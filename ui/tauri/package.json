@@ -8,14 +8,15 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test tests/controller.test.ts tests/native-contract.test.ts tests/document-contract.test.ts tests/session-observation.test.ts",
+    "test": "node --test tests/controller.test.ts tests/native-contract.test.ts tests/document-contract.test.ts tests/session-observation.test.ts tests/host-status.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "knip": "knip",
     "knip:production": "knip --production",
     "test:browser": "node --test tests/browser.test.ts",
     "build": "vite build && node scripts/notices.mjs",
-    "test:native": "node native-smoke/run.ts"
+    "test:native": "node native-smoke/run.ts",
+    "build:host-status-fixture": "vite build --config host-status-fixture/vite.config.ts"
   },
   "devDependencies": {
     "playwright-core": "1.64.1",
