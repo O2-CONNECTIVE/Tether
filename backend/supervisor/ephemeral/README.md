@@ -29,6 +29,13 @@ error/panic/結果不明のlaunchはburnを維持し、このissuerからの次�
 Lookupは現在memory map内のgenerationと完全一致Identityだけを照合し、旧callbackや別bootの同generationを拒否する。
 pollは期限確認だけでrenewせず、hard deadlineはPrepare時の承認値から延長しない。
 
+## 現在利用者issuer（2026-10-31）
+
+`NewCurrentUser`は、既にログオン中の利用者として動く承認（`supervisor.CurrentUserNoIsolation`）だけを発行する別issuerである。
+種別は生成時に固定し、切り替える入口はない。guest境界のpolicyは`Prepare`でgeneration消費前に拒否し、Authorityは`supervisor.NewCurrentUser`で作る。
+既定の`New`の挙動は変えておらず、現在利用者の境界は従来どおり`Launch`内の`supervisor.New`が拒否する。
+epoch・単回消費・Lookup・失効の規則は同じである。利用者本人の明示同意を得るproducerは未実装で、このissuerは同意を代用しない。
+
 ## 保証範囲と未実装
 
 初期保証対象はremote non-admin guestからsupervisor/停止処理を守ることで、host operator/adminが既に侵害されている場合は対象外。

@@ -1,5 +1,7 @@
 # 提供段階と検証状況
 
+> **対象範囲の更新（2026-11-01）:** 以下の旧SSH / Windows / Pythonに関する本文・受入条件は、その方式と記録時点の履歴として保持しています。現在のTetherはAI commandと一時派遣を目標にMacを優先し、現状の正本は[文書索引](README.md)と[検証状態](tether-pilot-status.md)です。旧ゲート閉鎖や未達を解除・達成扱いにはしません。Macは現在ユーザー・非sandboxであり、Windows隔離guestの保証を引き継ぎません。
+
 [READMEへ戻る](../README.md)
 
 2026-10-28に公開main `f0c41be394fe138ce1052a005b26f562bfe54809` へ[#72](https://github.com/O2-CONNECTIVE/rescue-host/pull/72)を統合した時点の記録です。
@@ -109,7 +111,7 @@ buildとhash照合の成功を配布検証全体の成功へ読み替えず、�
 
 未接続評価物の生成と照合は[評価版の説明](tauri-evaluation.md)、nativeの観測境界は[native smoke](tauri-native-smoke.md)を参照してください。
 ブラウザー画像はRust IPCがない表示例であり、native起動や遠隔接続の証拠ではありません。
-旧Python版の公開証跡は[検証集計](history/verification/result.json)、[原ログ](history/verification/unittest.txt)、[v0.2.1レビュー](history/SECURITY_REVIEW_V021.md)に残しています。
+旧Python版の公開証跡は検証集計（過去の参照資料・本文非同梱）、原ログ（過去の参照資料・本文非同梱）、v0.2.1レビュー（過去の参照資料・本文非同梱）に残しています。
 過去の記録や候補ごとの成功を、現在のmain全体の成功へ流用しません。
 
 ## 初期検証の安全境界と残る条件

@@ -36,7 +36,14 @@ func (f *EndpointFactory) MatchesSIDPolicy(operatorSID, guestSID string) bool {
 }
 
 // RuntimeConfigured は静的policyとは別の正規helper資源供給の有無である。
-// 方式Bの専用helper token/保護runtime sourceは未実装で、取得を開始できない。
+// 方式Bは元Recordのsupplierと、image内の固定値の一致がある場合だけ真で、
+// 既定の未設定imageでは取得を開始できない。実Windowsでの成立は未検証。
 func (f *EndpointFactory) RuntimeConfigured() bool {
-	return f != nil && f.self == f && f.sidPolicy == (SIDPolicy{}) && f.spec.producer != nil
+	if f == nil || f.self != f {
+		return false
+	}
+	if f.sidPolicy != (SIDPolicy{}) {
+		return f.supplierEnabled()
+	}
+	return f.spec.producer != nil
 }

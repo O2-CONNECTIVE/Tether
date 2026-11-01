@@ -12,11 +12,7 @@ status: accepted
 実messageのtoken、kind/level、restricted/AppContainer等を検査し、復帰を確認した後の実AuthIdを同じ要求・owner・logical channelのbindingへ固定する。
 同じchannelの後続要求では主体projectionの完全一致を要求し、AuthIdが変われば引き継がない。切断後は再認証と新規承認が必要で、鍵集合・期限上限・失効・再承認条件は変えない。
 
-## 比較した方式
-
-従来の独立したAuthId期待値を事前固定する方式Aには、正規ログオンを選ぶtrusted起動owner等が必要だった。
-初版へ新たな独立登録手順を必須化せず、remote非管理者guestから監督・停止を守り、host operator/admin既侵害は保証外という既決の範囲に合わせて方式Bを選んだ。
-互換用profile/1の完全比較は残し、profile/2を明示的に分ける。AuthIdの0値をwildcardとして使わない。
+互換用profile/1の完全比較は残し、profile/2を明示的に分けます。AuthIdの0値をwildcardとして使いません。host operator/admin既侵害は保証対象外です。
 
 ## 実装と残る境界
 

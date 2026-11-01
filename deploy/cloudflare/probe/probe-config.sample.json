@@ -1,0 +1,13 @@
+{
+  "deployment_profile": "container_private",
+  "listen": "",
+  "auth_mode": "cloudflare_access",
+  "resource": "",
+  "access_issuer": "",
+  "access_aud": "",
+  "access_keys": {"keys": []},
+  "leeway_seconds": 0,
+  "principals": [
+    {"label": "member-1", "subject": ""}
+  ]
+}

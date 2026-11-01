@@ -1,5 +1,7 @@
 # Rescue Hostの脅威モデル
 
+> **対象範囲の更新（2026-11-01）:** 以下の旧SSH / Windows / Pythonに関する本文・受入条件は、その方式と記録時点の履歴として保持しています。現在のTetherはAI commandと一時派遣を目標にMacを優先し、現状の正本は[文書索引](README.md)と[検証状態](tether-pilot-status.md)です。旧ゲート閉鎖や未達を解除・達成扱いにはしません。Macは現在ユーザー・非sandboxであり、Windows隔離guestの保証を引き継ぎません。
+
 [安全要件](security.md) / [通信契約](communication-contract.md) / [接続再開の条件](SECURITY_BACKEND_CONTRACT.md)
 
 製品の新規接続ゲートは閉鎖しており、本番利用できません。

@@ -66,12 +66,28 @@ PRODUCT_FILES = {
         'staging_execution.go', 'staging_preview.go', 'operator_policy.go', 'runtime_execution.go', 'runtime_native.go', 'runtime_source.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/servicecontrol': {'request.go', 'strict.go', 'response.go', 'response_fields.go', 'response_preview.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceauthowner': {'owner.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec': {'contract.go', 'output.go', 'run.go', 'session.go', 'local_summary.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel': {'channel.go', 'server.go', 'client.go', 'conn.go', 'keys.go', 'liveness.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire': {'client.go', 'server.go', 'strict.go', 'wire.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink': {'host.go', 'client.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter': {'jsonrpc.go', 'server.go', 'tools.go', 'http_bridge.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway': {'gateway.go', 'http.go', 'token.go', 'config.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-gateway': {'main.go', 'config.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-echo-probe': {'main.go', 'probe.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-access-identity': {'main.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mac-agent': {'main.go', 'config.go', 'status.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mcp': {'main.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent': {'runtime.go', 'process.go', 'cleanup_diagnostic.go', 'groupobserver.go', 'start_diagnostic.go', 'terminal_disposition.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch': {'approval.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport': {'protocol.go', 'stream.go', 'gateway.go', 'mac.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys': {'loader.go', 'path.go', 'policy.go', 'acl.go', 'source.go', 'format.go', 'trust_config.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/operatorauth': {
         'collector.go', 'controller.go', 'helper.go', 'types.go', 'launch.go', 'native_batch.go',
         'report.go', 'report_cleanup.go', 'report_endpoint.go', 'report_operation.go', 'report_owner.go', 'report_pair.go',
         'profile_frame.go', 'profile_stream.go', 'profile_sync.go', 'profile_pipe.go', 'profile_receiver.go',
         'helper_entry.go', 'helper_entry_owner.go', 'prepared_batch.go', 'batch_scope.go', 'profile_provider.go', 'profile_query.go', 'endpoint_candidate.go', 'sole_input_batch.go',
-        'authenticated_report.go', 'operator_binding.go', 'sid_policy.go', 'sid_profile_frame.go'},
+        'authenticated_report.go', 'operator_binding.go', 'sid_policy.go', 'sid_profile_frame.go',
+        'supplier.go', 'supplier_config.go', 'helper_launch_source.go'},
 }
 
 
@@ -167,22 +183,44 @@ SERVICE_PROVISION_FILES = {
 
 
 OPERATOR_AUTH_FILES = {
-    'linux': {'native_other.go', 'native_batch_other.go', 'native_launch_other.go', 'native_report_other.go', 'profile_sync_other.go', 'profile_pipe_other.go', 'profile_receiver_other.go', 'helper_entry_other.go', 'profile_query_other.go', 'endpoint_profile_other.go'},
-    'darwin': {'native_other.go', 'native_batch_other.go', 'native_launch_other.go', 'native_report_other.go', 'profile_sync_other.go', 'profile_pipe_other.go', 'profile_receiver_other.go', 'helper_entry_other.go', 'profile_query_other.go', 'endpoint_profile_other.go'},
+    'linux': {'native_other.go', 'native_batch_other.go', 'native_launch_other.go', 'native_report_other.go', 'profile_sync_other.go', 'profile_pipe_other.go', 'profile_receiver_other.go', 'helper_entry_other.go', 'profile_query_other.go', 'endpoint_profile_other.go',
+              'helper_launch_native_other.go'},
+    'darwin': {'native_other.go', 'native_batch_other.go', 'native_launch_other.go', 'native_report_other.go', 'profile_sync_other.go', 'profile_pipe_other.go', 'profile_receiver_other.go', 'helper_entry_other.go', 'profile_query_other.go', 'endpoint_profile_other.go',
+               'helper_launch_native_other.go'},
     'windows': {'native_windows.go', 'native_token_windows.go', 'native_process_windows.go', 'native_batch_windows.go',
                 'native_launch_binding_windows.go', 'native_launch_image_windows.go', 'native_launch_windows.go',
-                'native_report_operation_windows.go', 'native_report_principal_windows.go', 'native_report_windows.go', 'profile_sync_windows.go', 'profile_pipe_windows.go', 'profile_receiver_windows.go', 'helper_entry_windows.go', 'profile_query_windows.go', 'endpoint_candidate_windows.go', 'endpoint_profile_windows.go'},
+                'native_report_operation_windows.go', 'native_report_principal_windows.go', 'native_report_windows.go', 'profile_sync_windows.go', 'profile_pipe_windows.go', 'profile_receiver_windows.go', 'helper_entry_windows.go', 'profile_query_windows.go', 'endpoint_candidate_windows.go', 'endpoint_profile_windows.go',
+                'supplier_image_windows.go', 'supplier_native_windows.go', 'supplier_security_windows.go', 'helper_launch_native_windows.go'},
 }
 
 
-def product_files_for(goos):
+MAC_AGENT_FILES = {
+    'linux': {'native_other.go'},
+    'darwin': {'native_darwin.go'},
+    'windows': {'native_other.go'},
+}
+
+
+def product_files_for(goos, cgo_enabled=True):
+    if type(cgo_enabled) is not bool:
+        raise ValueError("CGO selection must be explicit boolean")
     if (goos not in SCM_FILES or goos not in LOCALCONTROL_FILES
             or goos not in CHILDJOB_FILES or goos not in PROTECTEDKEY_FILES
             or goos not in NATIVE_BOOTSTRAP_FILES or goos not in SCM_READY_FILES
             or goos not in SERVICE_PROVISION_FILES or goos not in OPERATOR_AUTH_FILES
-            or goos not in GUEST_ACCOUNT_FILES):
+            or goos not in GUEST_ACCOUNT_FILES or goos not in MAC_AGENT_FILES):
         raise ValueError('Unsupported Go target for production inventory')
     expected = {package: set(files) for package, files in PRODUCT_FILES.items()}
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent'].update(MAC_AGENT_FILES[goos])
+    if goos == 'darwin':
+        expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent'].add('groupobserver_darwin.go' if cgo_enabled else 'groupobserver_darwin_nocgo.go')
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mac-agent'].update({
+        'status_darwin.go' if goos == 'darwin' else 'status_other.go',
+        'status_clock_darwin.go' if goos == 'darwin' and cgo_enabled else 'status_clock_other.go'})
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch'].add('terminal_darwin.go' if goos == 'darwin' else 'terminal_other.go')
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys'].add(
+        'native_other.go' if goos == 'darwin' and not cgo_enabled else
+        {'linux': 'native_linux.go', 'darwin': 'native_darwin.go', 'windows': 'native_windows.go'}[goos])
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/guestaccount'].update(GUEST_ACCOUNT_FILES[goos])
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/operatorauth'].update(OPERATOR_AUTH_FILES[goos])
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/servicehost'].add(SCM_FILES[goos])

@@ -10,3 +10,6 @@ tools/native-driver-trace/* -text
 
 # 共通応答vectorの固定bytesをcheckout時にも保持する。
 backend/internal/servicecontrol/testdata/response-vectors.json -text
+
+# 管理者がhash照合するASCII-only scriptのbytesをcheckout時に変換しない。
+deploy/cloudflare/prepare-directory.ps1 -text

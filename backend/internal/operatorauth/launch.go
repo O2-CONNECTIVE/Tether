@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// nativeLaunchSpec comes only from a future protected factory. The leaf hash is
-// not proof of ancestor ACLs, service provenance or guest separation. That
-// protection supplier is unimplemented; RunFixed remains closed.
+// nativeLaunchSpec comes only from the retained Record via supplierBatchSpec.
+// The leaf hash is not proof of ancestor ACLs, service provenance or guest
+// separation; the unset compiled helper value keeps RunFixed closed.
 type nativeLaunchSpec struct {
 	imagePath                                            string
 	imageSHA256                                          [32]byte

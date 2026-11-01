@@ -4,7 +4,12 @@
 
 launcherの引数は`--operator-auth-internal`、operator読取handle、report書込handle、profile読取handle、launch IDである。番号とIDはlocatorであり、親・認証主体・profileの真正性を作らない。private入口は別途取得した保護sourceの同一launch記録と完全一致させ、source確認前にnative adoptionしない。
 
-正規sourceの実装・登録と同一launchのOS bindingは未接続で、公開`RunFixed`は未構成拒否する。sourceは正規producerから得た不変の設定、信頼された期限とcleanup予算、独立した保持証拠を提供する必要がある。runtime自身のtokenや受信payloadをそのまま期待値へ採用しない。実helper executableの配置・署名・固定hashと祖先保護、実SID/ACLの検証も別途必要である。
+`RunFixed`は`runHelperProcess`だけを経由し、helper image内へcompileした固定値（監督/supplierのService名・image・service SID・予算）が有効な場合だけ役割を選ぶ。既定値は未設定で、両役割ともnative呼出し前に未構成拒否する。この値は監督の保護Recordがpath・SHA-256で固定するimageの一部で、監督側はRecordと全項目一致しない限り取得を開かない。argv・環境・fileから補完しない。
+このcompile時固定値方式は未承認の候補で、配置先ごとの値を作る保護されたproducerがない。現行sourceは未設定の既定で非活性に留まり、実現可能な経路の完成を示さない。
+`--operator-auth-internal`は同launch source（親SCM PID・作成元・親tokenのSYSTEM/専用SID/owner/DACL、supplier process/token、保持pipe）を経てentryへ進む。準備期限も同じ固定値から作る。
+`--auth-supplier-internal`は引数をそれ以外受けず、固定Service名でSCM dispatcherへ入り、RUNNING報告後にstop/shutdown・固定寿命（run+cleanup）・取消のいずれかで終える。token・pipeを扱わず、所有者が退役しても世代は有限寿命で止まる。
+同一launchのOS bindingとSCM配送は実Windows未検証で、保護されたsource producer、親process/token DACLへ照会権を付与する責任、report書込handleでのserver PID照会のaccess権契約、fatal退役後の強いtoken handleの寿命は未成立の前提として残る。supplierのSCM登録・撤去は監督側の同じgate下のsourceだけである。
+既存Root/Anchorは監督service SIDを前提とし、helperのsupplier tokenから読むには読取ACEの追加が要るため、子の期待主体（監督/supplierのService名と予算）の供給元にはならない。この供給経路は未決である。runtime自身のtokenや受信payloadをそのまま期待値へ採用しない。実helper executableの配置・署名・固定hashと祖先保護、実SID/ACLの検証も別途必要である。
 
 入口はraw handleの所有を保持し、constructorが非nil ownerを返したときだけそのownerへ移す。profile受信・EOF確認後に既存`Helper.Run`へ進み、profile/operator/reportの各I/Oとsourceを有限cleanupで回収する。致命的thread不明時は通常のnative cleanupへ戻さず、専用helper processの異常終了に委ねる。未確認cleanupを正常終了としない。
 

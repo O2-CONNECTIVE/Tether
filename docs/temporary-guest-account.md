@@ -17,7 +17,7 @@ native factoryは未設定拒否とし、実アカウントAPIや資格情報生
 memory fixtureの保存成功は、OS保護された永続化や実Windowsの非管理者性の証明ではない。
 SSHへの有効化、実token発行、既存guest主体への置換は今回の実装範囲外である。
 後続の[Windows照会とjournal境界](temporary-guest-native-boundary.md)では、実API呼出sourceとmock試験を分けて準備する。
-実機操作に必要な入力・権限・変更対象・復元は[別途承認する計画](temporary-guest-provisioning-plan.md)へ分離する。
+実機操作に必要な入力・権限・変更対象・復元は別途承認する計画（過去の参照資料・本文非同梱）へ分離する。
 [作成入口と検査拒否](temporary-guest-create-boundary.md)では、作成返却SIDを同じcoreへ接続し、未構成の完全検査を成功にしない。
 
 ## 作成と有効化の境界

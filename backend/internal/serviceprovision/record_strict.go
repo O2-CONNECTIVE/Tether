@@ -6,6 +6,7 @@ import (
 	"io"
 	"reflect"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -88,22 +89,31 @@ func recordValue(d *json.Decoder, depth int) (any, error) {
 	return nil, ErrRecord
 }
 
-// 型付きwireの全fieldを必須・exact-caseとして照合し、jsonの曖昧なfield照合を避ける。
+// 型付きwireのfieldをexact-caseで照合する。helperSupplierだけは省略可能だが、
+// 存在する場合はnullを許さず全内部fieldを必須にする。未知fieldは常に拒否する。
 func recordShape(value any, typ reflect.Type) bool {
 	switch typ.Kind() {
 	case reflect.Struct:
 		object, ok := value.(map[string]any)
-		if !ok || len(object) != typ.NumField() {
+		if !ok {
 			return false
 		}
+		seen := 0
 		for i := 0; i < typ.NumField(); i++ {
 			field := typ.Field(i)
-			v, ok := object[field.Tag.Get("json")]
+			name, options, _ := strings.Cut(field.Tag.Get("json"), ",")
+			v, ok := object[name]
+			if !ok && options == "omitempty" && typ == reflect.TypeOf(wireRecord{}) && name == "helperSupplier" {
+				continue
+			}
 			if !ok || !recordShape(v, field.Type) {
 				return false
 			}
+			seen++
 		}
-		return true
+		return len(object) == seen
+	case reflect.Pointer:
+		return value != nil && recordShape(value, typ.Elem())
 	case reflect.Map:
 		object, ok := value.(map[string]any)
 		if !ok {

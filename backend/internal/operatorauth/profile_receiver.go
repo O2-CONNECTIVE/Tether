@@ -22,7 +22,7 @@ func (b profileReceiverBinding) valid() bool {
 
 // The source must independently prove that the very inherited pipe belongs to
 // the retained protected parent and this launch. Payload fields cannot create
-// this proof. No production supplier exists; nil stays unconfigured. A source
+// this proof. Production uses helperLaunchReceiver only; nil stays unconfigured. A source
 // also retains its evidence after this receiver closes its local pipe handle.
 type profileReceiverSource interface {
 	check(context.Context, profileReceiverBinding) error

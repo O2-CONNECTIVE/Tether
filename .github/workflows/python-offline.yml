@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, wip/tether-public-pilot-20261101]
 
 permissions:
   contents: read
@@ -48,3 +48,11 @@ jobs:
         run: python scripts/check_source_sizes.py --verify-report
       - name: Verify development-tool and token-checker fixtures
         run: python -m unittest discover -s scripts/tests -v
+      - name: Set up fixed Node for Worker source fixtures
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+      - name: Verify closed-gate Worker fixtures without deployment
+        if: runner.os == 'Linux'
+        run: python scripts/check_tether_fixtures.py workers

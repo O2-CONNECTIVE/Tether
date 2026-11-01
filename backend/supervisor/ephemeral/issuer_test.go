@@ -40,6 +40,66 @@ func policy() ephemeral.ApprovedPolicy {
 	return ephemeral.ApprovedPolicy{PolicyDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", KeySetDigest: [32]byte{1}, GuestBoundary: supervisor.SeparatedNonAdminGuest, HardDeadline: time.Date(2026, 10, 28, 12, 0, 20, 0, time.UTC), BackendLeaseCeiling: 3 * time.Second}
 }
 
+// The current-user issuer is a separate explicit path: it refuses a guest
+// policy before consuming a generation, and the default issuer still cannot
+// launch a current-user policy. Epoch, single use and revoke are unchanged.
+func TestCurrentUserIssuerIsExplicitAndSeparate(t *testing.T) {
+	p := policy()
+	now := p.HardDeadline.Add(-20 * time.Second)
+	clock := func() time.Time { return now }
+	launch := func(context.Context, *supervisor.Authority) error { return nil }
+
+	cu, err := ephemeral.NewCurrentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cu.Close()
+	def, err := ephemeral.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer def.Close()
+	if cu.Boundary() != supervisor.CurrentUserNoIsolation || def.Boundary() != supervisor.SeparatedNonAdminGuest {
+		t.Fatalf("boundaries = %d / %d", cu.Boundary(), def.Boundary())
+	}
+	if cu.Snapshot().InstanceEpoch == def.Snapshot().InstanceEpoch {
+		t.Fatal("issuer epoch reused")
+	}
+	if _, err := cu.Prepare(p); !errors.Is(err, ephemeral.ErrDenied) || cu.Snapshot().Generation != 0 {
+		t.Fatalf("current-user issuer accepted a guest policy: %v, generation %d", err, cu.Snapshot().Generation)
+	}
+
+	p.GuestBoundary = supervisor.CurrentUserNoIsolation
+	c, err := def.Prepare(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, err := def.Launch(context.Background(), c, clock, launch); a != nil || err == nil {
+		t.Fatal("default issuer launched a current-user grant")
+	}
+
+	c, err = cu.Prepare(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := cu.Launch(context.Background(), c, clock, launch)
+	if err != nil || a.Grant().GuestBoundary != supervisor.CurrentUserNoIsolation {
+		t.Fatalf("current-user launch: %v", err)
+	}
+	if again, err := cu.Launch(context.Background(), c, clock, launch); again != nil || !errors.Is(err, ephemeral.ErrConsumed) {
+		t.Fatalf("approval reused: %v", err)
+	}
+	if got, err := cu.Lookup(c.Binding(), clock); err != nil || got != a {
+		t.Fatalf("lookup = %v", err)
+	}
+	if err := cu.Revoke(c.Binding()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cu.Lookup(c.Binding(), clock); !errors.Is(err, ephemeral.ErrDenied) || a.Snapshot(now).State != supervisor.Revoked {
+		t.Fatalf("revoked grant still current: %v", err)
+	}
+}
+
 func TestChallengeIsConsumedBeforeLaunchAndUsesTheRealCore(t *testing.T) {
 	i, err := ephemeral.New()
 	if err != nil {

@@ -1,5 +1,7 @@
 # 安全要件と接続停止の理由
 
+> **対象範囲の更新（2026-11-01）:** 以下の旧SSH / Windows / Pythonに関する本文・受入条件は、その方式と記録時点の履歴として保持しています。現在のTetherはAI commandと一時派遣を目標にMacを優先し、現状の正本は[文書索引](README.md)と[検証状態](tether-pilot-status.md)です。旧ゲート閉鎖や未達を解除・達成扱いにはしません。Macは現在ユーザー・非sandboxであり、Windows隔離guestの保証を引き継ぎません。
+
 [READMEへ戻る](../README.md)
 
 **v0.2.1-devは新規接続を停止しており、本番利用できません。**
@@ -35,8 +37,8 @@ source/fake試験は検査と拒否・所有保持の確認、Windows compileは
 |---|---|
 | [バックエンド契約](SECURITY_BACKEND_CONTRACT.md) | SSH権限、TCP宛先、失効と同一性、有効化判定 |
 | [オフラインモデル](OFFLINE_BACKEND_MODEL.md) | 操作モード、ライフサイクル、期限と実装限界 |
-| [v0.2.1の公開レビュー](history/SECURITY_REVIEW_V021.md) | 修正確認と残存リスク。実リモート利用の承認ではない |
-| [v0.2の公開レビュー](history/SECURITY_REVIEW_V02.md) | 過去版の問題と上流ソースへの参照。現仕様はv0.2.1を優先 |
+| v0.2.1の公開レビュー（過去の参照資料・本文非同梱） | 修正確認と残存リスク。実リモート利用の承認ではない |
+| v0.2の公開レビュー（過去の参照資料・本文非同梱） | 過去版の問題と上流ソースへの参照。現仕様はv0.2.1を優先 |
 | [対応環境と検証状況](status.md) | 公開済み証拠の範囲と未検証事項 |
 | [GUIとバックエンドの通信契約](communication-contract.md) | 公開CLI、限定評価stdio、未実装Tauri adapter案の区別 |
 | [脅威モデル](threat-model.md) | 保護資産、信頼境界、既存受入IDとの対応と残余リスク |

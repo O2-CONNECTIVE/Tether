@@ -1,7 +1,7 @@
 # ADR 0001: rescue-host-control/1 の実装候補
 
 状態: **準備コードの実装候補。実backend activation・実機変更・接続の承認ではありません。**
-日付: 2026-10-28。関連: [#17](https://github.com/O2-CONNECTIVE/rescue-host/issues/17)、[#36 DEC-01/02](https://github.com/O2-CONNECTIVE/rescue-host/issues/36)、[既存提案](../product-ipc-proposal.md)。
+日付: 2026-10-28。関連: [#17](https://github.com/O2-CONNECTIVE/rescue-host/issues/17)、[#36 DEC-01/02](https://github.com/O2-CONNECTIVE/rescue-host/issues/36)、既存提案（過去の参照資料・本文非同梱）。
 
 ## 正本と採用する技術範囲
 

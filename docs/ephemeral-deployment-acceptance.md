@@ -1,8 +1,8 @@
-# 単発版の配置に関する受入計画
+# 旧Windows単発版の未実証受入条件
 
 [配置と責任分担](ephemeral-deployment-architecture.md) / [配布版の受入記録](windows-acceptance-records.md) / [限定評価手順](windows-evaluation-runbook.md)
 
-運営中継コンテナと、顧客端末の同梱ネイティブ/一時非管理者guestという採用済み配置に対応する補助計画です。
+運営中継コンテナと、顧客端末の同梱ネイティブ/一時非管理者guestという採用済み配置に対応する未実証の試験条件です。現在のMac実証とは別で、[現行状態](tether-pilot-status.md)を参照してください。
 全項目は未実行で、実装、評価対象、独立観測手段と操作の承認が揃うまで開始しません。
 既存44条件、配布版8件のID、JSON schema、合否は変更しません。
 以下の項目名を既存受入の代替IDや成功記録には使いません。

@@ -1,0 +1,25 @@
+// SYNTHETIC, NON-DEPLOYABLE sample for the Tether commandless route probe.
+// Not named wrangler.jsonc on purpose, so no tool picks it up by default.
+// It fails closed: workers.dev and preview URLs are off, the gate is
+// "closed" (the Worker answers 404 to everything), the VPC Service ID is
+// empty, and compatibility_date is deliberately absent. The account
+// subdomain, Access team/issuer, AUD tag, subjects and container port belong
+// to the protected backend document and to the approval record, never here.
+// The "vpc_services" member shape was confirmed by the coordinator against
+// the official Workers VPC documentation; a live route is untested. See
+// README.md.
+{
+  "name": "tether-dev",
+  "main": "worker.mjs",
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "TETHER_PROBE_GATE": "closed"
+  },
+  "vpc_services": [
+    {
+      "binding": "TETHER_PROBE_VPC",
+      "service_id": ""
+    }
+  ]
+}

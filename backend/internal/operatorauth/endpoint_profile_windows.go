@@ -28,8 +28,18 @@ func prepareNativeSoleInputProfileBatch(s nativeBatchSpec, input *serviceready.S
 	return prepareNativeBatch(s, factory, serviceToken, owner)
 }
 
-// SID mode uses the same retained Batch and native Move. Dedicated helper token
-// and protected launch/entry sources remain absent; no public factory calls it.
+// Supplier SID mode composes one native lease per request from the retained
+// Record and then uses the same retained Batch and native Move. Pure prepare
+// only: the supplier starts inside the registered Batch's Start.
+func prepareNativeSupplierSIDBatch(f *EndpointFactory, input *serviceready.SoleInput, owner batchOwner) (*nativeBatch, error) {
+	s, err := f.supplierBatchSpec(nativeSupplierKernel{parent: f.parent})
+	if err != nil {
+		return nil, err
+	}
+	return prepareNativeSoleInputSIDBatch(s, input, f.service, f.serviceToken, owner, f.sidPolicy)
+}
+
+// SID mode uses the same retained Batch and native Move.
 func prepareNativeSoleInputSIDBatch(s nativeBatchSpec, input *serviceready.SoleInput, factory *bootstrapauth.Factory, serviceToken uintptr, owner batchOwner, policy SIDPolicy) (*nativeBatch, error) {
 	s, err := soleInputSIDSpec(s, input, policy)
 	if err != nil {

@@ -1,0 +1,3 @@
+{"source_continuous_ms":1234,"version":1,"seq":1,"phase":"connected","reason":"none","grant_remaining_ms":59999,"starting_workers":0,"running_workers":1,"stopping_workers":0,"cleanup":"pending","terminal":false,"terminal_cleanup_unknown":false}
+{"source_continuous_ms":1234,"version":1,"seq":3,"phase":"stopping","reason":"none","grant_remaining_ms":59998,"starting_workers":0,"running_workers":1,"stopping_workers":0,"cleanup":"pending","terminal":false,"terminal_cleanup_unknown":false}
+{"source_continuous_ms":1234,"version":1,"seq":4,"phase":"failed","reason":"terminal_cleanup_unknown","grant_remaining_ms":0,"starting_workers":0,"running_workers":1,"stopping_workers":0,"cleanup":"unknown","terminal":true,"terminal_cleanup_unknown":true}

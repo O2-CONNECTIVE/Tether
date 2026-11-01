@@ -84,22 +84,54 @@ func (c Challenge) Binding() supervisor.Binding {
 }
 
 // Issuer は初回利用後にコピーしない。lifetimeを閉じてもepoch/counterは再利用しない。
+// boundaryは生成時に固定し、後から変更・切替する入口はない。
 type Issuer struct {
 	mu         sync.Mutex
 	epoch      [32]byte
+	boundary   supervisor.GuestBoundary
 	closed     bool
 	generation uint64
 	current    *entry
 }
 
 // New はauthority lifetimeごとにfresh crypto epochを作り、許可0で始める。
-// PID/time/保存UI stateをseedや復元入力に使わない。
+// PID/time/保存UI stateをseedや復元入力に使わない。既存のguest境界専用で、
+// CurrentUserNoIsolationのpolicyはPrepareで拒否する。
 func New() (*Issuer, error) {
-	i := &Issuer{}
+	return newIssuer(supervisor.SeparatedNonAdminGuest)
+}
+
+// NewCurrentUser は、既にログオン中の利用者として動く承認だけを発行する別issuer。
+// SeparatedNonAdminGuestのpolicyは拒否し、AuthorityはNewCurrentUserで作る。
+// 利用者本人の明示同意を得るproducerは別責務で、このissuerは同意を代用しない。
+func NewCurrentUser() (*Issuer, error) {
+	return newIssuer(supervisor.CurrentUserNoIsolation)
+}
+
+func newIssuer(boundary supervisor.GuestBoundary) (*Issuer, error) {
+	i := &Issuer{boundary: boundary}
 	if _, err := io.ReadFull(rand.Reader, i.epoch[:]); err != nil || i.epoch == ([32]byte{}) {
 		return nil, ErrEntropy
 	}
 	return i, nil
+}
+
+// Boundary はこのissuerが発行する唯一の境界を返す。認可判定の代用ではない。
+func (i *Issuer) Boundary() supervisor.GuestBoundary {
+	if i == nil {
+		return 0
+	}
+	return i.boundary
+}
+
+func (i *Issuer) newAuthority(grant supervisor.ProvisionedGrant, now time.Time) (*supervisor.Authority, error) {
+	switch i.boundary {
+	case supervisor.SeparatedNonAdminGuest:
+		return supervisor.New(grant, now)
+	case supervisor.CurrentUserNoIsolation:
+		return supervisor.NewCurrentUser(grant, now)
+	}
+	return nil, ErrDenied
 }
 
 func (i *Issuer) Snapshot() Snapshot {
@@ -149,6 +181,11 @@ func (i *Issuer) Prepare(p ApprovedPolicy) (Challenge, error) {
 	if i.closed || i.epoch == ([32]byte{}) {
 		return Challenge{}, ErrDenied
 	}
+	// 現在利用者issuerは別境界のpolicyをgeneration消費前に拒否する。既定issuerの
+	// Prepareは従来どおりで、guest以外の境界はLaunch内のsupervisor.Newが拒否する。
+	if i.boundary == supervisor.CurrentUserNoIsolation && p.GuestBoundary != i.boundary {
+		return Challenge{}, ErrDenied
+	}
 	if e := i.current; e != nil && (e.inflight || e.state != revoked) {
 		return Challenge{}, ErrBusy
 	}
@@ -187,7 +224,7 @@ func (i *Issuer) Launch(ctx context.Context, c Challenge, clock func() time.Time
 		i.mu.Unlock()
 		return nil, ErrDenied
 	}
-	a, err := supervisor.New(e.grant, readClock(clock))
+	a, err := i.newAuthority(e.grant, readClock(clock))
 	if err != nil {
 		e.state = failed
 		i.mu.Unlock()

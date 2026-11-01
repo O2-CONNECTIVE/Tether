@@ -161,6 +161,8 @@ guest作業のepoch/intent/counterを供給し、検査後の所有SID・policy�
 Serviceは認証後のopaque bindingを同じCollector/owner/issuerとstop gate内で照合し、後続要求のAuthId等が変われば失効する。
 指定SIDの別ログオン資格は既存許可の引継ぎではなく、新規channelでの新規承認だけに使う。
 専用helper token・same-launch evidence・helper entryの保護sourceは未構成であり、Endpoint取得/Moveより前に拒否する。Service起動tokenを専用helper tokenの代用品にしない。
+Recordが`helperSupplier`を持つ場合、同じ元threadが公開前に`operatorauth.RegisterHelperSupplier`を呼び、得た登録（部分を含む）をstageが保持する。取得gateが閉じている既定では何も作らずbindへ進み、Prepareは拒否を続ける。撤去はinner proof後（または未公開時）のstage `Close`の最初に行い、未確認なら他の参照も保持したまま`ErrRootUnconfirmed`、faultなら`ErrRootFatal`で元threadを退役させる。
+登録関数だけを置き換えるprivate seam（本番は未設定で上記関数）により、元owner・stageの保持・エラー分類・撤去順序をfake試験する。保持Recordとpolicyはstageが渡し、実SCMの登録・撤去は未実証のまま。fatal時の元thread退役はstageの`ErrRootFatal`までを試験し、owner loopの退役自体はこの試験で実行しない。
 source/fake試験と実Windows・実runtime/inner sshd・実SSHの成立を分け、後者のgateは閉鎖を維持する。
 
 policyの再検査失敗や取消でServiceを公開しない場合も、inner Close workerと元threadのcleanup-only RPCを分離し、実inner proof→元Root回収→Close workerの実returnを待って起動エラーを返す。

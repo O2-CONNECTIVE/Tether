@@ -1,0 +1,11 @@
+# Source-only packaging recipe. Build only from a fresh two-file staging
+# directory containing this Dockerfile and the coordinator-verified,
+# statically linked CGO_ENABLED=0 Linux/amd64 binary named rescue-gateway.
+# Do not use the repository, a home directory, or credential storage as context.
+FROM scratch
+
+COPY --chown=0:0 --chmod=0555 rescue-gateway /rescue-gateway
+
+USER 10001:10001
+WORKDIR /
+ENTRYPOINT ["/rescue-gateway"]
