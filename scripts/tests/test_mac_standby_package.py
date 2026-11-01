@@ -34,13 +34,20 @@ class StandbyPackageTests(unittest.TestCase):
         for name in m.TEXTS:
             p = self.notices / name
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(texts[p.name])
+            p.write_bytes(texts[p.name].encode('utf-8'))
         self.output = self.root / 'fake-candidate.zip'
 
     def args(self):
         return dict(binary=self.binary, expected_sha256=m.base.sha(self.binary.read_bytes()),
                     target='darwin-arm64', source_manifest_sha256='a' * 64,
                     notices_root=self.notices, output=self.output)
+
+    def test_pinned_template_checkout_and_fixture_notice_bytes(self):
+        rule = 'packaging/macos/local.tether.host.standby.evaluation.plist.in -text'
+        self.assertIn(rule, (ROOT / '.gitattributes').read_text().splitlines())
+        for name, digest in m.TEXTS.items():
+            with self.subTest(notice=name):
+                self.assertEqual(m.base.sha((self.notices / name).read_bytes()), digest)
 
     def test_archive_and_template_are_exact_inactive_and_blocked(self):
         result = m.package(**self.args())
@@ -129,7 +136,8 @@ class StandbyPackageTests(unittest.TestCase):
     def test_template_exact_bytes_refuse_rendering_extra_keys_and_args(self):
         original = m.base.read_regular
         raw = m.TEMPLATE_PATH.read_bytes()
-        variants = [raw.replace(b'@TETHER_STANDBY_EXECUTABLE@', b'/tmp/other'),
+        variants = [raw.replace(b'\n', b'\r\n'),
+                    raw.replace(b'@TETHER_STANDBY_EXECUTABLE@', b'/tmp/other'),
                     raw.replace(b'--standby', b'--status-stdout'),
                     raw.replace(b'</dict>', b'<key>UserName</key><string>root</string></dict>'),
                     raw.replace(b'</dict>', b'<key>KeepAlive</key><true/></dict>')]

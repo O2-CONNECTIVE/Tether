@@ -13,3 +13,6 @@ backend/internal/servicecontrol/testdata/response-vectors.json -text
 
 # 管理者がhash照合するASCII-only scriptのbytesをcheckout時に変換しない。
 deploy/cloudflare/prepare-directory.ps1 -text
+
+# Preserve the pinned inactive template bytes on every checkout.
+packaging/macos/local.tether.host.standby.evaluation.plist.in -text
