@@ -373,3 +373,36 @@ func TestEmptyCleanupDiagnosticDoesNotClaimFailure(t *testing.T) {
 		t.Fatal("empty history emitted diagnostics")
 	}
 }
+
+func TestFixedCommandPilotCallerWiringAndGeneralUnchanged(t *testing.T) {
+	for _, mode := range []string{"-config", "-fixed-command-pilot-config"} {
+		t.Run(mode, func(t *testing.T) {
+			r := newRecorder(t, encode(t, macDoc(t)))
+			var diagnostic bytes.Buffer
+			code := execute(context.Background(), []string{mode, configPath}, &diagnostic, r.deps())
+			if code != 1 || r.trace() != "read load prepare approve client run client-close" {
+				t.Fatal(code, r.trace())
+			}
+			if mode == "-config" {
+				if r.prepared.FixedStart != nil {
+					t.Fatal("general mode narrowed")
+				}
+				return
+			}
+			f := r.prepared.FixedStart
+			want := "/usr/bin/printf 'TETHER_MCP_GUI_BEGIN\\n'; /bin/sleep 5; /usr/bin/printf 'TETHER_MCP_GUI_END\\n'"
+			if f == nil || f.RequestID != "tether-fixed-command-v1" || f.Command != want || f.TimeoutMillis != 15000 {
+				t.Fatal("pilot not wired")
+			}
+		})
+	}
+}
+func TestFixedCommandPilotRejectsUnknownOrOverrideArguments(t *testing.T) {
+	for _, args := range [][]string{{"-fixed-command-pilot", "x"}, {"-fixed-command-pilot-config", configPath, "-command", "x"}, {"-config", configPath, "-fixed-command-pilot-config"}, {"-fixed-command-pilot-config", configPath, "-yes"}} {
+		r := newRecorder(t, encode(t, macDoc(t)))
+		var out bytes.Buffer
+		if code := execute(context.Background(), args, &out, r.deps()); code != 2 || r.trace() != "" {
+			t.Fatal(code, r.trace())
+		}
+	}
+}

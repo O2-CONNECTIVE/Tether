@@ -97,6 +97,11 @@ func main() {
 	os.Exit(execute(ctx, os.Args[1:], os.Stderr, nativeDeps()))
 }
 
+// This opt-in pilot narrows admission at the host, not merely at the client.
+// The protected config still supplies existing identity/paths, never command
+// bytes. This is not a new shell, sandbox, grant or noninteractive consent.
+const fixedPilotCommand = "/usr/bin/printf 'TETHER_MCP_GUI_BEGIN\\n'; /bin/sleep 5; /usr/bin/printf 'TETHER_MCP_GUI_END\\n'"
+
 // execute validates the whole document and loads the host key before
 // preparing anything. Only the local terminal approval creates a grant; the
 // same signer then proves the host to the gateway. Every exit after approval
@@ -104,7 +109,7 @@ func main() {
 // label, fingerprint, endpoint or key is printed.
 func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) int {
 	if ctx == nil || d.readTrust == nil || d.loadKey == nil || d.prepare == nil || d.newClient == nil || d.clock == nil ||
-		(len(args) != 2 && (len(args) != 3 || args[2] != "-status-stdout")) || args[0] != "-config" || args[1] == "" {
+		(len(args) != 2 && (len(args) != 3 || args[2] != "-status-stdout")) || (args[0] != "-config" && args[0] != "-fixed-command-pilot-config") || args[1] == "" {
 		report(diagnostic, "使い方: rescue-mac-agent -config <path>")
 		return 2
 	}
@@ -143,13 +148,17 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 		report(diagnostic, "host鍵を取得できませんでした。承認を求めません")
 		return 2
 	}
+	var fixedStart *agentexec.FixedStartConstraint
+	if args[0] == "-fixed-command-pilot-config" {
+		fixedStart = &agentexec.FixedStartConstraint{RequestID: "tether-fixed-command-v1", Command: fixedPilotCommand, TimeoutMillis: 15000}
+	}
 	startDiagnostics := &macagent.StartDiagnostics{}
 	cleanupDiagnostics := &macagent.CleanupDiagnostics{}
 	terminalDisposition := &macagent.TerminalDisposition{}
 	defer func() { reportCleanupFailures(diagnostic, cleanupDiagnostics) }()
 	defer func() { reportStartFailure(diagnostic, startDiagnostics.Failure()) }()
 	pending, err := d.prepare(maclaunch.Config{
-		HostKey: signer, AllowedKeys: []ssh.PublicKey{cfg.allowed},
+		FixedStart: fixedStart, HostKey: signer, AllowedKeys: []ssh.PublicKey{cfg.allowed},
 		Runtime:  macagent.Config{WorkDir: cfg.workDir, Home: cfg.home, StartDiagnostics: startDiagnostics, CleanupDiagnostics: cleanupDiagnostics, TerminalDisposition: terminalDisposition},
 		Deadline: d.clock().Add(cfg.session), CleanupTimeout: cfg.cleanup, Budgets: agentgateway.ChannelBudgets(),
 	})

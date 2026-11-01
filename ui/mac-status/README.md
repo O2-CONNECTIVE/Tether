@@ -110,7 +110,7 @@ real-agent connectivity or manual accessibility behavior.
 ## GitHub-hosted CI source preparation
 
 `.github/workflows/tether-mac-status.yml` is prepared for main pull requests and
-pushes to main or the specific Tether WIP branch. It has not yet run on GitHub.
+pushes to main or the specific Tether WIP branch. The main cf9fcec baseline has now passed GitHub-hosted CI (run 41287973206); this does not certify later source changes.
 It uses the standard arm64 `macos-26` image and requires the existing
 `/Applications/Xcode_26.5.app/Contents/Developer`; a missing selection fails
 rather than installing or falling back. The job records actual compiler/SDK/image
@@ -123,7 +123,7 @@ Source checks build/core21/package10/local bundle. GUI checks require the real
 synthetic owned-window9, both bundled own-window cases and the exact8 own-content
 PNG outputs. Unavailable GUI session, missing PASS, nonzero exit, timeout or image
 mismatch fails the job; there is no skipped-success or continue-on-error fallback.
-The hosted WindowServer/GUI capability remains unproven until an actual run.
+The hosted WindowServer/GUI fixture capability was exercised successfully on that exact baseline run; other images and real-agent GUI operation remain separate checks.
 
 Timeout records an unreaped owned child and stops subsequent checks without force
 kill or success inference. This workflow is limited to ephemeral GitHub-hosted VMs,

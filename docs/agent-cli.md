@@ -10,7 +10,7 @@
 
 ## 共通の入力規則
 
-- 引数は`-config <path>`の2語だけです（gatewayに限り、代わりに`-pilot-config <path>`の2語も可）。鍵、token、承認、host・port、期限を引数・環境変数から受け取りません。pathの探索や既定位置はありません。
+- 基本の引数は `-config <path>` です。gateway は代わりに `-pilot-config <path>`、Mac は代わりに後述の `-fixed-command-pilot-config <path>` を受理します。Mac だけは末尾に `-status-stdout` を追加できます。各 mode は排他的で、未知引数・余剰語は拒否します。鍵、token、承認、host・port、期限を引数・環境変数から受け取りません。pathの探索や既定位置はありません。
 - 設定文書は`agentkeys.ReadTrustConfig`（期限付きctx、最大16KiB、秘密鍵と同じowner・ACL・同一handle検査）で読み、その値を使う前に厳格に検証し、検証後（成功・失敗とも）に読取りbufferを0で上書きします。内容は公開値ですが、改変されると認可・宛先が変わるため完全性が必要です。
 - 厳格JSON：`agentwire.CheckJSON`（重複member・null・不正UTF-8を全深さで拒否）と`agentwire.Fields`（未知member拒否）に加え、CLI envelopeの全memberを必須とします（内側gateway.allowed_originsだけは省略可）。秘密鍵・secret・承認・再接続などのmemberは未知memberとして拒否します。
 - 鍵は「path + 別経路で記録した`SHA256:`fingerprint」の参照だけです。読込みは`agentkeys.LoadCurrentUser`（期限付きctx）で、返ったsignerのfingerprintも照合します。設定文書と鍵のpathは文字列で区別し、大文字小文字違いも同一扱いです。filesystem aliasの非同一性をこの比較だけで証明せず、保護loaderとschema/fingerprint照合も必要です。
@@ -171,3 +171,36 @@ For an already explicitly approved CLI session, the manual composition remains:
 Fresh consent stays in the CLI's controlling terminal. This example is documentation, not a performed live test. Do not use `open` to carry the status pipe: LaunchServices does not establish this documented inherited-stdin composition.
 
 The viewer binary and Info.plist declare macOS 13.0; running on macOS 13 hardware is untested. This does not lower the separately built Go agent's recorded macOS 26.0 minimum. The bundle retains a linker ad-hoc signature with no signing identity; resources are not sealed, and no notarization, Gatekeeper bypass, or installation was performed. Dependency/license closure and release notices remain distribution prerequisites. See `ui/mac-status/README.md` for packaging and fixture checks.
+
+## Mac 固定コマンド試験モード（2026-11-01、実機未検証）
+
+正確な `rescue-mac-agent -fixed-command-pilot-config <path>`、または末尾に
+`-status-stdout` を付けた形だけを受理します。保護設定・鍵・本人同意・接続・
+失効・同じ owner による回収は通常モードと同じです。通常の `-config` に
+この制約を暗黙適用しません。この節は試験手順の許可や実接続の成功を意味しません。
+
+試験モードは trusted owner から Session へ次の値をコピーして渡し、
+ネットワーク要求や設定文書による変更を受け付けません。
+
+| 項目 | 固定値 |
+| --- | --- |
+| request_id | `tether-fixed-command-v1` |
+| timeout_ms | `15000` |
+| 最大 execution 数 | `1`（同じ ID・同じ payload の再照会は新 execution ではない） |
+| command | 下記の文字列と完全一致。各 `\n` は backslash と n の2文字 |
+
+```text
+/usr/bin/printf 'TETHER_MCP_GUI_BEGIN\n'; /bin/sleep 5; /usr/bin/printf 'TETHER_MCP_GUI_END\n'
+```
+
+- 別 command・request ID・timeout は実行前に拒否し、拒否だけで枠を消費しません。
+  並行する同じ要求は既存の冪等性・排他で高々1 execution です。
+- status / output / cancel は引き続き同じ grant の受理済み command ID だけに
+  作用します。別 ID・別 binding を指定して対象を選び直せません。
+- 同意待ちを含む grant の期限は短縮制約とは別です。固定 timeout も grant を
+  延長しません。失効・切断・cleanup unknown の後に許可を再開しません。
+- これは既存権限に追加する受入制約であり、OS sandbox や別ユーザー隔離では
+  ありません。現在のユーザー権限という説明を維持します。GUI は読取専用です。
+- 検証済み範囲は source/fake の exact 拒否、コピー保持、並行冪等性、期限・
+  binding・他 execution 拒否と CLI→maclaunch→Session の接続です。
+  実 Claude MCP・新 binary・実 GUI を同時に使う検証はまだ行っていません。

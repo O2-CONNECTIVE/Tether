@@ -61,5 +61,19 @@ class FixtureTests(unittest.TestCase):
             with patch.object(m.subprocess, "run", side_effect=fake), patch.object(m, "MAX_OUTPUT", 8), self.assertRaises(ValueError):
                 m.run_one(["fixture"], m.ROOT, m.node_count)
 
+    def test_worker_inventory_has_exact_four_named_suites(self):
+        self.assertEqual(m.NODE_FILES, (
+            "deploy/cloudflare/probe/worker.test.mjs",
+            "deploy/cloudflare/native/worker.test.mjs",
+            "deploy/cloudflare/discovery/worker.test.mjs",
+            "deploy/cloudflare/native/bounded-pilot.test.mjs",
+        ))
+
+    def test_fourth_worker_suite_failure_is_not_skipped(self):
+        with patch.object(m, "run_one", side_effect=[1, 1, 1, ValueError("fake")]) as run:
+            self.assertEqual(m.main(["workers"]), 1)
+        self.assertEqual(run.call_count, 4)
+        self.assertEqual(run.call_args.args[0][-1], "deploy/cloudflare/native/bounded-pilot.test.mjs")
+
 
 if __name__ == "__main__": unittest.main()
