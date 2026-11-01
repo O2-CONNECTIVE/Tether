@@ -37,6 +37,8 @@ STEPS = {
         ("bundle-fixture", [".build/local-evaluation/Tether Status.app/Contents/MacOS/TetherStatus",
                             "--check-own-window-fixture"], 15, b"OWN_BUNDLE_WINDOW_PASS"),
         ("render", [".build/debug/TetherStatus", "--render-fixtures"], 30, None),
+        ("pilot-lifecycle", ["python3", "-I", "Tests/check_pilot_lifecycle.py"],
+         150, b"PILOT_LIFECYCLE_CHECKS 9 FAILURES 0"),
     ],
 }
 
