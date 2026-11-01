@@ -56,7 +56,7 @@ class CIChecks(unittest.TestCase):
             root=Path(temp)
             for name,dimensions in ci.IMAGES.items():
                 (root/name).write_bytes(b"\x89PNG\r\n\x1a\n"+struct.pack(">I",13)+b"IHDR"+struct.pack(">II",*dimensions)+b"x"*1100)
-            self.assertEqual(len(ci.inspect_images(root)),8)
+            self.assertEqual(len(ci.inspect_images(root)),20)
             (root/"extra.png").write_bytes(b"x")
             with self.assertRaises(ValueError):ci.inspect_images(root)
     def test_invalid_png_refused(self):

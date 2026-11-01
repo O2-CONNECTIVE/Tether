@@ -19,8 +19,8 @@ SwiftUI の読み取り専用アプリです。macOS 13 以上を宣言し、Swi
 | version | 1 |
 | seq | 1..9007199254740991、厳密増加（gap 可） |
 | source_continuous_ms | 同じ Mac の mach_continuous_time 換算 ms、0..9007199254740991 |
-| phase | preparing / awaiting_approval / connecting / connected / stopping / closed / failed |
-| reason | none / revoked / deadline / transport_lost / runtime_fault / terminal_cleanup_unknown / canceled / command_timeout |
+| phase | checking_config / loading_key / preparing / awaiting_approval / connecting / connected / stopping / closed / failed |
+| reason | none / revoked / deadline / transport_lost / runtime_fault / terminal_cleanup_unknown / canceled / command_timeout / config_error / key_error / preparation_error / connection_error / approval_not_completed |
 | grant_remaining_ms | null または 0..86400000 |
 | starting_workers / running_workers / stopping_workers | 各0..1、合計最大1 |
 | cleanup | not_started / pending / confirmed / unknown |
@@ -119,8 +119,8 @@ versions. Official image availability is not proof of Swift 6.3.3 patch parity.
 A dependency-free `Tests/run_ci_checks.py` has only source/gui modes and refuses
 execution unless its GitHub/macOS/arm64/selected-toolchain scope matches. The check
 is an accidental-local-execution guard, not authentication or a sandbox.
-Source checks build/core21/package10/local bundle. GUI checks require the real
-synthetic owned-window9, both bundled own-window cases and the exact8 own-content
+Source checks build/core26/package10/local bundle. GUI checks require the real
+synthetic owned-window9, both bundled own-window cases and the exact20 own-content
 PNG outputs. Unavailable GUI session, missing PASS, nonzero exit, timeout or image
 mismatch fails the job; there is no skipped-success or continue-on-error fallback.
 The hosted WindowServer/GUI fixture capability was exercised successfully on that exact baseline run; other images and real-agent GUI operation remain separate checks.
@@ -138,3 +138,13 @@ private repositories, larger runners and artifact/cache storage have different
 allowances. No budget, paid runner, signing, deployment, secrets or permission
 change is part of this source preparation. Local fake helper tests do not certify
 a hosted GUI run or a signed product distribution.
+
+## 起動・接続時のフィードバック
+
+保護設定の確認、登録済み鍵の確認、ローカル準備、接続確認の**新鮮な実phase**だけで回転表示します。割合や完了予定時刻は推測しません。本人の承認待ちは回転せず「起動したターミナルで承認してください」と案内します。GUIに承認・再試行操作はありません。接続完了、terminal、stale、EOF、未知状態では回転を止めます。動きを減らす設定と静的renderでは処理中を固定アイコンで表します。
+
+設定／鍵／準備／接続構成の失敗はCLI実callerから固定reasonだけを送ります。approval_not_completedは拒否・時間切れ・中断・読取不能を本人の明示拒否と断定しません。既存通信断や回収不明をセットアップ失敗で隠しません。実際のエラー文字列、設定値、鍵、ユーザー名、commandは表示streamに加えません。設定や権限変更、鍵生成、自動再接続もありません。
+
+JSONL v1は同じ12キーのままenumを拡張しています。旧viewerは未知enumを安全に拒否するため、producer/viewerは対応する版を組み合わせてください。旧viewerへのsilent fallbackはしません。失敗reasonはfailed/terminal、worker0、残時間0/null、cleanup not_startedまたはconfirmedとの組合せだけを受理します。terminal_cleanup_unknownは常に優先して保持します。
+
+20状態のown-content画像はsynthetic fixtureであり、実agentの接続結果でもanimationの動作実証でもありません。既存の実機検証結果をこの変更の合格へ流用しません。

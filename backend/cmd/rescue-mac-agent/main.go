@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
@@ -132,22 +133,27 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 	cancel()
 	if err != nil {
 		wipe(raw)
+		status.failSetup(setupConfig, "not_started")
 		report(diagnostic, "設定を読めませんでした")
 		return 2
 	}
 	cfg, err := parseLocalConfig(raw, args[1])
 	wipe(raw)
 	if err != nil {
+		status.failSetup(setupConfig, "not_started")
 		report(diagnostic, "設定が不正または不完全です")
 		return 2
 	}
+	status.update("loading_key", "not_started", false)
 	load, cancel := context.WithTimeout(ctx, readBudget)
 	signer, err := d.loadKey(load, cfg.hostKey)
 	cancel()
 	if err != nil || signer == nil || signer.PublicKey().Type() != ssh.KeyAlgoED25519 || ssh.FingerprintSHA256(signer.PublicKey()) != cfg.hostKey.Fingerprint {
+		status.failSetup(setupKey, "not_started")
 		report(diagnostic, "host鍵を取得できませんでした。承認を求めません")
 		return 2
 	}
+	status.update("preparing", "not_started", false)
 	var fixedStart *agentexec.FixedStartConstraint
 	if args[0] == "-fixed-command-pilot-config" {
 		fixedStart = &agentexec.FixedStartConstraint{RequestID: "tether-fixed-command-v1", Command: fixedPilotCommand, TimeoutMillis: 15000}
@@ -163,6 +169,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 		Deadline: d.clock().Add(cfg.session), CleanupTimeout: cfg.cleanup, Budgets: agentgateway.ChannelBudgets(),
 	})
 	if err != nil || pending == nil {
+		status.failSetup(setupPreparation, "not_started")
 		report(diagnostic, "ローカル実行環境を準備できませんでした。承認を求めません")
 		return 2
 	}
@@ -170,6 +177,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 	status.update("awaiting_approval", "not_started", false)
 	owner, err := pending.ApproveLocal(ctx)
 	if err != nil || owner == nil {
+		approvalCleanupUnknown := setupCleanupUnknown(err)
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
 			report(diagnostic, "入力待ちの期限が切れました。未承認のまま終了し、接続しません")
@@ -187,11 +195,20 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 			err = errors.Join(err, closeErr)
 			if closeErr != nil {
 				terminalUnknown(owner, nil, terminalDisposition, cfg.cleanup, diagnostic, status)
+			} else if approvalCleanupUnknown {
+				status.unknown()
 			} else {
-				status.update("failed", "confirmed", true)
+				status.failSetup(setupApproval, "confirmed")
 			}
 		}
-		if errors.Is(err, agentexec.ErrCleanupUnknown) || errors.Is(err, agenttransport.ErrCleanupUnknown) {
+		if owner == nil {
+			if approvalCleanupUnknown {
+				status.unknown()
+			} else {
+				status.failSetup(setupApproval, "not_started")
+			}
+		}
+		if setupCleanupUnknown(err) {
 			report(diagnostic, "承認処理後の回収を確認できませんでした")
 		}
 		return 1
@@ -207,11 +224,17 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 			report(diagnostic, "承認済みsessionの回収を確認できませんでした")
 			terminalUnknown(owner, client, terminalDisposition, cfg.cleanup, diagnostic, status)
 		} else {
-			status.update("failed", "confirmed", true)
+			status.failSetup(setupConnection, "confirmed")
 		}
 		return 1
 	}
 	return finish(ctx, client, owner, terminalDisposition, cfg.cleanup, diagnostic, status)
+}
+
+// Classification only: retain uncertainty from any owned approval layer before
+// the first terminal display frame. It does not change cleanup control or errors.
+func setupCleanupUnknown(err error) bool {
+	return errors.Is(err, agentexec.ErrCleanupUnknown) || errors.Is(err, agenttransport.ErrCleanupUnknown) || errors.Is(err, agentchannel.ErrCleanupUnknown)
 }
 
 // closeApproved makes at most two finite attempts on the same partially
