@@ -1,5 +1,7 @@
 # 開発とオフライン検証
 
+> **対象範囲:** 以下は旧Python部分（v0.2.1-dev）の開発・オフライン検証手順です。現在のTether全体のバージョン・提供段階や、Go/Swiftの検証入口を示しません。[文書索引](README.md)、[Go CI](go-ci.md)、[Mac viewer](../ui/mac-status/README.md)を用途別に参照してください。
+
 [READMEへ戻る](../README.md)
 
 エージェントで開始・再開・編集委譲・レビューを行う場合は[共通エージェント開発手順](agent-workflow.md)を参照してください。
@@ -107,8 +109,8 @@ Python/Tk等を含む環境全体の固定と再現ビルドは未実装です�
 - [構成と実装境界](architecture.md)
 - [リポジトリの配置方針](repository-layout.md)
 - [接続再開のバックエンド契約](SECURITY_BACKEND_CONTRACT.md)
-- [v0.2.1の引き継ぎ](history/HANDOFF_V021.md)
-- [前段候補の引き継ぎ](history/HANDOFF_V02.md)（履歴。現仕様はv0.2.1を優先）
+- v0.2.1の引き継ぎ（過去の参照資料・本文非同梱）
+- 前段候補の引き継ぎ（過去の参照資料・本文非同梱）（履歴。現仕様はv0.2.1を優先）
 - [変更履歴](../CHANGELOG.md)
 
 既存の引き継ぎにある元HANDOFFと元レビューの未提供事項は、この文書整理では解消していません。

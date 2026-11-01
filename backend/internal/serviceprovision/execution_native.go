@@ -3,6 +3,7 @@ package serviceprovision
 import (
 	"context"
 	"errors"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/operatorauth"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceready"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/servicehost"
 )
@@ -17,6 +18,9 @@ type nativeExecutionCalls struct {
 	guest   func(context.Context, *Prepared) (*GuestConfiguration, error)
 	staging func(context.Context, *nativeExecutionStage, servicehost.GuestStagingTicket, servicehost.GuestStagingOwner, *serviceready.InspectionLease) (nativeGuestStager, error)
 	runtime func(context.Context, *nativeExecutionStage, servicehost.RuntimeGuestTicket, servicehost.RuntimeGuestOwner, *serviceready.InspectionLease) (nativeRuntimeGuest, error)
+	// register replaces only the native supplier registrar; the held Record and
+	// policy still come from this stage. Unset uses RegisterHelperSupplier.
+	register func(context.Context, Record, operatorauth.SIDPolicy) (supplierRegistration, error)
 }
 type nativeExecutionStage struct {
 	previewSnapshot *servicehost.PreviewDescriptor
@@ -31,6 +35,7 @@ type nativeExecutionStage struct {
 	guest           *GuestConfiguration
 	guestAttempt    *nativeGuestAttempt
 	runtimeAttempt  *nativeRuntimeAttempt
+	supplier        supplierRegistration
 	service         *servicehost.Service
 }
 
@@ -125,6 +130,17 @@ func prepareExecutionToken(ctx context.Context, prepared *Prepared) (*LaunchToke
 func (s *nativeExecutionStage) Close(ctx context.Context) error {
 	if (s.guestAttempt != nil && !s.guestAttempt.closed) || (s.runtimeAttempt != nil && !s.runtimeAttempt.closed) {
 		return ErrRootUnconfirmed
+	}
+	// Close runs only after the inner cleanup proof (or before publication), so
+	// every Batch has confirmed its generation; only then is the registration removed.
+	if s.supplier != nil {
+		if err := s.supplier.Close(ctx); err != nil {
+			if errors.Is(err, operatorauth.ErrFatal) {
+				return errors.Join(ErrRootFatal, err)
+			}
+			return errors.Join(ErrRootUnconfirmed, err)
+		}
+		s.supplier = nil
 	}
 	if s.guest != nil {
 		if err := s.guest.Close(ctx); err != nil {

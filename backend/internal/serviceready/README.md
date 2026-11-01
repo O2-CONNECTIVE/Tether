@@ -27,14 +27,26 @@ QueryServiceConfigの情報は次回起動の設定でもあり、現在imageの
 service/processのowner・protected DACLを明示expected policyへexact照合する。
 信頼主体はUser/Service/Operator/SYSTEM/Administratorsで、Guestを常に除外する。
 host operator/adminの既侵害は今回の脅威scope外であり、追加の別admin承認を実装しない。
-未知主体・GuestのALLOWはserviceで0x2008d、processでREAD_CONTROL|SYNCHRONIZE（0x120000）だけを許す。
-PROCESS_QUERY_LIMITED_INFORMATION、QUERY_INFORMATION、generic、MAXIMUM_ALLOWEDの例外を未知主体へ作らない。
+未知主体・GuestのALLOWはserviceで0x2008d、processでREAD_CONTROL|SYNCHRONIZE|QUERY_INFORMATION|QUERY_LIMITED_INFORMATION（0x121400）を上限とする。
+processに未知主体・GuestのQUERY権がある構成は、後述する同じprimary token objectの独立検査をPrepareで通るまで受理しない。
+genericとMAXIMUM_ALLOWEDの例外は作らない。
 PROCESS_QUERY_LIMITED_INFORMATIONはOpenProcessTokenのprocess側の前提であり、tokenに得られるアクセス権はtoken object自身のDACLで別に判定される。
-query許可だけでtoken奪取が成立したとは扱わず、今回はtoken DACLを検査していないため不要な入口を閉じる。
+query許可だけでtoken奪取が成立したとは扱わず、process側のqueryとtoken側の使用・複製・変更権限を別々に検査する。
 trusted User/Service/Operator/SYSTEM/Administratorsのquery権限と、native照会自身のdesiredAccessは維持する。
 既取得・継承・漏出したprocess/token handleが無いことは別の前提であり、このACL検査で不在を証明しない。
 STOP、CHANGE_CONFIG、WRITE_DAC/OWNER、DELETE、VM_READ/WRITE/OPERATION、DUP_HANDLE、TERMINATE等を未知主体へ許さず、DENYで危険なALLOWを相殺しない。
 未知ACE、継承flags、未知mask、NULL DACL、非protected policyを拒否する。
+
+processのQUERY公開時は、既に保持する同じprocessからTOKEN_QUERY|READ_CONTROLだけでprimary tokenを開き、同じprocess ownerに保持する。
+新しいtokenの生成・複製・impersonationや強い起動handleの取得は行わない。
+token objectそのもののowner/DACLを取得し、TokenDefaultDaclとは区別する。
+未知主体・GuestはTOKEN_QUERY|READ_CONTROL（0x20008）までとし、ASSIGN_PRIMARY、DUPLICATE、IMPERSONATE、ADJUST系、WRITE_DAC/OWNER、DELETE、QUERY_SOURCEを拒否する。
+SYNCHRONIZE、generic、MAXIMUM_ALLOWED、未知ACE・継承flag、NULL DACLも拒否し、危険ALLOWをDENYで相殺しない。
+保持tokenと借用PrimaryToken、現在processのprimary tokenのTokenId/ModifiedId一致、照会前後の不変を確認する。
+初回のtoken owner/DACL・Protected値・TokenId/ModifiedIdを複製して固定し、再検査で変化したら不可逆に失効する。
+token objectのProtected値には新たなtrue必須条件を加えず、実値を固定して変更を拒否する。既存service/processのProtected必須は維持する。
+token取得・検査の途中失敗やclose失敗でも、同じprocess ownerに部分handleを残して回収を再試行する。
+これらは現在の保持対象の検査であり、生成直後からの全履歴や侵害済み別serviceからの完全隔離を証明しない。
 
 `PreparePreflight(ctx)`は、`Prepare`の同じquery-only prefixを共有し、auth scopeとheld service/process refsをopaqueな`Preflight`として保持する。
 元の固定thread、no impersonation、profileの自主体・固定image、service binarypath・type・DACL、current processのalive・PID・creation・DACLを既存と同じ規則で検査する。
@@ -47,7 +59,7 @@ Preflightの成功をlistener/SCM readiness、operator/server認証、approval�
 `Preflight.Recheck(ctx)`と`Binding(ctx)`は同じscopeのquery証拠を再照合する。
 `ProcessBinding{PID, Creation}`は保持processの相関値であり、値の構築や複製だけでは認証やtokenの取得元を証明しない。
 取得元の証明はopaque Preflightに残し、strong-token supplierは強handleを開く前後に同じscopeを再検査する必要がある。
-このPreflightはtoken object/default DACLや強handleのdesired access自体を検査しないため、その別検査も省略できない。
+processのQUERY公開時だけtoken objectを上記の規則で検査する。TokenDefaultDaclや強handleのdesired accessは検査しないため、strong-token supplierの別検査を省略できない。
 ctx/admission失敗、query不一致、元thread・主体の変化で受理をstickyに失効させ、並行処理も成功したBindingを返さない。
 失敗時のBindingはzero値であり、部分取得のPreflightも同じpointerを保持してCloseする。
 PreflightのCloseはlistenerを持たない同じ有限cleanup経路を使う。

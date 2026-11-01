@@ -11,6 +11,17 @@ import (
 // BindOperatorSIDPolicy is a pre-use composition step, not authentication or a
 // Root capability. The original Prepared owner supplies only its held Record.
 func (s *Service) BindOperatorSIDPolicy(owner OuterFinalizer, policy operatorauth.SIDPolicy) error {
+	return s.bindOperatorSupplier(owner, policy, nil)
+}
+
+// BindOperatorSupplier is fixed configuration composition by the original outer
+// owner. It neither authenticates a request nor starts or registers a service.
+// Acquisition opens only when the compiled helper value equals this Record.
+func (s *Service) BindOperatorSupplier(owner OuterFinalizer, policy operatorauth.SIDPolicy, supplier operatorauth.HelperSupplierConfig) error {
+	return s.bindOperatorSupplier(owner, policy, &supplier)
+}
+
+func (s *Service) bindOperatorSupplier(owner OuterFinalizer, policy operatorauth.SIDPolicy, supplier *operatorauth.HelperSupplierConfig) error {
 	if s == nil {
 		return ErrProvisioningUnconfigured
 	}
@@ -26,7 +37,13 @@ func (s *Service) BindOperatorSIDPolicy(owner OuterFinalizer, policy operatoraut
 	if policy.OperatorSID != factories.operatorSID || policy.GuestSID != factories.guestSID {
 		return ErrProvisioningRejected
 	}
-	factory, err := operatorauth.NewSIDEndpointFactory(s.control.factories.auth, factories.operatorSID, policy)
+	var factory *operatorauth.EndpointFactory
+	var err error
+	if supplier == nil {
+		factory, err = operatorauth.NewSIDEndpointFactory(factories.auth, factories.operatorSID, policy)
+	} else {
+		factory, err = operatorauth.NewSIDEndpointFactoryWithSupplier(factories.auth, factories.primaryToken, factories.operatorSID, policy, factories.profile, *supplier)
+	}
 	if err != nil {
 		return ErrProvisioningRejected
 	}

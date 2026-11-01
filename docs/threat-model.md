@@ -1,5 +1,7 @@
 # Rescue Hostの脅威モデル
 
+> **対象範囲の更新（2026-11-01）:** 以下の旧SSH / Windows / Pythonに関する本文・受入条件は、その方式と記録時点の履歴として保持しています。現在のTetherはAI commandと一時派遣を目標にMacを優先し、現状の正本は[文書索引](README.md)と[検証状態](tether-pilot-status.md)です。旧ゲート閉鎖や未達を解除・達成扱いにはしません。Macは現在ユーザー・非sandboxであり、Windows隔離guestの保証を引き継ぎません。
+
 [安全要件](security.md) / [通信契約](communication-contract.md) / [接続再開の条件](SECURITY_BACKEND_CONTRACT.md)
 
 製品の新規接続ゲートは閉鎖しており、本番利用できません。
@@ -27,6 +29,9 @@
 | 配布元 → ダウンロードと実行 | artifactや依存物、hash一覧、ビルド経路の改ざん。評価helperのhash一致だけで配布元と検証器の独立性は得られない |
 
 OS管理者、kernel、保護側の資格情報を掌握した攻撃者に対する同一OS内の強制停止保証は目標に含めません。
+2026-10-30の[認証helper設計の保証範囲](adr/0004-localservice-auth-helper.md#未成立の境界)では、既に侵害された別のWindows serviceからの完全防御も保証対象外と明記しました。
+非管理者guestからの認証偽造・監督停止の乗っ取りを防ぐ要件と、専用service SID・ACL・実主体照合は維持します。
+共有LocalServiceや専用SIDの存在だけを認証証拠とせず、製品の保持process世代・token・固定設定へ結びます。
 一方、通常ゲストによる同一ユーザー領域への干渉は残すべき脅威で、非目標として除外しません。
 Go内のtimerと所有参照は、プロセスごと停止されると実行できません。
 

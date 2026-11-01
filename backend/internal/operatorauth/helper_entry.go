@@ -50,13 +50,83 @@ func (f helperEntryFactory) valid() bool {
 	return f.message != nil && f.profile != nil && f.thread != nil && f.closeRaw != nil
 }
 
-// No production source exists. Arguments identify an expected retained launch;
-// they cannot supply its protection, evidence, profile or execution budget.
+// protectedHelperLaunch is an unapproved candidate: a value compiled into both
+// the supervisor and helper images. The supervisor's root-protected Record pins
+// the helper image by path and SHA-256 before SCM or CreateProcess maps it, so
+// this value would be covered by that digest; the supervisor additionally
+// requires it to equal the Record. No protected producer for a deployed value
+// exists, so it stays unset and inactive: argv, environment and files never
+// assign it.
+var protectedHelperLaunch helperLaunchFixed
+
+const supplierEntryArg = "--auth-supplier-internal"
+
+// Arguments select one fixed role and carry locators only; they cannot supply
+// protection, evidence, profile, Service names or any budget.
 func runNativeFixedHelper(ctx context.Context, args []string) error {
-	return runFixedHelper(ctx, args, nil, helperEntryFactory{
+	return runHelperProcess(ctx, args, protectedHelperLaunch, nativeHelperLaunchWitness(), nativeSupplierEntry(), helperEntryFactory{
 		message: newNativeMessageEndpoint, profile: newNativeProfileReceiver,
 		thread: func() threadKernel { return &nativeThread{} }, closeRaw: closeNativeHelperEntryHandle,
 	})
+}
+
+// runHelperProcess is the single production dispatch for the helper image. An
+// unset or invalid compiled value refuses before any native call.
+func runHelperProcess(ctx context.Context, args []string, fixed helperLaunchFixed, witness helperLaunchWitness, supplier supplierEntryKernel, factory helperEntryFactory) error {
+	if !fixed.valid() {
+		return ErrUnconfigured
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return ErrDenied
+	}
+	if len(args) == 1 && args[0] == supplierEntryArg {
+		return runSupplierEntry(ctx, fixed, supplier)
+	}
+	// The preparation deadline comes from the same compiled value, not argv.
+	bounded, cancel := context.WithTimeout(ctx, fixed.runBudget+fixed.cleanup)
+	defer cancel()
+	source, err := newHelperLaunchSource(fixed, args, witness)
+	if err != nil || source == nil {
+		return errors.Join(ErrUnconfigured, err)
+	}
+	return runFixedHelper(bounded, args, source, factory)
+}
+
+// supplierEntryKernel is the SCM dispatcher of the fixed supplier Service. run
+// blocks until the dispatcher returns and serves through serveSupplierEntry.
+type supplierEntryKernel interface {
+	run(ctx context.Context, name string, lifetime time.Duration) error
+}
+
+// runSupplierEntry is the dedicated LocalService supplier. It opens no token,
+// pipe or handle: the supervisor opens its process token. It reports running
+// and ends at a stop request, at the compiled lifetime, or on cancellation, so
+// a generation whose owner retired fatally still stops without that owner.
+func runSupplierEntry(ctx context.Context, fixed helperLaunchFixed, k supplierEntryKernel) error {
+	if k == nil {
+		return ErrUnconfigured
+	}
+	return k.run(ctx, fixed.supplierService, fixed.supplierLifetime())
+}
+
+// serveSupplierEntry is the SCM handler body. handle reports whether a request
+// is a stop; it may answer an interrogation itself but never extends lifetime.
+func serveSupplierEntry[T any](ctx context.Context, lifetime time.Duration, requests <-chan T, running func(), handle func(T) bool) {
+	timer := time.NewTimer(lifetime)
+	defer timer.Stop()
+	running()
+	for {
+		select {
+		case r, ok := <-requests:
+			if !ok || handle(r) {
+				return
+			}
+		case <-timer.C:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // runFixedHelper is a private dedicated-process entry, never a registration API.

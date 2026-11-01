@@ -1,4 +1,4 @@
-"""固定Goと2moduleの本文を収集する。Go実行・取得・配布判定は行わない。"""
+"""固定Goと3moduleの本文を収集する。Go実行・取得・配布判定は行わない。"""
 
 import argparse
 import hashlib
@@ -11,6 +11,9 @@ import stat
 
 GO_VERSION = 'go1.27.3'
 MODULES = {
+    'github.com/coder/websocket': ('v1.8.15',
+                                 'h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=',
+                                 'h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg='),
     'golang.org/x/crypto': ('v0.58.0',
                           'h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=',
                           'h1:Xh+kl5A+M0gMiWDytH2Hhr5Z7WbNCpv/eB/EFgfSk+w='),
@@ -21,6 +24,14 @@ MODULES = {
 TEXT_SHA = {'LICENSE': '911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad',
             'PATENTS': '96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc'}
 # Fixed-tag upstream text digests; module h1 and toolchain provenance are separate.
+WEBSOCKET_TEXT_SHA = {
+    'LICENSE.txt': 'cc0975a5f6305145bdd7b41ce9479632fdac3870e6ac4281f28017f18c767c4e',
+}
+MODULE_TEXTS = {
+    'github.com/coder/websocket': ('https://github.com/coder/websocket', WEBSOCKET_TEXT_SHA),
+    'golang.org/x/crypto': ('https://github.com/golang/crypto', TEXT_SHA),
+    'golang.org/x/sys': ('https://github.com/golang/sys', TEXT_SHA),
+}
 
 
 class CollectionError(Exception):
@@ -106,11 +117,34 @@ def check_metadata(data):
 
 
 def check_locks(locks):
-    expected_mod = ['module', 'github.com/O2-CONNECTIVE/rescue-host/backend', 'go', '1.27.3']
-    for name, (version, _, _) in MODULES.items():
-        expected_mod += ['require', name, version]
-    require(locks['go.mod'].decode('utf-8').split() == expected_mod,
-            'GO_LICENSE_LOCK_MISMATCH')
+    # Deliberately narrow grammar: exact module/go declarations and fixed
+    # require entries, either individual or a block. No comments, replacement,
+    # toolchain/exclude directive, quoted path or extra dependency is accepted.
+    tokens = locks['go.mod'].decode('utf-8').split()
+    require(tokens[:4] == ['module', 'github.com/O2-CONNECTIVE/rescue-host/backend',
+                           'go', '1.27.3'], 'GO_LICENSE_LOCK_MISMATCH')
+    remaining, found = tokens[4:], {}
+    while remaining:
+        require(len(remaining) >= 3 and remaining[0] == 'require', 'GO_LICENSE_LOCK_MISMATCH')
+        remaining = remaining[1:]
+        grouped = remaining[0] == '('
+        if grouped:
+            remaining = remaining[1:]
+        count = 0
+        while remaining and (not grouped or remaining[0] != ')'):
+            require(len(remaining) >= 2, 'GO_LICENSE_LOCK_MISMATCH')
+            name, version = remaining[:2]
+            require(name in MODULES and name not in found and version == MODULES[name][0],
+                    'GO_LICENSE_LOCK_MISMATCH')
+            found[name] = version
+            count += 1
+            remaining = remaining[2:]
+            if not grouped:
+                break
+        if grouped:
+            require(count > 0 and remaining and remaining[0] == ')', 'GO_LICENSE_LOCK_MISMATCH')
+            remaining = remaining[1:]
+    require(set(found) == set(MODULES), 'GO_LICENSE_LOCK_MISMATCH')
     expected_sum = []
     for name, (version, module_sum, mod_sum) in MODULES.items():
         expected_sum += [[name, version, module_sum], [name, version + '/go.mod', mod_sum]]
@@ -134,11 +168,11 @@ def collect(args):
             'GO_LICENSE_TOOLCHAIN_VERSION_MISMATCH')
     files = {}
 
-    def texts(root, destination):
+    def texts(root, destination, hashes):
         records = {}
-        for name in TEXT_SHA:
+        for name in hashes:
             data = read_file(root / name, 16 * 1024)
-            require(digest(data) == TEXT_SHA[name], 'GO_LICENSE_TEXT_HASH_MISMATCH')
+            require(digest(data) == hashes[name], 'GO_LICENSE_TEXT_HASH_MISMATCH')
             path = destination + '/' + name
             files[path] = data
             records[name] = {'path': path, 'sha256': digest(data)}
@@ -153,17 +187,18 @@ def collect(args):
         'lockFiles': {name: digest(data) for name, data in locks.items()},
         'toolchain': {'version': GO_VERSION, 'source': 'https://github.com/golang/go/tree/' + GO_VERSION,
                       'archiveVerified': False,
-                      'texts': texts(args.go_root, 'go-toolchain/' + GO_VERSION)},
+                      'texts': texts(args.go_root, 'go-toolchain/' + GO_VERSION, TEXT_SHA)},
         'modules': [],
     }
     for module, (version, module_sum, mod_sum) in MODULES.items():
         name = module.rsplit('/', 1)[1]
+        upstream, hashes = MODULE_TEXTS[module]
         inventory['modules'].append({
             'module': module, 'version': version, 'moduleSum': module_sum, 'goModSum': mod_sum,
-            'source': 'https://github.com/golang/' + name + '/tree/' + version,
+            'source': upstream + '/tree/' + version,
             'directoryVerified': False,
             'texts': texts(fixed_directory(args.module_cache, module + '@' + version),
-                           name + '-' + version),
+                           name + '-' + version, hashes),
         })
     files['DEPENDENCIES.json'] = (json.dumps(inventory, indent=2, sort_keys=True) + '\n').encode()
     try:
@@ -185,7 +220,7 @@ def main():
     parser.add_argument('--source', required=True)
     try:
         collect(parser.parse_args())
-        report = {'check': 'go-license-inventory', 'status': 'collected', 'textCount': 6,
+        report = {'check': 'go-license-inventory', 'status': 'collected', 'textCount': 7,
                   'distributionStatus': 'blocked', 'productionGateClosed': True}
         code = 0
     except CollectionError as error:

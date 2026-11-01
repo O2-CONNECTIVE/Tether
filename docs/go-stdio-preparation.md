@@ -1,6 +1,6 @@
 # Go stdio 入口の準備
 
-[Issue #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25) / [IPC仕様案](product-ipc-proposal.md) / [製品gate](security.md)
+[Issue #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25) / IPC仕様案（過去の参照資料・本文非同梱） / [製品gate](security.md)
 
 製品schemaの採用前に使う入出力基盤です。
 `cmd/rescue-backend` は引数によらず固定診断をstderrへ書き、exit 2で終了します。

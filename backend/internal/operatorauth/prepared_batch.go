@@ -3,8 +3,8 @@ package operatorauth
 import (
 	"context"
 	"errors"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/bootstrapauth"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/bootstrapauth"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceauthowner"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceready"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor/ephemeral"
@@ -48,6 +48,8 @@ func (b *nativeBatch) revoke() error {
 	b.collector.failed, b.collector.closed = true, true
 	b.collector.mu.Unlock()
 	b.mu.Unlock()
+	// 新規借用だけを先に閉じる。進行中の取得を待たず、保持参照は回収しない。
+	b.spec.supplier.revoke()
 	defer func() {
 		b.mu.Lock()
 		startCancel, collectCancel := b.startCancel, b.collectCancel
@@ -123,27 +125,41 @@ func (b *nativeBatch) Collect(ctx context.Context) (*Read, error) {
 		return nil, ErrDenied
 	}
 	defer func() { <-b.operation }()
+	// A supplier-lent child is collected only until the lending budget ends, so
+	// no result outlives that authority. The returned Read carries this context:
+	// it ends at that budget or when Close/revoke cancels the collection, never
+	// when Collect returns. A past end fails through the Collector's own path,
+	// which reclaims with the same owner.
+	release := func() {}
+	if s := b.spec.supplier; s != nil {
+		bounded, stop := context.WithDeadline(ctx, s.borrowEnd())
+		ctx, release = bounded, stop
+	}
 	b.mu.Lock()
 	if !b.ready || b.closing {
 		b.mu.Unlock()
+		release()
 		return nil, ErrDenied
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	b.collectCancel = cancel
+	end := func() { cancel(); release() }
+	b.collectCancel = end
 	b.mu.Unlock()
 
 	r, err := b.collector.Collect(ctx)
 	if err != nil {
-		cancel()
+		end()
 	}
 	b.mu.Lock()
 	fatal := b.fatal
 	closing := b.closing
 	b.mu.Unlock()
 	if fatal != nil {
+		end()
 		return nil, errors.Join(err, ErrFatal, fatal)
 	}
 	if closing {
+		end()
 		return nil, ErrDenied
 	}
 	return r, err
@@ -207,6 +223,9 @@ type EndpointFactory struct {
 	spec         nativeBatchSpec
 	policy       profileProviderPolicy
 	sidPolicy    SIDPolicy
+	// supplier/parent は元Recordの複製。lease は要求ごとに Prepare で作る。
+	supplier *HelperSupplierConfig
+	parent   bootstrapauth.Profile
 }
 
 func newEndpointFactory(s nativeBatchSpec, f *bootstrapauth.Factory, token uintptr, p profileProviderPolicy) (*EndpointFactory, error) {
@@ -224,10 +243,13 @@ func (f *EndpointFactory) Prepare(input *serviceready.SoleInput, owner *servicea
 	if f == nil || f.self != f || input == nil || !owner.MatchesIssuer(issuer) {
 		return nil, ErrUnconfigured
 	}
-	// SID policy構成とhelper資源の供給は別契約。正規runtime未構成なら
-	// SoleInput.Moveやnative取得より前に閉じる。
+	// SID policy構成とhelper資源の供給は別契約。supplierが未構成、または
+	// image内の固定値がRecordと一致しなければSoleInput.Moveやnative取得より前に閉じる。
 	if f.sidPolicy != (SIDPolicy{}) {
-		return nil, ErrUnconfigured
+		if !f.supplierEnabled() {
+			return nil, ErrUnconfigured
+		}
+		return prepareNativeSupplierSIDBatch(f, input, batchOwner{issuer: issuer, owner: owner})
 	}
 	return prepareNativeSoleInputProfileBatch(f.spec, input, f.service, f.serviceToken, batchOwner{issuer: issuer, owner: owner}, f.policy)
 }

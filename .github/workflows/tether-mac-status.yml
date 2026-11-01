@@ -1,0 +1,71 @@
+name: Tether Mac status source and owned GUI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, wip/tether-public-pilot-20261101]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac-status:
+    name: Swift source, packaging and synthetic owned GUI
+    runs-on: macos-26
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        working-directory: ui/mac-status
+        shell: bash
+    steps:
+      - name: Check out source without retained credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Require the documented standard arm64 toolchain
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test -d "$DEVELOPER_DIR"
+          test "$(uname -m)" = arm64
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 26.5"
+          xcodebuild -version
+          git rev-parse HEAD
+          xcrun swift --version
+          xcrun --sdk macosx --show-sdk-version
+          sw_vers
+          printf 'ImageOS=%s ImageVersion=%s\n' "$ImageOS" "$ImageVersion"
+      - name: Test the bounded source-only CI harness
+        run: |
+          python3 - <<'PYTEST'
+          import unittest
+          suite = unittest.defaultTestLoader.discover("Tests", pattern="test_ci_checks.py")
+          if suite.countTestCases() != 12:
+              raise SystemExit("CI_HELPER_TEST_COUNT_MISMATCH")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if not result.wasSuccessful() or result.skipped or result.testsRun != 12:
+              raise SystemExit(1)
+          PYTEST
+      - name: Build, core checks and local evaluation packaging
+        run: python3 Tests/run_ci_checks.py source
+      - name: Require real owned-window and own-content rendering checks
+        run: python3 Tests/run_ci_checks.py gui
+      - name: Preserve only synthetic status evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: tether-mac-status-synthetic-evidence
+          path: |
+            ui/mac-status/.build/ci-evidence/*.json
+            ui/mac-status/.build/fixture-images/*.png
+          if-no-files-found: error
+          retention-days: 3

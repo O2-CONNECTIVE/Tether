@@ -55,7 +55,7 @@ func (b *nativeBatch) moveInput(ctx context.Context) error {
 	if errors.Is(err, serviceready.ErrFatal) || errors.Is(err, ErrFatal) {
 		return b.retainScopeFailure(errors.Join(ErrFatal, err))
 	}
-	if h != 0 && (!helperHandle(h) || h == b.spec.launch.primaryToken || b.ops.scope != nil && h == b.ops.scope.token) {
+	if h != 0 && (!helperHandle(h) || h == b.helperToken || b.ops.scope != nil && h == b.ops.scope.token) {
 		// pseudo/借用 token との alias は close せず、同じ owner に未知を残す。
 		b.mu.Lock()
 		b.uncertain = true
@@ -82,7 +82,7 @@ func (b *nativeBatch) checkMovedPipeAliases(profile batchProfile, report batchRe
 	if b.spec.soleInput == nil {
 		return nil
 	}
-	retained := []uintptr{b.input, b.spec.launch.primaryToken}
+	retained := []uintptr{b.input, b.helperToken}
 	if b.ops.scope != nil {
 		retained = append(retained, b.ops.scope.token)
 	}

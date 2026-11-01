@@ -1,103 +1,83 @@
-# Rescue Host
+# Tether（テザー）
 
-**開発中。新規接続は停止中で、本番利用できません。**
+[用語と名前の境界](GLOSSARY.md)
 
-全体進捗、完了済みの範囲、未決事項は[単発版のマイルストーンとロードマップ](https://github.com/O2-CONNECTIVE/rescue-host/issues/22)、受入条件と履歴は[受入44条件](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)を参照してください。
-コード統合、限定検証、実機受入は別判定で、実SSHとWindows保護は未検証、製品接続gateは閉鎖中です。
+必要な間だけ、承認した相手から端末を操作できる仕組みを作っています。
+**開発中・限定評価段階です。一般配布・本番利用はまだできません。**
+現在は **AI agent から Mac を操作する経路**を優先しています。
 
-顧客や社員が自分のPCへの接続主導権を持ち、許可した相手に一時的なアクセスを渡して、エージェントによる環境構築や作業代行を受けられることを目指すプロジェクトです。
-相手、操作範囲、期限をPC側で承認し、停止や期限でアクセスを失効させる構想です。
-現在のTauri配布物は**バックエンド未接続のGUI評価版**で、Go / SSHはUIと未配線、開始と停止は無効です。
+## 2つのゴール
 
-## 想定する用途と利用の流れ
+1. **dot がリモートホストのコマンドを操作できること。** MCP の start / output / status / cancel を、本人の承認・期限・失効に結びます。
+2. **人間が開発 PC から、必要なときだけ操作 agent を派遣できること。** 最小経路は受領者による取得・前景起動・その回の明示同意です。無認証 remote install や恒久常駐を前提にしません。
 
-以下は開発目標であり、現在利用できる遠隔機能ではありません。
+人向け SSH 互換は現在の完成条件から外しています。途中の SSH / Windows 実装は削除せず、将来の再統合候補として保存しています。製品名の変更に伴う repository や実行ファイル名の一括変更はしていません。
 
-- 開発ツールの導入や設定など、環境構築を一時的に任せる。
-- PCの診断や修復、日常の作業を許可した範囲で代行してもらう。
-- 必要な間だけアクセスを渡し、作業後は許可を終了する。
+## 現在地
 
-目標の流れは、PC側（host）で相手、操作範囲、期限を承認 → 操作側（operator）へ一時アクセスを渡す → 許可範囲で作業 → 停止または期限による失効と終了確認です。
-初期評価は非管理者の遠隔ゲストを対象とし、管理者昇格は含みません。
-PCや監督サービスの再起動後は許可をすべて失効させ、再承認を求める方針です。
-この流れを成立させる保護サービス、認証付きIPC、実SSHの製品配線は未検証です。
+| 境界 | 確認したこと | まだ確認していないこと |
+| --- | --- | --- |
+| Mac native command | 固定した旧 snapshot の1名・1 Macで正常実行、取消、要求なし期限切れ、実行中通信断の4 case | 任意 workload、他端末・他利用者、新しい build 全体の実動作 |
+| Claude Code HTTP/OAuth | 実認証・接続と4 toolの discovery | Claude からの実 command。native 4 caseとは別の証跡 |
+| dot → MCP | 実装・接続準備 | workspace の plugin 作成が403拒否。管理者による利用許可確認待ち |
+| Mac status GUI | 読取専用 SwiftUI、build・合成状態・所有 window 終了、ローカル評価 `.app` | 実 agent と GUI の同時動作、Finder/Gatekeeper、署名済み配布 |
+| 人間による一時派遣 | 前景 CLI、評価 package 作成ツールの source | 一般受領者の起動受入、初回 enrollment、配布条件の充足 |
 
-## GUIの現在地
+4名用の認証方針があることと、4名全員の backend identity / 鍵登録が済んでいることは別です。
+限定実演用の公開入口・専用 gateway は閉鎖・停止を確認済みで、常時接続サービスは提供していません。
+この文書は現在の開発ソースを説明し、すべてが公開 main に統合済みという宣言ではありません。
+詳細と固定証跡は **[現在の検証状態・残件](docs/tether-pilot-status.md)** を正本とします。
 
-![未接続Tauri shellのブラウザー描画。Rust IPCを取得できない表示例で、native起動や遠隔接続の証拠ではありません。](docs/assets/tauri-native-shell-browser.png)
+## 構成と対象環境
 
-画像は実HTML/CSSのブラウザー描画で、接続機能を持たないshellの表示例です。
-[AI生成の目標UI案](docs/assets/rescue-host-ui-concept.png)も保管していますが、実画面や実装済み機能を示しません。
+```text
+MCP client → HTTPS 認証入口 → Go gateway / 薄い MCP adapter
+                                  ↕ 認証済み agent channel / WSS
+受領者の Mac: 前景 CLI → fresh 同意 → 有限 grant → command runtime
+                    └→ 専用 status pipe → 読取専用 SwiftUI viewer
+```
 
-## 主な機能と状態
+gateway は呼出主体と登録済みホストを照合しますが、Mac の同意を代行せず grant を発行・延長しません。
+人向け SSH server や既存 sshd への fallback はありません。
+詳しい責任分担は[文書索引](docs/README.md)、[gateway](docs/agent-gateway.md)、[CLI](docs/agent-cli.md)を参照してください。
 
-| 対象 | 現在の状態 |
+| 対象 | 現時点の範囲 |
 | --- | --- |
-| Tauri GUI | 未接続状態の表示、診断表示、状態の再確認を実装。開始と停止は無効 |
-| 操作側UIモック | 承認待ち・準備失敗・期限切れ・終了未確認を区別し、遅い応答による停止待ちの巻戻りを拒否。[#154](https://github.com/O2-CONNECTIVE/rescue-host/pull/154)のsource/browser回帰で確認。実通信は未配線 |
-| 既存Python版 | 操作範囲の設定保存、期限と失効のオフラインモデル、旧記録の回復補助を実装 |
-| Go基盤 | 認証、固定宛先、期限と失効、所有接続の管理、未配線の制御入口と認可モデルをmainへ統合済み |
-| 製品用の制御配線 | codec、coordinator、service host等の未接続準備コードを[#72](https://github.com/O2-CONNECTIVE/rescue-host/pull/72)でmainへ統合済み。UIからの製品接続は利用不可 |
-| 制御経路の準備 | Windows側clientとbootstrap周辺の準備を進めています。実pipeの認証、正規承認、実SSHとの接続は未検証です |
-| 遠隔作業とOS保護 | 実サービス、ACL、製品のJob管理、認証付きIPC、実SSHの一連の製品動作は未検証 |
+| Mac command target | 現在ユーザー権限、昇格なし・sandboxなし。現在の agent build 宣言は macOS **26.0** |
+| Mac status viewer | macOS **13.0**以上を宣言。ただし13実機未検証で、agent全体の対応下限ではない |
+| Linux / Windows | gateway の配置候補と source/build 検証を、command target対応と区別。Windows target追加は保留 |
+| 旧 Windows Tauri / Python | 履歴として保持。現在のMac実行基盤へ接続されたGUIではない |
 
-GUI評価版の実機起動と表示は利用者から確認済みです。
-固定guest設定の保護Root読取と要求単位の検査leaseは[#147](https://github.com/O2-CONNECTIVE/rescue-host/pull/147)、確認から同issuerの単回発行・status・revokeまでのsource/fake経路は[#148](https://github.com/O2-CONNECTIVE/rescue-host/pull/148)で統合しました。
-同Endpointの検査leaseを入力分離前に保持するAPIは[#149](https://github.com/O2-CONNECTIVE/rescue-host/pull/149)で統合しました。
-main `3b4a3ac75c1307071ad6c94f15f6a35330729d53` の[Go 3OS](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40969758285)・[Python 3OS](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40969758341)・[日本語検査](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40969758270)は全7ジョブ成功しています。
-発行経路の正例はprivate OS seamを置換したfixtureで、製品runtime providerは未登録、実LaunchとSSHは未接続です。
-未起動guestの準備は、[#150](https://github.com/O2-CONNECTIVE/rescue-host/pull/150)で明示入口から元ownerと実stager factoryへのsource配線を追加しました。固定SID policyは保持RootからServiceへ供給済みですが、専用helperのtoken・同一launch証拠・保護sourceは未構成で、実Windowsの製品入口は取得前の拒否を維持します。
-承認主体は[方式B](docs/adr/0002-operator-sid-policy.md)を採用しました。指定Windowsユーザーの再ログイン後も新規承認資格はありますが、既存許可や接続を引き継ぎません。
-[#151](https://github.com/O2-CONNECTIVE/rescue-host/pull/151)の認証coreは固定SIDと実message主体を分離し、専用helper資源の未構成拒否を維持します。[#152](https://github.com/O2-CONNECTIVE/rescue-host/pull/152)で保持RootからServiceへの供給と、同一channelでのAuthId完全一致・別ログオンへの移譲拒否をsource/fakeで検証しました。
-このCIは実機SSH、停止の強制力、OS保護、製品接続の成功や保証ではありません。
-端末内実行は[方式Cと利用中のLocalSystem監督service](docs/adr/0003-owned-guest-workload.md)を設計採用しました。既存Windows OpenSSHの設定やportに依存せず、一時非管理者guestと同じtargetの検査・承認・停止を製品が所有する方針です。
-[基盤API](backend/internal/childjob/README.md)には、停止中targetの保持、token読取、保護記述子検査と承認後単回開始のsource候補があります。実装中の縦断は固定された無害workloadを対象にし、従来NETWORK契約とは別のBATCHログオンを明示します。
-固定評価のcommand入口はruntime構成へ接続し、同じ確認応答の書込み完了後にだけ保持中の承認から単回開始するsource経路を追加しました。明示runtime構成には有限のService要求受付を接続し、前要求の回収・worker終了後にだけ次要求へ進みます。previewは受付を始めません。設定は空のままで、通常の実行fileは取得前に拒否します。実message認証helperの起動資源、配布用固定値、実終了観測は未構成・未検証です。
-方式Bの[入力移譲と認証結果の回収](backend/internal/operatorauth/sole-input-batch.md#方式bの入力移譲)はBatch内のsource/fake結合であり、正規helper資源の供給や実Windows・SSHの接続完了ではありません。
-[利用中のLocalService認証helper分離](docs/adr/0004-localservice-auth-helper.md)を設計採用しました。共有ユーザーSIDと専用service SIDを分けて検査するsourceを整備し、正規token供給元の初期保護・寿命・実配置は未成立のままです。
-source/fakeの成功とWindows向けcompileを、実guestの生成・保護・停止や実SSHの成功には読み替えません。製品caller、実Windows配置、実SSH session処理と実機受入は未接続または未検証で、開始ゲートは閉鎖したままです。
-旧mainの配布CIの終了確認失敗は履歴として保持し、#72で更新した終了観測契約と分けて扱います。
-過去の統合版で通常nativeと展開EXEの限定した終了確認が成功しました。各版のCI結果は固定したsourceごとに確認します。
-[確認した版、公開証跡、統合済み準備コード、残る制約](docs/status.md)を参照してください。
+## ローカル開発の最短入口
 
-## OSごとの対象
+既存の対応 Swift toolchain がある Mac で、リポジトリルートから：
 
-実リモート接続を製品として対応済みと呼べるOSはありません。
+```sh
+cd ui/mac-status
+swift build
+swift run StatusCoreChecks
+python3 scripts/package_local.py
+```
 
-| 役割 | Windows | macOS | Linux |
-| --- | --- | --- | --- |
-| host（アクセスを渡すPC） | 初期対象として開発中 | 未対応 | 未対応 |
-| operator（操作側） | 構想段階 | 構想段階 | 構想段階 |
-| Tauri GUI評価版 | x64の未接続評価版 | native評価未確認 | native評価未確認 |
-| 開発検証 | Python / Goの限定CI | Python / Goの限定CI | Python / Goの限定CI |
+最後の行は既存 build からローカル評価 `.app` を作るだけで、起動・install・署名・agent接続をしません。既存出力は上書きせず停止します。
+[viewer の手順と制約](ui/mac-status/README.md)を先に確認してください。通常起動には専用 status pipe が必要で、入力がなければ接続状態は不明です。
 
-3 OSでのGo試験成功は、製品のOS対応や保護境界の成立を証明しません。
-サポート終了OSを用いた確認は互換性評価として分け、正式対応や本番安全性の証拠にしません。
-OS版やCPUごとの確認範囲は[対応環境と検証状況](docs/status.md#osと役割ごとの範囲)で確認します。
+Go の入口は `backend/cmd/rescue-gateway`、`backend/cmd/rescue-mac-agent`、stdio adapter は `backend/cmd/rescue-mcp` です。
+実接続は保護設定・鍵・identity・今回の同意・許可された入口がそろってから行います。clone/buildだけでは接続できません。
+[Go検証](docs/go-ci.md) / [CLIの設定契約](docs/agent-cli.md) / [開発手順](docs/agent-workflow.md)
 
-## 評価と開発の入口
+## 安全と配布の境界
 
-GUI評価は[未接続Tauri評価版の説明](docs/tauri-evaluation.md)と[同梱手順](docs/tauri-evaluation-readme.txt)に沿い、表示や操作性と通信の検証を分けて記録します。
-候補のsource SHA、ハッシュ、CI結果を照合し、開始と停止が無効であることを確認します。
-新しい候補の合格や配布可を、過去の実機確認から推定しません。
-実機の事前確認、未確定項目、実行時承認、受け入れと撤去の準備は[Windows限定評価手順](docs/windows-evaluation-runbook.md)にまとめています。
-[配布版の受入手順と結果記録](docs/windows-acceptance-records.md)には開始条件・終了確認・公開要約の形式検査をまとめています。実機8件は未実行で、記録形式の合格は実機合否を認定しません。
+- Macの実行は現在ユーザーと同じ権限です。そのユーザーがアクセスできるファイル・ネットワークへ届き、同一ユーザーからの干渉も防げません。Windowsの隔離guestと同等ではありません。
+- 期限・取消・通信断で失効し、同じownerが所有process群とI/Oの回収を試みます。実行済み変更は戻らず、群を離れた子孫の停止は保証しません。
+- cleanup unknownは非成功です。GUIの閉鎖・EOF・残時間0だけでは停止確認になりません。GUIは承認・開始・取消を行いません。
+- packageに鍵・token・同意を入れません。license/依存閉包、配布署名・notarization、一般受領者の受入は未完です。評価 `.app` のlinker ad-hoc署名は配布identityの署名ではありません。
 
-開発時は[Pythonのオフライン検証](docs/development.md)、[Tauriの検証手順](ui/tauri/README.md)、[Goの検証手順](docs/go-ci.md)から対象を選びます。
-GUIの終了は通信終了の証明ではありません。
-旧Python版の記録を扱う場合は[回復時の注意](docs/recovery.md)を確認してください。
+[文書索引と現行安全契約](docs/README.md) / [Mac runtime](docs/mac-agent-runtime.md) / [旧設計の安全要件](docs/security.md)
 
-## 構成と詳細資料
+## 歴史資料
 
-現行の設計と安全契約は `docs/`、旧レビュー・引き継ぎ・検証記録は `docs/history/` にあります。
+SSH/Windowsの過去の提供状況は旧検証状態に分けて記載しています。
+旧受入条件の未達や過去の失敗は消していません。現在のMac限定評価と、旧SSH/Windowsの提供状況を合成しないでください。
 
-![既存Python部分の構成図。設定とオフラインモデル、開始拒否、将来の安全境界を区別。](docs/assets/architecture.svg)
-
-既存の構成図はPython部分の説明です。
-現在のGo基盤は[backendの説明](backend/README.md)、製品配線の候補は[制御契約ADR](docs/adr/0001-control-contract-candidate.md)を参照してください。
-
-- [構成図の説明とPNG](docs/architecture.md) / [配置方針](docs/repository-layout.md)
-- [安全要件](docs/security.md) / [脅威モデル](docs/threat-model.md) / [検証状況](docs/status.md)
-- [UIとアクセシビリティ](docs/design-accessibility.md) / [native検証](docs/tauri-native-smoke.md)
-- [開発手順](docs/agent-workflow.md) / [進捗Issue](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)
-- [変更履歴](CHANGELOG.md) / [ライセンス](LICENSE)
+[旧検証状態](docs/status.md) / [配置方針](docs/repository-layout.md) / [変更履歴](CHANGELOG.md) / [ライセンス](LICENSE)

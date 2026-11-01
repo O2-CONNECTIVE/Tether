@@ -16,3 +16,6 @@ third_party/
 /ui/tauri/node_modules/
 /ui/tauri/src-tauri/target/
 /ui/tauri/src-tauri/gen/
+
+# Local Cloudflare CLI cache/state is not project source
+/.wrangler/

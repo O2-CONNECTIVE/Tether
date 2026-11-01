@@ -38,12 +38,15 @@ accept側の受信準備後に固定65536 byteを送り、同じ初回TCP Write�
 偽clockでは5秒直前・到達・壁時計だけの前進と失効後の復活拒否を確認しますが、実OSの時刻変更を再現したものではありません。
 これは試験の時計領域を揃える変更で、製品の5秒期限・lease・maximumは変更しません。
 
-通常buildに選択される26package、Linux/macOSでは258実装、Windowsでは285実装ファイルを照合します。
+通常buildに選択される39package、Linux/macOSでは309実装、Windowsでは340実装ファイルを照合します。
 guestaccountは下記の共通・OS別実装を限定登録し、memory/native API seamで準備・失効・清掃順序を検査します。実account・保護rootからのjournal供給・動的GuestSID・有効化は未接続です。
 同じdeep snapshotからの制御用Factory pair、SCM所有threadのfresh Witness照合、応答write bridgeの共通3実装を限定登録します。正常縦断は既存memory auth/write fixtureの証拠で、実Native入力の認証・実SSH成功には広げません。
 operatorauthのsole_input_batch.goは具体SoleInputの単回Moveと部分所有保持を追加します。Moveや候補取得を認証proofにはせず、Serviceへの正規factory供給と実Windows保護は未実証です。
+operatorauthのsupplier.go・supplier_config.go・helper_launch_source.goと、Windowsのsupplier_image/native/security・helper_launch_native、他OSのhelper_launch_native_otherはsupplier借用と子側同launch証拠のsourceです。fake試験とcompileだけで、実SCM起動・token・ACL・認証の成功は未実証です。
+一時supplierのSCM登録・撤去も既存のsupplier.go・supplier_native_windows.go・supplier_security_windows.go・helper_entry_other.goに置き、実装fileは増やしません。取得と同じgateで閉じ、Windowsの登録・撤去sourceはcompile対象で、fake試験は共通の所有・再試行・退役だけを確認します。
 追加の未接続CLI、coordinator、所有pipe入口も相対ファイル名を明示し、fixtureや将来のpackageを無差別に許可しません。
 supervisorの追加はauthority.goの純粋grant判定だけで、service登録・IPC・timer・実OS保護を提供しません。
+同じauthority.goの失効通知`Done`、単回専有`ClaimConsumer`、時刻を観測しない`Grant`は、memory内の状態遷移と通知だけで、実装fileは増やしません。
 ephemeralの追加はissuer.goのmemory-onlyな単回発行だけです。durable store、実OSの承認口、サービス起動や実通信は追加しません。
 serviceauthownerは共通owner.goだけを許可し、実issuerと共通gateの状態を扱います。正規profile sourceや実OSの認証は提供しません。
 servicehostは共通control.go/host.go/approved.go/job.go/ownercontrol.go/issued.go/nativebootstrap.go/nativestdio.go/ownedstdio.go/scm_ready.go/service.go/outer.go/dispatch.go/dispatch_owner.go/reservation.go/delivery.go/auth_dispatch.go/workload_reclaim.go/auth_exchange.go/auth_exchange_endpoint.go/auth_exchange_worker.go/control_factory.go/control_readiness.go/control_exchange.go/preview.go/preview_dispatch.go/confirmation.go/confirmed_grant.go/confirmed_grant_snapshot.go/confirmed_target.go/guest_staging.go/guest_staging_dispatch.goと、go env GOOSに対応するSCM実装1件・nativebootstrap実装1件・SCM ready実装1件だけを許可します。
@@ -105,8 +108,9 @@ full suiteが既知fixture前提の不成立で失敗した場合も、その結
 | --- | --- | --- |
 | golang.org/x/crypto | v0.58.0 | [LICENSE](https://github.com/golang/crypto/blob/v0.58.0/LICENSE) / [PATENTS](https://github.com/golang/crypto/blob/v0.58.0/PATENTS) |
 | golang.org/x/sys | v0.49.0 | [LICENSE](https://github.com/golang/sys/blob/v0.49.0/LICENSE) / [PATENTS](https://github.com/golang/sys/blob/v0.49.0/PATENTS) |
+| github.com/coder/websocket | v1.8.15 | [LICENSE.txt](https://github.com/coder/websocket/blob/v1.8.15/LICENSE.txt) (ISC) |
 
-両moduleは公開担当が固定版のBSD系LICENSEとPATENTSを確認済みです。
+golang.org/x/crypto と golang.org/x/sys は公開担当が固定版の BSD 系 LICENSE と PATENTS を確認済みです。coder/websocket は 2026-10-31 に公式 Go proxy / checksum DB による取得、tag commit 9c8faadccd1b679e811a79ce506f8a10237251ad、ISC LICENSE.txt、追加 module 依存なしを確認しました。
 依存ソースやバイナリをこのPRで同梱せず、実配布物のnotice確認は#24へ残します。
 checksumの一致をlicense審査や脆弱性検査の代替にはしません。
 
@@ -179,6 +183,25 @@ profile/reportの明示v2と単回binding消費を検査し、policy構成をRoo
 LocalServiceと専用service SIDの分離は、登録済みoperatorauthのlaunch.go、native_batch.go、report.go、native_launch_windows.go、native_launch_binding_windows.goを変更します。
 追加はhelper_service_identity_test.goのfixtureだけで、実装fileのallowlistは増やしません。source/childの現在のgroup検査を、正規supplierの初期保護や実Windows隔離の証明へ昇格させません。
 
+process照会権とtoken objectの保護を対応させる検査は、servicereadyの共通`process_token.go`とWindows限定`process_token_windows.go`を登録します。
+同じ保持processのtoken owner/DACLと同一性の検査、変化時の失効、部分取得と回収再試行をprivate kernel seamで試験します。
+この追加に実Windowsでのtoken取得試験やservice起動は含めず、Windowsではcompileと同じfake回帰だけを行います。実配置・認証・実SSHは未検証です。
+
+## agent command core
+
+agentexecは全OS共通のcontract.go/output.go/run.go/session.goだけを登録し、OS別実装や試験用runtimeを通常buildへ混ぜません。
+同じissuerの現在Authorityを保持したstart/status/output/cancelと、所有process回収のmemory/fake試験です。
+固定agent policy digestへのmode束縛、Authority単位の単回Session、`Authority.Done`による外部失効の伝達を含み、公開`New`の試験は数百msの実timerを使います。
+固定guest shellのnative runtime、Service/transport/MCPの呼出し、実リモートでのcommand実行・GUI・SSH・配布の成功は含みません。
+[契約](agent-command-contract.md)の未接続境界を参照します。
+
+現在利用者の境界は`supervisor.NewCurrentUser`と`ephemeral.NewCurrentUser`だけが扱い、既定の`supervisor.New`・`ephemeral.New`のLaunchと既存のguest前提consumerは拒否します。実装fileは増やしていません。
+
+agent用の薄いadapterとして、全OS共通のagentwire（client.go/server.go/strict.go/wire.go）、mcpadapter（jsonrpc.go/server.go/tools.go）、cmd/rescue-mcp（main.go）を登録します。
+macagentは共通のruntime.go/process.goと、darwinではnative_darwin.go、Linux/Windowsではnative_other.goの1件を厳密選択します。
+試験はnet.Pipe/io.Pipeとmemory fakeだけで、認証済みchannel・relay・同意producer・実shell起動・MCP登録を実行しません。
+CIの合格はMacの実command実行、遠隔接続、配布の成功を示しません。詳細は[MCP adapter](agent-mcp-adapter.md)を参照します。
+
 ## 検査と承認の未接続bridge
 
 同対象の検査/単回開始の分離はchildjob/inspection.go、保持対象と同issuer challengeの結合はservicehost/confirmed_target.goだけを共通追加します。
@@ -207,3 +230,29 @@ guestaccountは共通`runtime_close.go`、`runtime_credential_io.go`、`runtime_
 失効後の新規取得を拒否しつつ、元の回収scopeと部分取得参照を保持する試験を含みます。
 source/fake・compile・CIの成功は、実Windowsでのaccount作成、BATCH logon、権利や保護SD、物理停止・撤去の証拠へ広げません。
 実機操作と製品callerは有効化していません。
+
+Agent-only encrypted channel inventory: `internal/agentchannel` contains channel.go, server.go, client.go, conn.go, keys.go and liveness.go. Tests use buffered in-memory connections and synthetic test-only keys; no listener/dial, enrollment or real relay is executed.
+信頼済み合成の`internal/agentlink`はhost.go/client.goの2件を全OS共通で登録します。試験はMCP stdio→agentwire→暗号化agent channel（memory conn）→同じSession→fake Mac runtimeの全経路を通しますが、実relay、同意producer、実鍵登録、Macでの実command実行の成功は示しません。
+2026-10-31の統合でchannelの失効順序の失敗を修正しましたが、修正後の結果は統合担当の実行で確認するまで未確定です。
+
+
+## HTTP MCP gateway source inventory
+
+`internal/agentgateway` の gateway.go/http.go/token.go/config.go、`cmd/rescue-gateway/main.go`、`internal/mcpadapter/http_bridge.go` を追加登録します。検証は直接 HTTP handler 呼出しと memory channel/fake runtime に限定し、実 listener、認証 provider、Tunnel、実 Mac command の成功とは区別します。
+
+
+`internal/agentkeys` は共通 7 ファイルと OS 別 native 1 ファイルを登録します。Darwin の native ACL 検証 source は cgo 必須、CI build の CGO_ENABLED=1 を維持します。CGO 無効の Darwin は鍵読取りを拒否します。Linux は `native_linux.go` の pure Go / x/sys 実装を限定登録しますが、compile 成功を実 native 保護確認済みと扱いません。試験は fake kernel であり、実鍵や実 OS の owner/ACL は読んでいません。
+
+### WSS registration transport
+`internal/agenttransport` の protocol.go/stream.go/gateway.go/mac.go を登録します。試験は memory connection と fake HTTP transport に限定し、実 TCP listener・TLS・Tunnel・実 Mac 起動は未検証です。
+
+### Concrete foreground agent CLI
+`cmd/rescue-gateway` の main.go/config.go と `cmd/rescue-mac-agent` の main.go/config.go を登録します。実 reader/key loader/tty approval/WSS caller は source 上で接続し、試験では private dependency seam と memory listener のみを使います。実行許可・実鍵供給・public route・実 Mac command の検証は別です。
+
+
+### Commandless Tether route probe
+`cmd/tether-echo-probe` の main.go/probe.go を全 OS 共通の限定 inventory に登録します。Go の検証は fake reader/listener、memory connection と合成 assertion、Worker の検証は fake VPC binding/socket/timer を使います。command を実行しない疎通専用 probe であり、実 Access 認証・VPC/WSL 到達・Mac command の成功は別判定です。現時点の Worker gate は閉鎖を維持します。設定と実演 gate は [probe 手順](../deploy/cloudflare/probe/README.md) を参照してください。
+
+
+### Local Access identity inspector
+`cmd/tether-access-identity/main.go` を全OS共通に登録します。公開issuer/AUD/JWKSを明示し、stdinのassertionを既存AccessVerifierで検証した後に限定claimsだけ出力するローカル登録補助です。認可・鍵発行・自動登録は行いません。試験は合成RSA/JWTとmemory inputのみ。詳細は [検証器手順](tether-access-identity.md) を参照してください。

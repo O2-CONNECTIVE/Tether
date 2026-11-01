@@ -1,0 +1,3 @@
+// swift-tools-version: 6.0
+import PackageDescription
+let package = Package(name: "TetherStatus", platforms: [.macOS(.v13)], products: [.executable(name: "TetherStatus", targets: ["TetherStatus"])], targets: [.target(name: "StatusCore"), .target(name: "StatusUI", dependencies: ["StatusCore"]), .executableTarget(name: "TetherStatus", dependencies: ["StatusCore", "StatusUI"]), .executableTarget(name: "StatusWindowChecks", dependencies: ["StatusCore", "StatusUI"], path: "Tests/StatusWindowChecks"), .executableTarget(name: "StatusCoreChecks", dependencies: ["StatusCore"], path: "Tests/StatusCoreTests", exclude: ["Fixtures"])], swiftLanguageModes: [.v5])

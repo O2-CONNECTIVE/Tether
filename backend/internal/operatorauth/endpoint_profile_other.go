@@ -15,6 +15,10 @@ func prepareNativeSoleInputProfileBatch(nativeBatchSpec, *serviceready.SoleInput
 	return nil, ErrUnconfigured
 }
 
+func prepareNativeSupplierSIDBatch(*EndpointFactory, *serviceready.SoleInput, batchOwner) (*nativeBatch, error) {
+	return nil, ErrUnconfigured
+}
+
 func prepareNativeSoleInputSIDBatch(nativeBatchSpec, *serviceready.SoleInput, *bootstrapauth.Factory, uintptr, batchOwner, SIDPolicy) (*nativeBatch, error) {
 	return nil, ErrUnconfigured
 }

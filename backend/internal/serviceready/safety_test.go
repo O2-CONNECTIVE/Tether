@@ -10,7 +10,7 @@ func TestStaticPoliciesRejectUnknownMutationAndDoNotOffsetAllowWithDeny(t *testi
 	for _, tc := range []struct {
 		process bool
 		mask    uint32
-	}{{false, 2}, {false, 0x20}, {false, 0x10}, {false, 0x100}, {false, 0x40000}, {false, 0x10000000}, {true, 0x40}, {true, 0x10}, {true, 0x20}, {true, 8}, {true, 1}, {true, 0x800}, {true, 0x400}} {
+	}{{false, 2}, {false, 0x20}, {false, 0x10}, {false, 0x100}, {false, 0x40000}, {false, 0x10000000}, {true, 0x40}, {true, 0x10}, {true, 0x20}, {true, 8}, {true, 1}, {true, 0x800}} {
 		c := config()
 		policy := &c.ServiceSecurity
 		if tc.process {
@@ -98,13 +98,13 @@ func TestChangedKernelEvidenceRevokesTheSamePlane(t *testing.T) {
 	}
 }
 
-func TestUnknownAndGuestProcessPolicyRejectsTokenOpeningQueryAccess(t *testing.T) {
+func TestUnknownAndGuestProcessPolicyRejectsGenericAndMaximumAccess(t *testing.T) {
 	for _, sid := range []string{"S-1-5-21-9", guest} {
-		for _, mask := range []uint32{0x1000, 0x121000, 0x400, 0x02000000, 0x80000000, 0x40000000, 0x20000000, 0x10000000} {
+		for _, mask := range []uint32{0x02000000, 0x80000000, 0x40000000, 0x20000000, 0x10000000} {
 			c := config()
 			c.ProcessSecurity.ACL = append(c.ProcessSecurity.ACL, protectedkey.ACE{Type: 1, SID: sid, Mask: mask}, protectedkey.ACE{SID: sid, Mask: mask})
 			if f, err := NewNative(c); f != nil || err != ErrConfig {
-				t.Errorf("未知/Guestへprocess query等を許可: SID=%s mask=%#x factoryConfigured=%t error=%v", sid, mask, f != nil, err)
+				t.Errorf("未知/Guestへgeneric等を許可: SID=%s mask=%#x factoryConfigured=%t error=%v", sid, mask, f != nil, err)
 			}
 		}
 		c := config()

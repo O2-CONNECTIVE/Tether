@@ -24,6 +24,41 @@ func approvedGrant() (supervisor.ProvisionedGrant, time.Time) {
 	}, now
 }
 
+// The current-user boundary has its own constructor. The default New keeps
+// accepting only the separated guest, and each constructor refuses the other.
+func TestCurrentUserBoundaryNeedsItsExplicitConstructor(t *testing.T) {
+	g, now := approvedGrant()
+	if a, err := supervisor.NewCurrentUser(g, now); err == nil || a != nil {
+		t.Fatal("NewCurrentUser accepted a guest-boundary grant")
+	}
+	g.GuestBoundary = supervisor.CurrentUserNoIsolation
+	if a, err := supervisor.New(g, now); err == nil || a != nil {
+		t.Fatal("the default New accepted a current-user grant")
+	}
+	a, err := supervisor.NewCurrentUser(g, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := a.Snapshot(now); s.State != supervisor.Granted || s.Grant.GuestBoundary != supervisor.CurrentUserNoIsolation {
+		t.Fatalf("snapshot = %+v", s)
+	}
+	// Deadline and revoke semantics are unchanged.
+	if s := a.Snapshot(g.HardDeadline); s.State != supervisor.Revoked || s.Reason != supervisor.HardDeadlineReached {
+		t.Fatalf("expired snapshot = %+v", s)
+	}
+	b, err := supervisor.NewCurrentUser(g, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Revoke(g.Binding); err != nil || b.Snapshot(now).State != supervisor.Revoked {
+		t.Fatalf("revoke = %v", err)
+	}
+	g.HardDeadline = now
+	if a, err := supervisor.NewCurrentUser(g, now); err == nil || a != nil {
+		t.Fatal("NewCurrentUser skipped the deadline checks")
+	}
+}
+
 func TestGrantIsImmutableAcrossInputAndSnapshotChanges(t *testing.T) {
 	input, now := approvedGrant()
 	original := input

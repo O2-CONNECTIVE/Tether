@@ -18,6 +18,8 @@ type serviceNativeFactories struct {
 	ready                 *serviceready.Factory
 	auth                  *bootstrapauth.Factory
 	batch                 *operatorauth.EndpointFactory // independently protected operator policy remains unconfigured
+	profile               bootstrapauth.Profile
+	primaryToken          uintptr // borrowed for same-Service verification, never a helper launch token
 }
 
 func newServiceNativeFactories(c serviceready.Config) (*serviceNativeFactories, error) {
@@ -44,7 +46,7 @@ func buildServiceNativeFactories(c serviceready.Config, constructors serviceNati
 	if err != nil || auth == nil {
 		return nil, ErrProvisioningRejected
 	}
-	p := &serviceNativeFactories{ready: ready, auth: auth, operatorSID: c.Profile.Keys.OperatorSID, guestSID: c.Profile.Keys.GuestSID}
+	p := &serviceNativeFactories{ready: ready, auth: auth, operatorSID: c.Profile.Keys.OperatorSID, guestSID: c.Profile.Keys.GuestSID, profile: c.Profile, primaryToken: c.PrimaryToken}
 	p.self = p
 	return p, nil
 }

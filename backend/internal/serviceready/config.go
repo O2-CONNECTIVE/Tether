@@ -51,7 +51,9 @@ func NewNative(c Config) (*Factory, error) {
 	return &Factory{c: c, auth: auth, configured: true}, nil
 }
 func cloneSecurity(s SecurityPolicy) SecurityPolicy {
-	s.ACL = append([]protectedkey.ACE(nil), s.ACL...)
+	if s.ACL != nil {
+		s.ACL = append(make([]protectedkey.ACE, 0, len(s.ACL)), s.ACL...)
+	}
 	return s
 }
 func cloneNodes(n []protectedkey.NodePolicy) []protectedkey.NodePolicy {

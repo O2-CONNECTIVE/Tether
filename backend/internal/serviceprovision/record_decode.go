@@ -8,6 +8,7 @@ import (
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/bootstrap"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/bootstrapauth"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/operatorauth"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/protectedkey"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceready"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/stdio"
@@ -87,22 +88,37 @@ type wireLimits struct {
 	Cleanup    string `json:"cleanupTimeoutNs"`
 }
 type wireRecord struct {
-	Protocol            string       `json:"protocol"`
-	Profile             wireProfile  `json:"profile"`
-	Endpoint            string       `json:"endpoint"`
-	ServiceCommandLine  string       `json:"serviceCommandLine"`
-	ServiceSecurity     wireSecurity `json:"serviceSecurity"`
-	ProcessSecurity     wireSecurity `json:"processSecurity"`
-	ReadyCleanupTimeout string       `json:"readyCleanupTimeoutNs"`
-	Budgets             wireBudgets  `json:"budgets"`
-	PolicyRef           string       `json:"policyRef"`
-	PollInterval        string       `json:"pollIntervalNs"`
-	OperationTimeout    string       `json:"operationTimeoutNs"`
-	StdioCleanupTimeout string       `json:"stdioCleanupTimeoutNs"`
-	StderrBytes         string       `json:"stderrBytes"`
-	Backend             wireBackend  `json:"backend"`
-	HostKeyRef          string       `json:"hostKeyRef"`
-	Limits              wireLimits   `json:"limits"`
+	Protocol            string              `json:"protocol"`
+	Profile             wireProfile         `json:"profile"`
+	Endpoint            string              `json:"endpoint"`
+	ServiceCommandLine  string              `json:"serviceCommandLine"`
+	ServiceSecurity     wireSecurity        `json:"serviceSecurity"`
+	ProcessSecurity     wireSecurity        `json:"processSecurity"`
+	ReadyCleanupTimeout string              `json:"readyCleanupTimeoutNs"`
+	Budgets             wireBudgets         `json:"budgets"`
+	PolicyRef           string              `json:"policyRef"`
+	PollInterval        string              `json:"pollIntervalNs"`
+	OperationTimeout    string              `json:"operationTimeoutNs"`
+	StdioCleanupTimeout string              `json:"stdioCleanupTimeoutNs"`
+	StderrBytes         string              `json:"stderrBytes"`
+	Backend             wireBackend         `json:"backend"`
+	HostKeyRef          string              `json:"hostKeyRef"`
+	Limits              wireLimits          `json:"limits"`
+	HelperSupplier      *wireHelperSupplier `json:"helperSupplier,omitempty"`
+}
+
+type wireHelperSupplier struct {
+	ServiceName        string       `json:"serviceName"`
+	ServiceSID         string       `json:"serviceSid"`
+	ServiceCommandLine string       `json:"serviceCommandLine"`
+	Image              wireImage    `json:"image"`
+	ServiceSecurity    wireSecurity `json:"serviceSecurity"`
+	ProcessSecurity    wireSecurity `json:"processSecurity"`
+	TokenSecurity      wireSecurity `json:"tokenSecurity"`
+	ChildProcessSDDL   string       `json:"childProcessSddl"`
+	ChildThreadSDDL    string       `json:"childThreadSddl"`
+	Cleanup            string       `json:"cleanupNs"`
+	RunBudget          string       `json:"runBudgetNs"`
 }
 
 // DecodeRecord は候補fileの純粋な値だけを返し、保護digestや実EOFを照合しない。
@@ -126,6 +142,9 @@ func DecodeRecord(data []byte) (Record, error) {
 	}
 	keys := protectedkey.Profile{Version: uint32(n.uint(p.Keys.Version, 32, true)), ProcessUserSID: p.Keys.ProcessUserSID, ServiceSID: p.Keys.ServiceSID, OperatorSID: p.Keys.OperatorSID, GuestSID: p.Keys.GuestSID, Volume: n.volume(p.Keys.Volume), Provisioning: protectedkey.ProvisioningRecord{Reference: p.Keys.Provisioning.Reference, ProtectedAt: at}, Catalog: catalog}
 	r := Record{Protocol: w.Protocol, Profile: bootstrapauth.Profile{Keys: keys, ServiceName: p.ServiceName, SupervisorImage: n.image(p.SupervisorImage), ChildImage: n.image(p.ChildImage)}, Endpoint: w.Endpoint, ServiceCommandLine: w.ServiceCommandLine, ServiceSecurity: n.security(w.ServiceSecurity), ProcessSecurity: n.security(w.ProcessSecurity), ReadyCleanupTimeout: n.duration(w.ReadyCleanupTimeout), Budgets: servicehost.Budgets{Startup: n.duration(w.Budgets.Startup), Cleanup: n.duration(w.Budgets.Cleanup), Observe: n.duration(w.Budgets.Observe)}, PolicyRef: w.PolicyRef, PollInterval: n.duration(w.PollInterval), OperationTimeout: n.duration(w.OperationTimeout), StdioCleanupTimeout: n.duration(w.StdioCleanupTimeout), StderrBytes: n.uint(w.StderrBytes, 64, true), Backend: bootstrap.Config{OperationMode: w.Backend.OperationMode, AllowedKeys: w.Backend.AllowedKeys, MaximumDuration: n.duration(w.Backend.MaximumDuration), LeaseDuration: n.duration(w.Backend.LeaseDuration), MaxChannels: int(n.uint(w.Backend.MaxChannels, 6, true)), MaxHandshakes: int(n.uint(w.Backend.MaxHandshakes, 7, true)), MaxTransports: int(n.uint(w.Backend.MaxTransports, 7, true))}, HostKeyRef: w.HostKeyRef, Limits: stdio.Limits{FrameBytes: int(n.uint(w.Limits.FrameBytes, 31, true)), Frames: int(n.uint(w.Limits.Frames, 31, true)), CleanupTimeout: n.duration(w.Limits.Cleanup)}}
+	if h := w.HelperSupplier; h != nil {
+		r.HelperSupplier = &operatorauth.HelperSupplierConfig{ServiceName: h.ServiceName, ServiceSID: h.ServiceSID, ServiceCommandLine: h.ServiceCommandLine, Image: n.image(h.Image), ServiceSecurity: n.security(h.ServiceSecurity), ProcessSecurity: n.security(h.ProcessSecurity), TokenSecurity: n.security(h.TokenSecurity), ChildProcessSDDL: h.ChildProcessSDDL, ChildThreadSDDL: h.ChildThreadSDDL, Cleanup: n.duration(h.Cleanup), RunBudget: n.duration(h.RunBudget)}
+	}
 	if n.invalid || ValidateRecord(r) != nil {
 		return Record{}, ErrRecord
 	}

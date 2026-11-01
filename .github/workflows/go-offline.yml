@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, wip/tether-public-pilot-20261101]
 
 permissions:
   contents: read
@@ -56,3 +56,10 @@ jobs:
       - name: Race tests on two CPUs
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
         run: python scripts/go_ci.py race
+      # Go ./... intentionally excludes testdata; this peer has no runtime backend.
+      - name: Test tokenless MCP schema fixture
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: python scripts/check_tether_fixtures.py go-schema

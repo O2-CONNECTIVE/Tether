@@ -16,8 +16,12 @@ CLI = ROOT / 'scripts/collect_go_licenses.py'
 FIXTURE = Path(__file__).parent / 'fixtures/go-licenses/texts.json'
 SOURCE = 'a' * 40
 LICENSE_SHA = '911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad'
+WEBSOCKET_SHA = 'cc0975a5f6305145bdd7b41ce9479632fdac3870e6ac4281f28017f18c767c4e'
 PATENTS_SHA = '96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc'
 MODULES = [
+    {'Path': 'github.com/coder/websocket', 'Version': 'v1.8.15',
+     'Sum': 'h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=',
+     'GoModSum': 'h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg='},
     {'Path': 'golang.org/x/crypto', 'Version': 'v0.58.0',
      'Sum': 'h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=',
      'GoModSum': 'h1:Xh+kl5A+M0gMiWDytH2Hhr5Z7WbNCpv/eB/EFgfSk+w='},
@@ -46,9 +50,13 @@ class GoLicenseTests(unittest.TestCase):
         for folder in [self.toolchain] + [self.cache / (m['Path'] + '@' + m['Version'])
                                           for m in MODULES]:
             folder.mkdir(parents=True, exist_ok=True)
-            for name, value in self.texts.items():
+            for name, value in self.component_texts(folder).items():
                 (folder / name).write_bytes(value.encode('utf-8'))
         self.write_metadata(MODULES)
+
+    def component_texts(self, folder):
+        names = ('LICENSE.txt',) if folder.name == 'websocket@v1.8.15' else ('LICENSE', 'PATENTS')
+        return {name: self.texts[name] for name in names}
 
     def write_metadata(self, modules):
         self.metadata.write_text('\n'.join(json.dumps(item) for item in modules), encoding='utf-8')
@@ -154,9 +162,10 @@ class GoLicenseTests(unittest.TestCase):
 
     def test_missing_empty_changed_and_nonregular_texts_do_not_create_output(self):
         locations = [self.toolchain, self.cache / 'golang.org/x/crypto@v0.58.0',
-                     self.cache / 'golang.org/x/sys@v0.49.0']
+                     self.cache / 'golang.org/x/sys@v0.49.0',
+                     self.cache / 'github.com/coder/websocket@v1.8.15']
         for folder in locations:
-            for name in self.texts:
+            for name in self.component_texts(folder):
                 path = folder / name
                 for fault in ['missing', 'empty', 'changed', 'directory', 'oversize']:
                     with self.subTest(component=folder.name, text=name, fault=fault):
@@ -173,7 +182,8 @@ class GoLicenseTests(unittest.TestCase):
 
     def test_symlink_roots_nested_directories_and_metadata_are_rejected(self):
         for path in [self.toolchain, self.module, self.cache, self.cache / 'golang.org',
-                     self.cache / 'golang.org/x/crypto@v0.58.0', self.metadata]:
+                     self.cache / 'golang.org/x/crypto@v0.58.0',
+                     self.cache / 'github.com/coder/websocket@v1.8.15', self.metadata]:
             with self.subTest(component=path.name):
                 target = path.with_name(path.name + '-PRIVATE-moved')
                 path.rename(target)
@@ -201,6 +211,26 @@ class GoLicenseTests(unittest.TestCase):
         version.write_bytes(original)
         for source in ['PRIVATE', 'a' * 39, 'A' * 40]:
             self.assert_rejected('GO_LICENSE_SOURCE_INVALID', ['--source', source])
+
+    def test_exact_module_set_supports_individual_and_block_requires(self):
+        path = self.module / 'go.mod'
+        prefix = 'module github.com/O2-CONNECTIVE/rescue-host/backend\ngo 1.27.3\n'
+        entries = [m['Path'] + ' ' + m['Version'] for m in MODULES]
+        for body in [''.join('require ' + entry + '\n' for entry in entries),
+                     'require (\n' + '\n'.join(reversed(entries)) + '\n)\n']:
+            with self.subTest(body=body):
+                path.write_text(prefix + body)
+                result = self.run_cli()
+                self.assertEqual(result.returncode, 0, result.stdout)
+                # Successful destinations are intentionally never reused.
+                self.output = self.base / (self.output.name + '-next')
+        for body in ['require ()', 'require (\n' + '\n'.join(entries) + '\n',
+                     'require (\n' + '\n'.join(entries + [entries[0]]) + '\n)',
+                     'require ' + entries[0], 'require (\n' + '\n'.join(entries) + '\n)\nexclude x v1.0.0',
+                     'require (\n' + '\n'.join(entries) + '\n)\nrequire PRIVATE/module v1.0.0']:
+            with self.subTest(body=body):
+                path.write_text(prefix + body)
+                self.assert_rejected('GO_LICENSE_LOCK_MISMATCH')
 
     def test_existing_output_file_directory_and_symlink_are_not_overwritten(self):
         for kind in ['file', 'directory', 'symlink']:
@@ -235,12 +265,12 @@ class GoLicenseTests(unittest.TestCase):
         self.assertIn('--metadata', result.stdout)
         self.assertFalse(self.output.exists())
 
-    def test_collects_six_pinned_texts_and_records_checks_without_distribution_claim(self):
+    def test_collects_seven_pinned_texts_and_records_checks_without_distribution_claim(self):
         result = self.run_cli()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stderr, '')
         self.assertEqual(json.loads(result.stdout), {
-            'check': 'go-license-inventory', 'status': 'collected', 'textCount': 6,
+            'check': 'go-license-inventory', 'status': 'collected', 'textCount': 7,
             'distributionStatus': 'blocked', 'productionGateClosed': True})
         inventory = json.loads((self.output / 'DEPENDENCIES.json').read_text(encoding='utf-8'))
         self.assertEqual(inventory['sourceCommit'], SOURCE)
@@ -251,15 +281,21 @@ class GoLicenseTests(unittest.TestCase):
         self.assertFalse(inventory['moduleGraphVerified'])
         self.assertFalse(inventory['binaryDependenciesVerified'])
         self.assertEqual([p['module'] for p in inventory['modules']],
-                         ['golang.org/x/crypto', 'golang.org/x/sys'])
+                         ['github.com/coder/websocket', 'golang.org/x/crypto', 'golang.org/x/sys'])
         expected_paths = {'DEPENDENCIES.json'}
         for name in ('go.mod', 'go.sum'):
             self.assertEqual(inventory['lockFiles'][name],
                              hashlib.sha256((self.module / name).read_bytes()).hexdigest())
         for component in [inventory['toolchain'], *inventory['modules']]:
-            self.assertTrue(component['source'].startswith('https://github.com/golang/'))
-            self.assertEqual(set(component['texts']), {'LICENSE', 'PATENTS'})
-            for name, expected in [('LICENSE', LICENSE_SHA), ('PATENTS', PATENTS_SHA)]:
+            is_websocket = component.get('module') == 'github.com/coder/websocket'
+            if is_websocket:
+                self.assertEqual(component['source'], 'https://github.com/coder/websocket/tree/v1.8.15')
+                expected_texts = [('LICENSE.txt', WEBSOCKET_SHA)]
+            else:
+                self.assertTrue(component['source'].startswith('https://github.com/golang/'))
+                expected_texts = [('LICENSE', LICENSE_SHA), ('PATENTS', PATENTS_SHA)]
+            self.assertEqual(set(component['texts']), {name for name, _ in expected_texts})
+            for name, expected in expected_texts:
                 record = component['texts'][name]
                 expected_paths.add(record['path'])
                 self.assertEqual(record['sha256'], expected)

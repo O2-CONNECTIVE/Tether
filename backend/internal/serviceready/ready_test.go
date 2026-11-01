@@ -71,12 +71,24 @@ func (s *fakeService) inspect() (serviceState, error) {
 func (s *fakeService) close() error { s.closes++; return nil }
 
 type fakeProcess struct {
-	value  processState
-	closes int
+	value          processState
+	closes         int
+	token          processTokenState
+	tokenInspects  int
+	tokenErr       error
+	onTokenInspect func()
+	closeErr       error
 }
 
 func (p *fakeProcess) inspect() (processState, error) { return p.value, nil }
-func (p *fakeProcess) close() error                   { p.closes++; return nil }
+func (p *fakeProcess) inspectToken(uintptr) (processTokenState, error) {
+	p.tokenInspects++
+	if p.onTokenInspect != nil {
+		p.onTokenInspect()
+	}
+	return p.token, p.tokenErr
+}
+func (p *fakeProcess) close() error { p.closes++; return p.closeErr }
 
 type fakeOperation struct {
 	done, cancelled, released bool

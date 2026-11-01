@@ -9,6 +9,7 @@ import (
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/bootstrap"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/bootstrapauth"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/operatorauth"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceready"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/stdio"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/servicehost"
@@ -35,6 +36,9 @@ type Record struct {
 	Backend                                             bootstrap.Config
 	HostKeyRef                                          string
 	Limits                                              stdio.Limits
+	// nil preserves the existing unconfigured helper path. Values are protected
+	// only after the original Root verifies the complete record and its digest.
+	HelperSupplier *operatorauth.HelperSupplierConfig
 }
 
 // ValidateRecord は値を検査するだけで、OS APIを呼ばず、tokenの代用品を補わない。
@@ -46,6 +50,9 @@ func ValidateRecord(r Record) error {
 		return ErrRecord
 	}
 	if !validValues(r) {
+		return ErrRecord
+	}
+	if r.HelperSupplier != nil && operatorauth.ValidateHelperSupplierConfig(r.Profile, operatorauth.SIDPolicy{OperatorSID: r.Profile.Keys.OperatorSID, GuestSID: r.Profile.Keys.GuestSID}, *r.HelperSupplier) != nil {
 		return ErrRecord
 	}
 	return nil

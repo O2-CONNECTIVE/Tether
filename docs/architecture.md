@@ -1,5 +1,7 @@
 # 構成と実装境界
 
+> **対象範囲の更新（2026-11-01）:** 以下の旧SSH / Windows / Pythonに関する本文・受入条件は、その方式と記録時点の履歴として保持しています。現在のTetherはAI commandと一時派遣を目標にMacを優先し、現状の正本は[文書索引](README.md)と[検証状態](tether-pilot-status.md)です。旧ゲート閉鎖や未達を解除・達成扱いにはしません。Macは現在ユーザー・非sandboxであり、Windows隔離guestの保証を引き継ぎません。
+
 [READMEへ戻る](../README.md)
 
 採用済みの上位配置は[単発版の配置と責任分担](ephemeral-deployment-architecture.md)、補助受入は[配置の受入計画](ephemeral-deployment-acceptance.md)を参照してください。

@@ -13,8 +13,10 @@ import (
 
 // raw input は従来の所有移譲済み read。新 typed 経路は具体 SoleInput だけを
 // pure 保持し、Start 後の Move 実 return を b.input に保持する。両入力は排他。
+// supplier は Batch 準備時に単一 owner へ束縛され、Start 内でだけ取得する。
 type nativeBatchSpec struct {
 	sidPolicy  SIDPolicy
+	supplier   *supplierLease
 	input      uintptr
 	launch     nativeLaunchSpec
 	report     reportConfig
@@ -75,6 +77,7 @@ type nativeBatch struct {
 	startDone                  chan struct{}
 	ops                        nativeBatchOps
 	input, readCopy            uintptr
+	helperToken                uintptr
 	report                     batchReport
 	profile                    batchProfile
 	child                      batchChild
@@ -102,7 +105,7 @@ func (s nativeBatchSpec) valid() bool {
 	}
 	return inputValid && l.operatorRead == 0 && l.reportWrite == 0 && l.profileRead == 0 &&
 		localHelperImage(l.imagePath) && l.imageSHA256 != ([32]byte{}) && profileLaunchID(l.launchID) && l.maxImageBytes > 0 && l.maxImageBytes <= 1<<30 &&
-		helperHandle(l.primaryToken) && l.cleanup > 0 && l.processSDDL != "" && l.threadSDDL != "" && l.helperIdentityValid() && l.helperReportSID() == s.report.helperSID && s.report.valid()
+		(helperHandle(l.primaryToken) && s.supplier == nil || l.primaryToken == 0 && s.supplier != nil && s.supplier.matchesLaunch(l)) && l.cleanup > 0 && l.processSDDL != "" && l.threadSDDL != "" && l.helperIdentityValid() && l.helperReportSID() == s.report.helperSID && s.report.valid()
 }
 
 // prepareBatch only validates and constructs the retained owner. It performs no native I/O.
@@ -110,8 +113,12 @@ func prepareBatch(s nativeBatchSpec, owner batchOwner, ops nativeBatchOps) (*nat
 	if !s.valid() || s.soleInput != nil && ops.moveSoleInput == nil || owner.issuer == nil || !owner.owner.MatchesIssuer(owner.issuer) || ops.parent == nil || ops.clean == nil || ops.newReport == nil || ops.newProfile == nil || ops.duplicateRead == nil || ops.start == nil || ops.closeHandle == nil {
 		return nil, ErrUnconfigured
 	}
-	b := &nativeBatch{issuer: owner.issuer, ops: ops, input: s.input, spec: s, startDone: make(chan struct{}), operation: make(chan struct{}, 1), owner: owner.owner}
+	b := &nativeBatch{issuer: owner.issuer, ops: ops, input: s.input, helperToken: s.launch.primaryToken, spec: s, startDone: make(chan struct{}), operation: make(chan struct{}, 1), owner: owner.owner}
 	b.self = b
+	// 同じ lease を別 Batch へ渡さない。束縛は native 取得より前に行う。
+	if s.supplier != nil && !s.supplier.bind(b) {
+		return nil, ErrUnconfigured
+	}
 	b.collector = &Collector{sidPolicy: s.sidPolicy, launchID: s.launch.launchID, authOwner: owner.owner, authIssuer: owner.issuer, cleanup: s.launch.cleanup, ops: collectorOps{
 		check: b.recheck, drain: b.drain, terminate: b.terminate, wait: b.wait,
 		closeIO: b.closeOwned, closeProcess: b.confirmClosed,
@@ -202,6 +209,20 @@ func (b *nativeBatch) Start(ctx context.Context) (err error) {
 		if e := ops.scope.acquire(ctx); e != nil {
 			return b.retainScopeFailure(e)
 		}
+	}
+	if s.supplier != nil {
+		// 部分取得や遅延 return は lease が保持し、失敗時も同じ Close が回収する。
+		if e := s.supplier.acquire(ctx, b); e != nil {
+			return b.retainScopeFailure(e)
+		}
+		token := s.supplier.token()
+		if !helperHandle(token) || token == s.input || ops.scope != nil && token == ops.scope.token {
+			return ErrDenied
+		}
+		s.launch.primaryToken = token
+		b.mu.Lock()
+		b.helperToken = token
+		b.mu.Unlock()
 	}
 	if e := b.parent(ctx); e != nil {
 		return e
@@ -317,6 +338,11 @@ func (b *nativeBatch) parent(ctx context.Context) error {
 	}
 	if b.ops.scope != nil {
 		if e := b.ops.scope.recheck(ctx); e != nil {
+			return b.retainScopeFailure(e)
+		}
+	}
+	if b.spec.supplier != nil {
+		if e := b.spec.supplier.recheck(ctx, b); e != nil {
 			return b.retainScopeFailure(e)
 		}
 	}
@@ -454,6 +480,13 @@ func (b *nativeBatch) closeOwned(ctx context.Context) error {
 	}
 	if p, ok := b.spec.producer.(profileLifetimeProducer); ok {
 		if e := p.close(ctx); e != nil {
+			return b.retainScopeFailure(e)
+		}
+	}
+	// child close が保持 process の終了と Job/I/O 回収を確認した後だけ、
+	// 借用 token の解放と同じ起動世代の supplier 停止へ進む。
+	if b.spec.supplier != nil {
+		if e := b.spec.supplier.close(ctx, b); e != nil {
 			return b.retainScopeFailure(e)
 		}
 	}

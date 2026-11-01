@@ -70,13 +70,15 @@ func validSecurity(p bootstrapauth.Profile, s serviceready.SecurityPolicy, proce
 	known, readonly := uint32(0xf00f01ff), uint32(0x2008d)
 	if process {
 		known = 0xf01fffff
-		readonly = 0x120000
+		readonly = 0x121400
 	}
 	for _, a := range s.ACL {
 		if a.Type > 1 || a.Flags != 0 || a.Mask == 0 || a.Mask & ^known != 0 || !sid(a.SID) {
 			return false
 		}
-		// servicereadyと同じ規則。DENYで危険ALLOWを相殺せず、process queryを未知主体へ許さない。
+		// servicereadyと同じ静的候補上限。queryを含む場合は実Prepareで
+		// 同じprocessのtoken objectを検査し、値の検証だけでreadyとしない。
+		// DENYで危険ALLOWを相殺しない。
 		if a.Type == 0 && !trusted(p, a.SID) && a.Mask & ^readonly != 0 {
 			return false
 		}

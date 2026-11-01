@@ -56,5 +56,5 @@ Windows compileはAPIの型整合だけを確認します。
 調査した[PowerShell v7.4の第一者実装](https://github.com/PowerShell/PowerShell/blob/v7.4.0/src/Microsoft.PowerShell.LocalAccounts/LocalAccounts/Sam.cs)と、対象端末に配備するbinaryの同じ動作は未実証です。
 不明な値を観測値や自己申告値で埋めるproducerは作りません。
 保護root供給、作成元証明、完全権限検査、外側Serviceの回収合流も未配線です。
-実機承認の対象・変更・復元手順は[既存の計画](temporary-guest-provisioning-plan.md)で別に扱います。
+実機承認の対象・変更・復元手順は既存の計画（過去の参照資料・本文非同梱）で別に扱います。
 通常試験やJob成功を、実Windows隔離・停止・監督hang・OS sleep・実SSHの証拠へ広げません。

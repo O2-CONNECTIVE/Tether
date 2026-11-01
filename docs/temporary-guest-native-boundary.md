@@ -81,7 +81,7 @@ Goからsamlibの内部exportを直接呼ぶ案は、SAMRの公開RPC仕様をDL
 合成kernelは、同じjournalを既存Lifecycleへ接続する順序、取消、部分結果、競合、破損、再起動復旧、別SID拒否を検証する。
 Windows向けcompileは実API呼出コードの型・link確認であり、実APIを動かした成功ではない。
 合成fileやtemporary directoryの試験を、Windows ACL／disk durability／account非管理者性の証明へ広げない。
-[別途承認するprovisioning計画](temporary-guest-provisioning-plan.md)を満たすまで、製品gateは閉じたままとする。
+別途承認するprovisioning計画（過去の参照資料・本文非同梱）を満たすまで、製品gateは閉じたままとする。
 
 ## 一次資料
 

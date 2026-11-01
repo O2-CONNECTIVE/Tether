@@ -18,6 +18,7 @@ type serviceRef interface {
 }
 type processRef interface {
 	inspect() (processState, error)
+	inspectToken(uintptr) (processTokenState, error)
 	close() error
 }
 type listenerRef interface {
@@ -62,6 +63,7 @@ type Plane struct {
 	op                         *ownedOperation
 	thread, pid                uint32
 	creation                   uint64
+	tokenEvidence              *processTokenState
 	prepared, running          bool
 	revoked, stopped, poisoned atomic.Bool
 }
@@ -196,6 +198,11 @@ func (p *Plane) verify(ctx context.Context, listener bool) (serviceState, error)
 		p.creation = process.creation
 	} else if p.creation != process.creation {
 		return s, ErrDenied
+	}
+	if processQueryExposed(p.c.Profile, p.c.ProcessSecurity) {
+		if err := p.verifyProcessToken(); err != nil {
+			return s, err
+		}
 	}
 	if listener {
 		if err := p.inspectListener(); err != nil {

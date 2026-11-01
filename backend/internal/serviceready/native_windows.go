@@ -4,6 +4,7 @@ package serviceready
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"unicode/utf16"
 	"unsafe"
@@ -135,6 +136,7 @@ func (s *nativeService) close() error {
 
 type nativeProcess struct {
 	handle windows.Handle
+	token  windows.Token
 	thread uint32
 }
 
@@ -175,13 +177,21 @@ func (p *nativeProcess) inspect() (processState, error) {
 	return processState{pid: pid, creation: uint64(creation.HighDateTime)<<32 | uint64(creation.LowDateTime), alive: true, security: security}, nil
 }
 func (p *nativeProcess) close() error {
+	var result error
+	if p.token != 0 {
+		if p.token.Close() != nil {
+			result = ErrUnconfirmed
+		} else {
+			p.token = 0
+		}
+	}
 	if p.handle != 0 {
 		if windows.CloseHandle(p.handle) != nil {
-			return ErrUnconfirmed
+			return errors.Join(result, ErrUnconfirmed)
 		}
 		p.handle = 0
 	}
-	return nil
+	return result
 }
 func nativeSecurity(handle windows.Handle, kind windows.SE_OBJECT_TYPE) (SecurityPolicy, error) {
 	sd, err := windows.GetSecurityInfo(handle, kind, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)

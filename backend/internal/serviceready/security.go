@@ -36,14 +36,14 @@ func validSecurity(p bootstrapauth.Profile, s SecurityPolicy, process bool) bool
 	known, readonly := uint32(0xf00f01ff), uint32(0x2008d)
 	if process {
 		known = 0xf01fffff
-		readonly = 0x120000
+		readonly = 0x121400
 	}
 	for _, a := range s.ACL {
 		if a.Type > 1 || a.Flags != 0 || a.Mask == 0 || a.Mask & ^known != 0 || !validSID(a.SID) {
 			return false
 		}
 		// DENYで危険ALLOWを相殺せず、未知主体の許可上限を広げない。
-		// process queryはtoken objectへの入口になるため未知/Guestへ許さない。
+		// process queryは同じ保持tokenの独立検査がある場合だけPrepareで受理する。
 		if a.Type == 0 && !trusted(p, a.SID) && a.Mask & ^readonly != 0 {
 			return false
 		}

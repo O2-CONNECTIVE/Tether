@@ -1,4 +1,5 @@
-// rescue-auth-helperは固定保護sourceだけを使う単回認証専用processである。
+// rescue-auth-helperは単回認証helperと専用supplier serviceの2役割を持つ。
+// 役割と期待値はimage内の固定値だけで決まり、既定の未設定値では両方を拒否する。
 package main
 
 import (
