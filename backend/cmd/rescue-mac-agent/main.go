@@ -23,6 +23,7 @@ import (
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"golang.org/x/crypto/ssh"
@@ -261,7 +262,12 @@ func finish(ctx context.Context, client session, owner agenttransport.Owner, ter
 	if len(feeds) > 0 {
 		status = feeds[0]
 	}
-	_ = client.Run(ctx)
+	runErr := client.Run(ctx)
+	defer func() {
+		for _, code := range runObservationCodes(runErr) {
+			report(diagnostic, "NATIVE_RUN_OBSERVATION category="+code)
+		}
+	}()
 	status.update("stopping", "pending", false)
 	cleanup, stop := context.WithTimeout(context.Background(), budget)
 	err := client.Close(cleanup)
@@ -320,4 +326,40 @@ func terminalUnknown(owner agenttransport.Owner, client session, terminal *macag
 	status.unknown()
 	report(diagnostic, "TERMINAL_CLEANUP_UNKNOWN")
 	report(diagnostic, "回収未確認のまま所有を終了します。関連プロセスが残っている可能性があります。成功扱いせず、この承認は再利用しません")
+}
+
+// runObservationCodes reports only existing sentinel membership, not a root
+// cause or the final cleanup result. Joined errors can match several entries.
+// In particular ErrPeerLost is joined for every completed wire Serve, and
+// heartbeat/read-stall reasons may already have been replaced upstream.
+// Never format err: its text may contain endpoint or credential material.
+func runObservationCodes(err error) []string {
+	if err == nil {
+		return []string{"returned_nil"}
+	}
+	checks := []struct {
+		code    string
+		matched bool
+	}{
+		{"registration_refused", errors.Is(err, agenttransport.ErrRefused)},
+		{"channel_rejected", errors.Is(err, agentchannel.ErrRejected)},
+		{"wire_protocol", errors.Is(err, agentwire.ErrProtocol)},
+		{"context_deadline", errors.Is(err, context.DeadlineExceeded)},
+		{"context_canceled", errors.Is(err, context.Canceled)},
+		{"peer_end", errors.Is(err, agentwire.ErrPeerLost)},
+		{"closed", errors.Is(err, agenttransport.ErrClosed) || errors.Is(err, agentchannel.ErrClosed) || errors.Is(err, agentwire.ErrClosed)},
+		{"config", errors.Is(err, agenttransport.ErrConfig) || errors.Is(err, agentchannel.ErrConfig) || errors.Is(err, agentwire.ErrUnconfigured)},
+		{"already_used", errors.Is(err, agenttransport.ErrUsed) || errors.Is(err, agentchannel.ErrUsed) || errors.Is(err, agentwire.ErrUsed)},
+		{"run_cleanup_unknown", errors.Is(err, agenttransport.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown)},
+	}
+	var codes []string
+	for _, check := range checks {
+		if check.matched {
+			codes = append(codes, check.code)
+		}
+	}
+	if len(codes) == 0 {
+		return []string{"unknown"}
+	}
+	return codes
 }
