@@ -7,6 +7,9 @@ import StatusUI
     static let shared = Model()
     @Published var snapshot = Snapshot()
     @Published var now = FeedClock.now()
+    let pilot = Array(CommandLine.arguments.dropFirst()) == ["--pilot-exit-on-stream-end"]
+    private var pilotTerminating = false
+    var pilotSummary: PilotSummary? { reader.pilotSummary() }
     let fixture: Bool
     private let reader = PipeReader()
     private var timer: Timer?
@@ -22,6 +25,12 @@ import StatusUI
             Task { @MainActor in
                 guard let self else { return }; self.now=FeedClock.now()
                 if !self.fixture { self.snapshot=self.reader.snapshot() }
+                if self.pilot && !self.pilotTerminating && self.pilotSummary != nil {
+                    self.pilotTerminating = true
+                    NSApplication.shared.terminate(nil)
+                    // A refused join retains the window, timer and reader ownership.
+                    self.pilotTerminating = false
+                }
             }
         }
     }
@@ -83,7 +92,7 @@ enum RenderFailure: Error { case image }
     private var checkClosing = false
     private var checkMode: Bool {
         let args=Array(CommandLine.arguments.dropFirst())
-        return args == ["--check-own-window-no-input"] || args == ["--check-own-window-fixture"]
+        return args == ["--check-own-window-eof"] || args == ["--check-own-window-no-input"] || args == ["--check-own-window-fixture"]
     }
     func applicationDidFinishLaunching(_ notification:Notification) {
         guard checkMode else { return }
@@ -93,7 +102,7 @@ enum RenderFailure: Error { case image }
             let fixture=Array(CommandLine.arguments.dropFirst()) == ["--check-own-window-fixture"]
             let stateOK=fixture
                 ? model.fixture && model.snapshot.frame?.phase == "connected" && !model.snapshot.fresh(at:FeedClock.now())
-                : !model.fixture && model.snapshot.fault == .unavailable
+                : !model.fixture && model.snapshot.fault == (Array(CommandLine.arguments.dropFirst()) == ["--check-own-window-eof"] ? .eof : .unavailable)
             checkPassed = !windows.isEmpty && stateOK
             checkClosing = true
             for window in windows { window.performClose(nil) }
@@ -107,6 +116,12 @@ enum RenderFailure: Error { case image }
         }
     }
     func applicationWillTerminate(_ notification:Notification) {
+        if Model.shared.pilot {
+            let summary = Model.shared.pilotSummary ?? PilotSummary(snapshot:Model.shared.snapshot,at:FeedClock.now(),eof:false)
+            let bytes = Array(summary.jsonLine.utf8)
+            let written = bytes.withUnsafeBytes { Darwin.write(STDOUT_FILENO,$0.baseAddress,bytes.count) }
+            exit(written == bytes.count ? summary.exitCode : 2)
+        }
         if checkMode {
             print(checkPassed && checkClosing ? "OWN_BUNDLE_WINDOW_PASS" : "OWN_BUNDLE_WINDOW_FAIL")
             if !checkPassed || !checkClosing { exit(1) }
@@ -121,7 +136,7 @@ enum RenderFailure: Error { case image }
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     init() {
         let args=Array(CommandLine.arguments.dropFirst())
-        guard args.isEmpty || args == ["--fixture"] || args == ["--render-fixtures"] || args == ["--check-own-window-no-input"] || args == ["--check-own-window-fixture"] else { exit(64) }
+        guard args.isEmpty || args == ["--check-own-window-eof"] || args == ["--pilot-exit-on-stream-end"] || args == ["--fixture"] || args == ["--render-fixtures"] || args == ["--check-own-window-no-input"] || args == ["--check-own-window-fixture"] else { exit(64) }
         if args == ["--render-fixtures"] {
             do { try renderFixtures(); exit(0) } catch { exit(1) }
         }

@@ -148,3 +148,34 @@ a hosted GUI run or a signed product distribution.
 JSONL v1は同じ12キーのままenumを拡張しています。旧viewerは未知enumを安全に拒否するため、producer/viewerは対応する版を組み合わせてください。旧viewerへのsilent fallbackはしません。失敗reasonはfailed/terminal、worker0、残時間0/null、cleanup not_startedまたはconfirmedとの組合せだけを受理します。terminal_cleanup_unknownは常に優先して保持します。
 
 20状態のown-content画像はsynthetic fixtureであり、実agentの接続結果でもanimationの動作実証でもありません。既存の実機検証結果をこの変更の合格へ流用しません。
+
+## Pilot-only finite viewer observation
+
+Exact opt-in `--pilot-exit-on-stream-end` preserves ordinary visualization until
+actual pipe EOF or reader rejection/read failure. A terminal frame alone does not
+close the viewer. Default mode still stays open after EOF. This flag never stops
+an agent, issues a grant, opens a port, or changes consent.
+
+After a successful reader join, the viewer terminates its own application/windows
+and writes exactly one bounded JSON line on stdout:
+`{"version":1,"stream_end":"eof","result":"confirmed_terminal","fault":"eof","reader":"joined","exit_code":0}`.
+`stream_end` is eof/rejected/read_error/canceled/unavailable; `result` is
+confirmed_terminal/unknown; `fault` is unavailable/stale/malformed/clock/sequence/
+eof/read/rate/stopped. No IDs, paths, raw frames or commands are emitted.
+Exit 0 requires actual EOF and a validated closed terminal with confirmed cleanup,
+zero workers/remaining, no unknown, and source age at EOF at most three seconds.
+All other summaries exit 2. A partial final line is EOF with malformed fault,
+never a confirmed result. Missing/invalid stdout must be treated as unknown by
+an owner; stdout failure is nonzero. Join refusal cancels termination, retaining
+reader ownership and freshness updates.
+
+Confirmed terminal is **producer-reported history**, not independent OS cleanup
+proof or agent exit evidence. Owners must capture viewer stdout separately from
+status stdin and keep agent exit/observations as separate evidence. Manual early
+viewer close is canceled/unknown, not successful completion.
+
+`python3 Tests/check_pilot_lifecycle.py` explicitly launches only finite synthetic
+viewer fixtures. It performs no agent launch or desktop capture. The internal
+`--check-own-window-eof` fixture checks that normal EOF retains its own visible
+window for 3.6 seconds, then closes it normally. No force-kill fallback is used;
+a timeout reports an unreaped owned viewer and stops the suite.

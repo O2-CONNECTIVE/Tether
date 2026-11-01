@@ -52,6 +52,19 @@ final class StatusTests {
         XCTAssertEqual(s.snapshot.remaining(at:12),118); XCTAssertNil(s.snapshot.remaining(at:20))
     }
     func testEOFNotCleanupEvidence() {
+        var terminal = FeedState()
+        terminal.ingest(line(1,["phase":"closed","terminal":true,"cleanup":"confirmed","running_workers":0,"grant_remaining_ms":0]),at:10)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:10,eof:false).exitCode,2)
+        terminal.fail(.eof)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:10,eof:true).exitCode,0)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:14,eof:true).exitCode,2)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:9,eof:true).exitCode,2)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:.nan,eof:true).exitCode,2)
+        for fault in [FeedFault.malformed,.stale,.clock,.sequence,.read,.rate,.stopped,.unavailable] {
+            terminal.fail(fault)
+            XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:10,eof:true).exitCode,2)
+        }
+
         var s=FeedState(); s.ingest(line(),at:10); s.fail(.eof)
         XCTAssertFalse(s.snapshot.fresh(at:10)); XCTAssertEqual(s.snapshot.frame?.cleanup,"pending")
     }

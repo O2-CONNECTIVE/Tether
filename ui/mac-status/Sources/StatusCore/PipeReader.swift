@@ -14,6 +14,7 @@ public final class PipeReader {
     private let lock = NSLock()
     private let joined = DispatchGroup()
     private var state = FeedState()
+    private var completion: PilotSummary?
     private var canceled = false
     private var started = false
     private var closed = false
@@ -24,14 +25,15 @@ public final class PipeReader {
         guard !started, !closed else { return }
         started = true
         var info = stat()
-        guard fstat(STDIN_FILENO,&info) == 0, info.st_mode & S_IFMT == S_IFIFO else { state.fail(.unavailable); return }
+        guard fstat(STDIN_FILENO,&info) == 0, info.st_mode & S_IFMT == S_IFIFO else { finishLocked(.unavailable); return }
         let flags = fcntl(STDIN_FILENO,F_GETFL)
-        guard flags >= 0, fcntl(STDIN_FILENO,F_SETFL,flags | O_NONBLOCK) == 0 else { state.fail(.read); return }
+        guard flags >= 0, fcntl(STDIN_FILENO,F_SETFL,flags | O_NONBLOCK) == 0 else { finishLocked(.read); return }
         fd = STDIN_FILENO
         joined.enter()
         Thread.detachNewThread { [self] in self.readLoop() }
     }
     public func snapshot() -> Snapshot { lock.lock(); defer { lock.unlock() }; return state.snapshot }
+    public func pilotSummary() -> PilotSummary? { lock.lock(); defer { lock.unlock() }; return completion }
     public func stopAndJoin() -> Bool {
         lock.lock()
         if closed || fd < 0 { closed = true; lock.unlock(); return true }
@@ -41,7 +43,11 @@ public final class PipeReader {
         if !closed { Darwin.close(fd); fd = -1; closed = true }
         return true
     }
-    private func fail(_ fault:FeedFault) { lock.lock(); state.fail(fault); lock.unlock() }
+    private func finishLocked(_ fault: FeedFault, eof: Bool = false) {
+        state.fail(fault)
+        completion = PilotSummary(snapshot: state.snapshot, at: FeedClock.now(), eof: eof)
+    }
+    private func fail(_ fault:FeedFault, eof:Bool=false) { lock.lock(); finishLocked(fault, eof:eof); lock.unlock() }
     private func isCanceled() -> Bool { lock.lock(); defer { lock.unlock() }; return canceled }
     private func readLoop() {
         defer { joined.leave() }
@@ -54,7 +60,7 @@ public final class PipeReader {
             if ready == 0 { continue }
             if item.revents & Int16(POLLERR | POLLNVAL) != 0 { fail(.read); return }
             let n = Darwin.read(fd,&bytes,bytes.count)
-            if n == 0 { fail(buffer.isEmpty ? .eof : .malformed); return }
+            if n == 0 { fail(buffer.isEmpty ? .eof : .malformed, eof:true); return }
             if n < 0 { if errno == EAGAIN || errno == EINTR { continue }; fail(.read); return }
             buffer.append(contentsOf:bytes.prefix(n))
             while let end = buffer.firstIndex(of:10) {
@@ -63,7 +69,7 @@ public final class PipeReader {
                 if now-rateStart >= 1 { rateStart=now; frames=0 }
                 frames += 1
                 guard frames <= 64 else { fail(.rate); return }
-                lock.lock(); state.ingest(line,at:now); let failed = state.snapshot.fault != nil; lock.unlock()
+                lock.lock(); state.ingest(line,at:now); let failed = state.snapshot.fault != nil; if failed { completion = PilotSummary(snapshot:state.snapshot, at:now, eof:false) }; lock.unlock()
                 if failed { return }
             }
             if buffer.count > 2048 { fail(.malformed); return }
