@@ -106,11 +106,39 @@ class MacPackageTests(unittest.TestCase):
         p.mkdir()
         with self.assertRaises(m.PackageError):m.package(**self.args())
 
-    def test_oversize_and_fifo_do_not_read(self):
-        with mock.patch.object(m, 'BINARY_LIMIT', 16):
-            with self.assertRaises(m.PackageError):m.package(**self.args())
-        self.binary.unlink();os.mkfifo(self.binary)
-        with self.assertRaises(m.PackageError):m.read_regular(self.binary,100)
+    def test_oversize_does_not_open(self):
+        args = self.args()
+        with mock.patch.object(m, 'BINARY_LIMIT', 16), mock.patch.object(m.os, 'open') as opened:
+            with self.assertRaisesRegex(m.PackageError, 'SIZE_INVALID'):
+                m.package(**args)
+            opened.assert_not_called()
+
+    def test_fifo_metadata_rejected_before_open_on_all_platforms(self):
+        fifo = mock.Mock(st_mode=stat.S_IFIFO | 0o600, st_file_attributes=0)
+        with mock.patch.object(m, 'directory_chain'), mock.patch.object(Path, 'lstat', return_value=fifo), mock.patch.object(m.os, 'open') as opened:
+            with self.assertRaisesRegex(m.PackageError, 'FILE_INVALID'):
+                m.read_regular(self.binary, 100)
+            opened.assert_not_called()
+
+    def test_opened_fifo_metadata_rejected_before_read_on_all_platforms(self):
+        fifo = mock.Mock(st_mode=stat.S_IFIFO | 0o600)
+        stream = mock.MagicMock()
+        stream.__enter__.return_value = stream
+        stream.fileno.return_value = 123
+        with mock.patch.object(m.os, 'open', return_value=123), mock.patch.object(m.os, 'fdopen', return_value=stream), mock.patch.object(m.os, 'fstat', return_value=fifo):
+            with self.assertRaisesRegex(m.PackageError, 'FILE_CHANGED'):
+                m.read_regular(self.binary, 100)
+            stream.read.assert_not_called()
+        stream.__exit__.assert_called_once()
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'POSIX FIFO creation unavailable; metadata refusal is tested on every OS')
+    def test_posix_fifo_rejected_before_open(self):
+        self.binary.unlink()
+        os.mkfifo(self.binary)
+        with mock.patch.object(m.os, 'open') as opened:
+            with self.assertRaisesRegex(m.PackageError, 'FILE_INVALID'):
+                m.read_regular(self.binary, 100)
+            opened.assert_not_called()
 
     def test_same_verified_bytes_archived_no_reread(self):
         original=m.read_regular
