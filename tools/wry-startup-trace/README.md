@@ -41,7 +41,14 @@ python3 scripts/prepare_wry_trace.py \
 出力先は source tree の外にある未存在 directory のみです。
 親 directory は存在必須、symlink component は拒否します
 （macOS の `/tmp` 等は canonical path を指定）。
-Git が追跡する `ui/tauri/src-tauri` だけと、明示した生成 `dist` をコピーします。
+Git が追跡する `ui/tauri/src-tauri` と、下記2つの固定 contract入力、明示した生成 `dist` をコピーします。
+- `contracts/control-v1/vectors.json` → `app/contracts/control-v1/vectors.json`
+- `ui/tauri/contracts/shell-status-v1.json` → `app/contracts/shell-status-v1.json`
+
+contractは追跡必須でbyte保持します。一時コピーの `tests/control_contract.rs`（3箇所）と
+`tests/control_coordinator.rs`（1箇所）の既知includeだけを `../../../../contracts` から
+`../../contracts` へ変更し、元testsourceは変更しません。`src/lib.rs` のshell-status includeは
+元の相対pathを保ちます。全Rust compile-time includeを検査し、非literal・欠落・出力外参照は拒否します。
 untracked source、target、node_modules、hidden/private key、symlink は取り込みません。
 dist は index.html と許可した frontend拡張子のみを受け入れます。
 source tree・registry cache・元の lock に書き込みません。

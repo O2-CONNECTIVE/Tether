@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -16,6 +17,10 @@ ARCHIVE_SHA256 = "759c50ddad0ef9913bb5496cb9d509a50433a3b78cb0238d61105526589cf0
 BUNDLE_SHA256 = "e317bd6136cbe3acab4e27837e04942d7221eb4740221b8859414bc3c3ac2c22"
 VERSION = "0.57.1"
 APP_PREFIX = "ui/tauri/src-tauri/"
+CONTRACTS = {
+    "contracts/control-v1/vectors.json": "contracts/control-v1/vectors.json",
+    "ui/tauri/contracts/shell-status-v1.json": "contracts/shell-status-v1.json",
+}
 BUNDLE_FILES = ("patch.json", "startup_trace.rs", "app_hook.rs.txt")
 MAX_BYTES = 64 * 1024 * 1024
 
@@ -139,6 +144,24 @@ def prepare_lock(text):
     return "[[package]]\n".join(chunks)
 
 
+def verify_includes(files):
+    """Fail closed on compile-time includes outside the copied app input."""
+    macro = r"\binclude(?:_str|_bytes)?!\s*\("
+    literal = macro + r'\s*"([^"]+)"\s*,?\s*\)'
+    for name, data in files.items():
+        if not name.endswith(".rs"):
+            continue
+        text = data.decode()
+        includes = re.findall(literal, text)
+        require(len(includes) == len(re.findall(macro, text)), "nonliteral include unsupported")
+        for target in includes:
+            require(not target.startswith("/") and "\\" not in target
+                    and ":" not in target, "invalid include target")
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+            safe_name(resolved)
+            require(resolved in files, "include target outside prepared inputs")
+
+
 def prepare_app(files, bridge):
     result = dict(files)
     manifest = result["src-tauri/Cargo.toml"].decode().replace("\r\n", "\n")
@@ -156,16 +179,28 @@ def prepare_app(files, bridge):
             "diagnostic recorder missing or already hooked")
     marker = "        let recorder = Recorder::memory();\n"
     result[name] = replace_once(trace, marker, marker + bridge.decode()).encode()
+    old_include = b"../../../../contracts/control-v1/vectors.json"
+    new_include = b"../../contracts/control-v1/vectors.json"
+    for name, count in (("src-tauri/tests/control_contract.rs", 3),
+                        ("src-tauri/tests/control_coordinator.rs", 1)):
+        require(result[name].count(old_include) == count, "contract include preimage mismatch")
+        result[name] = result[name].replace(old_include, new_include)
+    verify_includes(result)
     return result
 
 
 def collect_app(source):
-    listing = subprocess.run(["git", "-C", str(source), "ls-files", "-z", "--", APP_PREFIX],
+    listing = subprocess.run(["git", "-C", str(source), "ls-files", "-z", "--",
+                              APP_PREFIX, *CONTRACTS],
                              check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
     names = listing.decode("utf-8").split("\0")
+    require(set(CONTRACTS).issubset(names), "tracked contract inputs missing")
     files = {}
     for name in filter(None, names):
         safe_name(name)
+        if name in CONTRACTS:
+            files[CONTRACTS[name]] = read_regular(source / name)
+            continue
         require(name.startswith(APP_PREFIX), "unexpected tracked path")
         relative = name[len(APP_PREFIX):]
         parts = safe_name(relative).parts

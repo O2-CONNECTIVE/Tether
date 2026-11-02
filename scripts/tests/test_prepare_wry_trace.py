@@ -31,6 +31,13 @@ def app_files():
             "src-tauri/Cargo.lock": lock_text().encode(),
             "src-tauri/src/startup_diagnostics.rs":
             b"wry_hook: AtomicBool\n        let recorder = Recorder::memory();\n",
+            "src-tauri/tests/control_contract.rs":
+            b'include_str!("../../../../contracts/control-v1/vectors.json");\n' * 3,
+            "src-tauri/tests/control_coordinator.rs":
+            b'include_str!("../../../../contracts/control-v1/vectors.json");\n',
+            "src-tauri/src/lib.rs": b'include_str!("../../contracts/shell-status-v1.json");',
+            "contracts/control-v1/vectors.json": b'{"fixture": "control"}',
+            "contracts/shell-status-v1.json": b'{"fixture": "status"}',
             "dist/index.html": b"<html></html>"}
 
 
@@ -73,6 +80,34 @@ class PreparationTests(unittest.TestCase):
         self.assertIn(b"recorder.wry_hook.store(true, SeqCst)", prepared[
             "src-tauri/src/startup_diagnostics.rs"])
         self.assertEqual(files["dist/index.html"], prepared["dist/index.html"])
+
+    def test_all_generated_includes_resolve_inside_app_without_mutating_inputs(self):
+        files = app_files()
+        original = dict(files)
+        result = p.prepare_app(files, (self.bundle / "app_hook.rs.txt").read_bytes())
+        self.assertEqual(files, original)
+        self.assertEqual(result["contracts/control-v1/vectors.json"],
+                         original["contracts/control-v1/vectors.json"])
+        self.assertEqual(result["contracts/shell-status-v1.json"],
+                         original["contracts/shell-status-v1.json"])
+        p.verify_includes(result)
+        for name in ("src-tauri/tests/control_contract.rs",
+                     "src-tauri/tests/control_coordinator.rs"):
+            self.assertNotIn(b"../../../../contracts", result[name])
+            self.assertIn(b"../../contracts/control-v1/vectors.json", result[name])
+
+    def test_include_closure_rejects_escape_missing_and_dynamic_targets(self):
+        for target in ('"../../../../escape.json"', '"missing.json"', 'env!("INPUT")'):
+            files = app_files()
+            files["src-tauri/src/new.rs"] = ("include_str!(" + target + ");").encode()
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                p.prepare_app(files, (self.bundle / "app_hook.rs.txt").read_bytes())
+
+    def test_known_contract_include_count_drift_is_refused(self):
+        files = app_files()
+        files["src-tauri/tests/control_contract.rs"] = b"no includes"
+        with self.assertRaisesRegex(ValueError, "preimage"):
+            p.prepare_app(files, (self.bundle / "app_hook.rs.txt").read_bytes())
 
     def test_app_missing_or_duplicate_marker_refused(self):
         for trace in (b"missing", app_files()["src-tauri/src/startup_diagnostics.rs"] * 2):
@@ -170,10 +205,16 @@ class PreparationTests(unittest.TestCase):
         dist = self.source / "ui/tauri/dist"
         dist.mkdir()
         (dist / "index.html").write_bytes(b"generated")
-        fake = subprocess.CompletedProcess([], 0, (tracked + "\0").encode())
+        for name in p.CONTRACTS:
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"contract fixture")
+        fake = subprocess.CompletedProcess([], 0,
+            ("\0".join([tracked, *p.CONTRACTS]) + "\0").encode())
         with patch.object(p.subprocess, "run", return_value=fake):
             files = p.collect_app(self.source)
-            self.assertEqual(set(files), {"src-tauri/src/main.rs", "dist/index.html"})
+            self.assertEqual(set(files), {"src-tauri/src/main.rs", "dist/index.html",
+                                          *p.CONTRACTS.values()})
             (dist / ".secret").write_bytes(b"no")
             with self.assertRaises(ValueError):
                 p.collect_app(self.source)
