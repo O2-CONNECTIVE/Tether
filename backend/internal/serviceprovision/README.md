@@ -257,3 +257,64 @@ Macの要求、target表示label、OAuth成功からWindows本人同意を作ら
 専用本人確認variant、servicebinding、Windows guest command runtimeは未配線。
 現mainはこの候補を自動loadせず、実Windows実行可能にはならない。
 検証は閉じたRoot/OS seam fixtureとcrosscompileであり、実Windowsの配置・権限・実行の証拠ではない。
+
+## Offline service/client projection pairing
+
+`cmd/tether-service-client-manifest` is the concrete source/packaging consumer of
+`DeriveUntrustedClientProjection` and `VerifyUntrustedClientProjection`.
+It does not load a native client, authenticate a Windows peer, or install a file.
+
+From the backend module, the packaging caller may run:
+```text
+go run ./cmd/tether-service-client-manifest --record reviewed-service.json --service-image rescue-service-host.exe
+go run ./cmd/tether-service-client-manifest --record reviewed-service.json --service-image rescue-service-host.exe --check-projection service-client-projection-v1.json
+```
+These are offline packaging commands, not commands executed by the implementation
+tests. The first writes one canonical JSON record plus LF to stdout; the second
+checks an existing exact canonical artifact and emits nothing. Save output only
+when exit status is 0; partial stdout after failure is not a valid artifact.
+Exit 0 certifies pairing/serialization only. Rejection returns 2 with a fixed
+diagnostic, without raw paths or native error details.
+
+The input is the existing nonsecret `rescue-service-provisioning/1` record.
+Its original bytes (including an allowed single LF) are hashed without
+re-marshalling. The selected service build is streamed and SHA-256 checked against
+`Profile.SupervisorImage`; the CLI has no digest, SID, endpoint or policy override
+flag. Record input is at most 256 KiB; build input is nonempty, no larger than the
+record's image bound, and at most 256 MiB. Check input is bounded by the derived
+canonical artifact length. These byte bounds do not guarantee filesystem I/O
+returns within a wall-clock deadline.
+
+The fixed `rescue-service-client-projection/1` artifact always says
+`activation=blocked` and `trust=unverified`. It derives service name, fixed
+service endpoint/command line, SYSTEM process user, service/operator/excluded
+configured guest SIDs, expected volume, executable identity/node policy, and
+service/process security expectations from that single record. The excluded SID
+is a configured exclusion, not evidence of a newly created execution guest.
+The artifact is not a second editable UI configuration: checking it rederives
+the entire object and requires exact bytes. Its serializer accepts source/build
+inputs, not a caller-modified projection object. The projection targets the
+SYSTEM guest-service candidate only and does not weaken the old control/1
+client's different TokenUser identity contract.
+
+Volume serial and image byte limit are canonical decimal strings; image hashes
+are lowercase hex. Nested path/owner/ACL fields are expectations, not OS facts.
+Runtime token-object protection, token IDs/groups, held SCM/process/pipe identity
+and protected-reader checks still require actual independent native evidence.
+A matching named image hash is not attestation of already loaded process bytes.
+
+Build dependency order is service bytes -> exact service record -> client
+projection -> GUI/final package. Neither GUI's own final hash nor final package
+hash feeds compilation. Build-fixed service identity and host-specific
+SID/volume/path/policy are sourced from the same provisioning record, not
+independent UI overrides. No five-minute candidate lease, runtime deadline,
+session, Authority, approval or remote command scope belongs in this artifact.
+
+The protected installation seed shared by service and native client, client-side
+protected reader, service-specific peer validator, local default-no prompt and
+agent execution binding are still unconnected. Missing values remain
+`NotConfigured`; this command does not create that seed or turn its JSON into a
+trusted capability. The existing blocked package checker and its gates are
+unchanged. Fixture binary bytes are synthetic text, not a built/verified service.
+No Windows installation, ACL/token/service operation, runtime activation or
+distribution is certified by these source tests.

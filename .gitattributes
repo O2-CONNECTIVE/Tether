@@ -13,3 +13,6 @@ backend/internal/servicecontrol/testdata/response-vectors.json -text
 
 # 管理者がhash照合するASCII-only scriptのbytesをcheckout時に変換しない。
 deploy/cloudflare/prepare-directory.ps1 -text
+
+# Preserve the synthetic exact-byte service record on Windows checkout.
+backend/cmd/tether-service-client-manifest/testdata/service_record.json -text
