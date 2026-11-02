@@ -4,11 +4,11 @@
 mod generated;
 mod policy;
 mod retained;
-mod worker;
-#[cfg(windows)]
-mod windows;
 #[cfg(test)]
 mod tests;
+#[cfg(windows)]
+mod windows;
+mod worker;
 
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -32,7 +32,10 @@ pub(super) struct Seed {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Fault { Denied, Unknown }
+pub(super) enum Fault {
+    Denied,
+    Unknown,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Principal {
     pub user: String,
@@ -73,14 +76,26 @@ pub(super) trait Calls: Send + 'static {
     fn token_principal(&self, token: usize) -> Result<Principal, Fault>;
     fn open(&self, path: &str, leaf: bool) -> Result<usize, Fault>;
     fn inspect(&self, file: usize) -> Result<FileState, Fault>;
-    fn read(&self, file: usize, length: usize, stop: &AtomicBool, deadline: Instant, cleanup: Duration)
-        -> Result<Vec<u8>, Fault>;
+    fn read(
+        &self,
+        file: usize,
+        length: usize,
+        stop: &AtomicBool,
+        deadline: Instant,
+        cleanup: Duration,
+    ) -> Result<Vec<u8>, Fault>;
     fn close(&self, handle: usize) -> Result<(), Fault>;
     fn fatal(&self) -> !;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Observation { NotConfigured, Pending, Checked(u64), Denied, Unknown }
+pub(crate) enum Observation {
+    NotConfigured,
+    Pending,
+    Checked(u64),
+    Denied,
+    Unknown,
+}
 
 /// The normal caller polls this Interface, not OS handles or seed fields.
 /// No successful observation enables an operation. Every poll requests a fresh
@@ -101,26 +116,49 @@ impl Installation {
         // adopted. A generated seed alone MUST NOT activate this evaluator.
         const NATIVE_EVALUATION_ADMITTED: bool = false;
         if !NATIVE_EVALUATION_ADMITTED {
-            return Self { worker: None, initial: Observation::NotConfigured };
+            return Self {
+                worker: None,
+                initial: Observation::NotConfigured,
+            };
         }
         let Some(seed) = seed else {
-            return Self { worker: None, initial: Observation::NotConfigured };
+            return Self {
+                worker: None,
+                initial: Observation::NotConfigured,
+            };
         };
         #[cfg(windows)]
-        { Self::with_calls(seed, windows::Native) }
+        {
+            Self::with_calls(seed, windows::Native)
+        }
         #[cfg(not(windows))]
-        { let _ = seed; Self { worker: None, initial: Observation::Denied } }
+        {
+            let _ = seed;
+            Self {
+                worker: None,
+                initial: Observation::Denied,
+            }
+        }
     }
 }
 impl Installation {
     #[cfg(any(windows, test))]
     fn with_calls(seed: Seed, calls: impl Calls) -> Self {
         if !policy::valid_seed(&seed) {
-            return Self { worker: None, initial: Observation::Denied };
+            return Self {
+                worker: None,
+                initial: Observation::Denied,
+            };
         }
         match Worker::start(seed, calls) {
-            Ok(worker) => Self { worker: Some(worker), initial: Observation::Pending },
-            Err(_) => Self { worker: None, initial: Observation::Unknown },
+            Ok(worker) => Self {
+                worker: Some(worker),
+                initial: Observation::Pending,
+            },
+            Err(_) => Self {
+                worker: None,
+                initial: Observation::Unknown,
+            },
         }
     }
     pub(crate) fn observe(&mut self) -> Observation {
