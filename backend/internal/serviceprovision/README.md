@@ -192,3 +192,68 @@ runtimeのnative構成は `NewRuntimeService` を選び、SCM Running後に既�
 両者を一つの実native認証成功へ合成しない。
 実message認証helperの正規起動資源は未構成で、SID policy付きnative factoryは取得前の拒否を維持する。
 評価用固定値・配布artifact・実OS保護・実終了観測・実SSH session処理と製品入口は未接続または未検証である。
+
+## Windows agent purpose の保護入力候補
+
+`Prepared.LoadAgentPurpose(ctx, runtimeGuestConfiguration)` は同じ元ownerの
+固定sibling `agent-purpose-v1.json` / `agent-purpose-v1.sha256` を既存Rootで読む。
+新しいnative reader、任意path、設定fallbackは作らない。戻り値の
+`AgentPurposeOwner.Descriptor` は**不活性な候補**であり、本人承認、
+Authority、実guest、service開始、agent sessionを生成しない。
+
+固定6fieldsは protocol=`rescue-windows-agent-purpose/1`、
+purpose=`single-guest-command`、serviceDigest、runtimeGuestDigest、
+operatorKeys、maximumDurationNsだけ。policyDigest、approval、command、
+SID/token/argv/epoch/request等の入力は受け取らない。
+JSONは最大4096bytes、duplicateを消去前に拒否し、未知field・不正UTF8・
+非canonical duration/hash/key・重複keyを拒否する。operatorKeysは専用の
+1〜8 ED25519公開鍵で、旧SSH AllowedKeysから暗黙に補わない。
+
+purposeはfull非管理者guest shell stdin・1commandに固定する。
+PolicyDigestはコードから `agentexec.FullPolicyDigest()` を導出する。
+将来の消費側は同じ実AuthorityからSessionを作り、MaxCommands=1を固定する必要がある。
+descriptorの型やdigestだけではその制約も実行許可も成立しない。
+
+### 元owner、配置と寿命
+
+- 同じPrepared pointer、runtime用GuestConfiguration、self一致、元thread、
+  live/nonpoisoned親、同じ保護Subjectを要求する。親はborrowし、purpose ownerを先に閉じる。
+- 原Rootのvolume/fileID/祖先owner/ACL/独立digest/読取・保持検査をそのまま使う。
+  新JSONとsha256の両leafの実volume/fileIDをguest layoutのconfiguration役割に要求する。
+  **28files上限と検査予算は増やさない。**
+- serviceDigestは保持service bytesのSHA256、runtimeGuestDigestは
+  `GuestConfiguration.Digest`（service+runtime layout bundle）と完全一致する必要がある。
+  layout単体digestや入力の自己申告一致を証拠にしない。
+- 配置順序は、追加2filesの物理fileIDを含むruntime layoutを確定し、そのbundle digestを
+  purposeへ記す構造。layoutは追加fileの内容hashを参照しないため内容digestの循環は無い。
+  ただし物理fileを置換してIDを変えた場合は再provisioningが必要で、自動追随しない。
+  この順序説明は実file作成・ACL設定・配布承認ではない。
+- 候補全体digestは `rescue-windows-agent-purpose-bundle/1\\0` と
+  service digest、runtime bundle digest、exact purpose bytes digestから導出する。
+  これは相関値であり、承認・認証・replay防止の証拠ではない。
+- Descriptorは保持native同一性/metadataと保持bytesを再検査する。
+  getterが毎回disk bytesを再読取するとは主張しない。既存の漏出write handle等の限界も不変。
+- 初回成功load時のローカルmonotonic-bearing時刻から最大5分の**候補owner寿命**を固定する。
+  descriptor再取得、clock rollback、失効後再取得で延長・復活しない。
+  常駐host寿命や実Execution grantの発行/期限を実装したものではない。
+- 候補入口はpre-launch/image-lease借用前に使う。Descriptorから親scopeを既に借用中の
+  同threadへ再入させてはならない。将来の承認consumerは別の正規同owner検証契約が必要。
+- 部分取得/検証失敗は同じ子ownerを保持しCloseを確認する。Close失敗でdescriptorは復活しない。
+  コピー、閉じた親、保護同一性の変化を拒否する。
+
+### 主体と未配線の消費側
+
+HostFingerprintは既存HostKeyRef/catalogが指定する設定上の鍵で、実相手の鍵所持証明ではない。
+LocalOperatorSIDはWindows本人承認に必要な主体の設定で、remote operatorKeysとは別。
+Macの要求、target表示label、OAuth成功からWindows本人同意を作らない。
+
+旧serviceprovision recordはSSH policy、旧Previewは127.0.0.1:22/direct-tcpip固定のまま。
+このdescriptorを旧Previewへcastしたりdigestを置き換えたりしない。
+将来必要な呼出鎖は、保護purpose読取→**専用の真実なagent同意表示・認証済み本人confirm**
+→同じguest/inspection/issuer→固定1command Session→gueststdinである。
+旧boot/channel/sequence/intent単回消費とagentexec request冪等は別の契約で、
+この候補入力からepochやgrantを復元しない。
+
+専用本人確認variant、servicebinding、Windows guest command runtimeは未配線。
+現mainはこの候補を自動loadせず、実Windows実行可能にはならない。
+検証は閉じたRoot/OS seam fixtureとcrosscompileであり、実Windowsの配置・権限・実行の証拠ではない。
