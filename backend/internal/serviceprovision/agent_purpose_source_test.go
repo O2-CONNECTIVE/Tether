@@ -303,11 +303,17 @@ func TestAgentPurposePendingNativeReadRetainsPartialOwner(t *testing.T) {
 	p, g, root, k := agentPurposeFixture(t)
 	op := &rootFakeOp{done: false}
 	k.files[root.anchor.RecordPath].op = op
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	// Cancel only after the fake native read has started. A short wall-clock
+	// deadline can expire during acquisition, when no pending operation exists.
+	ctx, cancel := context.WithCancel(rootContext(t))
 	defer cancel()
+	k.files[root.anchor.RecordPath].onRead = cancel
 	owner, err := p.loadAgentPurpose(ctx, g, root)
 	if err == nil || owner == nil {
 		t.Fatalf("pending read lost partial owner: %v %v", owner, err)
+	}
+	if k.files[root.anchor.RecordPath].reads != 1 || !op.cancelled {
+		t.Fatal("fixture did not enter and cancel the pending read")
 	}
 	if _, err := owner.Descriptor(rootContext(t)); err == nil {
 		t.Fatal("partial read approved candidate")
@@ -431,5 +437,28 @@ func TestAgentPurposeHashGraphPinsFileIdentityWithoutContentCycle(t *testing.T) 
 	}
 	if _, err = first.Descriptor(rootContext(t)); err == nil {
 		t.Fatal("closed owner revived")
+	}
+}
+
+func TestAgentPurposeCancelBeforeReadHasNoPendingOperation(t *testing.T) {
+	p, g, root, k := agentPurposeFixture(t)
+	op := &rootFakeOp{done: false}
+	file := k.files[root.anchor.RecordPath]
+	file.op = op
+	ctx, cancel := context.WithCancel(rootContext(t))
+	defer cancel()
+	k.onPrincipal = func(uintptr) { cancel() }
+	owner, err := p.loadAgentPurpose(ctx, g, root)
+	if err == nil || owner == nil {
+		t.Fatalf("cancelled acquisition: %v %v", owner, err)
+	}
+	if file.reads != 0 || op.cancelled || op.released {
+		t.Fatal("unstarted operation changed")
+	}
+	if err := owner.Close(rootContext(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Descriptor(rootContext(t)); err == nil {
+		t.Fatal("cancelled acquisition approved candidate")
 	}
 }
