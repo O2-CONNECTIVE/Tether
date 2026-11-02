@@ -106,3 +106,7 @@ Windows hosted runner の限定した WebView2 起動・実 IPC・通常 close �
 ブラウザーの文字200%と forced colors/reduced motion 模擬だけで OS 実機を合格にしません。
 CI は installer、bundle、署名、更新、Release を作成・公開しません。
 Rust を含む完全な配布 license 棚卸し、WebView2 未導入とオフライン配布は[配布条件](../../docs/distribution.md)の後続です。
+
+## Inactive Windows installation source candidate
+
+See [installation Module contract](src-tauri/src/service_installation/README.md). The normal caller remains NotConfigured even with a generated seed; native availability policy and Rust verification are unresolved.

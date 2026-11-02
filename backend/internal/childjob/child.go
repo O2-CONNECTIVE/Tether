@@ -237,13 +237,55 @@ func (c *Child) release(handle *uintptr) error {
 	return nil
 }
 
+// WaitExit observes only this held leader. A successful code is not proof of
+// natural exit, execution admission, Job emptiness, pipe EOF or handle cleanup.
+// It shares the original owner gate/cache with Wait and Close, and never closes
+// handles, terminates work or grants admission. The code is valid only on nil error.
+func (c *Child) WaitExit(ctx context.Context) (uint32, error) {
+	if c == nil || c.api == nil || c.gate == nil {
+		return 0, ErrConfig
+	}
+	if err := c.take(ctx); err != nil {
+		if ctx != nil {
+			return 0, errors.Join(err, ctx.Err())
+		}
+		return 0, err
+	}
+	defer func() { c.gate <- struct{}{} }()
+	code, err := c.observeExitOwned(ctx)
+	if err != nil {
+		return 0, errors.Join(err, ctx.Err())
+	}
+	if err := ctx.Err(); err != nil {
+		// Retain a real successful OS observation, but do not report success
+		// for a call whose budget expired while that observation returned.
+		return 0, errors.Join(ErrUnconfirmed, err)
+	}
+	return code, nil
+}
+
+// The caller holds c.gate. Failed observations never set exited or cache a code.
+// Original OS errors remain available to the internal caller, not public UI.
+func (c *Child) observeExitOwned(ctx context.Context) (uint32, error) {
+	if c.exited {
+		return c.exitCode, nil
+	}
+	if c.process == 0 {
+		return 0, ErrUnconfirmed
+	}
+	code, err := c.api.waitProcess(ctx, c.process)
+	if err != nil {
+		return 0, errors.Join(ErrUnconfirmed, err)
+	}
+	c.exitCode, c.exited = code, true
+	return code, nil
+}
+
 func (c *Child) waitOwned(ctx context.Context) error {
 	if c.process != 0 && !c.exited {
-		code, err := c.api.waitProcess(ctx, c.process)
-		if err != nil {
+		if _, err := c.observeExitOwned(ctx); err != nil {
 			return ErrUnconfirmed
 		}
-		c.exitCode, c.exited = code, true
 	}
 	if c.job != 0 {
 		if err := c.api.waitEmpty(ctx, c.job); err != nil {

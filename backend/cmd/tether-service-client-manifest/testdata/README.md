@@ -1,0 +1,1 @@
+Synthetic nonsecret fixture derived from serviceprovision record_decode_test.go validJSON: process-user/node-owner SID replaced by SYSTEM, supervisor SHA256 replaced by the hash of the test literal `synthetic service build\n`. It is not a real host configuration or service binary. No private deployment values are included.

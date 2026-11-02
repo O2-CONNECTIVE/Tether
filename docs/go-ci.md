@@ -256,3 +256,7 @@ Agent-only encrypted channel inventory: `internal/agentchannel` contains channel
 
 ### Local Access identity inspector
 `cmd/tether-access-identity/main.go` を全OS共通に登録します。公開issuer/AUD/JWKSを明示し、stdinのassertionを既存AccessVerifierで検証した後に限定claimsだけ出力するローカル登録補助です。認可・鍵発行・自動登録は行いません。試験は合成RSA/JWTとmemory inputのみ。詳細は [検証器手順](tether-access-identity.md) を参照してください。
+
+Windows agent purpose candidate adds only serviceprovision/agent_purpose_record.go and agent_purpose_source.go. Explicit inventory: 42 packages; Linux 327, Darwin 328, Windows 358 production files (including the offline client projection producer). Fixed protected input loading is not local approval, agent execution, or OS verification.
+
+The offline `tether-service-client-manifest` command adds one package/main.go; `serviceprovision/client_projection.go` adds one production file. Its source/build pairing tests do not run a Windows service or establish protected installation/native-client trust. Existing blocked package checks remain unchanged.
