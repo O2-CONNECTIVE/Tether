@@ -31,6 +31,14 @@ void test('browserではRust未取得を明示し、keyboard・focus・拡大で
   await page.goto(url);
   await page.waitForFunction(() => document.querySelector('#status-title')?.textContent === '状態を取得できません');
   assert.match(await page.locator('#status-description').innerText(), /ブラウザー表示/);
+  const status = page.getByRole('status');
+  assert.equal(await status.count(), 1);
+  assert.equal(await status.getAttribute('aria-live'), 'polite');
+  assert.equal(await status.getAttribute('aria-atomic'), 'true');
+  assert.equal(await status.locator('h2#status-title').count(), 1);
+  assert.equal(await status.locator('p#status-description').count(), 1);
+  assert.equal(await status.locator('svg[aria-hidden="true"][focusable="false"]').count(), 1);
+  assert.equal(await status.getByRole('button').count(), 0);
   assert.equal(await page.getByRole('button', { name: 'サポートを開始' }).isDisabled(), true);
   assert.equal(await page.getByRole('button', { name: '接続を停止' }).isDisabled(), true);
   await page.keyboard.press('Tab');
@@ -70,6 +78,8 @@ void test('未配線IPC fixtureは接続成功にせず、HTML風不正応答も
     await page.waitForFunction(() => Boolean(document.querySelector('#status-title')) && document.querySelector('#status-title')?.textContent !== '状態を確認中');
     assert.equal(await page.locator('#status-title').innerText(), valid ? 'バックエンド未接続' : '状態を取得できません');
     assert.equal(await page.getByRole('button', { name: 'サポートを開始' }).isDisabled(), true);
+    if (valid) assert.match(await page.locator('#status-description').innerText(), /現在の shell は未配線/);
+    assert.equal(await page.getByRole('button', { name: '接続を停止' }).isDisabled(), true);
     assert.equal(await page.locator('img').count(), 0);
     assert.equal(await page.evaluate(() => (window as Window & { injected?: unknown }).injected), undefined);
     await page.close();
@@ -205,11 +215,12 @@ void test('readerの終了未確認コードは狭い拡大表示でも診断内
     } };
   });
   await page.goto(url);
-  await page.waitForFunction(() => document.querySelector('#status-title')?.textContent === '状態を取得できません');
+  await page.waitForFunction(() => document.querySelector('#status-title')?.textContent === '回収を確認できません');
+  assert.match(await page.locator('#status-description').innerText(), /EOF や画面終了は回収確認ではありません/);
   await page.getByRole('button', { name: '診断情報', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#diagnostic')?.textContent === 'TERMINATION_UNCONFIRMED');
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
-  assert.equal(await page.locator('#status-title').innerText(), '状態を取得できません');
+  assert.equal(await page.locator('#status-title').innerText(), '回収を確認できません');
   assert.equal(await page.getByRole('button', { name: 'サポートを開始' }).isDisabled(), true);
   assert.equal(await page.getByRole('button', { name: '接続を停止', exact: true }).isDisabled(), true);
   if (process.env.SHELL_SCREENSHOT_DIR) {

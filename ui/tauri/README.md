@@ -41,6 +41,8 @@ CI の controller/build/browser は同一 step 内で順に実行し、各非0�
 `SHELL_SCREENSHOT_DIR` の指定時だけ実描画を保存します。
 IPC fixture は表示と操作の検証であり、Rust や実通信の成功証拠ではありません。
 
+Mac status入力の別型・strict decoder・pure feed state候補は[Mac status core](MAC_STATUS_CORE.md)を参照してください。固定公開050e48fのSwift golden156行のみローカル実行済みです（このPR基点の同tree内Swiftとは異なります）。Rust goldenは既存Rust CIでこれから検証し、既存Swift CIには新golden harnessは未接続です。両言語実行同値とnative pipe配線は未完です。
+
 ## 内部 reader と状態表示の境界
 
 `ReaderTask` は既に渡された byte stream を別 worker で読み、最大16KiBの JSONL frame を既存 codec / coordinator に渡します。
