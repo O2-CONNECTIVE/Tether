@@ -166,3 +166,14 @@ func (p *Prepared) Wait(ctx context.Context) error {
 	}
 	return err
 }
+
+// WaitExit is observation through this same retained owner, not admission.
+// Revoke does not erase an observed exit or prevent cleanup-time observation.
+// Suspended/forced exits are not natural command success; the caller separately
+// owns that distinction. No inspection/query handle is closed by this method.
+func (p *Prepared) WaitExit(ctx context.Context) (uint32, error) {
+	if p == nil || p.child == nil {
+		return 0, ErrConfig
+	}
+	return p.child.WaitExit(ctx)
+}

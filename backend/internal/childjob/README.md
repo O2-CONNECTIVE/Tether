@@ -130,3 +130,28 @@ native WinAPI本体はcross compileの対象とし、実process、service、acco
 - [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects): Job所属とkill-on-last-handle、子孫の管理。最後のhandle閉鎖と監督hangは別。
 - [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew): share modeは保有handleの存続中に作用し、非共有write/deleteと既存openの競合を拒否する。
 - [GetCurrentThreadToken](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentthreadtoken): thread impersonation tokenのpseudo handle。取得handleの閉鎖は不要。
+
+## Leader退出だけの観測
+
+`Child.WaitExit(ctx)` と `Prepared.WaitExit(ctx)` は、同じ保持processの退出codeだけを返す。
+nil errorの時だけuint32 codeが有効で、非0でもこの観測APIはErrExitを返さない。
+取得失敗はErrUnconfirmedと原本errorを保持し、ctx終了も別のerrorとして保持する。
+内部errorを未選別のままUIやwireへ転送しない。
+
+このAPIはJob active=0、pipe EOF、handle回収、自然終了、command実行の成功を証明しない。
+suspended targetの外部停止による退出もあり得るため、退出観測から承認済実行を推定しない。
+Revoke後も同じ所有物の観測だけは可能で、admission、検査receipt、grantを復活させない。
+有効な有限ctxを先に要求し、cacheがあっても取消済・無期限ctxでは成功を返さない。
+OSの成功観測とctx終了が競合した場合、観測はcacheへ保持するが当該callは失敗にする。
+
+既存Wait/Closeと同じowner gateでOS待機とcacheを共有する。再観測のためのPID検索、
+handle再取得、kill、JobEmpty待機、close、自動retryは行わない。
+Close後は保持済みの観測事実だけを返し、processも観測も無ければ未知のまま拒否する。
+同時Wait/Closeとのgate待機にもctx予算が適用される。OS待機がctxに従う前提は既存と同じで、
+OS hang中の強制停止を追加保証しない。
+
+既存Waitはleader退出＋Job空＋handle回収、非0ならErrExitという契約を維持する。
+この追加は将来のWindows agent adapterに必要な観測seamであり、
+guest shell stdin/output adapter、FullPolicyDigest本人承認producer、service/session接続は未実装。
+固定exit0評価経路、SYSTEM helper argv、token取得・設定は変更しない。
+memory試験とWindows向けcompileは実Windows実行・権限分離・回収の証拠ではない。
