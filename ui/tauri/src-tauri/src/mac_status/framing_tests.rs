@@ -15,13 +15,18 @@ fn every_chunk_boundary_preserves_one_complete_frame() {
     for split in 0..=bytes.len() {
         let mut f = Framing::new(10.0);
         for chunk in [&bytes[..split], &bytes[split..]] {
-            if !chunk.is_empty() { f.push_read(chunk, || 10.0); }
+            if !chunk.is_empty() {
+                f.push_read(chunk, || 10.0);
+            }
         }
         assert_eq!(f.snapshot().fault, None);
         assert_eq!(f.snapshot().frame.as_ref().expect("frame").seq, 1);
         f.eof();
         assert!(f.snapshot().source_closed());
-        assert_eq!(f.snapshot().frame.as_ref().expect("retained").cleanup, "pending");
+        assert_eq!(
+            f.snapshot().frame.as_ref().expect("retained").cleanup,
+            "pending"
+        );
         assert!(!f.snapshot().fresh(10.0));
     }
 }
@@ -57,7 +62,10 @@ fn rate_limit_is64_per_window_and_resets_at_one_second() {
     }
     rejected.push_read(&line(65), || 10.999);
     assert_eq!(rejected.snapshot().fault, Some(FeedFault::Rate));
-    assert_eq!(rejected.snapshot().frame.as_ref().expect("retained").seq, 64);
+    assert_eq!(
+        rejected.snapshot().frame.as_ref().expect("retained").seq,
+        64
+    );
     accepted.push_read(&line(65), || 11.0);
     assert_eq!(accepted.snapshot().fault, None);
     assert_eq!(accepted.snapshot().frame.as_ref().expect("frame").seq, 65);

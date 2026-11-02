@@ -39,7 +39,10 @@ fn matches_independently_checked_swift_golden() {
                     assert_eq!(hex.len() % 2, 0);
                     (0..hex.len())
                         .step_by(2)
-                        .map(|offset| u8::from_str_radix(&hex[offset..offset + 2], 16).expect("closed fixture hex"))
+                        .map(|offset| {
+                            u8::from_str_radix(&hex[offset..offset + 2], 16)
+                                .expect("closed fixture hex")
+                        })
                         .collect()
                 };
                 state.ingest(&bytes, now);
@@ -50,16 +53,31 @@ fn matches_independently_checked_swift_golden() {
         let s = state.snapshot();
         let actual = [
             s.fault.map_or("-", FeedFault::as_str).to_owned(),
-            s.frame.as_ref().map_or("-", |frame| frame.phase.as_str()).to_owned(),
-            s.frame.as_ref().map_or_else(|| "-".to_owned(), |frame| frame.seq.to_string()),
-            s.frame.as_ref().map_or("-", |frame| frame.cleanup.as_str()).to_owned(),
+            s.frame
+                .as_ref()
+                .map_or("-", |frame| frame.phase.as_str())
+                .to_owned(),
+            s.frame
+                .as_ref()
+                .map_or_else(|| "-".to_owned(), |frame| frame.seq.to_string()),
+            s.frame
+                .as_ref()
+                .map_or("-", |frame| frame.cleanup.as_str())
+                .to_owned(),
             u8::from(s.sticky_unknown).to_string(),
             u8::from(s.source_closed()).to_string(),
             u8::from(s.terminal_observed()).to_string(),
             u8::from(s.fresh(now)).to_string(),
-            s.remaining(now).map_or_else(|| "-".to_owned(), |remaining| remaining.to_string()),
+            s.remaining(now)
+                .map_or_else(|| "-".to_owned(), |remaining| remaining.to_string()),
         ];
-        assert_eq!(actual.join("\t"), fields[4..].join("\t"), "case={} op={}", fields[0], fields[1]);
+        assert_eq!(
+            actual.join("\t"),
+            fields[4..].join("\t"),
+            "case={} op={}",
+            fields[0],
+            fields[1]
+        );
         checked += 1;
     }
     assert_eq!(checked, 156);

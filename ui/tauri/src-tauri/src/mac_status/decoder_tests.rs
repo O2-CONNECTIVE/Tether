@@ -17,8 +17,14 @@ fn failed(reason: &str, cleanup: &str, remaining: &str) -> String {
     changed(&[
         (r#""phase":"connected""#, r#""phase":"failed""#),
         (r#""reason":"none""#, &format!(r#""reason":"{reason}""#)),
-        (r#""cleanup":"not_started""#, &format!(r#""cleanup":"{cleanup}""#)),
-        (r#""grant_remaining_ms":5000"#, &format!(r#""grant_remaining_ms":{remaining}"#)),
+        (
+            r#""cleanup":"not_started""#,
+            &format!(r#""cleanup":"{cleanup}""#),
+        ),
+        (
+            r#""grant_remaining_ms":5000"#,
+            &format!(r#""grant_remaining_ms":{remaining}"#),
+        ),
         (r#""running_workers":1"#, r#""running_workers":0"#),
         (r#""terminal":false"#, r#""terminal":true"#),
     ])
@@ -35,7 +41,10 @@ fn decodes_exact_fields_and_whitespace() {
     assert_eq!((frame.starting, frame.running, frame.stopping), (0, 1, 0));
     assert_eq!(frame.cleanup, "not_started");
     assert!(!frame.terminal_unknown && !frame.terminal);
-    let spaced = format!(" \t\r\n{} \r\n\t", VALID.replace(':', " : ").replace(',', ",\n"));
+    let spaced = format!(
+        " \t\r\n{} \r\n\t",
+        VALID.replace(':', " : ").replace(',', ",\n")
+    );
     assert_eq!(decode(spaced.as_bytes()), Ok(frame));
 }
 
@@ -54,8 +63,21 @@ fn rejects_nonflat_or_malformed_input_without_payload_errors() {
     for input in ["", "{}", "[]", "null", "true", "{", "\u{feff}", " \t\r\n"] {
         rejects(input);
     }
-    for value in ["[]", "{}", "\"1\"", "null", "true", "false", "-1", "+1",
-        "01", "1.0", "1e0", "18446744073709551616", "NaN"] {
+    for value in [
+        "[]",
+        "{}",
+        "\"1\"",
+        "null",
+        "true",
+        "false",
+        "-1",
+        "+1",
+        "01",
+        "1.0",
+        "1e0",
+        "18446744073709551616",
+        "NaN",
+    ] {
         rejects(&VALID.replace(r#""seq":1"#, &format!(r#""seq":{value}"#)));
     }
     for value in ["TRUE", "0", "\"false\"", "null", "falsex"] {
@@ -78,11 +100,26 @@ fn enforces_length_and_safe_integer_boundaries() {
     let exact = format!("{VALID}{}", " ".repeat(MAX_LINE_BYTES - VALID.len()));
     assert!(decode(exact.as_bytes()).is_ok());
     rejects(&format!("{exact} "));
-    assert!(decode(changed(&[(r#""source_continuous_ms":1000"#,
-        r#""source_continuous_ms":0"#)]).as_bytes()).is_ok());
+    assert!(decode(
+        changed(&[(
+            r#""source_continuous_ms":1000"#,
+            r#""source_continuous_ms":0"#
+        )])
+        .as_bytes()
+    )
+    .is_ok());
     for key in ["seq", "source_continuous_ms"] {
-        let old = if key == "seq" { "\"seq\":1" } else { "\"source_continuous_ms\":1000" };
-        assert!(decode(VALID.replace(old, &format!("\"{key}\":9007199254740991")).as_bytes()).is_ok());
+        let old = if key == "seq" {
+            "\"seq\":1"
+        } else {
+            "\"source_continuous_ms\":1000"
+        };
+        assert!(decode(
+            VALID
+                .replace(old, &format!("\"{key}\":9007199254740991"))
+                .as_bytes()
+        )
+        .is_ok());
         rejects(&VALID.replace(old, &format!("\"{key}\":9007199254740992")));
     }
     rejects(&VALID.replace("\"seq\":1", "\"seq\":0"));
@@ -90,52 +127,94 @@ fn enforces_length_and_safe_integer_boundaries() {
         rejects(&VALID.replace("\"version\":1", &format!("\"version\":{version}")));
     }
     for value in ["null", "0", "86400000"] {
-        assert!(decode(VALID.replace("\"grant_remaining_ms\":5000",
-            &format!("\"grant_remaining_ms\":{value}")).as_bytes()).is_ok());
+        assert!(decode(
+            VALID
+                .replace(
+                    "\"grant_remaining_ms\":5000",
+                    &format!("\"grant_remaining_ms\":{value}")
+                )
+                .as_bytes()
+        )
+        .is_ok());
     }
-    rejects(&VALID.replace("\"grant_remaining_ms\":5000", "\"grant_remaining_ms\":86400001"));
+    rejects(&VALID.replace(
+        "\"grant_remaining_ms\":5000",
+        "\"grant_remaining_ms\":86400001",
+    ));
 }
 
 #[test]
 fn validates_enums_workers_and_terminal_equivalence() {
-    for (old, new) in [("\"connected\"", "\"unexpected\""), ("\"none\"", "\"unexpected\""),
-        ("\"not_started\"", "\"unexpected\""), ("\"running_workers\":1", "\"running_workers\":2"),
+    for (old, new) in [
+        ("\"connected\"", "\"unexpected\""),
+        ("\"none\"", "\"unexpected\""),
+        ("\"not_started\"", "\"unexpected\""),
+        ("\"running_workers\":1", "\"running_workers\":2"),
         ("\"starting_workers\":0", "\"starting_workers\":1"),
         ("\"stopping_workers\":0", "\"stopping_workers\":1"),
         ("\"terminal\":false", "\"terminal\":true"),
-        ("\"connected\"", "\"closed\""), ("\"connected\"", "\"failed\"")] {
+        ("\"connected\"", "\"closed\""),
+        ("\"connected\"", "\"failed\""),
+    ] {
         rejects(&VALID.replace(old, new));
     }
-    for phase in ["checking_config", "loading_key", "preparing", "awaiting_approval",
-        "connecting", "connected", "stopping"] {
+    for phase in [
+        "checking_config",
+        "loading_key",
+        "preparing",
+        "awaiting_approval",
+        "connecting",
+        "connected",
+        "stopping",
+    ] {
         assert!(decode(VALID.replace("connected", phase).as_bytes()).is_ok());
     }
     for phase in ["closed", "failed"] {
-        let input = VALID.replace("connected", phase).replace("\"terminal\":false", "\"terminal\":true");
+        let input = VALID
+            .replace("connected", phase)
+            .replace("\"terminal\":false", "\"terminal\":true");
         assert!(decode(input.as_bytes()).is_ok());
     }
 }
 
 #[test]
 fn enforces_unknown_implication_not_an_invented_cleanup_equivalence() {
-    let unknown = failed("terminal_cleanup_unknown", "unknown", "null")
-        .replace("\"terminal_cleanup_unknown\":false", "\"terminal_cleanup_unknown\":true");
+    let unknown = failed("terminal_cleanup_unknown", "unknown", "null").replace(
+        "\"terminal_cleanup_unknown\":false",
+        "\"terminal_cleanup_unknown\":true",
+    );
     assert!(decode(unknown.as_bytes()).unwrap().terminal_unknown);
-    for (old, new) in [("\"phase\":\"failed\"", "\"phase\":\"closed\""),
+    for (old, new) in [
+        ("\"phase\":\"failed\"", "\"phase\":\"closed\""),
         ("\"cleanup\":\"unknown\"", "\"cleanup\":\"pending\""),
-        ("\"reason\":\"terminal_cleanup_unknown\"", "\"reason\":\"none\""),
-        ("\"terminal_cleanup_unknown\":true", "\"terminal_cleanup_unknown\":false")] {
+        (
+            "\"reason\":\"terminal_cleanup_unknown\"",
+            "\"reason\":\"none\"",
+        ),
+        (
+            "\"terminal_cleanup_unknown\":true",
+            "\"terminal_cleanup_unknown\":false",
+        ),
+    ] {
         rejects(&unknown.replace(old, new));
     }
-    rejects(&VALID.replace("\"terminal_cleanup_unknown\":false", "\"terminal_cleanup_unknown\":true"));
+    rejects(&VALID.replace(
+        "\"terminal_cleanup_unknown\":false",
+        "\"terminal_cleanup_unknown\":true",
+    ));
     // Swift allows cleanup=unknown without asserting terminal_cleanup_unknown.
     assert!(decode(VALID.replace("\"not_started\"", "\"unknown\"").as_bytes()).is_ok());
 }
 
 #[test]
 fn enforces_all_setup_failure_constraints() {
-    for reason in ["config_error", "key_error", "preparation_error", "connection_error",
-        "approval_not_completed"] {
+    for reason in [
+        "config_error",
+        "key_error",
+        "preparation_error",
+        "connection_error",
+        "approval_not_completed",
+    ] {
         for cleanup in ["not_started", "confirmed"] {
             for remaining in ["null", "0"] {
                 assert!(decode(failed(reason, cleanup, remaining).as_bytes()).is_ok());
@@ -144,8 +223,14 @@ fn enforces_all_setup_failure_constraints() {
         rejects(&failed(reason, "pending", "0"));
         rejects(&failed(reason, "unknown", "0"));
         rejects(&failed(reason, "confirmed", "1"));
-        rejects(&failed(reason, "not_started", "null").replace("\"running_workers\":0", "\"running_workers\":1"));
-        rejects(&failed(reason, "not_started", "0").replace("\"phase\":\"failed\"", "\"phase\":\"closed\""));
+        rejects(
+            &failed(reason, "not_started", "null")
+                .replace("\"running_workers\":0", "\"running_workers\":1"),
+        );
+        rejects(
+            &failed(reason, "not_started", "0")
+                .replace("\"phase\":\"failed\"", "\"phase\":\"closed\""),
+        );
         rejects(&VALID.replace("\"reason\":\"none\"", &format!("\"reason\":\"{reason}\"")));
     }
 }

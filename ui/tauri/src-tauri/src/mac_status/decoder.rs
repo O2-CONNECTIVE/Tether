@@ -2,9 +2,18 @@
 pub(crate) const MAX_LINE_BYTES: usize = 2048;
 const SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const KEYS: [&str; 12] = [
-    "version", "source_continuous_ms", "seq", "phase", "reason",
-    "grant_remaining_ms", "starting_workers", "running_workers",
-    "stopping_workers", "cleanup", "terminal_cleanup_unknown", "terminal",
+    "version",
+    "source_continuous_ms",
+    "seq",
+    "phase",
+    "reason",
+    "grant_remaining_ms",
+    "starting_workers",
+    "running_workers",
+    "stopping_workers",
+    "cleanup",
+    "terminal_cleanup_unknown",
+    "terminal",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +50,10 @@ struct FlatJson<'a> {
 
 impl<'a> FlatJson<'a> {
     fn white(&mut self) {
-        while matches!(self.bytes.get(self.index), Some(b'\t' | b'\n' | b'\r' | b' ')) {
+        while matches!(
+            self.bytes.get(self.index),
+            Some(b'\t' | b'\n' | b'\r' | b' ')
+        ) {
             self.index += 1;
         }
     }
@@ -60,8 +72,8 @@ impl<'a> FlatJson<'a> {
         let start = self.index;
         while let Some(&byte) = self.bytes.get(self.index) {
             if byte == b'"' {
-                let text = std::str::from_utf8(&self.bytes[start..self.index])
-                    .map_err(|_| Invalid)?;
+                let text =
+                    std::str::from_utf8(&self.bytes[start..self.index]).map_err(|_| Invalid)?;
                 self.index += 1;
                 return Ok(text);
             }
@@ -87,14 +99,23 @@ impl<'a> FlatJson<'a> {
         if self.bytes.get(self.index) == Some(&b'"') {
             return self.string().map(Atom::Text);
         }
-        if self.literal(b"null") { return Ok(Atom::Null); }
-        if self.literal(b"true") { return Ok(Atom::Boolean(true)); }
-        if self.literal(b"false") { return Ok(Atom::Boolean(false)); }
+        if self.literal(b"null") {
+            return Ok(Atom::Null);
+        }
+        if self.literal(b"true") {
+            return Ok(Atom::Boolean(true));
+        }
+        if self.literal(b"false") {
+            return Ok(Atom::Boolean(false));
+        }
         let start = self.index;
         let mut value = 0u64;
         while let Some(&byte) = self.bytes.get(self.index) {
-            if !byte.is_ascii_digit() { break; }
-            value = value.checked_mul(10)
+            if !byte.is_ascii_digit() {
+                break;
+            }
+            value = value
+                .checked_mul(10)
                 .and_then(|n| n.checked_add(u64::from(byte - b'0')))
                 .ok_or(Invalid)?;
             self.index += 1;
@@ -110,9 +131,14 @@ impl<'a> FlatJson<'a> {
         self.byte(b'{')?;
         loop {
             let key = self.string()?;
-            let slot = KEYS.iter().position(|candidate| *candidate == key).ok_or(Invalid)?;
+            let slot = KEYS
+                .iter()
+                .position(|candidate| *candidate == key)
+                .ok_or(Invalid)?;
             // Check before assignment: repeated keys can never erase an earlier value.
-            if values[slot].is_some() { return Err(Invalid); }
+            if values[slot].is_some() {
+                return Err(Invalid);
+            }
             self.byte(b':')?;
             values[slot] = Some(self.atom()?);
             self.white();
@@ -152,23 +178,55 @@ fn boolean(atom: Option<Atom<'_>>) -> Result<bool, Invalid> {
 }
 
 pub(crate) fn decode(data: &[u8]) -> Result<Frame, Invalid> {
-    if data.is_empty() || data.len() > MAX_LINE_BYTES { return Err(Invalid); }
-    let [version, source, sequence, phase, reason, remaining, starting, running,
-        stopping, cleanup, terminal_unknown, terminal] =
-        FlatJson { bytes: data, index: 0 }.object()?;
-    if number(version, 1)? != 1 { return Err(Invalid); }
+    if data.is_empty() || data.len() > MAX_LINE_BYTES {
+        return Err(Invalid);
+    }
+    let [version, source, sequence, phase, reason, remaining, starting, running, stopping, cleanup, terminal_unknown, terminal] =
+        FlatJson {
+            bytes: data,
+            index: 0,
+        }
+        .object()?;
+    if number(version, 1)? != 1 {
+        return Err(Invalid);
+    }
     let source_ms = number(source, SAFE_INTEGER)?;
     let seq = number(sequence, SAFE_INTEGER)?;
-    if seq == 0 { return Err(Invalid); }
-    let phase = text(phase, &[
-        "checking_config", "loading_key", "preparing", "awaiting_approval",
-        "connecting", "connected", "stopping", "closed", "failed",
-    ])?;
-    let reason = text(reason, &[
-        "none", "revoked", "deadline", "transport_lost", "runtime_fault",
-        "terminal_cleanup_unknown", "canceled", "command_timeout", "config_error",
-        "key_error", "preparation_error", "connection_error", "approval_not_completed",
-    ])?;
+    if seq == 0 {
+        return Err(Invalid);
+    }
+    let phase = text(
+        phase,
+        &[
+            "checking_config",
+            "loading_key",
+            "preparing",
+            "awaiting_approval",
+            "connecting",
+            "connected",
+            "stopping",
+            "closed",
+            "failed",
+        ],
+    )?;
+    let reason = text(
+        reason,
+        &[
+            "none",
+            "revoked",
+            "deadline",
+            "transport_lost",
+            "runtime_fault",
+            "terminal_cleanup_unknown",
+            "canceled",
+            "command_timeout",
+            "config_error",
+            "key_error",
+            "preparation_error",
+            "connection_error",
+            "approval_not_completed",
+        ],
+    )?;
     let remaining = match remaining {
         Some(Atom::Null) => None,
         value => Some(number(value, 86_400_000)? as u32),
@@ -184,17 +242,29 @@ pub(crate) fn decode(data: &[u8]) -> Result<Frame, Invalid> {
         return Err(Invalid);
     }
     if terminal_unknown
-        && !(terminal && phase == "failed" && cleanup == "unknown"
+        && !(terminal
+            && phase == "failed"
+            && cleanup == "unknown"
             && reason == "terminal_cleanup_unknown")
     {
         return Err(Invalid);
     }
-    if reason == "terminal_cleanup_unknown" && !terminal_unknown { return Err(Invalid); }
-    if matches!(reason, "config_error" | "key_error" | "preparation_error"
-        | "connection_error" | "approval_not_completed")
-        && !(terminal && phase == "failed" && !terminal_unknown
-            && matches!(cleanup, "not_started" | "confirmed")
-            && workers == 0 && remaining.unwrap_or(0) == 0)
+    if reason == "terminal_cleanup_unknown" && !terminal_unknown {
+        return Err(Invalid);
+    }
+    if matches!(
+        reason,
+        "config_error"
+            | "key_error"
+            | "preparation_error"
+            | "connection_error"
+            | "approval_not_completed"
+    ) && !(terminal
+        && phase == "failed"
+        && !terminal_unknown
+        && matches!(cleanup, "not_started" | "confirmed")
+        && workers == 0
+        && remaining.unwrap_or(0) == 0)
     {
         return Err(Invalid);
     }
@@ -202,8 +272,17 @@ pub(crate) fn decode(data: &[u8]) -> Result<Frame, Invalid> {
         return Err(Invalid);
     }
     Ok(Frame {
-        source_ms, seq, phase: phase.into(), reason: reason.into(), remaining,
-        starting, running, stopping, cleanup: cleanup.into(), terminal_unknown, terminal,
+        source_ms,
+        seq,
+        phase: phase.into(),
+        reason: reason.into(),
+        remaining,
+        starting,
+        running,
+        stopping,
+        cleanup: cleanup.into(),
+        terminal_unknown,
+        terminal,
     })
 }
 

@@ -46,7 +46,10 @@ impl Framing {
         }
         self.buffer[self.len..self.len + bytes.len()].copy_from_slice(bytes);
         self.len += bytes.len();
-        while let Some(end) = self.buffer[..self.len].iter().position(|byte| *byte == b'\n') {
+        while let Some(end) = self.buffer[..self.len]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
             let time = now();
             if time - self.rate_start >= 1.0 {
                 self.rate_start = time;
@@ -71,7 +74,11 @@ impl Framing {
     }
 
     pub(crate) fn eof(&mut self) {
-        self.finish(if self.len == 0 { FeedFault::Eof } else { FeedFault::Malformed });
+        self.finish(if self.len == 0 {
+            FeedFault::Eof
+        } else {
+            FeedFault::Malformed
+        });
     }
 
     pub(crate) fn finish(&mut self, fault: FeedFault) {

@@ -1,4 +1,7 @@
-#[allow(dead_code, reason = "Mac status parity candidate has no native IO or presentation wiring")]
+#[allow(
+    dead_code,
+    reason = "Mac status parity candidate has no native IO or presentation wiring"
+)]
 mod mac_status;
 
 #[cfg(any(test, feature = "startup-diagnostics"))]
