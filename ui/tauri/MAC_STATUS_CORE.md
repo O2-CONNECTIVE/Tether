@@ -50,3 +50,5 @@ cargo +1.99.1 test --locked --manifest-path ui/tauri/src-tauri/Cargo.toml mac_st
 Rust1.99.1は既存`rust-toolchain.toml`とCIのpinであり、新たに導入した版ではありません。Cargo.toml / Cargo.lockは変更せず、新crateも追加しません。今回Swift golden156行は成功、Rust compiler/cargoが利用不可のため**Rust compile・fmt・clippy・fixture実行・Swift/Rust実行同値は未完**です。source reviewやSwift成功をRust成功へ昇格しません。Swift goldenは実pipe/clock/GUI/権限/OS回収の試験ではありません。公開承認後の既存hosted Rust jobs等で上記を確認するまで、製品接続可とは扱いません。
 
 既存Swift CIはこの新golden harnessを呼びません。固定050e比較元でのローカルSwift156行成功、今後のRust golden CI、既存Swift viewer CIは別の検証です。同treeのSwift/Rust同値や新goldenの両言語CI接続済みとは主張しません。
+
+[Mac Snapshot presentation mapping](MAC_STATUS_PRESENTATION.md)
