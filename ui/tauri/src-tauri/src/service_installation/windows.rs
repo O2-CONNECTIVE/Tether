@@ -233,7 +233,11 @@ fn parse_security(bytes: &[u8]) -> Result<(String, Vec<Ace>, bool), Fault> {
     }
     let owner_offset = u32_at(bytes, 4)? as usize;
     let acl_offset = u32_at(bytes, 16)? as usize;
-    if owner_offset < 20 || acl_offset < 20 || owner_offset % 4 != 0 || acl_offset % 4 != 0 {
+    if owner_offset < 20
+        || acl_offset < 20
+        || !owner_offset.is_multiple_of(4)
+        || !acl_offset.is_multiple_of(4)
+    {
         return Err(Fault::Denied);
     }
     let owner = identity::sid(bytes.get(owner_offset..).ok_or(Fault::Denied)?)?.0;
@@ -249,7 +253,7 @@ fn parse_security(bytes: &[u8]) -> Result<(String, Vec<Ace>, bool), Fault> {
     for _ in 0..count {
         let entry = acl.get(offset..).ok_or(Fault::Denied)?;
         let length = u16_at(entry, 2)? as usize;
-        if length < 16 || length > entry.len() || length % 4 != 0 || entry[0] > 1 {
+        if length < 16 || length > entry.len() || !length.is_multiple_of(4) || entry[0] > 1 {
             return Err(Fault::Denied);
         }
         let (sid, sid_length) = identity::sid(&entry[8..length])?;

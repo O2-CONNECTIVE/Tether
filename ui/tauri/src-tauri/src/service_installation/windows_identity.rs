@@ -28,11 +28,8 @@ pub(super) fn sid(bytes: &[u8]) -> Result<(String, usize), Fault> {
     }
     let authority = bytes[2..8].iter().fold(0u64, |n, b| (n << 8) | *b as u64);
     let mut value = format!("S-1-{authority}");
-    for chunk in bytes[8..length].chunks_exact(4) {
-        value.push_str(&format!(
-            "-{}",
-            u32::from_le_bytes(chunk.try_into().unwrap())
-        ));
+    for chunk in bytes[8..length].as_chunks::<4>().0 {
+        value.push_str(&format!("-{}", u32::from_le_bytes(*chunk)));
     }
     Ok((value, length))
 }
