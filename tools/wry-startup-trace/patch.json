@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "crate": "wry",
+  "version": "0.57.1",
+  "archiveSha256": "759c50ddad0ef9913bb5496cb9d509a50433a3b78cb0238d61105526589cf0e9",
+  "files": [
+    {
+      "path": "src/lib.rs",
+      "beforeSha256": "1563bfa16d1bcaa74e30e5f4688072442ec1d16355a040601a26547032855b51",
+      "afterSha256": "7ec7e9adf9f2651a239192828ee53dbbfbe75e4e7d52f6cc5b2b952f163ec95c",
+      "replacements": [
+        {
+          "before": "#[cfg(test)]\nmod tests {",
+          "after": "/// Opt-in fixed-event startup diagnostics for the isolated diagnostic build.\n#[cfg(target_os = \"windows\")]\npub mod startup_trace;\n\n#[cfg(test)]\nmod tests {"
+        }
+      ]
+    },
+    {
+      "path": "src/webview2/mod.rs",
+      "beforeSha256": "9ef674af12e52bc3519b0e300752c1042798b7f336e0e0dafca6a8944f348888",
+      "afterSha256": "8c2c715c8e171a657cb4b35b7bb6ea738a43dc8557594dbafebbd6604de628d4",
+      "replacements": [
+        {
+          "regionStart": "  fn create_environment(",
+          "regionEnd": "  #[inline]\n  fn create_controller(",
+          "before": "      CreateCoreWebView2EnvironmentWithOptions(",
+          "after": "      crate::startup_trace::emit(crate::startup_trace::Event::EnvironmentRequest);\n      CreateCoreWebView2EnvironmentWithOptions("
+        },
+        {
+          "regionStart": "  fn create_environment(",
+          "regionEnd": "  #[inline]\n  fn create_controller(",
+          "before": "            tx.send(result)",
+          "after": "            crate::startup_trace::emit(if result.is_ok() {\n              crate::startup_trace::Event::EnvironmentCallbackSuccess\n            } else {\n              crate::startup_trace::Event::EnvironmentCallbackError\n            });\n            tx.send(result)"
+        },
+        {
+          "regionStart": "  fn create_environment(",
+          "regionEnd": "  #[inline]\n  fn create_controller(",
+          "before": "    webview2_com::wait_with_pump(rx)?",
+          "after": "    let result = webview2_com::wait_with_pump(rx);\n    crate::startup_trace::emit(if matches!(&result, Ok(Ok(_))) {\n      crate::startup_trace::Event::EnvironmentWaitReturnSuccess\n    } else {\n      crate::startup_trace::Event::EnvironmentWaitReturnError\n    });\n    result?"
+        },
+        {
+          "regionStart": "  fn create_controller(",
+          "regionEnd": "  #[allow(clippy::too_many_arguments)]",
+          "before": "    unsafe {\n      match env.cast::<ICoreWebView2Environment10>() {",
+          "after": "    crate::startup_trace::emit(crate::startup_trace::Event::ControllerRequest);\n    unsafe {\n      match env.cast::<ICoreWebView2Environment10>() {"
+        },
+        {
+          "regionStart": "  fn create_controller(",
+          "regionEnd": "  #[allow(clippy::too_many_arguments)]",
+          "before": "        tx.send(result)",
+          "after": "        crate::startup_trace::emit(if result.is_ok() {\n          crate::startup_trace::Event::ControllerCallbackSuccess\n        } else {\n          crate::startup_trace::Event::ControllerCallbackError\n        });\n        tx.send(result)"
+        },
+        {
+          "regionStart": "  fn create_controller(",
+          "regionEnd": "  #[allow(clippy::too_many_arguments)]",
+          "before": "    webview2_com::wait_with_pump(rx)?",
+          "after": "    let result = webview2_com::wait_with_pump(rx);\n    crate::startup_trace::emit(if matches!(&result, Ok(Ok(_))) {\n      crate::startup_trace::Event::ControllerWaitReturnSuccess\n    } else {\n      crate::startup_trace::Event::ControllerWaitReturnError\n    });\n    result?"
+        }
+      ]
+    }
+  ]
+}

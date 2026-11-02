@@ -179,3 +179,5 @@ head a19eb995のrun40624841399/artifact12788014753では、WebView6件は全てC
 CreationDateはwall clock由来であり、順序整合は保護された所有証明の十分条件ではありません。
 時計変動や親世代の不確定をPASSへ変換せず、作成時の所有束縛など独立した証拠は別の未実装設計として残します。
 この変更はtimeoutの合格化ではなく、所有不確定を終了待ちより前に明示する修正です。
+
+[Isolated Wry startup diagnostics](tauri-wry-startup-diagnostic.md) describes the separate, non-distributable source variant and its unverified native boundary.

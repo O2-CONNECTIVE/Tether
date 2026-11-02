@@ -1,0 +1,20 @@
+        let wry_recorder = recorder.clone();
+        if wry::startup_trace::set_hook(move |event| {
+            let stage = match event {
+                wry::startup_trace::Event::EnvironmentRequest => Stage::EnvironmentRequest,
+                wry::startup_trace::Event::EnvironmentCallbackSuccess => Stage::EnvironmentCallbackOk,
+                wry::startup_trace::Event::EnvironmentCallbackError => Stage::EnvironmentCallbackError,
+                wry::startup_trace::Event::EnvironmentWaitReturnSuccess => Stage::EnvironmentWaitOk,
+                wry::startup_trace::Event::EnvironmentWaitReturnError => Stage::EnvironmentWaitError,
+                wry::startup_trace::Event::ControllerRequest => Stage::ControllerRequest,
+                wry::startup_trace::Event::ControllerCallbackSuccess => Stage::ControllerCallbackOk,
+                wry::startup_trace::Event::ControllerCallbackError => Stage::ControllerCallbackError,
+                wry::startup_trace::Event::ControllerWaitReturnSuccess => Stage::ControllerWaitOk,
+                wry::startup_trace::Event::ControllerWaitReturnError => Stage::ControllerWaitError,
+            };
+            wry_recorder.record(stage);
+        }) {
+            recorder.wry_hook.store(true, SeqCst);
+        } else {
+            recorder.dropped.fetch_add(1, SeqCst);
+        }

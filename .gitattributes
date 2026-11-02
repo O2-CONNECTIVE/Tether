@@ -16,3 +16,6 @@ deploy/cloudflare/prepare-directory.ps1 -text
 
 # Preserve the synthetic exact-byte service record on Windows checkout.
 backend/cmd/tether-service-client-manifest/testdata/service_record.json -text
+
+# Keep the fixed diagnostic Wry patch and hook bytes on Windows checkout.
+tools/wry-startup-trace/* -text

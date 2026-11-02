@@ -18,8 +18,9 @@ try {
   const exeSha256 = createHash('sha256').update(bytes).digest('hex');
   if (JSON.stringify(manifest) !== manifestText || !verifyStartupBuild(manifest, values.source, exeSha256)) throw new Error();
   // validator通過済みの固定情報だけを出力する。例外/path/原JSONは出さない。
-  const build = { schema: 1, variant: 'host-startup-diagnostic-1', sourceCommit: values.source,
-    exeSha256, profile: manifest.profile, features: ['custom-protocol', 'startup-diagnostics'], distribution: false };
+  const build = { schema: 1, variant: manifest.variant, sourceCommit: values.source,
+    exeSha256, profile: manifest.profile, features: ['custom-protocol', 'startup-diagnostics'], distribution: false,
+    ...(manifest.wryTrace ? { wryTrace: manifest.wryTrace } : {}) };
   if (values['build-only']) console.log(JSON.stringify({ code: 'APP_STARTUP_BUILD_VERIFIED', build }));
   else {
     let collection: unknown;
@@ -33,7 +34,8 @@ try {
       }
     } catch { /* 回収証跡欠測はincomplete。原文/例外を出さない。 */ }
     const startup = await inspectAppStartupFile(values.directory ?? '', collection);
-    const complete = startup.phase !== 'diagnostic-incomplete';
+    const complete = startup.phase !== 'diagnostic-incomplete'
+      && (manifest.variant !== 'host-wry-startup-diagnostic-1' || ('wryHook' in startup && startup.wryHook === true));
     console.log(JSON.stringify({ code: complete ? 'APP_STARTUP_COMPLETE' : 'APP_STARTUP_INCOMPLETE',
       diagnostic: complete ? 'complete' : 'incomplete', build, startup }));
     process.exitCode = complete ? 0 : 1;

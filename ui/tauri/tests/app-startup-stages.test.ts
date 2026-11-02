@@ -31,3 +31,45 @@ void test('欠落・未完了・未知情報・順序不整合は原文を返さ
     assert.equal(JSON.stringify(report).includes('PRIVATE_FIXTURE'), false);
   }
 });
+
+function wryFixture(stages: string[], hook = true) {
+  return { ...fixture(stages), variant: 'host-startup-stage-2', wryHook: hook,
+    sealReason: 'requested', sealedAtUs: stages.length * 100 };
+}
+void test('Wry初期化のrequest・callback・waitを同一封印窓の固定段階へ分ける', () => {
+  const start = ['setup-enter', 'webview-build-start'];
+  const environment = [...start, 'environment-request'];
+  assert.equal(classifyAppStartup(wryFixture(environment)).phase, 'environment-callback-not-observed');
+  assert.equal(classifyAppStartup(wryFixture([...environment, 'environment-callback-ok'])).phase, 'environment-wait-return-not-observed');
+  const ready = [...environment, 'environment-callback-ok', 'environment-wait-ok'];
+  assert.equal(classifyAppStartup(wryFixture(ready)).phase, 'controller-request-not-observed');
+  assert.equal(classifyAppStartup(wryFixture([...ready, 'controller-request'])).phase, 'controller-callback-not-observed');
+  assert.equal(classifyAppStartup(wryFixture([...ready, 'controller-request', 'controller-callback-ok'])).phase, 'controller-wait-return-not-observed');
+  assert.equal(classifyAppStartup(wryFixture([...ready, 'controller-request', 'controller-callback-ok', 'controller-wait-ok'])).phase, 'webview-post-controller-build-not-observed');
+  assert.equal(classifyAppStartup(wryFixture([...environment, 'environment-callback-error', 'environment-wait-error', 'webview-build-error'])).phase, 'webview-build-error');
+  assert.equal(classifyAppStartup(wryFixture(start, false)).phase, 'webview-build-not-observed');
+  const completed = [...ready, 'controller-request', 'controller-callback-ok', 'controller-wait-ok',
+    'webview-build-ok', 'setup-return', 'first-page-load-finished'];
+  assert.equal(classifyAppStartup({ ...wryFixture(completed), sealReason: 'complete' }).phase, 'first-page-load-finished');
+  assert.equal(classifyAppStartup(wryFixture([...environment, 'environment-wait-error'])).phase, 'environment-wait-error');
+  assert.equal(classifyAppStartup(wryFixture([...environment, 'webview-build-error'])).phase, 'webview-build-error');
+});
+void test('hook未設定・順序逆転・相反callback・封印後時刻を初期化証拠にしない', () => {
+  const start = ['setup-enter', 'webview-build-start'];
+  for (const value of [
+    wryFixture([...start, 'environment-request'], false),
+    wryFixture([...start, 'controller-request']),
+    wryFixture([...start, 'environment-callback-ok']),
+    wryFixture([...start, 'environment-request', 'environment-wait-ok']),
+    wryFixture([...start, 'environment-request', 'environment-callback-ok', 'environment-callback-error']),
+    wryFixture([...start, 'environment-request', 'environment-callback-error', 'environment-wait-ok']),
+    { ...wryFixture(start), sealedAtUs: 0 },
+    { ...wryFixture(start), sealReason: 'complete' },
+    { ...wryFixture(start), sealReason: 'deadline' },
+    { ...wryFixture(start), diagnostic: 'PRIVATE_FIXTURE' }
+  ]) {
+    const report = classifyAppStartup(value);
+    assert.equal(report.phase, 'diagnostic-incomplete');
+    assert.equal(JSON.stringify(report).includes('PRIVATE_FIXTURE'), false);
+  }
+});

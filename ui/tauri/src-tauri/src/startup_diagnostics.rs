@@ -4,7 +4,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst},
         Arc, Mutex,
     },
     thread,
@@ -19,6 +19,16 @@ pub enum Stage {
     BuildError,
     SetupReturn,
     PageFinished,
+    EnvironmentRequest,
+    EnvironmentCallbackOk,
+    EnvironmentCallbackError,
+    EnvironmentWaitOk,
+    EnvironmentWaitError,
+    ControllerRequest,
+    ControllerCallbackOk,
+    ControllerCallbackError,
+    ControllerWaitOk,
+    ControllerWaitError,
 }
 impl Stage {
     fn name(self) -> &'static str {
@@ -29,6 +39,16 @@ impl Stage {
             Self::BuildError => "webview-build-error",
             Self::SetupReturn => "setup-return",
             Self::PageFinished => "first-page-load-finished",
+            Self::EnvironmentRequest => "environment-request",
+            Self::EnvironmentCallbackOk => "environment-callback-ok",
+            Self::EnvironmentCallbackError => "environment-callback-error",
+            Self::EnvironmentWaitOk => "environment-wait-ok",
+            Self::EnvironmentWaitError => "environment-wait-error",
+            Self::ControllerRequest => "controller-request",
+            Self::ControllerCallbackOk => "controller-callback-ok",
+            Self::ControllerCallbackError => "controller-callback-error",
+            Self::ControllerWaitOk => "controller-wait-ok",
+            Self::ControllerWaitError => "controller-wait-error",
         }
     }
 }
@@ -46,7 +66,8 @@ struct Recorder {
     in_flight: AtomicUsize,
     enabled: AtomicBool,
     page_seen: AtomicBool,
-    observed: AtomicU8,
+    observed: AtomicU32,
+    wry_hook: AtomicBool,
 }
 struct Flight<'a>(&'a Recorder);
 impl Drop for Flight<'_> {
@@ -58,13 +79,14 @@ impl Recorder {
     fn memory() -> Arc<Self> {
         Arc::new(Self {
             start: Instant::now(),
-            events: Mutex::new(Vec::with_capacity(6)),
+            events: Mutex::new(Vec::with_capacity(16)),
             attempted: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             in_flight: AtomicUsize::new(0),
             enabled: AtomicBool::new(true),
             page_seen: AtomicBool::new(false),
-            observed: AtomicU8::new(0),
+            observed: AtomicU32::new(0),
+            wry_hook: AtomicBool::new(false),
         })
     }
     fn record(&self, stage: Stage) {
@@ -78,7 +100,7 @@ impl Recorder {
         }
         let seq = self.attempted.fetch_add(1, SeqCst) + 1;
         if let Ok(mut events) = self.events.try_lock() {
-            if events.len() < 6 {
+            if events.len() < 16 {
                 events.push(Event {
                     seq,
                     stage,
@@ -111,6 +133,14 @@ impl Recorder {
             .map(|v| v.clone())
             .unwrap_or_default();
         events.sort_by_key(|event| event.seq);
+        let sealed_at_us = self.start.elapsed().as_micros();
+        let reason = if self.complete() {
+            "complete"
+        } else if requested {
+            "requested"
+        } else {
+            "deadline"
+        };
         let rows: Vec<_> = events
             .iter()
             .map(|e| {
@@ -123,13 +153,16 @@ impl Recorder {
             })
             .collect();
         format!(
-            "{{\"schema\":1,\"variant\":\"host-startup-stage-1\",\"purpose\":\"diagnostic-hints-only\",\"events\":[{}],\"attempted\":{},\"recorded\":{},\"dropped\":{},\"sealed\":{},\"inFlight\":{}}}",
+            "{{\"schema\":1,\"variant\":\"host-startup-stage-2\",\"purpose\":\"diagnostic-hints-only\",\"events\":[{}],\"attempted\":{},\"recorded\":{},\"dropped\":{},\"sealed\":{},\"inFlight\":{},\"wryHook\":{},\"sealReason\":\"{}\",\"sealedAtUs\":{}}}",
             rows.join(","),
             self.attempted.load(SeqCst),
             events.len(),
             self.dropped.load(SeqCst),
             requested && self.in_flight.load(SeqCst) == 0,
-            self.in_flight.load(SeqCst)
+            self.in_flight.load(SeqCst),
+            self.wry_hook.load(SeqCst),
+            reason,
+            sealed_at_us
         )
     }
 }

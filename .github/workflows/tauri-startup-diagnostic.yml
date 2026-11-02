@@ -2,10 +2,10 @@ name: Tauri startup diagnostic variant
 on:
   pull_request:
     branches: [main]
-    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'scripts/*driver_trace.py', '.github/workflows/tauri-startup-diagnostic.yml']
+    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'tools/wry-startup-trace/**', 'scripts/prepare_wry_trace.py', 'scripts/tests/test_prepare_wry_trace.py', 'scripts/*driver_trace.py', '.github/workflows/tauri-startup-diagnostic.yml']
   push:
     branches: [main]
-    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'scripts/*driver_trace.py', '.github/workflows/tauri-startup-diagnostic.yml']
+    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'tools/wry-startup-trace/**', 'scripts/prepare_wry_trace.py', 'scripts/tests/test_prepare_wry_trace.py', 'scripts/*driver_trace.py', '.github/workflows/tauri-startup-diagnostic.yml']
 permissions:
   contents: read
 concurrency:
@@ -32,6 +32,8 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.1'
+      - name: Test isolated Wry source and lock preparation
+        run: python -m unittest discover -s scripts/tests -p test_prepare_wry_trace.py
       - name: Test fixed classification and file boundary
         working-directory: ui/tauri
         run: node --test tests/app-startup-stages.test.ts tests/app-startup-files.test.ts tests/app-startup-cli.test.ts
@@ -56,16 +58,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           exit $LASTEXITCODE
+      - name: Prepare hash-pinned Wry only in the isolated diagnostic copy
+        run: |
+          $archive = "$env:RUNNER_TEMP/wry-0.57.1.crate"
+          Invoke-WebRequest -Uri 'https://static.crates.io/crates/wry/wry-0.57.1.crate' -OutFile $archive
+          python scripts/prepare_wry_trace.py --source-root "$env:GITHUB_WORKSPACE" --archive $archive --output "$env:RUNNER_TEMP/wry-startup-source"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "WRY_MANIFEST=$env:RUNNER_TEMP/wry-startup-source/app/src-tauri/Cargo.toml" >> $env:GITHUB_ENV
       - name: Test and build explicit diagnostic feature
         working-directory: ui/tauri
         env:
           STARTUP_PROFILE: ${{ matrix.profile }}
         run: |
-          cargo +1.99.1 test --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol,startup-diagnostics
+          cargo +1.99.1 metadata --locked --format-version 1 --manifest-path $env:WRY_MANIFEST > "$env:RUNNER_TEMP/wry-cargo-metadata.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $args = @('+1.99.1', 'build', '--locked', '--manifest-path', 'src-tauri/Cargo.toml', '--features', 'custom-protocol,startup-diagnostics')
+          python ../../scripts/prepare_wry_trace.py --output "$env:RUNNER_TEMP/wry-startup-source" --verify-output --metadata "$env:RUNNER_TEMP/wry-cargo-metadata.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.99.1 test --locked --manifest-path $env:WRY_MANIFEST --features custom-protocol,startup-diagnostics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $args = @('+1.99.1', 'build', '--locked', '--manifest-path', $env:WRY_MANIFEST, '--features', 'custom-protocol,startup-diagnostics')
           if ($env:STARTUP_PROFILE -eq 'release') { $args += '--release' }
           & cargo @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python ../../scripts/prepare_wry_trace.py --output "$env:RUNNER_TEMP/wry-startup-source" --verify-output --metadata "$env:RUNNER_TEMP/wry-cargo-metadata.json"
           exit $LASTEXITCODE
       - name: Bind source features and hash to isolated diagnostic fixture
         env:
@@ -76,12 +91,13 @@ jobs:
           $exe = "$env:CARGO_TARGET_DIR/$env:STARTUP_PROFILE/rescue-host-shell.exe"
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = [ordered]@{
-            schema = 1; variant = 'host-startup-diagnostic-1'; sourceCommit = $env:STARTUP_SOURCE
+            schema = 1; variant = 'host-wry-startup-diagnostic-1'; sourceCommit = $env:STARTUP_SOURCE
             features = @('custom-protocol', 'startup-diagnostics'); profile = $env:STARTUP_PROFILE
             exeSha256 = $hash; distribution = $false
+            wryTrace = Get-Content "$env:RUNNER_TEMP/wry-startup-source/provenance.json" -Raw | ConvertFrom-Json
           }
           Copy-Item -LiteralPath $exe -Destination "$fixture/rescue-host-shell.exe"
-          [IO.File]::WriteAllText("$fixture/BUILD.json", ($manifest | ConvertTo-Json -Compress))
+          [IO.File]::WriteAllText("$fixture/BUILD.json", ($manifest | ConvertTo-Json -Depth 4 -Compress))
           if ($env:STARTUP_PROFILE -eq 'release') {
             # 通常配布packageとは別の、runner内だけの診断ZIP。
             Compress-Archive -Path "$fixture/*" -DestinationPath "$env:RUNNER_TEMP/startup-diagnostic-fixture.zip"
@@ -113,5 +129,6 @@ jobs:
           path: |
             ${{ runner.temp }}/startup-evidence/*.json
             ${{ runner.temp }}/startup-inventory.json
+            ${{ runner.temp }}/wry-startup-source/provenance.json
           if-no-files-found: error
           retention-days: 7
