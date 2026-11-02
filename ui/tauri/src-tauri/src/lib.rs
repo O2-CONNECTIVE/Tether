@@ -1,3 +1,5 @@
+#[allow(dead_code, reason = "native installation evaluator is gated pending availability policy")]
+mod service_installation;
 #[cfg(any(test, feature = "startup-diagnostics"))]
 #[allow(dead_code, reason = "startup diagnostics are an opt-in test variant")]
 mod startup_diagnostics;

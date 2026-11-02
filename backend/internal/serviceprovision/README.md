@@ -318,3 +318,7 @@ trusted capability. The existing blocked package checker and its gates are
 unchanged. Fixture binary bytes are synthetic text, not a built/verified service.
 No Windows installation, ACL/token/service operation, runtime activation or
 distribution is certified by these source tests.
+
+## Paired installation source candidate
+
+The offline client-manifest CLI can derive paired Go Anchor/Rust seed source from one canonical reviewed Anchor, exact Record and selected service bytes. This is untrusted source pairing, not an installer, protected-read proof or approval. `fixedEvaluationConfig` consumes the default generated zero Anchor; other required budgets remain zero. See [the inactive native consumer contract](../../../ui/tauri/src-tauri/src/service_installation/README.md) for two-phase commands, update/build constraints and unresolved GUI fail-stop policy.

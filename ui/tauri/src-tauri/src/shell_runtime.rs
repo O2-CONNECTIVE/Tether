@@ -4,6 +4,7 @@ use crate::control_coordinator::Conversation;
 #[cfg(windows)]
 use crate::windows_client::client::NativeClient;
 use crate::ShellStatus;
+use crate::service_installation::{Installation, Observation};
 use std::sync::Mutex;
 
 /// Default runtime has no endpoint. Monitoring never establishes authority,
@@ -11,13 +12,20 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub(crate) struct ShellRuntime {
     monitor: Mutex<Option<Monitor>>,
+    installation: Mutex<Installation>,
 }
 
 impl ShellRuntime {
+    #[cfg(test)]
+    pub(crate) fn with_installation_fixture(installation: Installation) -> Self {
+        Self { monitor: Mutex::new(None), installation: Mutex::new(installation) }
+    }
+
     #[allow(dead_code, reason = "authenticated endpoint bootstrap is not wired")]
     pub fn monitoring(connection: ReaderConnection<Conversation>) -> Self {
         Self {
             monitor: Mutex::new(Some(Monitor::Reader(connection))),
+            installation: Mutex::new(Installation::default()),
         }
     }
 
@@ -26,10 +34,16 @@ impl ShellRuntime {
     pub fn native_monitoring(client: NativeClient) -> Self {
         Self {
             monitor: Mutex::new(Some(Monitor::Native(client))),
+            installation: Mutex::new(Installation::default()),
         }
     }
 
     pub fn status(&self) -> Result<ShellStatus, &'static str> {
+        let installation = self.installation.lock()
+            .map_err(|_| Code::TerminationUnconfirmed.as_str())?.observe();
+        if matches!(installation, Observation::Denied | Observation::Unknown) {
+            return Err(Code::TerminationUnconfirmed.as_str());
+        }
         let mut monitor = self
             .monitor
             .lock()

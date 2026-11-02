@@ -37,6 +37,16 @@ func produce(args []string, output io.Writer, open func(string) (io.ReadCloser, 
 	flags := flag.NewFlagSet("tether-service-client-manifest", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var recordPath, imagePath, checkPath string
+	var anchorSource, pairedAnchor, selectedGo string
+	for name, target := range map[string]*string{"anchor-source": &anchorSource, "paired-anchor": &pairedAnchor, "selected-go-anchor": &selectedGo} {
+		flags.Func(name, "offline installation source input; never a runtime override", func(value string) error {
+			if *target != "" || value == "" {
+				return serviceprovision.ErrRecord
+			}
+			*target = value
+			return nil
+		})
+	}
 	flags.Func("record", "reviewed nonsecret service record", func(value string) error {
 		if recordPath != "" || value == "" {
 			return serviceprovision.ErrRecord
@@ -58,8 +68,41 @@ func produce(args []string, output io.Writer, open func(string) (io.ReadCloser, 
 		checkPath = value
 		return nil
 	})
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || recordPath == "" || imagePath == "" {
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return serviceprovision.ErrRecord
+	}
+	if anchorSource != "" {
+		if pairedAnchor != "" || selectedGo != "" || recordPath != "" || imagePath != "" || checkPath != "" {
+			return serviceprovision.ErrRecord
+		}
+		input, err := readCandidate(open, anchorSource, serviceprovision.InstallationAnchorBytes)
+		if err != nil {
+			return err
+		}
+		encoded, err := serviceprovision.EncodeInstallationAnchorSource(input)
+		if err != nil {
+			return err
+		}
+		return writeCandidate(output, encoded)
+	}
+	if recordPath == "" || imagePath == "" || (pairedAnchor == "") != (selectedGo == "") || pairedAnchor != "" && checkPath != "" {
+		return serviceprovision.ErrRecord
+	}
+	var anchorInput, selectedSource []byte
+	if pairedAnchor != "" {
+		var err error
+		anchorInput, err = readCandidate(open, pairedAnchor, serviceprovision.InstallationAnchorBytes)
+		if err != nil {
+			return err
+		}
+		// Reject malformed authority before reading the record or selected binary.
+		if _, err = serviceprovision.EncodeInstallationAnchorSource(anchorInput); err != nil {
+			return err
+		}
+		selectedSource, err = readCandidate(open, selectedGo, 32768)
+		if err != nil {
+			return err
+		}
 	}
 	recordBytes, err := readCandidate(open, recordPath, serviceprovision.RecordBytes)
 	if err != nil {
@@ -78,6 +121,13 @@ func produce(args []string, output io.Writer, open func(string) (io.ReadCloser, 
 	if err != nil {
 		return err
 	}
+	if pairedAnchor != "" {
+		encoded, err := serviceprovision.EncodeInstallationSourcePair(anchorInput, selectedSource, recordBytes, digest)
+		if err != nil {
+			return err
+		}
+		return writeCandidate(output, encoded)
+	}
 	encoded, err := serviceprovision.EncodeUntrustedClientProjection(recordBytes, digest)
 	if err != nil {
 		return err
@@ -89,6 +139,10 @@ func produce(args []string, output io.Writer, open func(string) (io.ReadCloser, 
 		}
 		return serviceprovision.VerifyUntrustedClientProjection(recordBytes, digest, artifact)
 	}
+	return writeCandidate(output, encoded)
+}
+
+func writeCandidate(output io.Writer, encoded []byte) error {
 	n, err := output.Write(encoded)
 	if err == nil && n != len(encoded) {
 		return io.ErrShortWrite

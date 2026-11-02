@@ -61,7 +61,7 @@ PRODUCT_FILES = {
         'config.go', 'operation.go', 'plane.go', 'security.go', 'process_token.go', 'preflight.go', 'service_witness.go', 'endpoint.go', 'endpoint_input.go', 'endpoint_operation.go', 'endpoint_staging.go',
         'inspection_lease.go', 'inspection_lease_security.go', 'inspection_lease_token.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceprovision': {
-        'compose.go', 'errors.go', 'record.go', 'record_decode.go', 'record_strict.go', 'agent_purpose_record.go', 'agent_purpose_source.go', 'client_projection.go',
+        'compose.go', 'errors.go', 'record.go', 'record_decode.go', 'record_strict.go', 'agent_purpose_record.go', 'agent_purpose_source.go', 'client_projection.go', 'installation_source.go', 'installation_rust_source.go', 'installation_anchor_generated.go',
         'record_validate.go', 'root.go', 'root_doc.go', 'root_io.go', 'root_validate.go', 'service.go', 'preview.go', 'confirmation.go',
         'execution.go', 'execution_native.go', 'execution_owner.go', 'launch.go', 'launch_security.go', 'guest_source.go',
         'staging_execution.go', 'staging_preview.go', 'operator_policy.go', 'runtime_execution.go', 'runtime_native.go', 'runtime_source.go'},

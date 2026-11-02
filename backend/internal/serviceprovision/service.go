@@ -134,7 +134,9 @@ func (p *Prepared) reject(err error) error {
 
 // 固定評価entryの配置値と予算は未設定。対象をレビューしてsourceに固定する。
 // 環境変数、argv、UI、実行pathから補完する入口は設けない。
-func fixedEvaluationConfig() PreviewExecutionConfig { return PreviewExecutionConfig{} }
+func fixedEvaluationConfig() PreviewExecutionConfig {
+	return PreviewExecutionConfig{Anchor: fixedInstallationAnchor()}
+}
 
 func newFixedExecution(c PreviewExecutionConfig) (*Execution, error) {
 	e, err := NewNativeRuntimeExecution(c)
