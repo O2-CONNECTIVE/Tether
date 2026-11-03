@@ -25,7 +25,7 @@ cleanup unknown の警告は current 表示の期限から独立して保持し�
 
 ## 受入と検証境界
 
-通常 App の Mac route 受入は、基点が `get_shell_status` を呼んだため同じ browser test が失敗し、新 caller が `get_status_presentation` を呼ぶ変更後に成功しました。その他の追加試験は後付け回帰です。
+通常 App の Mac route 受入は、基点が `get_shell_status` を呼んだため同じ browser test が失敗し、新 caller が `get_status_presentation` を呼ぶ変更後に成功しました。pagehide 後の復帰で古い進行表示が残る不具合も、同じ通常 App 試験の失敗を確認後、破棄前の表示無効化で修正しました。その他の追加試験は後付け回帰です。
 
 frontend controller の閉じた試験は platform と exact-key 検査、未接続、繰返し、表示期限同値、遅着、timeout、破棄、無効化、unknown と履歴を扱います。通常 browser は main/App から表示し、label、進行消去、focus、無効 button、狭幅/200%文字、forced colors/reduced motion を検証します。別の見本ページや DOM 差替えによる成功ではありません。
 

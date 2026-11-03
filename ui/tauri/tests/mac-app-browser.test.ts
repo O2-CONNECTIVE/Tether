@@ -123,3 +123,21 @@ void test('画面ライフサイクル無効化後の古い成功は通常Appへ
   assert.equal(await page.locator('.icon-spin').count(), 0);
   await page.close();
 });
+
+void test('pagehide後の復帰でもfixtureの進行表示を停止したままにする', async () => {
+  const page = await browser.newPage();
+  await page.addInitScript(() => {
+    window.__TAURI__ = { core: { invoke: () => Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'synthetic-observation',
+      view: { heading: '接続を確認中', detail: '閉じた表示試験です。', icon: 'checking' },
+      validForMs: 3000, cleanupUnknown: false, terminalHistory: false }) } };
+  });
+  await page.goto(url);
+  await page.waitForSelector('#synthetic-observation');
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  assert.equal(await page.locator('#status-title').innerText(), '状態の更新を確認できません');
+  assert.equal(await page.locator('.icon-spin').count(), 0);
+  await page.close();
+});

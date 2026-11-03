@@ -13,7 +13,7 @@ export function App({ invoke }: { invoke: AppInvoke | undefined }) {
     const instance = createAppController({ invoke, onChange: setState });
     controller.current = instance;
     void instance.refresh();
-    const dispose = () => instance.dispose();
+    const dispose = () => { instance.invalidate(); instance.dispose(); };
     const invalidate = () => instance.invalidate();
     const restore = (event: PageTransitionEvent) => { if (event.persisted) instance.invalidate(); };
     document.addEventListener('visibilitychange', invalidate);
