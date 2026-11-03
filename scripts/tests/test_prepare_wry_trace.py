@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -132,7 +133,7 @@ class PreparationTests(unittest.TestCase):
                                 stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, b"")
-        self.assertEqual(result.stderr, b"WRY_PREPARATION_REJECTED\n")
+        self.assertEqual(result.stderr, b"WRY_PREPARATION_REJECTED" + os.linesep.encode("ascii"))
         self.assertFalse(self.output.exists())
 
     def archive_fixture(self, entries):
