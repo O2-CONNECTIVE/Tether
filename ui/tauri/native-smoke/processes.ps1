@@ -31,6 +31,19 @@ function Get-LineageRole($Entry, $Context) {
         return 'other'
     } catch { return 'unknown' }
 }
+function Get-LineageBaselineIdentity($Entry, $Snapshot) {
+    # Earlier baseline observation only; never authorizes ownership or changes rejection.
+    if ($null -eq $Snapshot) { return 'not-recorded' }
+    try {
+        if (@($Snapshot).Count -gt 4096 -or -not (Test-LineageCreation $Entry)) { return 'unavailable' }
+        $rows = @($Snapshot | Where-Object ProcessId -eq $Entry.ProcessId)
+        if ($rows.Count -eq 0) { return 'absent' }
+        if ($rows.Count -ne 1) { return 'ambiguous' }
+        if (-not (Test-LineageCreation $rows[0])) { return 'unavailable' }
+        if (Same-Process $Entry $rows[0]) { return 'same' }
+        return 'different'
+    } catch { return 'unavailable' }
+}
 function Stop-UnconfirmedLineage($Evidence, [string]$Reason, $Parent, $Child, $Snapshot, $ParentDepth, $Context, [string]$SearchRoot) {
     if ($null -ne $Evidence) {
         $parentKnown = Test-LineageCreation $Parent
@@ -41,6 +54,8 @@ function Stop-UnconfirmedLineage($Evidence, [string]$Reason, $Parent, $Child, $S
         $parentIdentity = Get-LineageSnapshotIdentity $Parent $Snapshot
         $childIdentity = Get-LineageSnapshotIdentity $Child $Snapshot
         $rootLabel = if ($SearchRoot -in @('driver', 'app')) { $SearchRoot } else { 'unknown' }
+        $baseline = $null
+        if ($Context -is [hashtable] -and $Context.ContainsKey('BeforeDriverSnapshot')) { $baseline = $Context.BeforeDriverSnapshot }
         $Evidence.Value += [pscustomobject]@{
             reason = $Reason; parentCreationKnown = $parentKnown; childCreationKnown = $childKnown
             childMinusParentCreationMs = $delta
@@ -51,6 +66,8 @@ function Stop-UnconfirmedLineage($Evidence, [string]$Reason, $Parent, $Child, $S
             parentSnapshotIdentity = $parentIdentity
             childSnapshotIdentity = $childIdentity
             timeOrder = $order
+            parentBeforeDriverIdentity = Get-LineageBaselineIdentity $Parent $baseline
+            childBeforeDriverIdentity = Get-LineageBaselineIdentity $Child $baseline
         }
     }
     throw 'NATIVE_LINEAGE_OWNER_UNCONFIRMED'
@@ -91,11 +108,11 @@ function Assert-ListenerSnapshot($Listeners, [int]$DriverId, [int]$EdgeId) {
         }
     }
 }
-function Get-OwnedApp($Driver, $Edge, [string]$AppPath, $Snapshot, $LineageEvidence = $null) {
+function Get-OwnedApp($Driver, $Edge, [string]$AppPath, $Snapshot, $LineageEvidence = $null, $BeforeDriverSnapshot = $null) {
     if ($null -ne $LineageEvidence -and $LineageEvidence -isnot [System.Management.Automation.PSReference]) { throw 'NATIVE_LINEAGE_OWNER_UNCONFIRMED' }
     Require-Live $Driver $Snapshot
     Require-Live $Edge $Snapshot
-    $context = @{ Driver = $Driver; Edge = $Edge; AppPath = $AppPath }
+    $context = @{ Driver = $Driver; Edge = $Edge; AppPath = $AppPath; BeforeDriverSnapshot = $BeforeDriverSnapshot }
     $owned = @(Get-Descendants $Driver.ProcessId $Snapshot $LineageEvidence $context 'driver')
     $apps = @($owned | Where-Object ExecutablePath -eq $AppPath)
     if ($apps.Count -ne 1) { throw 'NATIVE_APP_OWNERSHIP_AMBIGUOUS' }

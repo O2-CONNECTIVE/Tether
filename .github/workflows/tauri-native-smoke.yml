@@ -1,11 +1,9 @@
-name: Tauri Windows native smoke
+name: Bounded lineage baseline observation
 on:
   pull_request:
-    branches: [main]
-    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'scripts/*driver_trace.py', '.github/workflows/tauri-native-smoke.yml']
-  push:
-    branches: [main]
-    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'scripts/*driver_trace.py', '.github/workflows/tauri-native-smoke.yml']
+    branches: ['wip/tauri-mac-app-output-public-20261103']
+    types: [opened]
+    paths: ['.github/workflows/tauri-native-smoke.yml']
 permissions:
   contents: read
 concurrency:
@@ -13,16 +11,24 @@ concurrency:
   cancel-in-progress: true
 jobs:
   native-smoke:
+    if: >-
+      ${{ github.event_name == 'pull_request' &&
+           github.event.action == 'opened' &&
+           github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.ref == 'wip/windows-lineage-baseline-observation-20261103' &&
+           github.event.pull_request.base.sha == '33bb93cfbc0592c721410fa9821c5bf642697351' }}
     name: Windows WebView2 launch, IPC and normal close
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Test ownership and close rejection contract
-        run: ./ui/tauri/native-smoke/process-contract.test.ps1
+        run: |
+          ./ui/tauri/native-smoke/process-contract.test.ps1
+          ./ui/tauri/native-smoke/lineage-baseline.test.ps1
       - name: Read existing WebView2 and driver versions
         shell: pwsh
         run: ./ui/tauri/native-smoke/inventory.ps1 -OutputPath "$env:RUNNER_TEMP/native-inventory.json"
@@ -55,6 +61,20 @@ jobs:
       - name: Build unchanged native shell
         working-directory: ui/tauri
         run: cargo +1.99.1 build --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol
+      - name: Bind this bounded observation to exact source and EXE
+        env:
+          EXPERIMENT_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          if ($sha -cne $env:EXPERIMENT_HEAD) { throw 'LINEAGE_EXPERIMENT_SOURCE_DRIFT' }
+          $exe = 'ui/tauri/src-tauri/target/debug/rescue-host-shell.exe'
+          $record = [ordered]@{
+            schema = 1; experiment = 'lineage-before-driver-observation-1'
+            sourceCommit = $sha; baseCommit = '33bb93cfbc0592c721410fa9821c5bf642697351'
+            exeSha256 = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            plannedNativeInvocations = 1; purpose = 'diagnostic-observation-not-fix'
+          }
+          [IO.File]::WriteAllText("$env:RUNNER_TEMP/lineage-experiment.json", ($record | ConvertTo-Json -Compress))
       - name: One native smoke with bounded owned-process cleanup
         timeout-minutes: 3
         run: ./ui/tauri/native-smoke/supervise.ps1 -ToolsDirectory "$env:RUNNER_TEMP/native-tools" -OutputDirectory "$env:RUNNER_TEMP/native-evidence"
@@ -66,10 +86,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: windows-native-evidence
+          name: lineage-before-driver-evidence
           path: |
             ${{ runner.temp }}/native-inventory.json
+            ${{ runner.temp }}/lineage-experiment.json
             ${{ runner.temp }}/native-evidence/*.json
-            ${{ runner.temp }}/native-evidence/*.png
           if-no-files-found: error
           retention-days: 7
