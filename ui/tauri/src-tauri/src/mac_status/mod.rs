@@ -2,8 +2,9 @@
 // Tauri commands and React. Swift StatusCore is the input reference.
 mod decoder;
 mod framing;
+pub(crate) mod output;
 mod presentation;
-mod state;
+pub(crate) mod state;
 
 #[cfg(test)]
 mod golden_tests;

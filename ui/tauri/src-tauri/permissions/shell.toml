@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-shell-status"
 description = "Read the shell integration status; does not start or stop anything."
-commands.allow = ["get_shell_status"]
+commands.allow = ["get_shell_status", "get_status_presentation"]

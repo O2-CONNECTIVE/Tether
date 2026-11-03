@@ -1,43 +1,42 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronRight, Square } from 'lucide-react';
-import { createShellController, type ShellInvoke, type ShellState } from './controller.ts';
+import { createAppController, initialAppState, type AppInvoke, type AppState } from './app-controller.ts';
 import { StatusContent } from './host-status/StatusContent.tsx';
-import { presentWindowsObservation } from './host-status/windows-observation.ts';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './components/ui/collapsible.tsx';
 
-export function App({ invoke }: { invoke: ShellInvoke | undefined }) {
-  const [state, setState] = useState<ShellState>({ kind: 'checking', diagnostic: 'CHECKING' });
-  const controller = useRef<ReturnType<typeof createShellController> | null>(null);
+export function App({ invoke }: { invoke: AppInvoke | undefined }) {
+  const [state, setState] = useState<AppState>(initialAppState);
+  const controller = useRef<ReturnType<typeof createAppController> | null>(null);
   useEffect(() => {
-    const instance = createShellController({ invoke, onChange: setState });
+    const instance = createAppController({ invoke, onChange: setState });
     controller.current = instance;
     void instance.refresh();
     const dispose = () => instance.dispose();
+    const invalidate = () => instance.invalidate();
+    const restore = (event: PageTransitionEvent) => { if (event.persisted) instance.invalidate(); };
+    document.addEventListener('visibilitychange', invalidate);
+    window.addEventListener('pageshow', restore);
     window.addEventListener('pagehide', dispose, { once: true });
     return () => {
       instance.dispose();
       window.removeEventListener('pagehide', dispose);
+      document.removeEventListener('visibilitychange', invalidate);
+      window.removeEventListener('pageshow', restore);
       controller.current = null;
     };
   }, [invoke]);
   const refresh = useCallback(() => { void controller.current?.refresh(); }, []);
-  // Fresh means this controller observation, not authenticated transport freshness.
-  const { presentation } = presentWindowsObservation({
-    scope: 'windows-shell-observation', version: 1, feed: 'fresh', state
-  });
-  const heading = state.kind === 'checking' ? '状態を確認中' : presentation.heading;
-  const explanation = state.kind === 'checking' ? '接続機能の状態を取得しています。' : presentation.detail;
   return <main className="shell">
     <header><p className="caption">開発用 Tauri shell / 実接続機能なし</p><h1>サポートの状態</h1>
       <p>この shell はバックエンド未配線です。開始や停止はできません。</p></header>
     <section className={`status${state.kind === 'unavailable' ? ' status--unconfirmed' : ''}`} role="status" aria-live="polite" aria-atomic="true">
       <StatusContent headingId="status-title" descriptionId="status-description"
-        icon={state.kind === 'checking' ? 'checking' : state.kind === 'unavailable' ? 'warning' : 'neutral'}
-        view={{ heading, detail: state.diagnostic === 'BRIDGE_MISSING'
-          ? 'ブラウザー表示では状態取得を利用できません。接続や通信終了は確認できません。' : explanation }} />
+        icon={state.view.icon} view={state.view} />
     </section>
+    {state.synthetic && <p id="synthetic-observation" className="caption">表示テスト・実接続なし</p>}
+    {state.history && <p id="status-history" className="caption">最終報告の履歴：{state.history.heading}。{state.history.detail}</p>}
     <Card role="region" aria-labelledby="permission-title"><h2 id="permission-title">許可条件</h2>
       <dl className="shell-permissions"><dt>許可相手</dt><dd>未確認</dd><dt>操作範囲</dt><dd>未確認</dd><dt>期限</dt><dd>未確認</dd><dt>通信の終了</dt><dd>未確認</dd></dl>
       <div className="shell-actions"><Button disabled aria-describedby="operation-help">サポートを開始</Button>
