@@ -26,7 +26,7 @@ STEPS = {
         ("build", ["xcrun", "swift", "build"], 180, None),
         ("core", ["xcrun", "swift", "run", "StatusCoreChecks"], 60, b"CHECKS 26 FAILURES 0"),
         ("pilot-output-runner", ["python3", "-m", "unittest", "discover", "-s", "Tests",
-                                  "-p", "test_pilot_output_runner.py", "-v"], 30, b"Ran 1 test"),
+                                  "-p", "test_pilot_output_runner.py", "-v"], 30, b"Ran 2 tests"),
         ("pilot-output", ["python3", "-I", "Tests/check_pilot_output.py"],
          180, b"PILOT_OUTPUT_CHECKS 9 FAILURES 0"),
         ("package-tests", ["python3", "-m", "unittest", "discover", "-s", "Tests",
@@ -42,7 +42,7 @@ STEPS = {
                             "--check-own-window-fixture"], 15, b"OWN_BUNDLE_WINDOW_PASS"),
         ("render", [".build/debug/TetherStatus", "--render-fixtures"], 30, None),
         ("pilot-lifecycle", ["python3", "-I", "Tests/check_pilot_lifecycle.py"],
-         150, b"PILOT_LIFECYCLE_CHECKS 9 FAILURES 0"),
+         150, b"PILOT_LIFECYCLE_CHECKS 13 FAILURES 0"),
     ],
 }
 

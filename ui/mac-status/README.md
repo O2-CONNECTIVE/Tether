@@ -119,7 +119,7 @@ versions. Official image availability is not proof of Swift 6.3.3 patch parity.
 A dependency-free `Tests/run_ci_checks.py` has only source/gui modes and refuses
 execution unless its GitHub/macOS/arm64/selected-toolchain scope matches. The check
 is an accidental-local-execution guard, not authentication or a sandbox.
-Source checks build/core26/headless output9/output-runner1/package10/local bundle. GUI checks require the real
+Source checks build/core26/headless output9/output-runner2/package10/local bundle. GUI checks require the real
 synthetic owned-window9, both bundled own-window cases and the exact20 own-content
 PNG outputs. Unavailable GUI session, missing PASS, nonzero exit, timeout or image
 mismatch fails the job; there is no skipped-success or continue-on-error fallback.
@@ -205,4 +205,25 @@ with the real StatusCore reader/summary into a headless native harness. It check
 full blocking/nonblocking pipes, normal output, reader loss, invalid sinks and
 alias flags; the Swift syscall seam also checks short writes and errors. This
 check runs in the existing source CI phase. It never launches AppKit/windows and
-does not replace the nine GUI lifecycle checks or certify real-agent cleanup.
+does not replace the thirteen GUI lifecycle checks or certify real-agent cleanup.
+
+### Pilot caller inventory and hosted fault cases
+
+The public repository has no production launcher that invokes
+`--pilot-exit-on-stream-end`. Its public executable caller is the synthetic
+`Tests/check_pilot_lifecycle.py` fixture. That caller now creates its own dedicated
+nonblocking/SIGPIPE-suppressed summary pipe through `output_pipe()`; the headless
+output fixture uses the same preparation. `docs/agent-cli.md` shows ordinary
+viewer mode with a dedicated status stdin, not finite pilot summary capture.
+Private evaluation harnesses are outside this inventory and must be updated by
+their owners before using this pilot contract. No production launcher or real
+agent connection is added here.
+
+The existing hosted GUI lifecycle step checks thirteen cases: its original nine
+plus full nonblocking stdout, full blocking stdout, reader loss and empty
+blocking stdout. Fault cases wait for actual viewer exit before draining output,
+so `communicate()` cannot hide backpressure. A timed-out owned writer is drained
+and waited normally; it still fails the case. A child that remains unreaped is
+reported with its PID and stops the suite without force kill. These fixtures open
+only their synthetic hosted windows. Headless source checks cover the same output
+boundary and caller preparation without launching any window.

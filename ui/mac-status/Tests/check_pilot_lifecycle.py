@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,12 +33,22 @@ def frame(kind):
         value['phase'] = 'PRIVATE_SENTINEL_NEVER_OUTPUT'
     return json.dumps(value).encode()+b'\n'
 
+def output_pipe():
+    """Caller-owned, dedicated summary pipe; no inherited fd flags are changed."""
+    read_fd, write_fd = os.pipe()
+    try:
+        os.set_blocking(write_fd, False)
+        fcntl.fcntl(write_fd, 73, 1)  # Darwin F_SETNOSIGPIPE (SDK sys/fcntl.h).
+        return read_fd, write_fd
+    except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
+        raise
+
+
 def run(kind, expected, fault, end='eof', default=False):
     flag = '--check-own-window-eof' if default else '--pilot-exit-on-stream-end'
-    out_read, out_write = os.pipe()
-    # Dedicated output OFD; viewer only validates, never mutates these flags.
-    os.set_blocking(out_write, False)
-    fcntl.fcntl(out_write, 73, 1)  # Darwin F_SETNOSIGPIPE (SDK sys/fcntl.h).
+    out_read, out_write = output_pipe()
     try:
         child = subprocess.Popen([str(ROOT/'.build/debug/TetherStatus'), flag], cwd=ROOT,
                                  stdin=subprocess.PIPE, stdout=out_write, stderr=subprocess.PIPE)
@@ -76,6 +87,90 @@ def run(kind, expected, fault, end='eof', default=False):
         assert b'PRIVATE_SENTINEL' not in stdout
     print(json.dumps(dict(case=kind+('_default' if default else ''), result='passed', exit_code=child.returncode)))
 
+def run_output_fault(kind):
+    """Wait before draining stdout: communicate() would hide backpressure."""
+    read_fd, write_fd = output_pipe()
+    alias = os.dup(write_fd)
+    capacity = 0
+    if kind.startswith('full-'):
+        while True:
+            try:
+                capacity += os.write(write_fd, b'x'*512)
+            except BlockingIOError:
+                break
+    if kind in ('blocking', 'full-blocking'):
+        # Deliberately invalid caller; only this newly created pipe is changed.
+        os.set_blocking(write_fd, True)
+    if kind == 'reader-loss':
+        os.close(read_fd)
+        read_fd = None
+    mask = os.O_ACCMODE | os.O_NONBLOCK | os.O_APPEND | os.O_ASYNC | os.O_SYNC | os.O_DSYNC
+    before = (fcntl.fcntl(alias, fcntl.F_GETFL) & mask,
+              fcntl.fcntl(alias, 74), fcntl.fcntl(alias, fcntl.F_GETFD))
+    with tempfile.TemporaryFile() as errors:
+        try:
+            child = subprocess.Popen([str(ROOT/'.build/debug/TetherStatus'), '--pilot-exit-on-stream-end'],
+                                     cwd=ROOT, stdin=subprocess.PIPE, stdout=write_fd, stderr=errors)
+        except OSError:
+            os.close(alias)
+            if read_fd is not None:
+                os.close(read_fd)
+            raise
+        finally:
+            os.close(write_fd)
+        input_ok = True
+        try:
+            child.stdin.write(frame('confirmed'))
+            child.stdin.close()
+        except BrokenPipeError:
+            input_ok = False
+        timed_out = False
+        try:
+            child.wait(timeout=12)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        # Recover a RED writer only by draining our own pipe, then normal wait.
+        received = bytearray()
+        deadline = time.monotonic()+3
+        if read_fd is not None:
+            os.set_blocking(read_fd, False)
+            while True:
+                try:
+                    received.extend(os.read(read_fd, 65536))
+                except BlockingIOError:
+                    pass
+                if child.poll() is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    print(json.dumps(dict(case=kind, result='timeout_child_unconfirmed',
+                                          owned_pid=child.pid, reaped=False)), flush=True)
+                    raise SystemExit(1)
+                time.sleep(.001)
+            while True:
+                try:
+                    received.extend(os.read(read_fd, 65536))
+                except BlockingIOError:
+                    break
+            os.close(read_fd)
+        try:
+            child.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            print(json.dumps(dict(case=kind, result='timeout_child_unconfirmed',
+                                  owned_pid=child.pid, reaped=False)), flush=True)
+            raise SystemExit(1)
+        after = (fcntl.fcntl(alias, fcntl.F_GETFL) & mask,
+                 fcntl.fcntl(alias, 74), fcntl.fcntl(alias, fcntl.F_GETFD))
+        os.close(alias)
+        errors.seek(0, os.SEEK_END)
+        error_bytes = errors.tell()
+    print(json.dumps(dict(case=kind, reaped=True, timed_out=timed_out,
+                          exit_code=child.returncode, capacity_bytes=capacity,
+                          alias_flags_unchanged=before == after)))
+    assert input_ok and not timed_out, 'viewer failed bounded EOF termination'
+    assert child.returncode == 2 and received == b'x'*capacity
+    assert before == after and error_bytes <= 1024*1024
+
+
 if __name__ == '__main__':
     run('confirmed', 0, 'eof')
     run('stale', 2, 'eof')
@@ -86,4 +181,6 @@ if __name__ == '__main__':
     run('invalid_enum', 2, 'malformed', 'rejected')
     run('truncated', 2, 'malformed')
     run('empty', 0, 'eof', default=True)
-    print('PILOT_LIFECYCLE_CHECKS 9 FAILURES 0')
+    for kind in ('full-nonblocking', 'full-blocking', 'reader-loss', 'blocking'):
+        run_output_fault(kind)
+    print('PILOT_LIFECYCLE_CHECKS 13 FAILURES 0')

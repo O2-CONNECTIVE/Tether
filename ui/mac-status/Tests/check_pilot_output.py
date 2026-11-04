@@ -11,7 +11,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_pilot_lifecycle import frame
+from check_pilot_lifecycle import frame, output_pipe
 
 ROOT = Path(__file__).resolve().parents[1]
 # Darwin SDK sys/fcntl.h; Python does not expose these constants.
@@ -62,10 +62,8 @@ def wait_owned(child, seconds, kind):
 
 
 def run(binary, kind, expected):
-    r, w = os.pipe()
+    r, w = output_pipe()
     os.set_blocking(r, False)
-    fcntl.fcntl(w, F_SETNOSIGPIPE, 1)
-    os.set_blocking(w, False)
     capacity = 0
     if kind.startswith('full'):
         while True:
