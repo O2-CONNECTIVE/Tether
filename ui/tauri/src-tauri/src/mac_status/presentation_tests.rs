@@ -25,7 +25,10 @@ fn ingest(state: &mut FeedState, changes: &[(&str, Value)], now: f64) {
 #[test]
 fn missing_and_unfresh_observations_never_show_progress() {
     let mut state = FeedState::default();
-    assert_eq!(present(state.snapshot(), 100.0).heading, "状態情報を待っています");
+    assert_eq!(
+        present(state.snapshot(), 100.0).heading,
+        "状態情報を待っています"
+    );
     ingest(&mut state, &[("phase", json!("connecting"))], 100.0);
     for now in [99.0, 103.001, f64::NAN, f64::INFINITY] {
         let output = present(state.snapshot(), now);
@@ -53,7 +56,11 @@ fn setup_phase_output_is_not_synthetic_or_authority() {
         ("checking_config", "起動設定を確認中", Icon::Checking),
         ("loading_key", "接続用の鍵を確認中", Icon::Checking),
         ("preparing", "この Mac の実行環境を準備中", Icon::Checking),
-        ("awaiting_approval", "起動したターミナルで承認してください", Icon::Neutral),
+        (
+            "awaiting_approval",
+            "起動したターミナルで承認してください",
+            Icon::Neutral,
+        ),
         ("connecting", "接続を確認中", Icon::Checking),
         ("connected", "接続中の報告", Icon::Neutral),
         ("stopping", "停止・回収中", Icon::Neutral),
@@ -69,12 +76,20 @@ fn setup_phase_output_is_not_synthetic_or_authority() {
 
 #[test]
 fn eof_without_terminal_and_read_errors_do_not_continue_progress() {
-    for fault in [FeedFault::Eof, FeedFault::Read, FeedFault::Malformed, FeedFault::Stopped] {
+    for fault in [
+        FeedFault::Eof,
+        FeedFault::Read,
+        FeedFault::Malformed,
+        FeedFault::Stopped,
+    ] {
         let mut state = FeedState::default();
         ingest(&mut state, &[("phase", json!("connecting"))], 100.0);
         state.fail(fault);
         assert_eq!(present(state.snapshot(), 100.0).icon, Icon::Warning);
-        assert_eq!(present(state.snapshot(), 100.0).heading, "状態の更新を確認できません");
+        assert_eq!(
+            present(state.snapshot(), 100.0).heading,
+            "状態の更新を確認できません"
+        );
     }
 }
 
@@ -104,11 +119,17 @@ fn terminal_eof_retains_history_but_not_current_cleanup_proof() {
 #[test]
 fn unknown_overrides_eof_staleness_and_all_later_faults() {
     let mut state = FeedState::default();
-    ingest(&mut state, &[
-        ("phase", json!("failed")), ("terminal", json!(true)),
-        ("reason", json!("terminal_cleanup_unknown")),
-        ("terminal_cleanup_unknown", json!(true)), ("cleanup", json!("unknown")),
-    ], 100.0);
+    ingest(
+        &mut state,
+        &[
+            ("phase", json!("failed")),
+            ("terminal", json!(true)),
+            ("reason", json!("terminal_cleanup_unknown")),
+            ("terminal_cleanup_unknown", json!(true)),
+            ("cleanup", json!("unknown")),
+        ],
+        100.0,
+    );
     for fault in [FeedFault::Eof, FeedFault::Read, FeedFault::Malformed] {
         state.fail(fault);
         let output = present(state.snapshot(), 1000.0);
@@ -118,7 +139,10 @@ fn unknown_overrides_eof_staleness_and_all_later_faults() {
     let mut nonterminal = FeedState::default();
     ingest(&mut nonterminal, &[("cleanup", json!("unknown"))], 100.0);
     assert!(!nonterminal.snapshot().sticky_unknown);
-    assert_eq!(present(nonterminal.snapshot(), 100.0).heading, "回収を確認できません");
+    assert_eq!(
+        present(nonterminal.snapshot(), 100.0).heading,
+        "回収を確認できません"
+    );
 }
 
 #[test]
@@ -126,11 +150,19 @@ fn null_remaining_keeps_prior_deadline_and_newer_remaining_cannot_extend_it() {
     for remaining in [Value::Null, json!(10000)] {
         let mut state = FeedState::default();
         ingest(&mut state, &[], 100.0);
-        ingest(&mut state, &[
-            ("seq", json!(2)), ("source_continuous_ms", json!(101000)),
-            ("grant_remaining_ms", remaining),
-        ], 101.0);
-        assert_eq!(present(state.snapshot(), 102.0).heading, "承認時間の終了・停止は未確認");
+        ingest(
+            &mut state,
+            &[
+                ("seq", json!(2)),
+                ("source_continuous_ms", json!(101000)),
+                ("grant_remaining_ms", remaining),
+            ],
+            101.0,
+        );
+        assert_eq!(
+            present(state.snapshot(), 102.0).heading,
+            "承認時間の終了・停止は未確認"
+        );
     }
 }
 
@@ -144,11 +176,17 @@ fn setup_failure_eof_is_history_and_not_an_approval_action() {
         ("approval_not_completed", "承認は完了しませんでした"),
     ] {
         let mut state = FeedState::default();
-        ingest(&mut state, &[
-            ("phase", json!("failed")), ("terminal", json!(true)),
-            ("reason", json!(reason)), ("cleanup", json!("not_started")),
-            ("grant_remaining_ms", Value::Null),
-        ], 100.0);
+        ingest(
+            &mut state,
+            &[
+                ("phase", json!("failed")),
+                ("terminal", json!(true)),
+                ("reason", json!(reason)),
+                ("cleanup", json!("not_started")),
+                ("grant_remaining_ms", Value::Null),
+            ],
+            100.0,
+        );
         state.fail(FeedFault::Eof);
         let output = present(state.snapshot(), 1000.0);
         assert_eq!(output.heading, heading);
@@ -160,10 +198,16 @@ fn setup_failure_eof_is_history_and_not_an_approval_action() {
 #[test]
 fn terminal_replay_is_not_revived_and_mapping_does_not_mutate_state() {
     let mut state = FeedState::default();
-    ingest(&mut state, &[
-        ("phase", json!("closed")), ("terminal", json!(true)),
-        ("cleanup", json!("confirmed")), ("grant_remaining_ms", json!(0)),
-    ], 100.0);
+    ingest(
+        &mut state,
+        &[
+            ("phase", json!("closed")),
+            ("terminal", json!(true)),
+            ("cleanup", json!("confirmed")),
+            ("grant_remaining_ms", json!(0)),
+        ],
+        100.0,
+    );
     let before = format!("{:?}", state.snapshot());
     let _ = present(state.snapshot(), 100.0);
     assert_eq!(format!("{:?}", state.snapshot()), before);
@@ -178,5 +222,8 @@ fn nonterminal_confirmed_cleanup_never_becomes_terminal_success() {
     ingest(&mut state, &[("cleanup", json!("confirmed"))], 100.0);
     assert_eq!(present(state.snapshot(), 100.0).heading, "接続中の報告");
     state.fail(FeedFault::Eof);
-    assert_eq!(present(state.snapshot(), 100.0).heading, "状態の更新を確認できません");
+    assert_eq!(
+        present(state.snapshot(), 100.0).heading,
+        "状態の更新を確認できません"
+    );
 }

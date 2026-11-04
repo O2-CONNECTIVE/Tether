@@ -120,7 +120,9 @@ fn terminal_view(reason: &str, cleanup: &str, source_closed: bool) -> MacPresent
         _ => "最終報告",
     };
     let detail = match cleanup {
-        "confirmed" => "最終報告：回収確認済み。現在の接続や OS 全体の回収を独立に確認したものではありません。",
+        "confirmed" => {
+            "最終報告：回収確認済み。現在の接続や OS 全体の回収を独立に確認したものではありません。"
+        }
         "not_started" => "最終報告：実行は開始されていません。現在の接続を示す表示ではありません。",
         _ => "最終報告：回収は未確認です。確認が続いているとは限りません。",
     };

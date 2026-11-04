@@ -38,7 +38,10 @@ fn stale_and_expiry_cannot_gain_a_new_budget() {
     }
     let mut expired = FeedState::default();
     expired.ingest(&frame(&[]), 100.0);
-    assert_eq!(output(&expired, 102.0)["view"]["heading"], "承認時間の終了・停止は未確認");
+    assert_eq!(
+        output(&expired, 102.0)["view"]["heading"],
+        "承認時間の終了・停止は未確認"
+    );
     assert_eq!(output(&expired, 102.0)["validForMs"], 0);
 }
 #[test]

@@ -18,8 +18,8 @@ mod windows_client;
 use serde::{Deserialize, Serialize};
 mod shell_runtime;
 mod status_presentation;
-use status_presentation::StatusPresentation;
 use shell_runtime::ShellRuntime;
+use status_presentation::StatusPresentation;
 
 #[allow(
     dead_code,
@@ -108,7 +108,10 @@ fn commands_with_presentation<R: tauri::Runtime>(
     builder
         .manage(runtime)
         .manage(output)
-        .invoke_handler(tauri::generate_handler![get_shell_status, get_status_presentation])
+        .invoke_handler(tauri::generate_handler![
+            get_shell_status,
+            get_status_presentation
+        ])
 }
 
 pub fn run() {

@@ -7,13 +7,10 @@ fn ipc(
     origin: &str,
     request: Value,
 ) -> Result<Value, Value> {
-    let app = commands_with_presentation(
-        tauri::test::mock_builder(),
-        ShellRuntime::default(),
-        output,
-    )
-    .build(tauri::generate_context!())
-    .unwrap();
+    let app =
+        commands_with_presentation(tauri::test::mock_builder(), ShellRuntime::default(), output)
+            .build(tauri::generate_context!())
+            .unwrap();
     let window = tauri::WebviewWindowBuilder::new(&app, label, Default::default())
         .build()
         .unwrap();
@@ -53,7 +50,10 @@ fn default_command_route_is_compiled_target_and_never_fixture_observation() {
             json!({"protocolVersion": 1, "source": "mac-status", "state": "source-unavailable"})
         );
     } else {
-        assert_eq!(output, json!({"protocolVersion": 1, "source": "unsupported"}));
+        assert_eq!(
+            output,
+            json!({"protocolVersion": 1, "source": "unsupported"})
+        );
     }
 }
 

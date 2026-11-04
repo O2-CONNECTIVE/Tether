@@ -37,9 +37,9 @@ impl MacOutput {
         } else {
             0.0
         };
-        let lifetime = snapshot
-            .remaining_deadline
-            .map_or(freshness, |deadline| freshness.min((deadline - now).max(0.0)));
+        let lifetime = snapshot.remaining_deadline.map_or(freshness, |deadline| {
+            freshness.min((deadline - now).max(0.0))
+        });
         let valid_for_ms = (lifetime * 1000.0).floor().clamp(0.0, 3000.0) as u32;
         Self::SyntheticObservation {
             view: OutputView {
