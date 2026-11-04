@@ -1,0 +1,192 @@
+name: PR180 finite original debug reproduction
+on:
+  pull_request:
+    branches: [wip/windows-installation-source-ci-20261102]
+    types: [opened]
+    paths: ['.github/workflows/pr180-finite-repro.yml', '.github/pr180-repro/**']
+permissions:
+  contents: read
+concurrency:
+  group: pr180-finite-original-repro-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    if: >-
+      github.run_attempt == 1 &&
+      github.repository == 'O2-CONNECTIVE/rescue-host' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diag/pr180-finite-repro-20261104' &&
+      github.event.pull_request.base.sha == '16a1de9e48f8ac4559b81feb2ac7a1c71a02ecf4'
+    runs-on: windows-2022
+    timeout-minutes: 12
+    outputs:
+      manifestSha256: ${{ steps.bundle.outputs.manifestSha256 }}
+      bundleBytes: ${{ steps.bundle.outputs.bundleBytes }}
+      artifactId: ${{ steps.transfer.outputs.artifact-id }}
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 16a1de9e48f8ac4559b81feb2ac7a1c71a02ecf4
+          path: source
+          persist-credentials: false
+      - name: Verify exact source and diagnostic-only changes
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $event = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+          $head = (git -C ../control rev-parse HEAD).Trim()
+          $parent = (git -C ../control rev-parse HEAD^).Trim()
+          $files = @(git -C ../control diff --name-only HEAD^ HEAD)
+          $allowed = @('.github/workflows/pr180-finite-repro.yml', '.github/pr180-repro/bundle.py', '.github/pr180-repro/test_bundle.py', '.github/pr180-repro/trial.ps1')
+          if ($LASTEXITCODE -ne 0 -or $head -cne $event.pull_request.head.sha -or $parent -cne '16a1de9e48f8ac4559b81feb2ac7a1c71a02ecf4' -or (git rev-parse HEAD).Trim() -cne $parent -or $files.Count -ne $allowed.Count -or @($files | Where-Object { $_ -notin $allowed }).Count -ne 0) { throw 'REPRO_SOURCE_REJECTED' }
+          "REPRO_WORKFLOW_SOURCE=$head" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$env:RUNNER_TEMP/repro-target" >> $env:GITHUB_ENV
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13.17'
+          architecture: x64
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+      - name: Validate transfer rejection fixtures and PowerShell syntax
+        run: |
+          python -B -m unittest discover -s ../control/.github/pr180-repro -p test_bundle.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tokens = $null; $parseErrors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ../control/.github/pr180-repro/trial.ps1), [ref]$tokens, [ref]$parseErrors)
+          if ($parseErrors.Count -ne 0) { throw 'REPRO_POWERSHELL_PARSE_REJECTED' }
+          & pwsh -NoProfile -File ./ui/tauri/native-smoke/process-contract.test.ps1
+          exit $LASTEXITCODE
+      - name: Read existing runtime without updating it
+        run: ./ui/tauri/native-smoke/inventory.ps1 -OutputPath "$env:RUNNER_TEMP/build-inventory.json"
+      - name: Select existing approved CI Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
+      - name: Build pinned driver once
+        timeout-minutes: 6
+        run: ./ui/tauri/native-smoke/setup.ps1 -ToolsDirectory "$env:RUNNER_TEMP/build-tools" -InventoryPath "$env:RUNNER_TEMP/build-inventory.json"
+      - name: Build original bundled frontend
+        working-directory: source/ui/tauri
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          exit $LASTEXITCODE
+      - name: Build ordinary debug app once without startup feature
+        working-directory: source/ui/tauri
+        run: cargo +1.99.1 build --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol
+      - name: Prepare bounded one-day same-binary transfer
+        id: bundle
+        run: |
+          git diff --exit-code -- .
+          if ($LASTEXITCODE -ne 0) { throw 'REPRO_ORIGINAL_SOURCE_DRIFT' }
+          python -B ../control/.github/pr180-repro/bundle.py pack --app "$env:CARGO_TARGET_DIR/debug/rescue-host-shell.exe" --tools "$env:RUNNER_TEMP/build-tools" --license LICENSE --workflow $env:REPRO_WORKFLOW_SOURCE --archive "$env:RUNNER_TEMP/transfer/repro-bundle.zip"
+          exit $LASTEXITCODE
+      - name: Transfer only bounded test bundle, never a Release
+        id: transfer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: pr180-debug-repro-bundle
+          path: ${{ runner.temp }}/transfer/repro-bundle.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+  trial:
+    needs: build
+    if: github.run_attempt == 1
+    name: Fresh ordinary debug trial ${{ matrix.trial }}
+    runs-on: windows-2022
+    timeout-minutes: 6
+    strategy:
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        trial: [1, 2, 3, 4]
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source
+    env:
+      REPRO_MANIFEST_SHA256: ${{ needs.build.outputs.manifestSha256 }}
+      REPRO_BUNDLE_BYTES: ${{ needs.build.outputs.bundleBytes }}
+      REPRO_TRIAL: ${{ matrix.trial }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 16a1de9e48f8ac4559b81feb2ac7a1c71a02ecf4
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13.17'
+          architecture: x64
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+      - name: Download only this run's shared binary artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifactId }}
+          path: ${{ runner.temp }}/received
+          digest-mismatch: error
+      - name: Verify exact file set and binary hashes before execution
+        run: |
+          $archive = "$env:RUNNER_TEMP/received/repro-bundle.zip"
+          if ((Get-Item $archive).Length -ne [long]$env:REPRO_BUNDLE_BYTES -or (Get-Item $archive).Length -gt 127MB) { throw 'REPRO_TRANSFER_BOUND_REJECTED' }
+          python -B ../control/.github/pr180-repro/bundle.py unpack --archive $archive --directory "$env:RUNNER_TEMP/repro-bundle" --manifest-sha256 $env:REPRO_MANIFEST_SHA256
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $manifest = Get-Content "$env:RUNNER_TEMP/repro-bundle/BUILD.json" -Raw | ConvertFrom-Json
+          $event = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+          if ($manifest.workflowCommit -cne $event.pull_request.head.sha) { throw 'REPRO_WORKFLOW_BINDING_REJECTED' }
+          ./ui/tauri/native-smoke/inventory.ps1 -OutputPath "$env:RUNNER_TEMP/trial-inventory.json"
+          $inventory = Get-Content "$env:RUNNER_TEMP/trial-inventory.json" -Raw | ConvertFrom-Json
+          if ($inventory.runtimeVersions.Count -ne 1 -or $inventory.runtimeVersions[0] -cne '131.0.2903.86') { throw 'REPRO_RUNTIME_DRIFT' }
+      - name: One original native invocation, no retries
+        id: native
+        timeout-minutes: 3
+        run: |
+          & pwsh -NoProfile -File ../control/.github/pr180-repro/trial.ps1 -SourceDirectory (Resolve-Path .) -BundleDirectory "$env:RUNNER_TEMP/repro-bundle" -ManifestSha256 $env:REPRO_MANIFEST_SHA256 -Trial $env:REPRO_TRIAL -EvidenceDirectory "$env:RUNNER_TEMP/trial-evidence"
+          exit $LASTEXITCODE
+      - name: Assert positive cleanup witness before allowing next fresh runner
+        if: success()
+        env:
+          REPRO_CONTINUE: ${{ steps.native.outputs.continue }}
+        run: |
+          if ($env:REPRO_CONTINUE -cne 'true') { throw 'REPRO_CLEANUP_WITNESS_MISSING' }
+      - name: Bound anonymous evidence before upload
+        if: always()
+        id: evidence
+        run: |
+          $root = "$env:RUNNER_TEMP/trial-evidence"
+          New-Item -ItemType Directory "$env:RUNNER_TEMP/safe-evidence" -ErrorAction Stop | Out-Null
+          $files = @()
+          if (Test-Path "$env:RUNNER_TEMP/trial-inventory.json") { $files += Get-Item "$env:RUNNER_TEMP/trial-inventory.json" }
+          if (Test-Path "$root/trial-result.json") { $files += Get-Item "$root/trial-result.json" }
+          if (Test-Path "$root/BUILD.json") { $files += Get-Item "$root/BUILD.json" }
+          foreach ($name in @('native-result.json', 'native-observation.json', 'driver-provenance.json', 'driver-stage-report.json', 'session-startup-timing.json', 'webview-result.json')) {
+            if (Test-Path "$root/native/$name") { $files += Get-Item "$root/native/$name" }
+          }
+          if ($files.Count -eq 0 -or ($files | Measure-Object Length -Sum).Sum -gt 128KB) { throw 'REPRO_EVIDENCE_BOUND_REJECTED' }
+          foreach ($file in $files) { Copy-Item -LiteralPath $file.FullName -Destination "$env:RUNNER_TEMP/safe-evidence/$($file.Name)" -ErrorAction Stop }
+          "bounded=true" >> $env:GITHUB_OUTPUT
+      - name: Save only bounded anonymous JSON, preserve failed verdict
+        if: always() && steps.evidence.outputs.bounded == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: pr180-fresh-trial-${{ matrix.trial }}-evidence
+          path: ${{ runner.temp }}/safe-evidence/*.json
+          if-no-files-found: error
+          retention-days: 1
