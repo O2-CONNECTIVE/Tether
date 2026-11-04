@@ -78,7 +78,7 @@ try {
     $snapshot = Get-Snapshot
     $phase = 'ownership-confirmation'
     $lineageEvidence = @()
-    try { $observation = Get-OwnedApp $driver[0] $edge[0] $appPath $snapshot ([ref]$lineageEvidence) }
+    try { $observation = Get-OwnedApp $driver[0] $edge[0] $appPath $snapshot ([ref]$lineageEvidence) $before }
     finally { $report.initialLineageFacts = @($lineageEvidence) }
     $app = $observation.App
     $children = $observation.Children

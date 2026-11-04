@@ -179,3 +179,14 @@ head a19eb995のrun40624841399/artifact12788014753では、WebView6件は全てC
 CreationDateはwall clock由来であり、順序整合は保護された所有証明の十分条件ではありません。
 時計変動や親世代の不確定をPASSへ変換せず、作成時の所有束縛など独立した証拠は別の未実装設計として残します。
 この変更はtimeoutの合格化ではなく、所有不確定を終了待ちより前に明示する修正です。
+
+### driver起動前との匿名同一性比較
+
+所有確認不能の理由を絞るため、既に取得しているdriver起動前のsnapshotと、不確定な親・子それぞれのPIDとCreationDateを比較します。
+公開するのは `parentBeforeDriverIdentity` と `childBeforeDriverIdentity` の固定分類（same/different/absent/ambiguous/unavailable/not-recorded）だけです。
+snapshotが4096行を超える場合や生成時刻を取得できない場合はunavailableにし、PID・絶対時刻・path・名前・command lineは保存しません。
+
+起動前から同じ子が存在し、現在の親が起動前にはabsent/differentだった場合、無関係な既存processとPID再利用の仮説を支持しますが、過去の親や実際の生成履歴を確定しません。
+この比較は所有認可・子の除外・close・cleanup・成功条件には使わず、従来と同じ `NATIVE_LINEAGE_OWNER_UNCONFIRMED` を保持します。
+`process-contract.test.ps1` から呼ぶ独立scopeの `lineage-baseline.test.ps1` は、匿名分類、depth4の二つの逆順時刻、baseline未取得時の拒否、正当なother子の保持、情報非公開を合成行で検査します。
+合成fixtureの成功と実Windowsの原因特定・通常close成功は別の証拠です。
