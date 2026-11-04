@@ -48,6 +48,19 @@ _ = marker.withUnsafeBytes { Darwin.write(STDERR_FILENO,$0.baseAddress,marker.co
     return binary
 
 
+def unreaped(child, kind):
+    print(json.dumps(dict(case=kind, result='timeout_child_unconfirmed',
+                          owned_pid=child.pid, reaped=False)), flush=True)
+    raise RuntimeError(f'owned child unreaped: {child.pid}')
+
+
+def wait_owned(child, seconds, kind):
+    try:
+        return child.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        unreaped(child, kind)
+
+
 def run(binary, kind, expected):
     r, w = os.pipe()
     os.set_blocking(r, False)
@@ -62,8 +75,6 @@ def run(binary, kind, expected):
                 break
     if kind in ('blocking', 'full-blocking'):
         os.set_blocking(w, True)
-    if kind == 'no-nosigpipe':
-        fcntl.fcntl(w, F_SETNOSIGPIPE, 0)
     sink = w
     extra = None
     if kind == 'reader-loss':
@@ -108,14 +119,14 @@ def run(binary, kind, expected):
             if child.poll() is not None:
                 break
             if time.monotonic() >= deadline:
-                raise RuntimeError(f'owned child unreaped: {child.pid}')
+                unreaped(child, kind)
             time.sleep(.001)
         while True:
             try:
                 data.extend(os.read(r, 65536))
             except BlockingIOError:
                 break
-    child.wait(timeout=1)
+    wait_owned(child, 1, kind)
     after = flags(alias)
     os.close(alias)
     os.close(w)

@@ -119,7 +119,7 @@ versions. Official image availability is not proof of Swift 6.3.3 patch parity.
 A dependency-free `Tests/run_ci_checks.py` has only source/gui modes and refuses
 execution unless its GitHub/macOS/arm64/selected-toolchain scope matches. The check
 is an accidental-local-execution guard, not authentication or a sandbox.
-Source checks build/core26/package10/local bundle. GUI checks require the real
+Source checks build/core26/headless output9/output-runner1/package10/local bundle. GUI checks require the real
 synthetic owned-window9, both bundled own-window cases and the exact20 own-content
 PNG outputs. Unavailable GUI session, missing PASS, nonzero exit, timeout or image
 mismatch fails the job; there is no skipped-success or continue-on-error fallback.
