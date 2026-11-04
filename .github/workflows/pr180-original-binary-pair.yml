@@ -1,0 +1,177 @@
+name: PR180 original binary startup observation
+on:
+  pull_request:
+    branches: [wip/windows-installation-source-ci-20261102]
+    types: [opened]
+    paths: ['.github/workflows/pr180-original-binary-pair.yml']
+permissions:
+  contents: read
+concurrency:
+  group: pr180-original-binary-pair-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  original-pair:
+    if: >-
+      github.repository == 'O2-CONNECTIVE/rescue-host' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diag/pr180-original-binary-pair-20261104' &&
+      github.event.pull_request.base.sha == '16a1de9e48f8ac4559b81feb2ac7a1c71a02ecf4'
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source
+    steps:
+      - name: Read diagnostic revision only
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Check out exact original application and harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 16a1de9e48f8ac4559b81feb2ac7a1c71a02ecf4
+          path: source
+          persist-credentials: false
+      - name: Reject any additional source change
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $event = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+          $original = '16a1de9e48f8ac4559b81feb2ac7a1c71a02ecf4'
+          $head = (git -C ../control rev-parse HEAD).Trim()
+          $parent = (git -C ../control rev-parse HEAD^).Trim()
+          $files = @(git -C ../control diff --name-only HEAD^ HEAD)
+          if ($LASTEXITCODE -ne 0 -or $head -cne $event.pull_request.head.sha -or $parent -cne $original -or $files.Count -ne 1 -or $files[0] -cne '.github/workflows/pr180-original-binary-pair.yml' -or (git rev-parse HEAD).Trim() -cne $original) { throw 'PAIR_SOURCE_REJECTED' }
+          "PAIR_WORKFLOW_SOURCE=$head" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$env:RUNNER_TEMP/pair-target" >> $env:GITHUB_ENV
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13.17'
+          architecture: x64
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+      - name: Check existing harness and classification contracts
+        run: |
+          & pwsh -NoProfile -File ./ui/tauri/native-smoke/process-contract.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & pwsh -NoProfile -File ./ui/tauri/native-smoke/app-startup-contract.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Location ui/tauri
+          node --test tests/app-startup-stages.test.ts tests/app-startup-files.test.ts tests/app-startup-cli.test.ts
+          exit $LASTEXITCODE
+      - name: Record runtime without updating it
+        run: ./ui/tauri/native-smoke/inventory.ps1 -OutputPath "$env:RUNNER_TEMP/pair-inventory.json"
+      - name: Select existing approved CI Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
+      - name: Build pinned driver once
+        timeout-minutes: 6
+        run: ./ui/tauri/native-smoke/setup.ps1 -ToolsDirectory "$env:RUNNER_TEMP/pair-tools" -InventoryPath "$env:RUNNER_TEMP/pair-inventory.json"
+      - name: Build original frontend
+        working-directory: source/ui/tauri
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          exit $LASTEXITCODE
+      - name: Build original release startup variant once
+        working-directory: source/ui/tauri
+        run: cargo +1.99.1 build --release --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol,startup-diagnostics
+      - name: Bind one application and driver binary to both trials
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = "$env:RUNNER_TEMP/pair-fixture"
+          $evidence = "$env:RUNNER_TEMP/pair-evidence"
+          New-Item -ItemType Directory $fixture, $evidence -ErrorAction Stop | Out-Null
+          Copy-Item "$env:CARGO_TARGET_DIR/release/rescue-host-shell.exe" "$fixture/rescue-host-shell.exe"
+          $exeHash = (Get-FileHash "$fixture/rescue-host-shell.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $driverHash = (Get-FileHash "$env:RUNNER_TEMP/pair-tools/tauri/bin/tauri-driver.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $edgeHash = (Get-FileHash "$env:RUNNER_TEMP/pair-tools/edge/msedgedriver.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            schema = 1; variant = 'host-startup-diagnostic-1'; sourceCommit = '16a1de9e48f8ac4559b81feb2ac7a1c71a02ecf4'
+            features = @('custom-protocol', 'startup-diagnostics'); profile = 'release'; exeSha256 = $exeHash; distribution = $false
+          }
+          [IO.File]::WriteAllText("$fixture/BUILD.json", ($manifest | ConvertTo-Json -Compress))
+          $pair = [ordered]@{
+            schema = 1; purpose = 'original-source-same-binary-observation'; sourceCommit = $manifest.sourceCommit
+            workflowCommit = $env:PAIR_WORKFLOW_SOURCE; exeSha256 = $exeHash; driverSha256 = $driverHash; edgeSha256 = $edgeHash
+            order = @('enabled', 'disabled'); trialsPlanned = 2; perRequestTimeoutMs = 15000
+            activation = 'existing-StartupDiagnostic-bundle'; orderConfounded = $true; distribution = $false
+          }
+          [IO.File]::WriteAllText("$evidence/pair-manifest.json", ($pair | ConvertTo-Json -Compress))
+          Copy-Item "$fixture/BUILD.json" "$evidence/BUILD.json"
+          node ui/tauri/native-smoke/inspect-app-startup.ts --manifest "$fixture/BUILD.json" --exe "$fixture/rescue-host-shell.exe" --source $manifest.sourceCommit --build-only
+          exit $LASTEXITCODE
+      - name: Observe each activation once with unchanged deadlines and cleanup
+        timeout-minutes: 7
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $evidence = "$env:RUNNER_TEMP/pair-evidence"
+          $pair = Get-Content "$evidence/pair-manifest.json" -Raw | ConvertFrom-Json
+          $fixture = "$env:RUNNER_TEMP/pair-fixture"
+          $exe = (Resolve-Path "$fixture/rescue-host-shell.exe").Path
+          $results = @()
+          $failed = $false
+          function Assert-PairBinaries([string]$ToolsDirectory) {
+            if ((Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $pair.exeSha256 -or (Get-FileHash "$ToolsDirectory/tauri/bin/tauri-driver.exe" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $pair.driverSha256 -or (Get-FileHash "$ToolsDirectory/edge/msedgedriver.exe" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $pair.edgeSha256) { throw 'PAIR_BINARY_DRIFT' }
+          }
+          foreach ($label in @('enabled', 'disabled')) {
+            $tools = "$env:RUNNER_TEMP/pair-$label-tools"
+            $output = "$evidence/$label"
+            New-Item -ItemType Directory "$tools/tauri/bin" -ErrorAction Stop | Out-Null
+            foreach ($name in @('edge', 'tauri-driver.crate', 'tauri-driver-2.1.0', 'driver-provenance.json')) {
+              Copy-Item -LiteralPath "$env:RUNNER_TEMP/pair-tools/$name" -Destination $tools -Recurse -ErrorAction Stop
+            }
+            Copy-Item "$env:RUNNER_TEMP/pair-tools/tauri/bin/tauri-driver.exe" "$tools/tauri/bin/tauri-driver.exe"
+            Assert-PairBinaries $tools
+            $arguments = @('-NoProfile', '-File', './ui/tauri/native-smoke/supervise.ps1', '-ToolsDirectory', $tools, '-OutputDirectory', $output, '-ApplicationPath', $exe)
+            if ($label -eq 'enabled') { $arguments += @('-StartupDiagnostic', '-StartupManifest', "$fixture/BUILD.json", '-StartupSource', $pair.sourceCommit) }
+            & pwsh @arguments
+            $nativeExit = $LASTEXITCODE
+            & pwsh -NoProfile -File ./ui/tauri/native-smoke/inspect-driver-trace.ps1 -ToolsDirectory $tools -OutputDirectory $output
+            $driverExit = $LASTEXITCODE
+            $appExit = $null
+            if ($label -eq 'enabled') {
+              node ui/tauri/native-smoke/inspect-app-startup.ts --directory "$tools/app-startup" --manifest "$fixture/BUILD.json" --exe $exe --source $pair.sourceCommit --collection "$output/native-result.json" > "$output/app-startup-report.json"
+              $appExit = $LASTEXITCODE
+            }
+            Assert-PairBinaries $tools
+            $result = Get-Content "$output/native-result.json" -Raw | ConvertFrom-Json
+            $cleanupConfirmed = $result.cleanupStarted -eq $true -and $result.cleanupFailures -eq 0 -and $result.driverExitObservedAfterCleanup -eq $true
+            $childrenConfirmed = $false
+            if ('afterDriverCleanupFacts' -in $result.PSObject.Properties.Name -and 'afterDriverCleanupObservation' -notin $result.PSObject.Properties.Name) {
+              $facts = $result.afterDriverCleanupFacts
+              $rows = @($facts.rows)
+              $unconfirmed = @($rows | Where-Object { $_.handleIdentityVerified -ne $true -or $_.handleState -ne 'exited' -or $_.snapshotState -eq 'same-identity' -or $_.snapshotState -eq 'ambiguous' })
+              $childrenConfirmed = $facts.observed -gt 0 -and $facts.omittedRows -eq 0 -and $rows.Count -eq $facts.observed -and $facts.remainingSnapshot -eq 0 -and $unconfirmed.Count -eq 0
+            }
+            $snapshot = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+            $ownedPaths = @($exe, (Resolve-Path "$tools/tauri/bin/tauri-driver.exe").Path, (Resolve-Path "$tools/edge/msedgedriver.exe").Path)
+            $remaining = @($snapshot | Where-Object { $_.ExecutablePath -in $ownedPaths })
+            $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -in @(4444, 4445))
+            $cleanBoundary = $cleanupConfirmed -and $childrenConfirmed -and $remaining.Count -eq 0 -and $listeners.Count -eq 0
+            $passed = $nativeExit -eq 0 -and $driverExit -eq 0 -and ($null -eq $appExit -or $appExit -eq 0) -and $result.nativeTestsRun -eq 1 -and $result.nativeTestsPassed -eq 1 -and $result.normalCloseVerified -eq $true -and $cleanBoundary
+            $results += [ordered]@{ activation = $label; nativeExit = $nativeExit; driverInspectionExit = $driverExit; appInspectionExit = $appExit; sameBinariesVerified = $true; childrenCleanupConfirmed = $childrenConfirmed; cleanBoundary = $cleanBoundary; passed = $passed }
+            [IO.File]::WriteAllText("$evidence/pair-result.json", (([ordered]@{ schema = 1; trialsPlanned = 2; trialsRun = $results.Count; results = $results }) | ConvertTo-Json -Depth 5 -Compress))
+            if (-not $passed) { $failed = $true }
+            if (-not $cleanBoundary) { throw 'PAIR_CLEANUP_UNCONFIRMED_NO_NEXT_TRIAL' }
+          }
+          git diff --exit-code -- .
+          if ($LASTEXITCODE -ne 0) { throw 'PAIR_ORIGINAL_SOURCE_DRIFT' }
+          if ($failed) { exit 1 }
+      - name: Save anonymous observations only
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: pr180-original-binary-pair-evidence
+          path: |
+            ${{ runner.temp }}/pair-inventory.json
+            ${{ runner.temp }}/pair-evidence/*.json
+            ${{ runner.temp }}/pair-evidence/enabled/*.json
+            ${{ runner.temp }}/pair-evidence/disabled/*.json
+          if-no-files-found: error
+          retention-days: 7
