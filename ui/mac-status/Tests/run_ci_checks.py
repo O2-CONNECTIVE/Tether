@@ -25,6 +25,8 @@ STEPS = {
     "source": [
         ("build", ["xcrun", "swift", "build"], 180, None),
         ("core", ["xcrun", "swift", "run", "StatusCoreChecks"], 60, b"CHECKS 26 FAILURES 0"),
+        ("pilot-output", ["python3", "-I", "Tests/check_pilot_output.py"],
+         180, b"PILOT_OUTPUT_CHECKS 9 FAILURES 0"),
         ("package-tests", ["python3", "-m", "unittest", "discover", "-s", "Tests",
                            "-p", "test_packaging.py", "-v"], 60, b"Ran 10 tests"),
         ("package", ["python3", "scripts/package_local.py"], 30,

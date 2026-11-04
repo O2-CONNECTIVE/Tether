@@ -157,7 +157,7 @@ close the viewer. Default mode still stays open after EOF. This flag never stops
 an agent, issues a grant, opens a port, or changes consent.
 
 After a successful reader join, the viewer terminates its own application/windows
-and writes exactly one bounded JSON line on stdout:
+and attempts one bounded JSON line on stdout:
 `{"version":1,"stream_end":"eof","result":"confirmed_terminal","fault":"eof","reader":"joined","exit_code":0}`.
 `stream_end` is eof/rejected/read_error/canceled/unavailable; `result` is
 confirmed_terminal/unknown; `fault` is unavailable/stale/malformed/clock/sequence/
@@ -166,7 +166,27 @@ Exit 0 requires actual EOF and a validated closed terminal with confirmed cleanu
 zero workers/remaining, no unknown, and source age at EOF at most three seconds.
 All other summaries exit 2. A partial final line is EOF with malformed fault,
 never a confirmed result. Missing/invalid stdout must be treated as unknown by
-an owner; stdout failure is nonzero. Join refusal cancels termination, retaining
+an owner; stdout failure is nonzero.
+
+Pilot stdout must be a **dedicated write-only FIFO already configured with
+O_NONBLOCK and Darwin F_SETNOSIGPIPE=1** by its owner before launch. The owner
+must keep all aliases' flags stable until viewer exit; dedication cannot be
+proved by fstat. Ordinary blocking `subprocess.PIPE`, shell redirection, files,
+TTYs and sockets do not meet this pilot contract. The viewer duplicates the fd,
+validates that same descriptor, and never changes/restores shared flags or signal
+dispositions. This deliberately tightens the opt-in pilot's caller contract;
+normal visualization mode has no new stdout requirement. In Python on Darwin,
+create `read_fd, write_fd = os.pipe()`, call `os.set_blocking(write_fd, False)`
+and `fcntl.fcntl(write_fd, 73, 1)` (SDK F_SETNOSIGPIPE), then pass `write_fd` as
+child stdout and close the parent's write copy. Keep status stdin independent.
+
+The fixed line is bounded by PIPE_BUF (512 bytes) and written in one nonblocking
+attempt. Full pipe, reader loss, invalid sink, EINTR/other error or short write
+returns exit2 without retry, waiting for output capacity, or a writer thread.
+On failure there may be no usable summary; an owner must require both a complete
+valid line and the matching actual exit code. It must not infer cleanup success
+from exit2, a missing summary, or viewer exit. Successful close of the temporary
+output descriptor is required for exit0. Join refusal cancels termination, retaining
 reader ownership and freshness updates.
 
 Confirmed terminal is **producer-reported history**, not independent OS cleanup
@@ -179,3 +199,10 @@ viewer fixtures. It performs no agent launch or desktop capture. The internal
 `--check-own-window-eof` fixture checks that normal EOF retains its own visible
 window for 3.6 seconds, then closes it normally. No force-kill fallback is used;
 a timeout reports an unreaped owned viewer and stops the suite.
+
+`python3 Tests/check_pilot_output.py` compiles the exact application's output call
+with the real StatusCore reader/summary into a headless native harness. It checks
+full blocking/nonblocking pipes, normal output, reader loss, invalid sinks and
+alias flags; the Swift syscall seam also checks short writes and errors. This
+check runs in the existing source CI phase. It never launches AppKit/windows and
+does not replace the nine GUI lifecycle checks or certify real-agent cleanup.

@@ -118,9 +118,7 @@ enum RenderFailure: Error { case image }
     func applicationWillTerminate(_ notification:Notification) {
         if Model.shared.pilot {
             let summary = Model.shared.pilotSummary ?? PilotSummary(snapshot:Model.shared.snapshot,at:FeedClock.now(),eof:false)
-            let bytes = Array(summary.jsonLine.utf8)
-            let written = bytes.withUnsafeBytes { Darwin.write(STDOUT_FILENO,$0.baseAddress,bytes.count) }
-            exit(written == bytes.count ? summary.exitCode : 2)
+            exit(PilotOutput.write(summary))
         }
         if checkMode {
             print(checkPassed && checkClosing ? "OWN_BUNDLE_WINDOW_PASS" : "OWN_BUNDLE_WINDOW_FAIL")

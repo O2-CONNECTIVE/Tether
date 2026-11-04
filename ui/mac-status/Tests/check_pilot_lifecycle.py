@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Explicit finite synthetic GUI fixtures; no agent, signals or desktop capture."""
 import ctypes
+import fcntl
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -32,8 +34,19 @@ def frame(kind):
 
 def run(kind, expected, fault, end='eof', default=False):
     flag = '--check-own-window-eof' if default else '--pilot-exit-on-stream-end'
-    child = subprocess.Popen([str(ROOT/'.build/debug/TetherStatus'), flag], cwd=ROOT,
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out_read, out_write = os.pipe()
+    # Dedicated output OFD; viewer only validates, never mutates these flags.
+    os.set_blocking(out_write, False)
+    fcntl.fcntl(out_write, 73, 1)  # Darwin F_SETNOSIGPIPE (SDK sys/fcntl.h).
+    try:
+        child = subprocess.Popen([str(ROOT/'.build/debug/TetherStatus'), flag], cwd=ROOT,
+                                 stdin=subprocess.PIPE, stdout=out_write, stderr=subprocess.PIPE)
+    except OSError:
+        os.close(out_read)
+        raise
+    finally:
+        os.close(out_write)
+    child.stdout = os.fdopen(out_read, 'rb')
     if kind != 'empty':
         data = b'{malformed}\n' if kind == 'malformed' else frame(kind)
         if kind == 'truncated':
