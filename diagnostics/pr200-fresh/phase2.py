@@ -42,6 +42,49 @@ def capability_safe(value):
     return value
 
 
+def preflight_safe(value):
+    report.need(isinstance(value, dict) and set(value) == {'schema', 'kind', 'runtimeExecuted',
+        'checksExpected', 'checksVerified', 'exitCode', 'passed', 'code'})
+    report.need(type(value['schema']) is int and value['schema'] == 1 and value['kind'] == 'synthetic-powershell-ledger')
+    report.need(type(value['runtimeExecuted']) is bool and type(value['passed']) is bool)
+    report.need(type(value['checksExpected']) is int and value['checksExpected'] == 5 and
+                type(value['checksVerified']) is int and value['checksVerified'] in {0, 5})
+    report.need(value['exitCode'] is None or type(value['exitCode']) is int and -2147483648 <= value['exitCode'] <= 4294967295)
+    report.need(value['code'] in {'pass', 'fixture-rejected', 'command-timeout', 'command-unavailable'})
+    report.need(value['passed'] is (value['code'] == 'pass'))
+    if value['passed']:
+        report.need(value['runtimeExecuted'] and value['checksVerified'] == 5 and value['exitCode'] == 0)
+    else:
+        report.need(value['checksVerified'] == 0)
+    return value
+
+
+def preflight(control, root):
+    report.need(sys.platform == 'win32' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
+    private = root / 'powershell-preflight'
+    private.mkdir(exist_ok=False)
+    result = {'schema': 1, 'kind': 'synthetic-powershell-ledger', 'runtimeExecuted': False,
+        'checksExpected': 5, 'checksVerified': 0, 'exitCode': None, 'passed': False, 'code': 'command-unavailable'}
+    try:
+        with (private / 'stdout.log').open('wb') as stdout, (private / 'stderr.log').open('wb') as stderr:
+            process = subprocess.run(['pwsh', '-NoLogo', '-NoProfile', '-File',
+                str(control / 'diagnostics/pr200-fresh/observer-reasons.test.ps1')],
+                stdout=stdout, stderr=stderr, timeout=60, check=False)
+        result.update(runtimeExecuted=True, exitCode=process.returncode, code='fixture-rejected')
+        raw = (private / 'stdout.log').read_bytes() if (private / 'stdout.log').stat().st_size <= 4096 else b''
+        if (process.returncode == 0 and raw.decode('utf-8-sig').strip() == 'OBSERVER_LEDGER_SYNTHETIC_PASS checks=5'
+                and (private / 'stderr.log').stat().st_size == 0):
+            result.update(passed=True, checksVerified=5, code='pass')
+    except subprocess.TimeoutExpired:
+        result.update(runtimeExecuted=True, code='command-timeout')
+    except Exception:
+        # No raw exception or log is copied. Missing output never becomes a pass.
+        pass
+    report.write(root / 'safe/powershell-preflight.json', preflight_safe(result))
+    print('POWERSHELL_LEDGER_PREFLIGHT_PASS' if result['passed'] else 'POWERSHELL_LEDGER_PREFLIGHT_FAILED')
+    return 0 if result['passed'] else 1
+
+
 def decision(exits, reports, profile, capability, diagnostics=None):
     native, reason = report.verdict(*exits, reports)
     required = set(report.FILES) - {'driver-startup-log-facts.json'}
@@ -85,7 +128,7 @@ def identity_safe(value):
     report.need(value['sourceCommit'] == report.SOURCE and value['sourceTree'] == report.TREE and
                 re.fullmatch('[0-9a-f]{40}', value['controlCommit']))
     report.need(value['features'] == ['custom-protocol'] and value['profile'] == 'release' and
-                value['specimen'] == 'new-build-not-original-binary' and value['requestDeadlineMs'] == 15000 and value['trialCap'] == 3)
+                value['specimen'] == 'new-build-not-original-binary' and value['requestDeadlineMs'] == 15000 and value['trialCap'] == report.CAP)
     report.need(value['originalFailure'] == {'run': 42037151371, 'job': 127278142941, 'attempt': 1})
     report.need(set(value['hashes']) == {'cargoLockSha256', 'packageLockSha256', 'toolPinsSha256',
                 'supervisorSha256', 'builtExeSha256', 'exeSha256', 'archiveSha256'})
@@ -109,7 +152,7 @@ def trial_safe(value):
     words = {'interpretation', 'stopReason'}
     report.need(isinstance(value, dict) and set(value) <= numeric | flags | words | {'rejectedEvidenceFiles'})
     report.need({'trial', 'continue', 'pr200Blocked', 'interpretation', 'stopReason'} <= set(value))
-    report.need(type(value['trial']) is int and value['trial'] in {1, 2, 3} and value['pr200Blocked'] is True)
+    report.need(type(value['trial']) is int and value['trial'] == 1 and value['pr200Blocked'] is True)
     report.need(value['continue'] is not True or value.get('classificationComplete') is True)
     for key, item in value.items():
         if key in numeric:
@@ -132,11 +175,12 @@ def trial_safe(value):
 
 def publish(root, index):
     # Summary/log output is free of artifact-storage use. Exact allowlist, no glob/raw data.
-    report.need(index in {1, 2, 3})
+    report.need(index == 1)
     files = {}
     validators = {'build-identity.json': identity_safe, 'launch-build-identity.json': identity_safe,
                   'trial.json': trial_safe, 'profile-observation.json': profile_safe,
                   'profile-capability.json': capability_safe,
+                  'powershell-preflight.json': preflight_safe,
                   'profile-capability-shape.json': evidence_schema.capability_shape_safe,
                   'observer-failure-sites.json': evidence_schema.observer_sites_safe}
     validators.update({'observation/' + name: report.safe for name in report.FILES})
@@ -148,6 +192,7 @@ def publish(root, index):
     if 'trial.json' in files:
         report.need(files['trial.json']['trial'] == index)
         if files['trial.json']['continue']:
+            report.need(preflight_safe(files.get('powershell-preflight.json', {}))['passed'])
             report.need(evidence_schema.classification_complete(
                 {name: files[name] for name in ['profile-capability-shape.json', 'observer-failure-sites.json'] if name in files},
                 files.get('profile-observation.json', {}), files.get('profile-capability.json', {})))
@@ -168,7 +213,8 @@ def publish(root, index):
 
 def trial(source, control, root, index):
     report.need(sys.platform == 'win32' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
-    report.need(index in {1, 2, 3})
+    report.need(index == 1)
+    report.need(preflight_safe(report.read(root / 'safe/powershell-preflight.json'))['passed'])
     build = report.identity(source, control, root, True)
     report.need(all(build['hashes'].values()) and build.get('driverProvenance'))
     report.need(build['hashes']['builtExeSha256'] == build['hashes']['exeSha256'])
@@ -318,15 +364,17 @@ def trial(source, control, root, index):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('stage', choices=['identity', 'tools', 'trial', 'publish'])
+    parser.add_argument('stage', choices=['identity', 'tools', 'preflight', 'trial', 'publish'])
     for name in ['source', 'control', 'root']:
         parser.add_argument('--' + name, type=Path, required=True)
-    parser.add_argument('--trial', type=int, choices=[1, 2, 3])
+    parser.add_argument('--trial', type=int, choices=[1])
     args = parser.parse_args()
     try:
         paths = (args.source.resolve(), args.control.resolve(), args.root.resolve())
         if args.stage == 'trial':
             return trial(*paths, args.trial)
+        if args.stage == 'preflight':
+            return preflight(paths[1], paths[2])
         if args.stage == 'publish':
             return publish(paths[2], args.trial)
         report.identity(*paths, args.stage == 'tools')

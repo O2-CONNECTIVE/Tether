@@ -82,7 +82,7 @@ class EvidenceClassificationTests(unittest.TestCase):
             self.assertFalse(phase2.decision([0, 0, 0], reports(), valid(), capability(), data)['continue'])
 
     def test_publication_cannot_lose_required_classification_after_continue_was_computed(self):
-        from test_phase2 import identity
+        from test_phase2 import identity, synthetic_preflight
         import report
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -91,6 +91,7 @@ class EvidenceClassificationTests(unittest.TestCase):
                 [0, 0, 0], reports(), valid(), capability(), synthetic_classification())})
             report.write(root / 'safe/profile-observation.json', valid())
             report.write(root / 'safe/profile-capability.json', capability())
+            report.write(root / 'safe/powershell-preflight.json', synthetic_preflight())
             output = io.StringIO()
             with patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(root / 'summary.md')), contextlib.redirect_stdout(output), self.assertRaises(ValueError):
                 phase2.publish(root, 1)

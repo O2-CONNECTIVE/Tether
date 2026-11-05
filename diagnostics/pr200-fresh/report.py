@@ -32,7 +32,7 @@ SOURCE = 'c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da'
 TREE = 'e278496a55b4accc6caafa7a7a99538e5c8ceeca'
 
 
-CAP = 3
+CAP = 1
 
 
 EXE = 'evaluation-unpacked/RescueHostTauriUnwiredEvaluation/rescue-host-shell.exe'

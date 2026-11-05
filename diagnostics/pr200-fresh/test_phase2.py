@@ -32,6 +32,11 @@ def synthetic_classification():
                                       'saturated': False, 'truncated': False}}
 
 
+def synthetic_preflight():
+    return {'schema': 1, 'kind': 'synthetic-powershell-ledger', 'runtimeExecuted': True,
+            'checksExpected': 5, 'checksVerified': 5, 'exitCode': 0, 'passed': True, 'code': 'pass'}
+
+
 def reports():
     result = {'nativeTestsRun': 1, 'nativeTestsPassed': 1, 'normalCloseVerified': True,
         'cleanupStarted': True, 'cleanupFailures': 0, 'childHandleDisposeFailures': 0,
@@ -57,7 +62,7 @@ def identity():
     return {'schema': 1, 'diagnosticOnly': True, 'distribution': False, 'sourceCommit': report.SOURCE,
         'sourceTree': report.TREE, 'controlCommit': 'a' * 40, 'features': ['custom-protocol'],
         'profile': 'release', 'specimen': 'new-build-not-original-binary', 'requestDeadlineMs': 15000,
-        'trialCap': 3, 'originalFailure': {'run': 42037151371, 'job': 127278142941, 'attempt': 1},
+        'trialCap': report.CAP, 'originalFailure': {'run': 42037151371, 'job': 127278142941, 'attempt': 1},
         'hashes': {key: None for key in ['cargoLockSha256', 'packageLockSha256', 'toolPinsSha256',
             'supervisorSha256', 'builtExeSha256', 'exeSha256', 'archiveSha256']}}
 
@@ -120,6 +125,7 @@ class Phase2Tests(unittest.TestCase):
                 report.write(root / 'safe/observation' / name, value)
             report.write(root / 'safe/profile-observation.json', valid())
             report.write(root / 'safe/profile-capability.json', capability())
+            report.write(root / 'safe/powershell-preflight.json', synthetic_preflight())
             for name, value in synthetic_classification().items(): report.write(root / 'safe' / name, value)
             report.write(root / 'safe/trial.json', {'trial': 1, **phase2.decision([0, 0, 0], reports(), valid(), capability(), synthetic_classification())})
             summary = root / 'summary.md'; output = io.StringIO()
@@ -130,7 +136,7 @@ class Phase2Tests(unittest.TestCase):
             digest = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             self.assertEqual(lines[0], 'BEGIN_PR200_FRESH_RECORD sha256:' + digest)
             self.assertEqual(lines[-1], 'END_PR200_FRESH_RECORD')
-            self.assertEqual(len(record['files']), 13)
+            self.assertEqual(len(record['files']), 14)
             self.assertIn(output.getvalue(), summary.read_text())
             self.assertNotIn(str(root), output.getvalue())
             self.assertLess(len(summary.read_bytes()), 600000)
@@ -157,6 +163,8 @@ class Phase2Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); source = root / 'source'; control = root / 'control'
             report.write(source / 'ui/tauri/native-smoke/tools.json', {'driverExeSha256': 'a' * 64})
+            report.write(root / 'safe/powershell-preflight.json', {'schema': 1, 'kind': 'synthetic-powershell-ledger',
+                'runtimeExecuted': True, 'checksExpected': 5, 'checksVerified': 5, 'exitCode': 0, 'passed': True, 'code': 'pass'})
             (root / 'tools').mkdir()
             build = {'hashes': {key: 'a' * 64 for key in ['exeSha256', 'archiveSha256', 'builtExeSha256']},
                      'driverProvenance': {'binarySha256': 'a' * 64}}
