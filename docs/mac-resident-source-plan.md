@@ -1,9 +1,9 @@
 # Mac resident producerの公開source段階
 
-未統合#200/#201/#202/#203/#204/#205/#206/#207に依存する準備sourceです。
+未統合 #200 / #201 / #202 / #203 / #204 / #205 / #206 / #207 / #210 に依存する準備 source です。#208 / #209 の Windows 診断は別系統です。
 #200のWindows session-create阻害、stacked CI未実行、通常未接続を解除しません。
 
-## 実際の閉包と今回の切り出し
+## 開始時の閉包と段階的な切り出し
 
 固定producer sourceを全件manifest照合し、Go1.27.3のproduction file選択でDarwin arm64/cgoの依存を追いました。
 開始時の#203に対する比較は24package/91 production fileで、同一45・新規31・変更15でした。
@@ -29,7 +29,7 @@ protected policy・transport・具体的Sessionの終了証拠を揃えるまで
 この所有slotの完了と、実EOF/exact Child/IO/supervisor/outer joinの完了は別です。
 unknownでは同じOwnerを保持し、別ownerで回復したことにしません。
 
-## 後続の具体的な依存
+## source 段階で扱う具体的な依存
 
 1. resident wire/mapperとread-only owner observation。strict framing・revision/freshness・receipt/transition・unknownを保持し、架空のproduction ownerで代替しません。
 2. concrete worker/standby ownerとtransport/admissionのsource閉包。同じ所有者の停止、物理回収、unknown保持・禁止置換を、既存public security/authorizationへ対応付けます。
@@ -74,4 +74,12 @@ resident transport/policyを有効化せず、opaque receiver、protected source
 [今回の閉包](mac-resident-transport-policy.md)で、両側のcontrol、opaque receiver、同じwork登録・receipt、固定MCP操作、strict policy/source/workerを結びます。
 既存4 packageに17 implementation fileを限定登録し、通常cmd・resident起動・IPCは未接続です。
 正の接続試験は実相互proofと自己所有の合成fileを使って `NewWireRequest` までを確認し、`Approve` / `Run` や全native実行は未実証として分けます。
-具体的Standby、pipe codec/mapper/owner、startup/producer entryと配布・起動信頼は残ります。
+次の [Standby / owned pipe 組成](mac-resident-producer-composition.md) で具体的な source を接続し、sealed entrypoint と配布・起動信頼を残します。
+
+## Standby / owned pipe の具体的組成
+
+[今回の source 組成](mac-resident-producer-composition.md) は residentmac の4 fileとresidentpipeの5 fileです。
+#205 の source cleanup中のhost停止、#206 の元owner、#207 のfixed handoff、#210 のreceiver単回claimとstrict APIを保持します。
+run loopはpackage内部だけで、汎用loaderと任意protected-policy flagを受けるprivate commandは移しません。通常CLI / IPC / GUIや認証・権限は未接続です。
+source上の残件はsealed entrypoint、trusted native policy選定と配布・配置・verify-to-execの根拠です。
+sourceのcompileやcomponent回帰を実producer / GUI / authenticated work / native全回収の成功に読み替えません。

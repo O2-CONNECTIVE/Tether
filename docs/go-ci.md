@@ -19,7 +19,7 @@ package/fileの欠落や未知fileは引き続き失敗し、直前の境界か�
 fixed intentのSession／wire引継ぎも既存implementation file内の変更で、同じ43packageの厳密inventoryを維持します。
 [正規namespace・runtime期限](mac-fixed-intent-handoff.md)の追加回帰はmemory経路だけで、通常residentやnative権限を追加しません。
 resident transport/policy閉包では、既存4 packageへ17 implementation fileを厳密に追加します。
-現在は43 package、cgo有効時Linux341/Darwin342/Windows372 production fileです。
+transport / policy 段階は43 package、cgo有効時 Linux341 / Darwin342 / Windows372 production fileでした。
 旧39 roleの集合は不変、当該4 roleは列挙したfileだけを増やし、各file欠落と未知factoryを拒否します。
 正のpolicy入力試験はDarwin/cgoの自己所有fileだけをnative readerで読み、実鍵や運用設定・OS trustを使いません。
 詳しくは[境界と未実証](mac-resident-transport-policy.md)を参照してください。
@@ -272,3 +272,13 @@ Agent-only encrypted channel inventory: `internal/agentchannel` contains channel
 
 ### Local Access identity inspector
 `cmd/tether-access-identity/main.go` を全OS共通に登録します。公開issuer/AUD/JWKSを明示し、stdinのassertionを既存AccessVerifierで検証した後に限定claimsだけ出力するローカル登録補助です。認可・鍵発行・自動登録は行いません。試験は合成RSA/JWTとmemory inputのみ。詳細は [検証器手順](tether-access-identity.md) を参照してください。
+
+
+## Standby / owned pipe の source inventory
+
+現在は45 packageです。新しい residentmac は factory.go / standby.go / standby_types.go / wire.go、residentpipe は共通 codec.go / mapper.go / startup.go だけです。
+Darwin / cgo のときだけ owned_darwin.go / run_darwin.go を追加します。通常 CLI / command entrypoint は登録しません。
+cgo有効時は Linux348 / Darwin351 / Windows379 production file、Darwinでcgo無効なら349 fileです。他43 roleのfile集合は変えません。
+各新fileの欠落・未知launcher、package結果の欠落をhelperで拒否し、fixture / 実producer idle/startup / Rust integration / 評価TLSをproductionや標準試験へ混ぜません。
+source unit は自己所有pipe、専用の無害test child、checkout内の合成保護fileだけです。実producer / 実鍵 / 実policy / ON / 外部 / GUI / OS trustは使いません。
+strict vet / build と runtime unit、cross compile、実機の証拠を分けます。詳細は [source組成](mac-resident-producer-composition.md) を参照してください。

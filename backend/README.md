@@ -152,3 +152,8 @@ GOTOOLCHAIN=local GOPROXY=off GOWORK=off go test -race ./...
 
 [resident transport / protected policy閉包](../docs/mac-resident-transport-policy.md)は相互proof・opaque receiver・同世代receiptとstrict source/workerの準備sourceです。
 通常cmdやresident bindingは追加せず、Standby/producer・実GUI・配布と起動の信頼は未実証です。
+
+
+[Standby / owned pipe の準備source](../docs/mac-resident-producer-composition.md) を internal/residentmac と internal/residentpipe に置きます。
+既存の固定protected factory、opaque receiver、同じcommon owner / transportと元Closeを組成します。run loopは非公開で、新しいcmd / 通常CLI / IPC / 認証・権限は有効化しません。
+idle / memory / 自己所有pipeのsource回帰と、sealed producer entrypoint・trusted policy選定・配布信頼・実機の未実証を分けます。
