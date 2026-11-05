@@ -1,6 +1,7 @@
 // Diagnostic observer only. Preserve the request, response, parsed value and errors.
 import fs from 'node:fs';
 import path from 'node:path';
+import { classifyCapabilityShape, unobservedShape } from './capability-shape.mjs';
 
 export function installCapture({ target, responseType, profile, output, filesystem }) {
   const originalFetch = target.fetch;
@@ -11,6 +12,9 @@ export function installCapture({ target, responseType, profile, output, filesyst
   let requestedMatchesEnvironment = false;
   let requestedAbsentBeforeRequest = false;
   let captureFailed = false;
+  let shape = unobservedShape();
+  const failureSites = [];
+  const note = site => { if (!failureSites.includes(site)) failureSites.push(site); };
   const normalize = value => {
     if (typeof value !== 'string' || !/^[A-Za-z]:[\\/].+/.test(value) || /[\x00\r\n"*?<>|]/.test(value) || value.slice(2).includes(':')) return null;
     const normalized = value.replaceAll('/', '\\');
@@ -19,7 +23,14 @@ export function installCapture({ target, responseType, profile, output, filesyst
   };
   const save = record => {
     try { filesystem.writeFileSync(path.join(output, 'profile-capability.json'), JSON.stringify(record)); }
-    catch { captureFailed = true; }
+    catch { captureFailed = true; note('legacy-record-write'); }
+  };
+  const saveShape = () => {
+    try {
+      filesystem.writeFileSync(path.join(output, 'profile-capability-shape.json'), JSON.stringify({
+        schema: 1, requests, settlements, ...shape, failureSites: [...failureSites]
+      }));
+    } catch { note('shape-record-write'); }
   };
   target.fetch = async function (...args) {
     const isSession = args[0] === 'http://127.0.0.1:4444/session' && args[1]?.method === 'POST';
@@ -29,13 +40,14 @@ export function installCapture({ target, responseType, profile, output, filesyst
         const requested = JSON.parse(args[1].body).capabilities.alwaysMatch['tauri:options'].webviewOptions.userDataFolder;
         requestedMatchesEnvironment = normalize(profile) !== null && normalize(requested) === normalize(profile);
         requestedAbsentBeforeRequest = !filesystem.existsSync(profile);
-      } catch { captureFailed = true; }
+      } catch { captureFailed = true; note('request-extraction'); }
       save({ schema: 1, requests, settlements, requestedMatchesEnvironment, requestedAbsentBeforeRequest,
         capabilityObserved: false, capabilityMatchesRequested: false, capabilityMapping: 'unavailable', captureFailed });
+      saveShape();
     }
     // No added timeout, retry, endpoint, argument substitution, or response-body read.
     const response = await Reflect.apply(originalFetch, this, args);
-    if (isSession) { try { responses.add(response); } catch { captureFailed = true; } }
+    if (isSession) { try { responses.add(response); } catch { captureFailed = true; note('response-registration'); saveShape(); } }
     return response;
   };
   responseType.prototype.json = async function (...args) {
@@ -58,9 +70,12 @@ export function installCapture({ target, responseType, profile, output, filesyst
         if (capabilityObserved) capabilityMapping = capabilityMatchesRequested ? 'requested-root' :
           normalize(candidates[0]) === normalize(path.win32.join(profile, 'EBWebView')) ?
             'requested-child-ebwebview' : 'outside-requested-profile';
-      } catch { captureFailed = true; }
+      } catch { captureFailed = true; note('capability-classification'); }
+      try { shape = classifyCapabilityShape(value, normalize); }
+      catch { shape = { ...unobservedShape(), candidateClass: 'classification-error' }; note('shape-classification'); }
       save({ schema: 1, requests, settlements, requestedMatchesEnvironment, requestedAbsentBeforeRequest,
         capabilityObserved, capabilityMatchesRequested, capabilityMapping, captureFailed });
+      saveShape();
     }
     return value;
   };

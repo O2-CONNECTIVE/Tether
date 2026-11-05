@@ -11,6 +11,7 @@ import re
 
 import profile_contract
 import report
+import evidence_schema
 
 
 def profile_safe(value):
@@ -41,7 +42,7 @@ def capability_safe(value):
     return value
 
 
-def decision(exits, reports, profile, capability):
+def decision(exits, reports, profile, capability, diagnostics=None):
     native, reason = report.verdict(*exits, reports)
     required = set(report.FILES) - {'driver-startup-log-facts.json'}
     if exits[0] != 0:
@@ -49,11 +50,15 @@ def decision(exits, reports, profile, capability):
     complete = required <= set(reports)
     profile_ok = (native_profile_confirmed(reports.get('native-result.json', {})) and
                   profile_contract.capability_accepted(capability, profile))
-    continuation = reason == 'continue' and complete and profile_ok
+    classified = evidence_schema.classification_complete(diagnostics, profile, capability)
+    continuation = reason == 'continue' and complete and profile_ok and classified
     return {**native, 'evidenceComplete': complete, 'profileVerified': profile_ok,
+            'classificationComplete': classified,
             'continue': continuation, 'pr200Blocked': True,
             'stopReason': 'single-observation-complete-inconclusive' if continuation else
-                reason if reason != 'continue' else 'profile-or-required-evidence-unconfirmed',
+                reason if reason != 'continue' else
+                'classification-evidence-incomplete' if complete and profile_ok and not classified else
+                'profile-or-required-evidence-unconfirmed',
             'interpretation': 'reproduced-new-specimen' if native['matchingTimeout'] else 'inconclusive'}
 
 
@@ -100,11 +105,12 @@ def identity_safe(value):
 def trial_safe(value):
     numeric = {'trial', 'supervisorExit', 'inspectorExit', 'auditExit', 'observerExit', 'sessionElapsedMs'}
     flags = {'continue', 'pr200Blocked', 'matchingTimeout', 'sessionTimeoutSymptom', 'cleanupConfirmed',
-             'normalCloseVerified', 'evidenceComplete', 'profileVerified', 'commandFailed'}
+             'normalCloseVerified', 'evidenceComplete', 'profileVerified', 'commandFailed', 'classificationComplete'}
     words = {'interpretation', 'stopReason'}
     report.need(isinstance(value, dict) and set(value) <= numeric | flags | words | {'rejectedEvidenceFiles'})
     report.need({'trial', 'continue', 'pr200Blocked', 'interpretation', 'stopReason'} <= set(value))
     report.need(type(value['trial']) is int and value['trial'] in {1, 2, 3} and value['pr200Blocked'] is True)
+    report.need(value['continue'] is not True or value.get('classificationComplete') is True)
     for key, item in value.items():
         if key in numeric:
             report.need(item is None or type(item) is int and -1 <= item <= 1_000_000)
@@ -116,10 +122,11 @@ def trial_safe(value):
             report.need(item in {'prelaunch-boundary-failure', 'single-observation-complete-inconclusive',
                 'matching-session-timeout', 'cleanup-uncertain-or-failed', 'unexpected-failure',
                 'profile-or-required-evidence-unconfirmed', 'evidence-observer-or-byte-integrity-failure',
-                'wrapper-failure-or-prelaunch-unknown', 'observer-cleanup-uncertain'})
+                'wrapper-failure-or-prelaunch-unknown', 'observer-cleanup-uncertain', 'classification-evidence-incomplete'})
         elif key == 'rejectedEvidenceFiles':
-            report.need(isinstance(item, list) and len(item) <= 10 and
-                set(item) <= set(report.FILES) | {'profile-observation.json', 'profile-capability.json'})
+            report.need(isinstance(item, list) and len(item) <= 12 and
+                set(item) <= set(report.FILES) | {'profile-observation.json', 'profile-capability.json',
+                    'observer-failure-sites.json', 'profile-capability-shape.json'})
     return value
 
 
@@ -129,7 +136,9 @@ def publish(root, index):
     files = {}
     validators = {'build-identity.json': identity_safe, 'launch-build-identity.json': identity_safe,
                   'trial.json': trial_safe, 'profile-observation.json': profile_safe,
-                  'profile-capability.json': capability_safe}
+                  'profile-capability.json': capability_safe,
+                  'profile-capability-shape.json': evidence_schema.capability_shape_safe,
+                  'observer-failure-sites.json': evidence_schema.observer_sites_safe}
     validators.update({'observation/' + name: report.safe for name in report.FILES})
     for name, validator in validators.items():
         file = root / 'safe' / name
@@ -138,6 +147,10 @@ def publish(root, index):
     report.need('build-identity.json' in files)
     if 'trial.json' in files:
         report.need(files['trial.json']['trial'] == index)
+        if files['trial.json']['continue']:
+            report.need(evidence_schema.classification_complete(
+                {name: files[name] for name in ['profile-capability-shape.json', 'observer-failure-sites.json'] if name in files},
+                files.get('profile-observation.json', {}), files.get('profile-capability.json', {})))
     record = {'schema': 1, 'diagnosticOnly': True, 'trial': index,
               'files': files, 'fileSha256': {name: hashlib.sha256(json.dumps(value, sort_keys=True,
                   separators=(',', ':')).encode()).hexdigest() for name, value in files.items()}}
@@ -178,7 +191,7 @@ def trial(source, control, root, index):
     observer_exit = None
     command_failed = False
     result = {'trial': index, 'continue': False, 'pr200Blocked': True,
-              'interpretation': 'inconclusive', 'stopReason': 'prelaunch-boundary-failure'}
+              'interpretation': 'inconclusive', 'stopReason': 'prelaunch-boundary-failure', 'classificationComplete': False}
     report.write(root / 'safe/trial.json', result)
     observer_log = (private / 'observer.log').open('wb')
     try:
@@ -247,7 +260,16 @@ def trial(source, control, root, index):
             report.write(root / 'safe/profile-capability.json', capability)
         except Exception:
             rejected.append('profile-capability.json')
-        result = {'trial': index, **decision(exits, reports, profile, capability),
+        diagnostics = {}
+        for name, file, validator in [
+            ('profile-capability-shape.json', output / 'profile-capability-shape.json', evidence_schema.capability_shape_safe),
+            ('observer-failure-sites.json', private / 'observer-failure-sites.json', evidence_schema.observer_sites_safe)]:
+            try:
+                diagnostics[name] = validator(report.read(file))
+                report.write(root / 'safe' / name, diagnostics[name])
+            except Exception:
+                rejected.append(name)
+        result = {'trial': index, **decision(exits, reports, profile, capability, diagnostics),
                   'observerExit': observer_exit, 'rejectedEvidenceFiles': rejected,
                   'commandFailed': command_failed}
         stable = report.digest(root / report.EXE) == build['hashes']['exeSha256'] and report.digest(root / report.ARCHIVE) == build['hashes']['archiveSha256']
@@ -277,6 +299,15 @@ def trial(source, control, root, index):
                 report.write(root / 'safe/profile-observation.json', profile_safe(report.read(profile_path)))
             except Exception:
                 result['continue'] = False
+        for name, file, validator in [
+            ('profile-capability-shape.json', output / 'profile-capability-shape.json', evidence_schema.capability_shape_safe),
+            ('observer-failure-sites.json', private / 'observer-failure-sites.json', evidence_schema.observer_sites_safe)]:
+            if file.exists() and not (root / 'safe' / name).exists():
+                try:
+                    report.write(root / 'safe' / name, validator(report.read(file)))
+                except Exception:
+                    result['continue'] = False
+                    result['classificationComplete'] = False
         report.write(root / 'safe/trial.json', result)
         # Job output is emitted only after cleanup, observation and evidence validation.
         with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:

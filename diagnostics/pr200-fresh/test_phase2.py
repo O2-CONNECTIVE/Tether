@@ -23,6 +23,15 @@ def capability(mapping='requested-root'):
             'capabilityMapping': mapping, 'captureFailed': False}
 
 
+def synthetic_classification():
+    return {'profile-capability-shape.json': {'schema': 1, 'requests': 1, 'settlements': 1,
+        'envelopeShape': 'object', 'valueShape': 'object', 'capabilitiesShape': 'object',
+        'flatShape': 'missing', 'nestedContainerShape': 'object', 'nestedShape': 'string',
+        'candidateClass': 'candidate-valid-nested', 'failureSites': []},
+        'observer-failure-sites.json': {'schema': 1, 'failureCount': 0, 'sites': [],
+                                      'saturated': False, 'truncated': False}}
+
+
 def reports():
     result = {'nativeTestsRun': 1, 'nativeTestsPassed': 1, 'normalCloseVerified': True,
         'cleanupStarted': True, 'cleanupFailures': 0, 'childHandleDisposeFailures': 0,
@@ -56,16 +65,16 @@ def identity():
 class Phase2Tests(unittest.TestCase):
     def test_native_success_needs_all_profile_and_required_report_gates(self):
         data = reports()
-        self.assertTrue(phase2.decision([0, 0, 0], data, valid(), capability())['continue'])
-        self.assertFalse(phase2.decision([0, 0, 0], data, valid(), capability('requested-child-ebwebview'))['continue'])
+        self.assertTrue(phase2.decision([0, 0, 0], data, valid(), capability(), synthetic_classification())['continue'])
+        self.assertFalse(phase2.decision([0, 0, 0], data, valid(), capability('requested-child-ebwebview'), synthetic_classification())['continue'])
         for mutate in [lambda p: p.update(queryComplete=False), lambda p: p.update(allObservedWebviewsCovered=False),
                        lambda p: p['rows'][0].update(mapping='outside-requested-profile'),
                        lambda p: p['rows'][0].update(actualPathReparseFree=False)]:
             profile = valid(); mutate(profile)
-            self.assertFalse(phase2.decision([0, 0, 0], data, profile, capability())['continue'])
+            self.assertFalse(phase2.decision([0, 0, 0], data, profile, capability(), synthetic_classification())['continue'])
         for name in data:
             missing = dict(data); del missing[name]
-            self.assertFalse(phase2.decision([0, 0, 0], missing, valid(), capability())['continue'])
+            self.assertFalse(phase2.decision([0, 0, 0], missing, valid(), capability(), synthetic_classification())['continue'])
 
     def test_capability_and_process_mapping_cannot_contradict(self):
         for change in [{'requests': 2}, {'settlements': 0}, {'capabilityObserved': False},
@@ -79,25 +88,25 @@ class Phase2Tests(unittest.TestCase):
     def test_native_exact_collection_cannot_be_substituted_by_equal_observer_count(self):
         for key, value in [('profileMatch', False), ('profileMatch', None), ('handleIdentityVerified', False), ('creationKnown', False)]:
             data = reports(); data['native-result.json']['childCloseFacts']['rows'][0][key] = value
-            self.assertFalse(phase2.decision([0, 0, 0], data, valid(), capability())['continue'])
+            self.assertFalse(phase2.decision([0, 0, 0], data, valid(), capability(), synthetic_classification())['continue'])
         data = reports(); data['native-result.json']['childCloseFacts']['omittedRows'] = 1
-        self.assertFalse(phase2.decision([0, 0, 0], data, valid(), capability())['continue'])
+        self.assertFalse(phase2.decision([0, 0, 0], data, valid(), capability(), synthetic_classification())['continue'])
         data = reports(); del data['native-result.json']['childCloseFacts']
-        self.assertFalse(phase2.decision([0, 0, 0], data, valid(), capability())['continue'])
+        self.assertFalse(phase2.decision([0, 0, 0], data, valid(), capability(), synthetic_classification())['continue'])
         data = reports(); data['native-result.json']['childCloseFacts']['rows'][0]['profileMatch'] = False
         profile = valid(); profile['rows'][0]['mapping'] = 'requested-child-ebwebview'
-        self.assertFalse(phase2.decision([0, 0, 0], data, profile, capability('requested-child-ebwebview'))['continue'])
+        self.assertFalse(phase2.decision([0, 0, 0], data, profile, capability('requested-child-ebwebview'), synthetic_classification())['continue'])
 
     def test_cleanup_uncertainty_and_original_timeout_stay_red(self):
         data = reports(); data['cleanup-audit.json']['appRemaining'] = None
-        self.assertEqual(phase2.decision([0, 0, 0], data, valid(), capability())['stopReason'], 'cleanup-uncertain-or-failed')
+        self.assertEqual(phase2.decision([0, 0, 0], data, valid(), capability(), synthetic_classification())['stopReason'], 'cleanup-uncertain-or-failed')
         data = reports()
         data['native-observation.json'].update(status='failed', phase='session-create',
             errorCode='NATIVE_DRIVER_TIMEOUT', documentObservations=0, originClass='unobserved',
             titleClass='unobserved', lastRequest={'operation': 'create-session', 'outcome': 'timeout', 'elapsedMs': 15017})
         data['driver-stage-report.json'].update(requestStage='dropped-before-headers',
             observedStages=['session-received', 'forward-start', 'request-dropped'])
-        verdict = phase2.decision([1, 0, 0], data, {}, {})
+        verdict = phase2.decision([1, 0, 0], data, {}, {}, synthetic_classification())
         self.assertEqual(verdict['stopReason'], 'matching-session-timeout')
         self.assertTrue(verdict['matchingTimeout'])
         self.assertFalse(verdict['continue'])
@@ -111,7 +120,8 @@ class Phase2Tests(unittest.TestCase):
                 report.write(root / 'safe/observation' / name, value)
             report.write(root / 'safe/profile-observation.json', valid())
             report.write(root / 'safe/profile-capability.json', capability())
-            report.write(root / 'safe/trial.json', {'trial': 1, **phase2.decision([0, 0, 0], reports(), valid(), capability())})
+            for name, value in synthetic_classification().items(): report.write(root / 'safe' / name, value)
+            report.write(root / 'safe/trial.json', {'trial': 1, **phase2.decision([0, 0, 0], reports(), valid(), capability(), synthetic_classification())})
             summary = root / 'summary.md'; output = io.StringIO()
             with patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(summary)), contextlib.redirect_stdout(output):
                 self.assertEqual(phase2.publish(root, 1), 0)
@@ -120,7 +130,7 @@ class Phase2Tests(unittest.TestCase):
             digest = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             self.assertEqual(lines[0], 'BEGIN_PR200_FRESH_RECORD sha256:' + digest)
             self.assertEqual(lines[-1], 'END_PR200_FRESH_RECORD')
-            self.assertEqual(len(record['files']), 11)
+            self.assertEqual(len(record['files']), 13)
             self.assertIn(output.getvalue(), summary.read_text())
             self.assertNotIn(str(root), output.getvalue())
             self.assertLess(len(summary.read_bytes()), 600000)
@@ -158,6 +168,8 @@ class Phase2Tests(unittest.TestCase):
                     self.code = None
                     original_write(Path(args[args.index('-ReadyPath') + 1]), 'ready')
                     report.write(Path(args[args.index('-OutputPath') + 1]), valid())
+                    report.write(Path(args[args.index('-OutputPath') + 1]).parent / 'observer-failure-sites.json',
+                                 synthetic_classification()['observer-failure-sites.json'])
                 def poll(self): return self.code
                 def wait(self, **kwargs): self.code = 0; return 0
                 def kill(self): self.code = -1
@@ -169,6 +181,7 @@ class Phase2Tests(unittest.TestCase):
                     output = Path(args[args.index('-OutputDirectory') + 1])
                     for name, value in reports().items(): report.write(output / name, value)
                     report.write(output / 'profile-capability.json', capability())
+                    report.write(output / 'profile-capability-shape.json', synthetic_classification()['profile-capability-shape.json'])
                 return SimpleNamespace(returncode=0)
 
             def write(path, *args, **kwargs):
