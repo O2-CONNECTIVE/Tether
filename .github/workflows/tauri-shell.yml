@@ -16,6 +16,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  macos-input:
+    name: Mac input, default and bundled contexts without GUI
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    defaults:
+      run:
+        working-directory: ui/tauri
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+      - name: Build locked frontend without starting a viewer
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+      - name: Select official Rust on disposable runner
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
+      - name: Restore Mac compilation cache
+        id: mac-rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ui/tauri/src-tauri/target
+          key: tauri-mac-rust-1.99.1-${{ hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml') }}
+      - name: Fetch locked dependencies before offline checks
+        run: cargo +1.99.1 fetch --locked --manifest-path src-tauri/Cargo.toml
+      - name: Check both context variants and all owned anonymous pipe tests
+        run: |
+          cargo +1.99.1 fmt --manifest-path src-tauri/Cargo.toml --check
+          cargo +1.99.1 test --locked --offline --manifest-path src-tauri/Cargo.toml --lib
+          cargo +1.99.1 clippy --locked --offline --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo +1.99.1 build --locked --offline --manifest-path src-tauri/Cargo.toml
+          cargo +1.99.1 test --locked --offline --manifest-path src-tauri/Cargo.toml --features custom-protocol --lib
+          cargo +1.99.1 clippy --locked --offline --manifest-path src-tauri/Cargo.toml --features custom-protocol --all-targets -- -D warnings
+          cargo +1.99.1 build --locked --offline --manifest-path src-tauri/Cargo.toml --features custom-protocol
+      - name: Save Mac compilation cache
+        if: success() && steps.mac-rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ui/tauri/src-tauri/target
+          key: tauri-mac-rust-1.99.1-${{ hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml') }}
   windows-shell:
     runs-on: windows-2022
     timeout-minutes: 20
