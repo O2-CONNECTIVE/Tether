@@ -1,7 +1,7 @@
 name: SCM Session I/O prerequisite observation
 "on":
   push:
-    branches: ['verify/system-observation-go-path-fix-20261105']
+    branches: ['verify/system-observation-manifest-order-20261105']
 permissions:
   contents: read
 concurrency:
@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   observe-system-service:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/verify/system-observation-go-path-fix-20261105' && github.event.before == 'b58e2bc4a50ca2b44590ad8e4bcb1f2a1f608e13' && github.event.created == false && github.event.forced == false && github.run_attempt == 1
+    if: github.event_name == 'push' && github.ref == 'refs/heads/verify/system-observation-manifest-order-20261105' && github.event.before == 'cc2d5d3f39054cacfde5f02663f250d93528d191' && github.event.created == false && github.event.forced == false && github.run_attempt == 1
     runs-on: windows-2022
     timeout-minutes: 20
     defaults:
@@ -50,6 +50,20 @@ jobs:
           $env:GO = $goPath
           python build-bundle.py
           if ($LASTEXITCODE -ne 0) { throw 'Fixed source build failed; no setup.' }
+          # Restore the approved manifest bytes and their derived checksum entry.
+          @'
+          import hashlib, json
+          from pathlib import Path
+          path = Path('artifacts/manifest.json')
+          manifest = json.loads(path.read_bytes())
+          manifest['files'] = {name: manifest['files'][name] for name in sorted(manifest['files'])}
+          raw = (json.dumps(manifest, indent=2) + '\n').encode('utf-8')
+          path.write_bytes(raw)
+          checksums = dict(manifest['files'])
+          checksums['manifest.json'] = hashlib.sha256(raw).hexdigest()
+          (path.parent / 'SHA256SUMS').write_bytes(''.join(value + '  ' + name + '\n' for name, value in sorted(checksums.items())).encode('utf-8'))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Fixed manifest serialization failed; no setup.' }
           $digest = (Get-FileHash artifacts\manifest.json -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($digest -cne $env:EXPECTED_PACKET_SHA256) { throw 'Approved immutable packet differs; no setup or fallback.' }
           "packet_ready=true" >> $env:GITHUB_OUTPUT
