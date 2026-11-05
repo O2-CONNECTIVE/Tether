@@ -85,6 +85,7 @@ jobs:
               result = subprocess.run(command, cwd='backend', capture_output=True, text=True)
               row = {'phase': name, 'exit_code': result.returncode, 'runs': 0,
                      'passed': 0, 'failed': [], 'skipped': 0, 'observations': [],
+                     'package_passes': 0,
                      'stderr_present': bool(result.stderr), 'parse_error': False}
               if len(result.stdout.encode()) > 32 * 1024 * 1024:
                   row['parse_error'] = True
@@ -96,8 +97,9 @@ jobs:
                           if test and '/' not in test:
                               if action == 'run': row['runs'] += 1
                               elif action == 'pass': row['passed'] += 1
-                              elif action == 'fail': row['failed'].append(test)
-                              elif action == 'skip': row['skipped'] += 1
+                          if test and action == 'fail': row['failed'].append(test)
+                          if test and action == 'skip': row['skipped'] += 1
+                          if not test and action == 'pass': row['package_passes'] += 1
                           output = event.get('Output', '')
                           if '[DEBUG-journal-' in output:
                               marker = output.index('[DEBUG-journal-')
@@ -107,7 +109,8 @@ jobs:
                       row['parse_error'] = True
               row['passed_gate'] = (result.returncode == 0 and row['runs'] > 0
                   and row['runs'] == row['passed'] and not row['failed']
-                  and row['skipped'] == 0 and not row['parse_error'])
+                  and row['skipped'] == 0 and row['package_passes'] == 1
+                  and not row['parse_error'])
               phases.append(row)
               print(json.dumps(row, ensure_ascii=False), flush=True)
               (evidence / (name + '.json')).write_text(json.dumps(row, ensure_ascii=False))
