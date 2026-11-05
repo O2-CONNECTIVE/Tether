@@ -269,11 +269,15 @@ func newGrant(t *testing.T, clock *testClock) (*ephemeral.Issuer, *supervisor.Au
 
 // newEnv uses the private constructor only to replace wall-clock timers with
 // manually fired ones; the public New path has its own tests with real timers.
-func newEnv(t *testing.T, limits Limits) *env {
+func newEnv(t *testing.T, limits Limits, fixed ...*FixedStartConstraint) *env {
 	t.Helper()
 	e := &env{t: t, clock: &testClock{now: time.Date(2026, 10, 31, 1, 0, 0, 0, time.UTC)}, timers: &fakeTimers{}, runtime: newFakeRuntime()}
 	e.issuer, e.authority = newGrant(t, e.clock)
-	s, err := newSession(Config{Issuer: e.issuer, Authority: e.authority, Runtime: e.runtime, Clock: e.clock.Now, Limits: limits, CleanupTimeout: time.Second}, e.timers.after)
+	var constraint *FixedStartConstraint
+	if len(fixed) > 0 {
+		constraint = fixed[0]
+	}
+	s, err := newSession(Config{FixedStart: constraint, Issuer: e.issuer, Authority: e.authority, Runtime: e.runtime, Clock: e.clock.Now, Limits: limits, CleanupTimeout: time.Second}, e.timers.after)
 	if err != nil {
 		t.Fatal(err)
 	}

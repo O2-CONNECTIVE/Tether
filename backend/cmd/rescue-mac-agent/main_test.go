@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"reflect"
@@ -12,10 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"golang.org/x/crypto/ssh"
@@ -371,5 +374,185 @@ func TestEmptyCleanupDiagnosticDoesNotClaimFailure(t *testing.T) {
 	reportCleanupFailures(&b, &macagent.CleanupDiagnostics{})
 	if b.Len() != 0 {
 		t.Fatal("empty history emitted diagnostics")
+	}
+}
+
+func TestFixedCommandPilotCallerWiringAndGeneralUnchanged(t *testing.T) {
+	for _, mode := range []string{"-config", "-fixed-command-pilot-config"} {
+		t.Run(mode, func(t *testing.T) {
+			r := newRecorder(t, encode(t, macDoc(t)))
+			var diagnostic bytes.Buffer
+			code := execute(context.Background(), []string{mode, configPath}, &diagnostic, r.deps())
+			if code != 1 || r.trace() != "read load prepare approve client run client-close" {
+				t.Fatal(code, r.trace())
+			}
+			if mode == "-config" {
+				if r.prepared.FixedStart != nil {
+					t.Fatal("general mode narrowed")
+				}
+				return
+			}
+			f := r.prepared.FixedStart
+			want := "/usr/bin/printf 'TETHER_MCP_GUI_BEGIN\\n'; /bin/sleep 5; /usr/bin/printf 'TETHER_MCP_GUI_END\\n'"
+			if f == nil || f.RequestID != "tether-fixed-command-v1" || f.Command != want || f.TimeoutMillis != 15000 {
+				t.Fatal("pilot not wired")
+			}
+		})
+	}
+}
+func TestFixedCommandPilotRejectsUnknownOrOverrideArguments(t *testing.T) {
+	for _, args := range [][]string{{"-fixed-command-pilot", "x"}, {"-fixed-command-pilot-config", configPath, "-command", "x"}, {"-config", configPath, "-fixed-command-pilot-config"}, {"-fixed-command-pilot-config", configPath, "-yes"}} {
+		r := newRecorder(t, encode(t, macDoc(t)))
+		var out bytes.Buffer
+		if code := execute(context.Background(), args, &out, r.deps()); code != 2 || r.trace() != "" {
+			t.Fatal(code, r.trace())
+		}
+	}
+}
+
+func TestFinishRecordsRunObservationWithoutChangingCleanup(t *testing.T) {
+	r := newRecorder(t, nil)
+	r.session.run = func() error { return agenttransport.ErrRefused }
+	var diagnostic bytes.Buffer
+	code := finish(context.Background(), r.session, r.owner, &macagent.TerminalDisposition{}, time.Second, &diagnostic)
+	if code != 1 || r.trace() != "run client-close" {
+		t.Fatal("finish control changed")
+	}
+	if !strings.Contains(diagnostic.String(), "NATIVE_RUN_OBSERVATION category=registration_refused\n") {
+		t.Fatal("fixed Run observation missing")
+	}
+}
+
+type panicRunError struct{}
+
+func (panicRunError) Error() string { panic("Error must never be formatted") }
+
+func TestRunObservationFixedSentinelsOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want []string
+	}{
+		{"nil", nil, []string{"returned_nil"}},
+		{"refused", agenttransport.ErrRefused, []string{"registration_refused"}},
+		{"rejected", agentchannel.ErrRejected, []string{"channel_rejected"}},
+		{"protocol", agentwire.ErrProtocol, []string{"wire_protocol"}},
+		{"deadline", context.DeadlineExceeded, []string{"context_deadline"}},
+		{"canceled", context.Canceled, []string{"context_canceled"}},
+		{"peer", agentwire.ErrPeerLost, []string{"peer_end"}},
+		{"transport_closed", agenttransport.ErrClosed, []string{"closed"}},
+		{"channel_closed", agentchannel.ErrClosed, []string{"closed"}},
+		{"wire_closed", agentwire.ErrClosed, []string{"closed"}},
+		{"transport_config", agenttransport.ErrConfig, []string{"config"}},
+		{"channel_config", agentchannel.ErrConfig, []string{"config"}},
+		{"wire_config", agentwire.ErrUnconfigured, []string{"config"}},
+		{"transport_used", agenttransport.ErrUsed, []string{"already_used"}},
+		{"channel_used", agentchannel.ErrUsed, []string{"already_used"}},
+		{"wire_used", agentwire.ErrUsed, []string{"already_used"}},
+		{"transport_cleanup", agenttransport.ErrCleanupUnknown, []string{"run_cleanup_unknown"}},
+		{"channel_cleanup_alias", agentchannel.ErrCleanupUnknown, []string{"run_cleanup_unknown"}},
+		{"exec_cleanup", agentexec.ErrCleanupUnknown, []string{"run_cleanup_unknown"}},
+		{"sensitive", errors.New("https://secret.invalid/token private-key member command"), []string{"unknown"}},
+		{"panic_string", panicRunError{}, []string{"unknown"}},
+		{"joined", errors.Join(agentwire.ErrPeerLost, agentwire.ErrProtocol, agentexec.ErrCleanupUnknown, panicRunError{}), []string{"wire_protocol", "peer_end", "run_cleanup_unknown"}},
+		// No invented distinction: the reason is not an errors.Is sentinel.
+		{"heartbeat_unclassified", &agentchannel.Error{Reason: agentchannel.ReasonHeartbeat, Err: agentchannel.ErrClosed}, []string{"closed"}},
+		{"read_stall_unclassified", &agentchannel.Error{Reason: agentchannel.ReasonReadStall, Err: agentchannel.ErrClosed}, []string{"closed"}},
+		{"raw_eof_not_inferred", io.EOF, []string{"unknown"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runObservationCodes(tc.err); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("codes=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+func TestFinishRunObservationKeepsExistingDisposition(t *testing.T) {
+	for _, cancelOuter := range []bool{false, true} {
+		for _, closeFails := range []bool{false, true} {
+			t.Run(fmt.Sprintf("cancel_%t_close_failure_%t", cancelOuter, closeFails), func(t *testing.T) {
+				r := newRecorder(t, nil)
+				r.session.run = func() error { return errors.Join(agentwire.ErrPeerLost, agentexec.ErrCleanupUnknown, panicRunError{}) }
+				if closeFails {
+					r.session.closeErr = errors.New("sensitive cleanup text")
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if cancelOuter {
+					cancel()
+				}
+				var diagnostic bytes.Buffer
+				code := finish(ctx, r.session, r.owner, &macagent.TerminalDisposition{}, time.Second, &diagnostic)
+				want := 1
+				if cancelOuter && !closeFails {
+					want = 0
+				}
+				if code != want || r.trace() != "run client-close" {
+					t.Fatal("existing finish disposition changed")
+				}
+				out := diagnostic.String()
+				for _, s := range []string{"NATIVE_RUN_OBSERVATION category=peer_end\n", "NATIVE_RUN_OBSERVATION category=run_cleanup_unknown\n"} {
+					if strings.Count(out, s) != 1 {
+						t.Fatal("fixed observation missing or repeated")
+					}
+				}
+				if strings.Contains(out, "sensitive") {
+					t.Fatal("raw error leaked")
+				}
+				terminal := strings.Contains(out, "TERMINAL_CLEANUP_UNKNOWN")
+				if terminal != closeFails {
+					t.Fatal("Run history changed final cleanup classification")
+				}
+				if strings.Index(out, "NATIVE_RUN_OBSERVATION") < strings.Index(out, "\n") {
+					t.Fatal("observation emitted before cleanup report")
+				}
+			})
+		}
+	}
+}
+
+// Even a custom Is method is consulted only after the existing cleanup.
+type afterCleanupRunError struct{ check func() }
+
+func (e afterCleanupRunError) Error() string { panic("must not format") }
+func (e afterCleanupRunError) Is(error) bool { e.check(); return false }
+func TestFinishClassifiesOnlyAfterCleanup(t *testing.T) {
+	r := newRecorder(t, nil)
+	checked := false
+	r.session.run = func() error {
+		return afterCleanupRunError{check: func() {
+			checked = true
+			if r.trace() != "run client-close" {
+				t.Error("classification before cleanup")
+			}
+		}}
+	}
+	var diagnostic bytes.Buffer
+	if finish(context.Background(), r.session, r.owner, &macagent.TerminalDisposition{}, time.Second, &diagnostic) != 1 || !checked {
+		t.Fatal("classification or disposition missing")
+	}
+	if !strings.Contains(diagnostic.String(), "NATIVE_RUN_OBSERVATION category=unknown\n") {
+		t.Fatal("unknown observation missing")
+	}
+}
+
+func TestFinishChannelCleanupAliasIsObservedWithoutChangingFinalCleanup(t *testing.T) {
+	if agenttransport.ErrCleanupUnknown != agentchannel.ErrCleanupUnknown {
+		t.Fatal("transport cleanup alias contract changed")
+	}
+	r := newRecorder(t, nil)
+	r.session.run = func() error { return agentchannel.ErrCleanupUnknown }
+	var diagnostic bytes.Buffer
+	code := finish(context.Background(), r.session, r.owner, &macagent.TerminalDisposition{}, time.Second, &diagnostic)
+	if code != 1 || r.trace() != "run client-close" {
+		t.Fatal("finish disposition changed")
+	}
+	out := diagnostic.String()
+	if strings.Count(out, "NATIVE_RUN_OBSERVATION category=run_cleanup_unknown\n") != 1 {
+		t.Fatal("channel cleanup observation missing")
+	}
+	if strings.Contains(out, "TERMINAL_CLEANUP_UNKNOWN") {
+		t.Fatal("historical error changed successful final Close")
 	}
 }

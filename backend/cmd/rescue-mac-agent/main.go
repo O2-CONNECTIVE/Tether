@@ -18,10 +18,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"golang.org/x/crypto/ssh"
@@ -97,6 +99,11 @@ func main() {
 	os.Exit(execute(ctx, os.Args[1:], os.Stderr, nativeDeps()))
 }
 
+// This opt-in pilot narrows admission at the host, not merely at the client.
+// The protected config still supplies existing identity/paths, never command
+// bytes. This is not a new shell, sandbox, grant or noninteractive consent.
+const fixedPilotCommand = "/usr/bin/printf 'TETHER_MCP_GUI_BEGIN\\n'; /bin/sleep 5; /usr/bin/printf 'TETHER_MCP_GUI_END\\n'"
+
 // execute validates the whole document and loads the host key before
 // preparing anything. Only the local terminal approval creates a grant; the
 // same signer then proves the host to the gateway. Every exit after approval
@@ -104,7 +111,7 @@ func main() {
 // label, fingerprint, endpoint or key is printed.
 func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) int {
 	if ctx == nil || d.readTrust == nil || d.loadKey == nil || d.prepare == nil || d.newClient == nil || d.clock == nil ||
-		(len(args) != 2 && (len(args) != 3 || args[2] != "-status-stdout")) || args[0] != "-config" || args[1] == "" {
+		(len(args) != 2 && (len(args) != 3 || args[2] != "-status-stdout")) || (args[0] != "-config" && args[0] != "-fixed-command-pilot-config") || args[1] == "" {
 		report(diagnostic, "使い方: rescue-mac-agent -config <path>")
 		return 2
 	}
@@ -127,21 +134,30 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 	cancel()
 	if err != nil {
 		wipe(raw)
+		status.failSetup(setupConfig, "not_started")
 		report(diagnostic, "設定を読めませんでした")
 		return 2
 	}
 	cfg, err := parseLocalConfig(raw, args[1])
 	wipe(raw)
 	if err != nil {
+		status.failSetup(setupConfig, "not_started")
 		report(diagnostic, "設定が不正または不完全です")
 		return 2
 	}
+	status.update("loading_key", "not_started", false)
 	load, cancel := context.WithTimeout(ctx, readBudget)
 	signer, err := d.loadKey(load, cfg.hostKey)
 	cancel()
 	if err != nil || signer == nil || signer.PublicKey().Type() != ssh.KeyAlgoED25519 || ssh.FingerprintSHA256(signer.PublicKey()) != cfg.hostKey.Fingerprint {
+		status.failSetup(setupKey, "not_started")
 		report(diagnostic, "host鍵を取得できませんでした。承認を求めません")
 		return 2
+	}
+	status.update("preparing", "not_started", false)
+	var fixedStart *agentexec.FixedStartConstraint
+	if args[0] == "-fixed-command-pilot-config" {
+		fixedStart = &agentexec.FixedStartConstraint{RequestID: "tether-fixed-command-v1", Command: fixedPilotCommand, TimeoutMillis: 15000}
 	}
 	startDiagnostics := &macagent.StartDiagnostics{}
 	cleanupDiagnostics := &macagent.CleanupDiagnostics{}
@@ -149,11 +165,12 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 	defer func() { reportCleanupFailures(diagnostic, cleanupDiagnostics) }()
 	defer func() { reportStartFailure(diagnostic, startDiagnostics.Failure()) }()
 	pending, err := d.prepare(maclaunch.Config{
-		HostKey: signer, AllowedKeys: []ssh.PublicKey{cfg.allowed},
+		FixedStart: fixedStart, HostKey: signer, AllowedKeys: []ssh.PublicKey{cfg.allowed},
 		Runtime:  macagent.Config{WorkDir: cfg.workDir, Home: cfg.home, StartDiagnostics: startDiagnostics, CleanupDiagnostics: cleanupDiagnostics, TerminalDisposition: terminalDisposition},
 		Deadline: d.clock().Add(cfg.session), CleanupTimeout: cfg.cleanup, Budgets: agentgateway.ChannelBudgets(),
 	})
 	if err != nil || pending == nil {
+		status.failSetup(setupPreparation, "not_started")
 		report(diagnostic, "ローカル実行環境を準備できませんでした。承認を求めません")
 		return 2
 	}
@@ -161,6 +178,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 	status.update("awaiting_approval", "not_started", false)
 	owner, err := pending.ApproveLocal(ctx)
 	if err != nil || owner == nil {
+		approvalCleanupUnknown := setupCleanupUnknown(err)
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
 			report(diagnostic, "入力待ちの期限が切れました。未承認のまま終了し、接続しません")
@@ -178,11 +196,20 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 			err = errors.Join(err, closeErr)
 			if closeErr != nil {
 				terminalUnknown(owner, nil, terminalDisposition, cfg.cleanup, diagnostic, status)
+			} else if approvalCleanupUnknown {
+				status.unknown()
 			} else {
-				status.update("failed", "confirmed", true)
+				status.failSetup(setupApproval, "confirmed")
 			}
 		}
-		if errors.Is(err, agentexec.ErrCleanupUnknown) || errors.Is(err, agenttransport.ErrCleanupUnknown) {
+		if owner == nil {
+			if approvalCleanupUnknown {
+				status.unknown()
+			} else {
+				status.failSetup(setupApproval, "not_started")
+			}
+		}
+		if setupCleanupUnknown(err) {
 			report(diagnostic, "承認処理後の回収を確認できませんでした")
 		}
 		return 1
@@ -198,11 +225,17 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 			report(diagnostic, "承認済みsessionの回収を確認できませんでした")
 			terminalUnknown(owner, client, terminalDisposition, cfg.cleanup, diagnostic, status)
 		} else {
-			status.update("failed", "confirmed", true)
+			status.failSetup(setupConnection, "confirmed")
 		}
 		return 1
 	}
 	return finish(ctx, client, owner, terminalDisposition, cfg.cleanup, diagnostic, status)
+}
+
+// Classification only: retain uncertainty from any owned approval layer before
+// the first terminal display frame. It does not change cleanup control or errors.
+func setupCleanupUnknown(err error) bool {
+	return errors.Is(err, agentexec.ErrCleanupUnknown) || errors.Is(err, agenttransport.ErrCleanupUnknown) || errors.Is(err, agentchannel.ErrCleanupUnknown)
 }
 
 // closeApproved makes at most two finite attempts on the same partially
@@ -229,7 +262,12 @@ func finish(ctx context.Context, client session, owner agenttransport.Owner, ter
 	if len(feeds) > 0 {
 		status = feeds[0]
 	}
-	_ = client.Run(ctx)
+	runErr := client.Run(ctx)
+	defer func() {
+		for _, code := range runObservationCodes(runErr) {
+			report(diagnostic, "NATIVE_RUN_OBSERVATION category="+code)
+		}
+	}()
 	status.update("stopping", "pending", false)
 	cleanup, stop := context.WithTimeout(context.Background(), budget)
 	err := client.Close(cleanup)
@@ -288,4 +326,40 @@ func terminalUnknown(owner agenttransport.Owner, client session, terminal *macag
 	status.unknown()
 	report(diagnostic, "TERMINAL_CLEANUP_UNKNOWN")
 	report(diagnostic, "回収未確認のまま所有を終了します。関連プロセスが残っている可能性があります。成功扱いせず、この承認は再利用しません")
+}
+
+// runObservationCodes reports only existing sentinel membership, not a root
+// cause or the final cleanup result. Joined errors can match several entries.
+// In particular ErrPeerLost is joined for every completed wire Serve, and
+// heartbeat/read-stall reasons may already have been replaced upstream.
+// Never format err: its text may contain endpoint or credential material.
+func runObservationCodes(err error) []string {
+	if err == nil {
+		return []string{"returned_nil"}
+	}
+	checks := []struct {
+		code    string
+		matched bool
+	}{
+		{"registration_refused", errors.Is(err, agenttransport.ErrRefused)},
+		{"channel_rejected", errors.Is(err, agentchannel.ErrRejected)},
+		{"wire_protocol", errors.Is(err, agentwire.ErrProtocol)},
+		{"context_deadline", errors.Is(err, context.DeadlineExceeded)},
+		{"context_canceled", errors.Is(err, context.Canceled)},
+		{"peer_end", errors.Is(err, agentwire.ErrPeerLost)},
+		{"closed", errors.Is(err, agenttransport.ErrClosed) || errors.Is(err, agentchannel.ErrClosed) || errors.Is(err, agentwire.ErrClosed)},
+		{"config", errors.Is(err, agenttransport.ErrConfig) || errors.Is(err, agentchannel.ErrConfig) || errors.Is(err, agentwire.ErrUnconfigured)},
+		{"already_used", errors.Is(err, agenttransport.ErrUsed) || errors.Is(err, agentchannel.ErrUsed) || errors.Is(err, agentwire.ErrUsed)},
+		{"run_cleanup_unknown", errors.Is(err, agenttransport.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown)},
+	}
+	var codes []string
+	for _, check := range checks {
+		if check.matched {
+			codes = append(codes, check.code)
+		}
+	}
+	if len(codes) == 0 {
+		return []string{"unknown"}
+	}
+	return codes
 }

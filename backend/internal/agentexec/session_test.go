@@ -972,3 +972,154 @@ func TestElapsedCapRefusesStartEvenWhenTimerCallbackIsDelayed(t *testing.T) {
 		t.Fatal("elapsed cap admitted a start")
 	}
 }
+
+// Fixed-start tests use the real admission core and fake process only.
+func TestFixedStartExactAdmissionImmutableAndConcurrentReplay(t *testing.T) {
+	fixed := &FixedStartConstraint{RequestID: "fixed-v1", Command: "fixed bytes\n", TimeoutMillis: 15000}
+	e := newEnv(t, Limits{MaxCommands: 99}, fixed)
+	*fixed = FixedStartConstraint{RequestID: "mutated", Command: "other", TimeoutMillis: 1}
+	req := e.startReq("fixed-v1", "fixed bytes\n")
+	req.TimeoutMillis = 15000
+	for _, mutate := range []func(*StartRequest){
+		func(r *StartRequest) { r.RequestID = "other" },
+		func(r *StartRequest) { r.Command = []byte("other") },
+		func(r *StartRequest) { r.TimeoutMillis++ },
+	} {
+		wrong := req
+		mutate(&wrong)
+		if _, err := e.session.Start(wrong); !errors.Is(err, ErrPolicy) {
+			t.Fatalf("wrong admission %v", err)
+		}
+	}
+	if len(e.session.order) != 0 || e.session.limits.MaxCommands != 1 {
+		t.Fatal("refusal consumed slot or missing cap")
+	}
+	const n = 16
+	results := make(chan Status, n)
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); st, err := e.session.Start(req); results <- st; errs <- err }()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var id string
+	for st := range results {
+		if id == "" {
+			id = st.CommandID
+			e.track(st)
+		}
+		if st.CommandID != id {
+			t.Fatal("duplicate execution")
+		}
+	}
+	e.proc()
+	e.runtime.mu.Lock()
+	count := len(e.runtime.stdin)
+	payload := string(e.runtime.stdin[0])
+	e.runtime.mu.Unlock()
+	if count != 1 || payload != "fixed bytes\n" {
+		t.Fatal("runtime constraint mismatch")
+	}
+	req.Command = []byte("different")
+	if _, err := e.session.Start(req); !errors.Is(err, ErrRequestMismatch) {
+		t.Fatal(err)
+	}
+	wrong := e.ref("not-the-owned-command")
+	if _, err := e.session.Status(wrong); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := e.session.Cancel(wrong); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := e.session.Output(OutputRequest{Version: Version, Binding: wrong.Binding, CommandID: wrong.CommandID, MaxBytes: 10}); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := e.session.Cancel(e.ref(id)); err != nil {
+		t.Fatal(err)
+	}
+	final := e.await(id)
+	if final.Cleanup != CleanupConfirmed {
+		t.Fatal(final)
+	}
+	replay := req
+	replay.Command = []byte("fixed bytes\n")
+	if st, err := e.session.Start(replay); err != nil || st.CommandID != id || !st.Terminal {
+		t.Fatal(st, err)
+	}
+	replay.RequestID = "second"
+	if _, err := e.session.Start(replay); !errors.Is(err, ErrPolicy) {
+		t.Fatal(err)
+	}
+	if len(e.session.order) != 1 {
+		t.Fatal("extra admission")
+	}
+}
+func TestFixedStartRevocationAndBindingStillApply(t *testing.T) {
+	fixed := &FixedStartConstraint{RequestID: "fixed", Command: "fixed", TimeoutMillis: 15000}
+	e := newEnv(t, Limits{}, fixed)
+	req := e.startReq("fixed", "fixed")
+	req.TimeoutMillis = 15000
+	bad := req
+	bad.Binding.Generation++
+	if _, err := e.session.Start(bad); !errors.Is(err, ErrBinding) {
+		t.Fatal(err)
+	}
+	if err := e.session.Close(finite(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.session.Start(req); !errors.Is(err, ErrDenied) {
+		t.Fatal(err)
+	}
+	if len(e.session.order) != 0 {
+		t.Fatal("revoked admission")
+	}
+}
+func TestFixedStartValidationBeforeClaim(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 10, 31, 1, 0, 0, 0, time.UTC)}
+	issuer, authority := newGrant(t, clock)
+	defer issuer.Close()
+	cfg := Config{Issuer: issuer, Authority: authority, Runtime: newFakeRuntime(), Clock: clock.Now, CleanupTimeout: time.Second}
+	for _, f := range []FixedStartConstraint{{}, {RequestID: "bad id", Command: "x", TimeoutMillis: 1}, {RequestID: "ok", Command: "", TimeoutMillis: 1}, {RequestID: "ok", Command: "x", TimeoutMillis: 1800001}} {
+		cfg.FixedStart = &f
+		if s, err := New(cfg); s != nil || !errors.Is(err, ErrUnconfigured) {
+			t.Fatal(s, err)
+		}
+	}
+	cfg.FixedStart = &FixedStartConstraint{RequestID: "ok", Command: "xx", TimeoutMillis: 10}
+	cfg.Limits = Limits{MaxCommandBytes: 1}
+	if s, err := New(cfg); s != nil || !errors.Is(err, ErrUnconfigured) {
+		t.Fatal(s, err)
+	}
+	cfg.Limits = Limits{}
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(finite(t))
+	cfg.FixedStart.Command = "mutated"
+	if s.fixedStart.Command != "xx" || s.limits.MaxCommands != 1 {
+		t.Fatal("public New did not copy")
+	}
+}
+
+func TestFixedStartExpiredBeforeAdmission(t *testing.T) {
+	fixed := &FixedStartConstraint{RequestID: "fixed", Command: "fixed", TimeoutMillis: 15000}
+	e := newEnv(t, Limits{}, fixed)
+	req := e.startReq("fixed", "fixed")
+	req.TimeoutMillis = 15000
+	e.clock.Advance(2 * time.Hour)
+	if _, err := e.session.Start(req); !errors.Is(err, ErrDenied) {
+		t.Fatal(err)
+	}
+	if len(e.session.order) != 0 {
+		t.Fatal("expired admission")
+	}
+}

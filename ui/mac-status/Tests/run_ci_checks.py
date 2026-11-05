@@ -15,11 +15,20 @@ IMAGES = {
     "cleanup-unknown.png": (1120, 1400), "cleanup-unknown-dark.png": (1120, 1400),
     "terminal-closed.png": (1120, 1400), "not-started.png": (1120, 1400),
     "stale-narrow.png": (720, 1520), "large-text.png": (1120, 1800),
+    **{name + ".png": (1120, 1560) for name in (
+        "setup-config", "setup-key", "setup-preparing", "setup-approval",
+        "setup-connecting", "setup-config-error", "setup-key-error",
+        "setup-preparation-error", "setup-connection-error", "setup-approval-incomplete", "setup-eof")},
+    "setup-stale.png": (720, 1680),
 }
 STEPS = {
     "source": [
         ("build", ["xcrun", "swift", "build"], 180, None),
-        ("core", ["xcrun", "swift", "run", "StatusCoreChecks"], 60, b"CHECKS 21 FAILURES 0"),
+        ("core", ["xcrun", "swift", "run", "StatusCoreChecks"], 60, b"CHECKS 26 FAILURES 0"),
+        ("pilot-output-runner", ["python3", "-m", "unittest", "discover", "-s", "Tests",
+                                  "-p", "test_pilot_output_runner.py", "-v"], 30, b"Ran 2 tests"),
+        ("pilot-output", ["python3", "-I", "Tests/check_pilot_output.py"],
+         180, b"PILOT_OUTPUT_CHECKS 9 FAILURES 0"),
         ("package-tests", ["python3", "-m", "unittest", "discover", "-s", "Tests",
                            "-p", "test_packaging.py", "-v"], 60, b"Ran 10 tests"),
         ("package", ["python3", "scripts/package_local.py"], 30,
@@ -32,6 +41,8 @@ STEPS = {
         ("bundle-fixture", [".build/local-evaluation/Tether Status.app/Contents/MacOS/TetherStatus",
                             "--check-own-window-fixture"], 15, b"OWN_BUNDLE_WINDOW_PASS"),
         ("render", [".build/debug/TetherStatus", "--render-fixtures"], 30, None),
+        ("pilot-lifecycle", ["python3", "-I", "Tests/check_pilot_lifecycle.py"],
+         150, b"PILOT_LIFECYCLE_CHECKS 13 FAILURES 0"),
     ],
 }
 

@@ -12,6 +12,7 @@ NODE_FILES = (
     "deploy/cloudflare/probe/worker.test.mjs",
     "deploy/cloudflare/native/worker.test.mjs",
     "deploy/cloudflare/discovery/worker.test.mjs",
+    "deploy/cloudflare/native/bounded-pilot.test.mjs",
 )
 MAX_OUTPUT = 8 * 1024 * 1024
 

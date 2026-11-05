@@ -81,3 +81,25 @@ gate未設定・不一致・probe gate/binding名での全拒否と閉gate時の
 2026-10-31 coordinator検証：Node 21/21 pass（probeと合わせ40件）。独立reviewのraw path正規化指摘に対し、観測できるraw pathと解析済pathの一致を必須化し、dot-segment回帰をred→greenで確認しました。EdgeがWorkerへ渡す前に既に正規化した部分まで観測できるとは主張しません。実Access path境界は別途検証します。
 
 本体CLIのFileConfigはCallTimeoutを設定しないためGo既定30秒で、Worker35秒以内です。将来このcompositionを変更する場合は両方の期限契約を再検証します。pilotのMac grantは最大5分（初回実演は60秒）に限定。匿名registration4slotの枯渇による可用性リスクは残り、WAF設定等を未承認で追加しません。
+
+## Opt-in bounded pilot entry (source only)
+
+`bounded-pilot.mjs` reuses `createNativeWorker(rt)`; it does not change the default entry or authenticate callers. A deployment must explicitly select this new entry. It adds no route, credentials or grant authority.
+
+In addition to the existing exact native gate and VPC binding, both `TETHER_NATIVE_STARTS` and `TETHER_NATIVE_EXPIRES` must be **13-digit decimal strings** in Unix milliseconds, with end > start and a window no larger than 300000 ms. Missing, malformed, unknown gate, early or expired settings reject. The only forwarded paths remain `/mcp` and `/tether-agent/v1/register`, with the original method/header/protocol/authentication boundaries.
+
+A Worker isolate fixes the first admitted window. Changing that window, observing a backwards/invalid clock, or reaching its expiry timer irreversibly closes that isolate's owned pilot work. Reconfiguration is not renewal. At most 32 active request/relay scopes are retained; an early-closed relay may conservatively occupy its scope until the original expiry.
+
+The absolute expiry timer cancels owned HTTP deadlines and closes both owned relay legs. Native body/upstream/upgrade/relay timers are capped by the remaining window. Checks before and after upstream awaits, before publishing the final response, and on each relay message/send prevent stale responses and queued frames from being forwarded after observed expiry. Late upgrade responses are accepted only to close; late HTTP bodies are canceled, not exposed. A caller-selected URL or global fetch is never introduced.
+
+These are application-level bounds, not a real-time OS kill guarantee: event-loop suspension, provider scheduling and network close propagation can delay cleanup. A separate owned watchdog must close the public gate and stop the exact newly started gateway independently of deployment wait. Never reuse a historical container ID or infer Mac grant cleanup from gateway/Worker closure. Mac authority and same-owner cleanup remain separate, and unknown is not success.
+
+Fake validation (no network, keys, real Worker or deployment):
+
+```sh
+node --test deploy/cloudflare/native/bounded-pilot.test.mjs deploy/cloudflare/native/worker.test.mjs
+```
+
+The tests inject clocks, timers, bindings and sockets, including expiry during body read/fetch/upgrade, late results, clock rollback, already-open relays, invalid windows and scope exhaustion. Real Cloudflare deployment, timing, OAuth and Mac operation remain separate acceptance steps. No actual STARTS/EXPIRES values or deployment commands are supplied here.
+
+The wrapper pins only the time window, not VPC binding identity. Deployment must independently keep the reviewed binding target fixed. Gate changes are not guaranteed to reach existing sockets in other isolates immediately; the absolute window and independent owned stop remain required.

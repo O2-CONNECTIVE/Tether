@@ -372,3 +372,45 @@ func TestApprovalFailureCategoriesDoNotCreateAuthority(t *testing.T) {
 		})
 	}
 }
+
+func TestFixedStartSurvivesPrepareConsentAndSession(t *testing.T) {
+	cfg := config(t)
+	cfg.FixedStart = &agentexec.FixedStartConstraint{RequestID: "fixed", Command: "fixed", TimeoutMillis: 15000}
+	r := &neverRuntime{}
+	p, err := prepare(cfg, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.FixedStart.Command = "changed before consent"
+	tty := &terminal{reply: p.phrase + "\n"}
+	a, err := p.approve(context.Background(), tty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close(contextWithDeadline(t))
+	if !strings.Contains(tty.output.String(), "固定コマンド試験") || !strings.Contains(tty.output.String(), "NO ISOLATION") {
+		t.Fatal("missing narrowing/risk disclosure")
+	}
+	req := agentexec.StartRequest{Version: agentexec.Version, Binding: a.session.Binding(), Mode: agentexec.ModeFull, RequestID: "fixed", Command: []byte("changed before consent"), TimeoutMillis: 15000}
+	if _, err = a.session.Start(req); !errors.Is(err, agentexec.ErrPolicy) {
+		t.Fatal(err)
+	}
+	req.Command = []byte("fixed")
+	st, err := a.session.Start(req)
+	if err != nil || st.CommandID == "" {
+		t.Fatal(st, err)
+	}
+}
+func TestFixedStartInvalidBeforeProposal(t *testing.T) {
+	cfg := config(t)
+	cfg.FixedStart = &agentexec.FixedStartConstraint{}
+	if p, err := prepare(cfg, &neverRuntime{}); p != nil || !errors.Is(err, ErrConfig) {
+		t.Fatal(p, err)
+	}
+}
+func contextWithDeadline(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}

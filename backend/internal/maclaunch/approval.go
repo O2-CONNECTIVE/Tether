@@ -44,6 +44,7 @@ type Config struct {
 	Deadline       time.Time
 	CleanupTimeout time.Duration
 	Budgets        agentchannel.Budgets
+	FixedStart     *agentexec.FixedStartConstraint
 }
 
 // Pending has no granted Authority. It cannot be serialized or resumed. Any
@@ -64,6 +65,7 @@ type Pending struct {
 	phrase        string
 	preparedAt    time.Time
 	initialBudget time.Duration
+	fixedStart    *agentexec.FixedStartConstraint
 	clock         func() time.Time
 }
 
@@ -82,6 +84,14 @@ func Prepare(cfg Config) (*Pending, error) {
 
 func prepare(cfg Config, runtime agentexec.ProfiledRuntime) (*Pending, error) {
 	now := time.Now()
+	var fixed *agentexec.FixedStartConstraint
+	if cfg.FixedStart != nil {
+		copied := *cfg.FixedStart
+		if copied.Validate() != nil {
+			return nil, ErrConfig
+		}
+		fixed = &copied
+	}
 	if runtime == nil || runtime.AgentProfile() != agentexec.ProfileMacCurrentUser || cfg.HostKey == nil || !now.Add(time.Second).Before(cfg.Deadline) || cfg.Deadline.Sub(now) > agentchannel.MaxClientLifetime || cfg.CleanupTimeout <= 0 || cfg.CleanupTimeout > time.Minute {
 		return nil, ErrConfig
 	}
@@ -118,7 +128,7 @@ func prepare(cfg Config, runtime agentexec.ProfiledRuntime) (*Pending, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256([]byte(challenge.Binding().Identity.LaunchID))
-	return &Pending{issuer: issuer, challenge: challenge, hostKey: cfg.HostKey, hostPublic: host[0], keys: keys, runtime: runtime, runtimeConfig: cfg.Runtime, deadline: cfg.Deadline, cleanup: cfg.CleanupTimeout, budgets: b, phrase: fmt.Sprintf("approve %x", sum[:8]), clock: time.Now, preparedAt: now, initialBudget: cfg.Deadline.Sub(now)}, nil
+	return &Pending{fixedStart: fixed, issuer: issuer, challenge: challenge, hostKey: cfg.HostKey, hostPublic: host[0], keys: keys, runtime: runtime, runtimeConfig: cfg.Runtime, deadline: cfg.Deadline, cleanup: cfg.CleanupTimeout, budgets: b, phrase: fmt.Sprintf("approve %x", sum[:8]), clock: time.Now, preparedAt: now, initialBudget: cfg.Deadline.Sub(now)}, nil
 }
 
 func (p *Pending) take() error {
@@ -186,6 +196,10 @@ func (p *Pending) confirm(ctx context.Context, tty io.ReadWriter) (approved *App
 	var text strings.Builder
 	fmt.Fprintf(&text, "\nTether | この Mac の一時操作を承認\n【入力待ち】確認文字列を入力して Enter（表示時点で残り %d 秒）\n\n", seconds)
 	fmt.Fprintln(&text, "承認すると、下の Client 鍵の保持者が現在のユーザーとして任意コマンドを実行できます。昇格なし。")
+	if p.fixedStart != nil {
+		fmt.Fprintln(&text, "固定コマンド試験: この作業承認ではローカルで固定した request ID・command・timeout の1件だけを受け付けます。")
+		fmt.Fprintln(&text, "これはAPI受付の制約であり、実行ユーザーの権限縮小やsandboxではありません。")
+	}
 	fmt.Fprintln(&text, "NO ISOLATION（隔離なし）: ファイル・鍵・ネットワーク等（current user's resources）にアクセス可能。")
 	fmt.Fprintln(&text, "作業フォルダも隔離領域ではありません。期限・通信断で失効し、所有プロセス群と入出力を回収。")
 	fmt.Fprintln(&text, "実行済みの変更は元に戻せず、切り離された子孫プロセスは回収されない場合があります。")
@@ -231,7 +245,7 @@ func (p *Pending) confirm(ctx context.Context, tty io.ReadWriter) (approved *App
 	if err != nil {
 		return nil, errors.Join(ErrDenied, err)
 	}
-	session, err := agentexec.New(agentexec.Config{ElapsedDeadline: p.preparedAt.Add(p.initialBudget), Issuer: p.issuer, Authority: authority, Runtime: p.runtime, Clock: p.clock, CleanupTimeout: p.cleanup})
+	session, err := agentexec.New(agentexec.Config{FixedStart: p.fixedStart, ElapsedDeadline: p.preparedAt.Add(p.initialBudget), Issuer: p.issuer, Authority: authority, Runtime: p.runtime, Clock: p.clock, CleanupTimeout: p.cleanup})
 	if err != nil {
 		return nil, err
 	}
