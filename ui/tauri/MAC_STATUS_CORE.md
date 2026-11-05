@@ -2,7 +2,9 @@
 
 Tauri共通画面へ向けた第2段の **source候補** です。共通presentation outputとMac status入力を混同しません。`src-tauri/src/mac_status` は固定公開commit `050e48f90e8182e15f7c2ac6374ac45bc6b7097a` のSwift `ui/mac-status/Sources/StatusCore/Status.swift` のDecoder / FeedState / Snapshotを参照し、PipeReaderのread chunk処理だけをメモリmodelにしています。Swift source・既存GUIは変更しません。
 
-このmoduleはnative pipe、clock、Tauri command、React表示へ**未配線**です。起動、fd所有、signal、read thread、join、実行許可、IPC、再接続、viewerやagentの起動は追加しません。既存shellの未接続・開始停止不可は不変です。
+この文書が扱うDecoder、FeedState、Snapshot、Framingはpureな入力検証層です。
+fd所有、native clock、read threadとjoinの内部前提は、後続の[Mac状態入力の読取前提](MAC_STATUS_INPUT.md)へ分けています。
+通常起動とTauri commandへのnative入力は未配線で、既存shellの未接続と開始停止不可を維持します。
 
 ## 固定入力契約
 
@@ -16,7 +18,11 @@ Tauri共通画面へ向けた第2段の **source候補** です。共通presenta
 
 wireにgeneration fieldはありません。新FeedState instanceが新しいfeedの所有境界で、reset/reconnect APIはありません。seqは増加必須（gap可）、terminal後のframeとreplayはsequence fault。decode/clock/stale等のfail後はingestを不可逆に拒否します。
 
-呼出元は同じcontinuous clock秒値を渡す契約です。将来の実adapterにはsleepを含むclockが必要ですが、ここではfake時刻のみです。ingest時の非有限・rollback・未来source・source rollbackを拒否し、source age **3秒以下はfresh（3秒ちょうどを含む）**。snapshot queryはreceived/sourceより前ならfreshにしません。queryのstale表示だけではpoisonせず、同じfeedの新鮮な次frameは受け取れる点もSwiftと同じです。
+呼出元は同じcontinuous clock秒値を渡す契約です。
+このpure層の試験はfake時刻を渡し、sleepを含むnative clockは別の入力前提層で扱います。
+ingest時の非有限、rollback、未来source、source rollbackを拒否し、source age **3秒以下はfresh（3秒ちょうどを含む）**とします。
+snapshot queryはreceived/sourceより前ならfreshにしません。
+queryのstale表示だけではpoisonせず、同じfeedの新鮮な次frameは受け取れる点もSwiftと同じです。
 
 残時間deadlineはsource+remaining_msで作り、既存deadlineとのminだけを採用。nullでも既存deadlineを消さず、期限を延長しません。残秒はceil、期限超過は0、非fresh時は値なしです。
 
@@ -28,7 +34,10 @@ sticky terminal-cleanup-unknown、retained terminal、source EOF、freshnessは�
 
 `push_read` はpositiveかつ4096 bytes以下のread結果専用です。空/過大chunkはcaller contract違反としてRead fault、EOFは別操作。これは新wire ruleではありません。OS poll/EINTR/EAGAIN、fd flags・close所有、実読取rate、reader join・実メモリ使用量はこのmodelから証明しません。
 
-## 閉じたgoldenと検証の限界
+## 閉じたgoldenと初段候補の検証記録
+
+以下の実行結果と未実行項目は、このpure層を準備した当時の記録です。
+後続の入力前提層の検証は、その固定候補headの記録で別に判定します。
 
 `src-tauri/tests/fixtures/mac_status_golden.tsv` は156行の固定入力・期待値です。期待値はRustから生成せず、契約から独立に記述しました。hex入力はduplicate・不正UTF-8も正規化せず保持します。`mac_status_reference.swift` は変更していないSwift Decoder/FeedStateを同じfixtureに通すpure実行harnessです。Rust `golden_tests.rs` は同じ期待値を比較するsourceで、自己生成した出力を正解にはしません。
 
