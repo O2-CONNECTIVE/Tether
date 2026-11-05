@@ -1,0 +1,33 @@
+{
+  "runtime_workflow_sha256": "bd0249cc95d3efe6825d0a2bfa4a481d80357e8b24bd1788a6a6c1ce308f23bd",
+  "blocks": [
+    {
+      "name": "Validate fresh platform, frozen source and exact approved packet",
+      "text": "$ErrorActionPreference = 'Stop'\nif ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or -not [Environment]::Is64BitProcess -or\n    [Environment]::OSVersion.Version.Build -ne 20348 -or\n    [IO.DriveInfo]::new('C:\\').DriveFormat -cne 'NTFS' -or\n    $env:EXPECTED_PACKET_SHA256 -cnotmatch '^[0-9a-f]{64}$') { throw 'Fixed fresh-platform/packet prerequisite not met.' }\n$env:GO = (Get-Command go -CommandType Application).Source\npython build-bundle.py\nif ($LASTEXITCODE -ne 0) { throw 'Fixed source build failed; no setup.' }\n$digest = (Get-FileHash artifacts\\manifest.json -Algorithm SHA256).Hash.ToLowerInvariant()\nif ($digest -cne $env:EXPECTED_PACKET_SHA256) { throw 'Approved immutable packet differs; no setup or fallback.' }\n\"packet_ready=true\" >> $env:GITHUB_OUTPUT\nWrite-Output 'Fixed source and packet verified. No Windows service created.'\n"
+    },
+    {
+      "name": "Parse controller and compile declarations without invoking setup",
+      "text": "./check-setup-source.ps1"
+    },
+    {
+      "name": "Prepare only the approved new observation service",
+      "text": "powershell.exe -NoProfile -File artifacts\\Invoke-ProtectionProbe.ps1 -Phase Prepare -ExpectedPacketSha256 $env:EXPECTED_PACKET_SHA256 *> \"$env:RUNNER_TEMP\\system-observation-prepare.private.log\"\nif ($LASTEXITCODE -ne 0) { throw 'Prepare failed; partial state retained, no retry.' }\n\"prepared=true\" >> $env:GITHUB_OUTPUT\nWrite-Output 'Prepared one owned stopped service; no start yet.'\n"
+    },
+    {
+      "name": "Consume and run once, preserving controller output privately",
+      "text": "powershell.exe -NoProfile -File artifacts\\Invoke-ProtectionProbe.ps1 -Phase Run -ExpectedPacketSha256 $env:EXPECTED_PACKET_SHA256 *> \"$env:RUNNER_TEMP\\system-observation-run.private.log\"\nif ($LASTEXITCODE -ne 0) { throw 'Run/exit unconfirmed; no retry or kill.' }\nWrite-Output 'Original process exit receipt recorded; capture success not implied.'\n"
+    },
+    {
+      "name": "Collect only receipt-proved owned resources",
+      "text": "powershell.exe -NoProfile -File artifacts\\Invoke-ProtectionProbe.ps1 -Phase Cleanup -ExpectedPacketSha256 $env:EXPECTED_PACKET_SHA256 *> \"$env:RUNNER_TEMP\\system-observation-cleanup.private.log\"\nif ($LASTEXITCODE -ne 0) { throw 'Cleanup unconfirmed; retain failure and disposable VM containment.' }\n\"collected=true\" >> $env:GITHUB_OUTPUT\nWrite-Output 'Owned registration/files collected; private evidence remains only in this VM.'\n"
+    },
+    {
+      "name": "Emit bounded anonymous observations only",
+      "text": "$evidenceRoot = 'C:\\ProgramData\\RescueSessionIOPrereq-20261104-evidence'\n$exitProof = [IO.File]::ReadAllText((Join-Path $evidenceRoot 'exit.json')) | ConvertFrom-Json\nif ($exitProof.consumed -isnot [bool] -or $exitProof.consumed -ne $true -or\n    $exitProof.processExitConfirmed -isnot [bool] -or $exitProof.processExitConfirmed -ne $true -or\n    $exitProof.proof.processExitCode -ne 0 -or $exitProof.proof.serviceWin32Exit -ne 0 -or\n    $exitProof.proof.serviceSpecificExit -ne 0 -or\n    $exitProof.proof.binding.manifestSha256 -cne $env:EXPECTED_PACKET_SHA256 -or\n    $exitProof.proof.binding.service -cne 'RescueSessionIOPrereq-20261104') { throw 'Original process/service exit did not confirm observation persistence.' }\n$rawPath = Join-Path $evidenceRoot 'subject.json'\nif ((Get-Item -LiteralPath $rawPath).Length -gt 262144) { throw 'Private report exceeds bound.' }\n$raw = [IO.File]::ReadAllText($rawPath, [Text.UTF8Encoding]::new($false, $true))\n$public = $raw | & .\\artifacts\\scm-token-observer.exe --summary 2>$null\n$summaryExit = $LASTEXITCODE\n$publicText = $public -join \"`n\"\nif ([Text.Encoding]::UTF8.GetByteCount($publicText) -gt 65536) { throw 'Public summary exceeds bound.' }\n$summary = $publicText | ConvertFrom-Json\nif ($summary.report_sha256 -cne $exitProof.reportSha256 -or\n    $summary.native_acceptance -cne 'NOT_EVALUATED' -or $summary.product_gate -cne 'CLOSED') { throw 'Original report digest/scope mismatch; no observation publication.' }\nif ($public) { Write-Output $public; Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $public -Encoding UTF8 }\nif ($summaryExit -ne 0) { throw 'Incomplete observation; native acceptance NOT_EVALUATED and gate CLOSED.' }\n"
+    },
+    {
+      "name": "Preserve honest outcome without exporting raw artifacts",
+      "text": "Write-Output 'No raw report, SID/SDDL/LUID/PID, private controller log, binary artifact or cache is uploaded.'\nWrite-Output 'Provider VM disposal is containment, never physical-stop or protected-native acceptance.'\n"
+    }
+  ]
+}

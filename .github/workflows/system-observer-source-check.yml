@@ -1,0 +1,21 @@
+name: SYSTEM observer noninvoking source checks
+"on":
+  push:
+    branches: ['verify/system-observation-sourcecheck-20261105']
+permissions:
+  contents: read
+concurrency:
+  group: system-observer-sourcecheck-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows-sourcecheck:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Parse fixed controller and workflow blocks, compile declarations only
+        shell: powershell
+        run: ./tools/scm-observer-sourcecheck/verify-source-only.ps1
