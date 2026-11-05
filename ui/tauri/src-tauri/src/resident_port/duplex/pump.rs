@@ -59,15 +59,12 @@ impl Pump {
     ) -> Result<bool, ()> {
         shared.sample(now)?;
         self.check_partial(now)?;
-        if self
-            .line_started
-            .is_some_and(|start| now < start || now - start >= 1000)
-            || (!shared.closure.requested()
-                && (shared.tracking.failed
-                    || shared
-                        .waiting
-                        .as_ref()
-                        .is_some_and(|(_, _, until)| now >= *until)))
+        if !shared.closure.requested()
+            && (shared.tracking.failed
+                || shared
+                    .waiting
+                    .as_ref()
+                    .is_some_and(|(_, _, until)| now >= *until))
         {
             return Err(());
         }
