@@ -25,6 +25,7 @@
 | 承認と実行 | [command契約](agent-command-contract.md) / [CLI](agent-cli.md) / [runtime](mac-agent-runtime.md) | Mac本人のfresh同意がgrant発行元。gateway/adapterは発行・延長しない |
 | 保護入力 | [鍵loader](agent-key-loader.md) / [Linux loader](agent-key-loader-linux.md) | 設定・鍵のowner/権限/同一性を検査。実登録とsource試験は別 |
 | 状態表示 | [SwiftUI viewer](../ui/mac-status/README.md) | 専用pipeのみ、読取専用。生成時刻で鮮度を判定、EOFや画面閉鎖は回収証拠でない |
+| 常駐待機のsource候補 | [最小待機入口](tether-resident-standby.md) | 許可0・接続なし。自動起動・実grant workerは未接続 |
 | 配置 | [専用deployment設定](../deploy/cloudflare/README.md) | 配置手順は実行許可ではない。新しい認証・route・公開窓は別途確認 |
 
 Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読める情報・変更できる状態へ届きます。同一ユーザーによる干渉、既実行の副作用、群を離れた子孫は残るリスクです。terminal cleanup unknownは警告・非成功・再開不可で、正常回収へ読み替えません。
