@@ -29,7 +29,7 @@ func (o *Owner) WaitSource(host, source context.Context, requests <-chan *Reques
 		cancel()
 		cleanup, stop := context.WithTimeout(context.Background(), o.budget)
 		defer stop()
-		if seal {
+		if seal || host.Err() != nil {
 			return o.Stop(cleanup)
 		}
 		if last == nil {
@@ -40,7 +40,13 @@ func (o *Owner) WaitSource(host, source context.Context, requests <-chan *Reques
 		// joins are confirmed. A stale request therefore already finished; it must
 		// not stop or mark a newer source's request unknown.
 		if errors.Is(err, ErrRejected) {
-			return nil
+			err = nil
+		}
+		// Host cancellation may arrive during the source-only cleanup wait.
+		// Seal the same Owner using the original cleanup context: no renewed
+		// budget, replacement, or retry of the original Close.
+		if host.Err() != nil {
+			return errors.Join(err, o.Stop(cleanup))
 		}
 		return err
 	}

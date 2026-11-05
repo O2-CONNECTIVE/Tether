@@ -32,8 +32,12 @@ unknown後も呼出側は同じOwnerとnative資源を保持し、別Ownerへの
 
 ## 検証範囲
 
-5つの元試験fileはメモリ内Session・channel・goroutineだけのsource試験です。
+5つの元試験fileと追加回帰はメモリ内Session・channel・goroutineだけのsource試験です。
 取得・Run・Closeを意図的に止める負例でも、同じfixtureを解放して元cleanupを観測します。
 資源なしのunknown記録とClose失敗の記録は保持されることを検査し、偽のnative成功へ読み替えません。
 実producer、鍵/policy、host、GUI、配布やpublisher identityは未検証です。
 全体の残る依存は[段階計画](../../../docs/mac-resident-source-plan.md)に記載します。
+
+追加回帰はsource切断/EOFのcleanup待機中にhost取消を重ねます。
+host取消を待機後にも再確認し、元cleanup contextの残り予算で同じOwnerのStopへ移ります。
+予算を延長せず、確認済みとunknownの両方でadmissionを閉じ、元Closeを重複実行しないことを検査します。

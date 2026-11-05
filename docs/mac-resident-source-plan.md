@@ -19,8 +19,9 @@ GoCIは当該1 production fileを厳密に列挙し、未知file/fixture/native 
 ## 次段のworker owner閉包
 
 続いて[`internal/workerowner`](../backend/internal/workerowner/README.md)をpackage全体で移します。
-3 production fileと5つの元試験fileで、取得・Run・Close、RunOnceの元cleanup予算、source切断とhost停止を同じownerへ結びます。
-標準library以外の依存はなく、元試験はメモリ内fixtureだけです。
+3 production fileと5つの元試験file・追加回帰で、取得・Run・Close、RunOnceの元cleanup予算、source切断とhost停止を同じownerへ結びます。
+標準library以外の依存はなく、試験はメモリ内fixtureだけです。
+source cleanup中のhost取消の再確認漏れを追加負例で再現し、元予算内の同じOwner.Stopへ移す最小差分を含みます。
 wire/mapperは具体的Standby、policy/transportは既存public APIの追加差分を必要とするため、今回はその代わりの汎用portや架空ownerを作りません。
 
 後続の具体的接続先はmaclaunchのresident worker adapterとresidentmac.Standbyです。
