@@ -1,0 +1,51 @@
+name: Windows Go executable resolution diagnosis
+"on":
+  push:
+    branches: ['verify/go-path-diagnosis-20261105']
+permissions:
+  contents: read
+jobs:
+  reproduce-go-child-launch:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOENV: 'off'
+      GOFLAGS: '-mod=readonly'
+      GOEXPERIMENT: ''
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.3'
+          architecture: x64
+          cache: false
+      - name: Reproduce original Go selection and Python launch only
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $found = @(Get-Command go -CommandType Application)
+          [ordered]@{ prefix = '[DEBUG-go-path-a1]'; command_count = $found.Count; sources = @($found | ForEach-Object { $_.Source }) } | ConvertTo-Json -Compress
+          $env:GO = (Get-Command go -CommandType Application).Source
+          @'
+          import os, json, subprocess, sys
+          go = os.environ.get('GO', 'go')
+          print(json.dumps({'prefix':'[DEBUG-go-path-a1]', 'go':go, 'is_file':os.path.isfile(go)}), flush=True)
+          env = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off', GOFLAGS='-mod=readonly', GOEXPERIMENT='', GOOS='windows', GOARCH='amd64', GOAMD64='v1', CGO_ENABLED='0')
+          results = []
+          for i in range(3):
+              try:
+                  output = subprocess.check_output([go, 'version'], env=env, text=True)
+                  results.append({'attempt':i+1, 'ok':output.startswith('go version go1.27.3 '), 'version':output.strip()})
+              except OSError as error:
+                  results.append({'attempt':i+1, 'ok':False, 'kind':type(error).__name__, 'winerror':error.winerror, 'errno':error.errno})
+          print(json.dumps({'prefix':'[DEBUG-go-path-a1]', 'results':results}), flush=True)
+          sys.exit(0 if all(r['ok'] for r in results) else 1)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Original Go executable selection cannot launch the Python child; no service operations.' }
