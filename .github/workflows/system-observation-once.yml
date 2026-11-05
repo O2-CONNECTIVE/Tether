@@ -1,7 +1,7 @@
 name: SCM Session I/O prerequisite observation
 "on":
   push:
-    branches: ['verify/system-observation-once-20261105']
+    branches: ['verify/system-observation-go-path-fix-20261105']
 permissions:
   contents: read
 concurrency:
@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   observe-system-service:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/verify/system-observation-once-20261105' && github.event.before == '40a2d5887a2dd1d363c120a765991168fef18c06' && github.event.created == false && github.event.forced == false && github.run_attempt == 1
+    if: github.event_name == 'push' && github.ref == 'refs/heads/verify/system-observation-go-path-fix-20261105' && github.event.before == 'b58e2bc4a50ca2b44590ad8e4bcb1f2a1f608e13' && github.event.created == false && github.event.forced == false && github.run_attempt == 1
     runs-on: windows-2022
     timeout-minutes: 20
     defaults:
@@ -45,7 +45,9 @@ jobs:
               [Environment]::OSVersion.Version.Build -ne 20348 -or
               [IO.DriveInfo]::new('C:\').DriveFormat -cne 'NTFS' -or
               $env:EXPECTED_PACKET_SHA256 -cnotmatch '^[0-9a-f]{64}$') { throw 'Fixed fresh-platform/packet prerequisite not met.' }
-          $env:GO = (Get-Command go -CommandType Application).Source
+          $goPath = (Get-Command go -CommandType Application | Select-Object -First 1).Source
+          if (-not (Test-Path -LiteralPath $goPath -PathType Leaf)) { throw 'Selected Go executable is missing; no setup.' }
+          $env:GO = $goPath
           python build-bundle.py
           if ($LASTEXITCODE -ne 0) { throw 'Fixed source build failed; no setup.' }
           $digest = (Get-FileHash artifacts\manifest.json -Algorithm SHA256).Hash.ToLowerInvariant()
