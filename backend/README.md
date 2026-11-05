@@ -149,3 +149,6 @@ GOTOOLCHAIN=local GOPROXY=off GOWORK=off go test -race ./...
 
 [fixed intentの引継ぎ](../docs/mac-fixed-intent-handoff.md)は既存Session／wire内で正規namespaceと有限runtime期限を保ちます。
 元timer・取消・単回ownerを維持し、通常resident／認証や実producerは未接続です。
+
+[resident transport / protected policy閉包](../docs/mac-resident-transport-policy.md)は相互proof・opaque receiver・同世代receiptとstrict source/workerの準備sourceです。
+通常cmdやresident bindingは追加せず、Standby/producer・実GUI・配布と起動の信頼は未実証です。

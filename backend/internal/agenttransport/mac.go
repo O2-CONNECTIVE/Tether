@@ -37,6 +37,7 @@ type ClientConfig struct {
 	PrincipalLabel string
 	HostKey        ssh.Signer
 	Budgets        Budgets
+	ResidentIntent *ResidentFixedIntent
 }
 
 // Client registers one approved owner once. It never reconnects, retries
@@ -47,6 +48,7 @@ type Client struct {
 	signer                    ssh.Signer
 	public                    ssh.PublicKey
 	dispatch                  agentgateway.Dispatch
+	resident                  *ResidentFixedIntent
 	owner                     Owner
 	budgets                   Budgets
 	clock                     func() time.Time
@@ -87,9 +89,17 @@ func NewClient(cfg ClientConfig, owner Owner) (*Client, error) {
 	if !bytes.Equal(d.HostKey, public.Marshal()) || checkDispatch(d, time.Now()) != nil {
 		return nil, ErrConfig
 	}
+	var intent *ResidentFixedIntent
+	if cfg.ResidentIntent != nil {
+		i := *cfg.ResidentIntent
+		if i.OriginalContext() == nil || i.OriginalContext().Err() != nil || i.Receiver() == nil || i.Endpoint() != cfg.Endpoint || i.HostLabel() != cfg.HostLabel || i.PrincipalLabel() != cfg.PrincipalLabel || i.HostKeyFingerprint() != ssh.FingerprintSHA256(public) || d.Deadline.After(i.Deadline()) {
+			return nil, ErrConfig
+		}
+		intent = &i
+	}
 	return &Client{
 		endpoint: cfg.Endpoint, host: cfg.HostLabel, principal: cfg.PrincipalLabel, signer: cfg.HostKey, public: public,
-		dispatch: d, owner: owner, budgets: cfg.Budgets, clock: time.Now, transport: nativeTransport, finished: make(chan struct{}),
+		dispatch: d, resident: intent, owner: owner, budgets: cfg.Budgets, clock: time.Now, transport: nativeTransport, finished: make(chan struct{}),
 	}, nil
 }
 
@@ -188,11 +198,19 @@ func (c *Client) register(ctx context.Context, ws *websocket.Conn) error {
 	if err != nil {
 		return err
 	}
-	sig, err := sign(c.signer, c.public, transcript(c.endpoint, c.host, c.principal, c.dispatch, nonce))
+	data := transcript(c.endpoint, c.host, c.principal, c.dispatch, nonce)
+	if c.resident != nil {
+		data = workTranscript(c.endpoint, c.host, c.principal, c.dispatch, nonce, c.resident.workBinding())
+	}
+	sig, err := sign(c.signer, c.public, data)
 	if err != nil {
 		return err
 	}
-	if err := ws.Write(ctx, websocket.MessageText, encodeRegister(c.host, c.principal, c.dispatch, sig)); err != nil {
+	msg = encodeRegister(c.host, c.principal, c.dispatch, sig)
+	if c.resident != nil {
+		msg = encodeWorkRegister(c.host, c.principal, c.dispatch, sig, c.resident.workBinding())
+	}
+	if err := ws.Write(ctx, websocket.MessageText, msg); err != nil {
 		return ErrRefused
 	}
 	typ, msg, err = ws.Read(ctx)

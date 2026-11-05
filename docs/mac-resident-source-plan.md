@@ -1,6 +1,6 @@
 # Mac resident producerの公開source段階
 
-未統合#200/#201/#202/#203/#204/#205/#206に依存する準備sourceです。
+未統合#200/#201/#202/#203/#204/#205/#206/#207に依存する準備sourceです。
 #200のWindows session-create阻害、stacked CI未実行、通常未接続を解除しません。
 
 ## 実際の閉包と今回の切り出し
@@ -68,3 +68,10 @@ resident transport/policyを有効化せず、opaque receiver、protected source
 [既存Session／wireの次段](mac-fixed-intent-handoff.md)では、正規adapterのnamespaceと固定内容、有限runtime deadlineを同じSessionへ渡します。
 元のclaim・replay・timer／cancel ownerを維持し、新しい認証や通常resident入口は追加しません。
 具体的resident transport／opaque receiver／work registration、protected policy／source／worker、Standby／wire／producer組成と配置信頼は未接続です。
+
+## transport / opaque receiver / policy の結合
+
+[今回の閉包](mac-resident-transport-policy.md)で、両側のcontrol、opaque receiver、同じwork登録・receipt、固定MCP操作、strict policy/source/workerを結びます。
+既存4 packageに17 implementation fileを限定登録し、通常cmd・resident起動・IPCは未接続です。
+正の接続試験は実相互proofと自己所有の合成fileを使って `NewWireRequest` までを確認し、`Approve` / `Run` や全native実行は未実証として分けます。
+具体的Standby、pipe codec/mapper/owner、startup/producer entryと配布・起動信頼は残ります。

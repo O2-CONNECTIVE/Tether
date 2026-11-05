@@ -112,9 +112,9 @@ reparse・remote・非NTFS/ReFS・非fixed driveの拒否、祖先・親・鍵�
 - `ssh.ParseRawPrivateKey`は入力bytesを自分で再解析するため、上記とは別の、このpackageが管理しない秘密鍵の複製（PEM decodeの結果等）を作り得ます。これらは参照できず、消去しません（library内部はこの担当の確認範囲外で、source照合もしていません）。成功時に返す`ssh.Signer`の秘密鍵も、process寿命の間memoryに残ります。Go runtimeによるcopy・GC前の残存も消去の対象外です。
 - 主体の確認に失敗したthreadは、lockしたままgoroutineを終了させ、runtimeに破棄させます（他の処理へ再利用させません）。
 
-## 試験の範囲（fake検証済み、実機未実行）
+## 試験の範囲（fake と自己所有file fixture）
 
-試験はmemory上のfake kernel（handleはobjectへ束縛、名前は別に差し替え可能）と、公開されたRFC 8032 TEST 1の合成test vectorだけを使います。
+agentkeys packageのunit試験はmemory上のfake kernel（handleはobjectへ束縛、名前は別に差し替え可能）と、公開されたRFC 8032 TEST 1の合成test vectorだけを使います。
 実file、実鍵、account列挙、native API、ACL変更、listener、networkは使いません。
 
 - 正常：Darwin相当とWindows相当の既定layoutで同じaccountの鍵を読み、固定fingerprintと署名を確認。全handleの逆順close、buffer消去
@@ -127,7 +127,7 @@ reparse・remote・非NTFS/ReFS・非fixed driveの拒否、祖先・親・鍵�
 - 鍵形式：前後の余分なtext・改行・空白、複数PEM block、CRLF、PEM header、暗号化・KDF、2鍵、outer/inner公開鍵とseedの不一致、check値、padding、非Ed25519、fingerprint不一致、期限切れ
 - path：両形式の正規化、`..`、空要素、制御文字、Windowsの末尾`.`/空白・ADS・予約device名（上付き`COM¹²³`・`LPT¹²³`を含み、kernelを作る前に拒否）
 
-Darwin/Windowsの実native APIはtestから呼びません。共通mapping（`posixState`、`windowsState`、`windowsGrants`）をfake検証します。Linuxは`native_linux.go`をin-memory syscall tableで実行し、実procfs/file APIを呼ばずに実装経路を検証します。
+上記のagentkeys unit試験はDarwin/Windowsの実native APIを呼びません。共通mapping（`posixState`、`windowsState`、`windowsGrants`）をfake検証します。Linuxは`native_linux.go`をin-memory syscall tableで実行し、実procfs/file APIを呼ばずに実装経路を検証します。
 Darwin・Windowsのcompile成功も、ACL・identityの実保護の証明ではありません。
 
 ## 実機で未確認の事実（compileやfake試験で代替できないもの）
@@ -157,4 +157,12 @@ GoCIには共通7fileとOS別native1fileを登録済み。両CLIと保護設定�
 
 `ReadTrustConfig(ctx, path)` は同じ owner/親ディレクトリ/ACL/同一 handle/close 確認で、明示したローカル設定を最大 16 KiB 読みます。issuer/sub/host pin は公開値でも改変されると認可が変わるため、秘密鍵と同じ保守的な private-file 保護を要求します（group/other への読取り・書込み、Darwin の拡張 ACL、信頼しない主体への Windows の allow ACE はすべて拒否）。全 handle の close と主体の再確認の後にも期限を確認し、期限切れなら buffer を消去して nil と `ErrDenied` を返します。JSON schema の厳格検証は各 CLI が行い、返却 buffer は使用後に消去します。これは公開設定の実内容を assistant に表示する許可ではありません。
 
-Darwin API の source 照合（2026-10-31）: Apple の [acl_file.c](https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c) と [filesec.c](https://github.com/apple-oss-distributions/Libc/blob/main/gen/filesec.c) では、ACL property がない場合に ENOENT を設定する経路を確認しました。[acl_get_entry(3)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/acl_get_entry.3.html) は正常 0、列挙終端の EINVAL を記載しています。実 Mac 上での ACL API の動作・実配置は依然未実行です。
+Darwin API の source 照合（2026-10-31）: Apple の [acl_file.c](https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c) と [filesec.c](https://github.com/apple-oss-distributions/Libc/blob/main/gen/filesec.c) では、ACL property がない場合に ENOENT を設定する経路を確認しました。[acl_get_entry(3)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/acl_get_entry.3.html) は正常 0、列挙終端の EINVAL を記載しています。運用配置・実enrollment・異常ACLや変更競合を含む実Mac適合は未実行です。
+
+## resident入力の限定file fixture
+
+resident transportのDarwin/cgo入力試験は、checkout内に試験自身が作る合成policyと固定seedのkey vectorを、このnative readerで読みます。
+実相互proofからstrict policy入力へ進むための限定試験で、既存key/policyや運用配置を読まず、ACL/CA/OS trustを変更しません。
+全handleの検査・同一性・close条件を維持し、fixtureは削除します。
+この一つの自己所有fixtureの成功を、実enrollment、全ACLケース、署名済み配布/配置元、実native実行の成功に広げません。
+運用対象のowner/ACL照会と変更には、上記の対象・範囲を固定した別承認が必要です。

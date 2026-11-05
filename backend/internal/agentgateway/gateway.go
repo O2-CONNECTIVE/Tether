@@ -85,12 +85,14 @@ type principal struct {
 // route is one approved grant reachable through one authenticated channel.
 // Its binding never changes; a new approval is a new route.
 type route struct {
-	owner   *principal
-	binding agentchannel.Binding
-	channel *agentchannel.Channel
-	client  *agentwire.Client
-	slots   chan struct{}
-	ended   chan struct{} // closed once the route is no longer routable
+	owner       *principal
+	binding     agentchannel.Binding
+	channel     *agentchannel.Channel
+	client      *agentwire.Client
+	slots       chan struct{}
+	ended       chan struct{} // closed once the route is no longer routable
+	cleanupDone chan struct{}
+	cleanupErr  error
 }
 
 type session struct {
@@ -98,6 +100,7 @@ type session struct {
 	route    *route // immutable; nil means permanently discovery-only
 	mcp      *mcpadapter.HTTPSession
 	lastUsed time.Time
+	resident *residentSession
 }
 
 // Gateway holds every mapping in memory only.
@@ -126,6 +129,7 @@ type Gateway struct {
 	joinOnce    sync.Once
 	joined      chan struct{}
 	retry       *cleanupAttempt
+	resident    *residentSetup
 }
 
 // New validates the configuration. It opens nothing and listens nowhere.
@@ -207,11 +211,16 @@ func validLabel(s string) bool {
 // closes the supplied stream; it never resumes the Mac approval.
 // The gateway never issues or extends a grant.
 func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
+	_, e := g.connect(label, d, conn)
+	return e
+}
+
+func (g *Gateway) connect(label string, d Dispatch, conn net.Conn) (*route, error) {
 	if g == nil || conn == nil {
 		if conn != nil {
 			_ = conn.Close()
 		}
-		return ErrConfig
+		return nil, ErrConfig
 	}
 	launch := d.Binding.Grant.Identity.LaunchID
 	g.mu.Lock()
@@ -233,7 +242,7 @@ func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
 	g.mu.Unlock()
 	if refusal != nil {
 		_ = conn.Close()
-		return refusal
+		return nil, refusal
 	}
 	defer g.watchers.Done() // includes failed/late acquisition and retire
 	r, err := g.open(p, d, conn)
@@ -241,18 +250,18 @@ func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
 	p.connecting = false
 	if err != nil {
 		g.mu.Unlock()
-		return err
+		return nil, err
 	}
 	if g.closed {
 		g.mu.Unlock()
 		g.retire(r)
-		return ErrClosed
+		return r, ErrClosed
 	}
 	p.route = r
 	g.watchers.Add(1)
 	g.mu.Unlock()
 	go g.watch(r)
-	return nil
+	return r, nil
 }
 
 func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) {
@@ -284,7 +293,7 @@ func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) 
 	}
 	return &route{
 		owner: p, binding: d.Binding, channel: ch, client: client, slots: make(chan struct{}, mcpadapter.MaxConcurrent),
-		ended: make(chan struct{}),
+		ended: make(chan struct{}), cleanupDone: make(chan struct{}),
 	}, nil
 }
 
@@ -326,7 +335,8 @@ func (g *Gateway) retire(r *route) {
 	g.mu.Unlock()
 	close(r.ended)
 	_ = r.client.Close()
-	_ = g.closeChannel(r.channel)
+	r.cleanupErr = g.closeChannel(r.channel)
+	close(r.cleanupDone)
 }
 
 // Close refuses further work, ends every session and route (the remote hosts
