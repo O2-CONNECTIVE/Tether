@@ -10,6 +10,13 @@ mod mac_status;
 )]
 mod resident_port;
 
+#[cfg(target_os = "macos")]
+#[allow(
+    dead_code,
+    reason = "outer resident owner awaits trusted launch and GUI binding"
+)]
+mod standby_lifecycle;
+
 #[cfg(any(test, feature = "startup-diagnostics"))]
 #[allow(dead_code, reason = "startup diagnostics are an opt-in test variant")]
 mod startup_diagnostics;

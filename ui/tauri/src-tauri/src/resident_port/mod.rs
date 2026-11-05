@@ -1,4 +1,4 @@
 //! Internal resident wire/IO ownership; no port, launch factory or IPC is installed.
-mod duplex;
+pub(crate) mod duplex;
 mod model;
 mod observation;
