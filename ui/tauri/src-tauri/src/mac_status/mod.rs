@@ -11,6 +11,8 @@ mod golden_tests;
 
 mod continuous_clock;
 #[cfg(target_os = "macos")]
+pub(crate) use continuous_clock::ContinuousClock;
+#[cfg(target_os = "macos")]
 mod native_input;
 #[cfg(target_os = "macos")]
 mod producer_owner;

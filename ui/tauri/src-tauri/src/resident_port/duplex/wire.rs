@@ -1,7 +1,7 @@
 //! Strict local process wire. Parsing is not producer authentication.
-use super::super::model::{Receipt, SAFE_INTEGER};
+use super::super::model::{IntentRequest, Receipt, SAFE_INTEGER};
 use super::super::observation::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 pub(super) const MAX_LINE: usize = 4095; // Plus exactly one LF: 4096-byte frame.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
@@ -131,4 +131,26 @@ impl Event {
             _ => Err(()),
         }
     }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Command<'a> {
+    protocol_version: u8,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request: &'a IntentRequest,
+}
+pub(super) fn encode(request: &IntentRequest) -> Result<Vec<u8>, ()> {
+    request.validate().map_err(|_| ())?;
+    let mut bytes = serde_json::to_vec(&Command {
+        protocol_version: 1,
+        kind: "intent",
+        request,
+    })
+    .map_err(|_| ())?;
+    if bytes.len() > MAX_LINE {
+        return Err(());
+    }
+    bytes.push(b'\n');
+    Ok(bytes)
 }
