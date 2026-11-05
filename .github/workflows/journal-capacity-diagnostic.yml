@@ -1,0 +1,164 @@
+name: Fixed Mac Intel journal diagnosis
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/journal-capacity-diagnostic.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Journal diagnosis (${{ matrix.label }})
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: unchanged-base
+            ref: f0115bc8ebd641ad22f254c9d9efa5c76be20846
+          - label: combined-candidate
+            ref: 3dc27726810c5137db1f46b9c1ca07895476660a
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOENV: 'off'
+      GOFLAGS: ''
+      CGO_ENABLED: '1'
+      GORACE: atexit_sleep_ms=0
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the fixed published source without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.17'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          architecture: x64
+          cache: false
+      - name: Verify fixed modules using the unchanged preparation entry
+        run: python3 scripts/go_ci.py prepare
+      - name: Compare unchanged execution with temporary failure observations
+        env:
+          EXPECTED_SOURCE: ${{ matrix.ref }}
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import subprocess
+          import sys
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+
+          expected = os.environ['EXPECTED_SOURCE']
+          allowed = {'f0115bc8ebd641ad22f254c9d9efa5c76be20846',
+                     '3dc27726810c5137db1f46b9c1ca07895476660a'}
+          if (expected not in allowed or git('rev-parse', 'HEAD') != expected
+                  or git('status', '--porcelain')
+                  or git('rev-parse', 'HEAD:backend/internal/guestaccount')
+                     != '818f1cd24dc5c8b1a481c6580abfa8e9a76c7dd5'
+                  or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted'
+                  or os.environ.get('RUNNER_OS') != 'macOS'
+                  or os.environ.get('RUNNER_ARCH') != 'X64'
+                  or platform.machine() != 'x86_64'):
+              raise SystemExit('DIAGNOSTIC_SCOPE_MISMATCH')
+          evidence = Path('.work/journal-diagnostic')
+          evidence.mkdir(parents=True, exist_ok=False)
+          phases = []
+          command = ['go', 'test', '-race', '-mod=readonly', '-trimpath',
+                     '-count=10', '-json', '-p=1', '-parallel=1', '-cpu=2',
+                     '-timeout=5m', './internal/guestaccount']
+
+          def run_phase(name):
+              result = subprocess.run(command, cwd='backend', capture_output=True, text=True)
+              row = {'phase': name, 'exit_code': result.returncode, 'runs': 0,
+                     'passed': 0, 'failed': [], 'skipped': 0, 'observations': [],
+                     'stderr_present': bool(result.stderr), 'parse_error': False}
+              if len(result.stdout.encode()) > 32 * 1024 * 1024:
+                  row['parse_error'] = True
+              else:
+                  try:
+                      for line in result.stdout.splitlines():
+                          event = json.loads(line)
+                          test, action = event.get('Test'), event.get('Action')
+                          if test and '/' not in test:
+                              if action == 'run': row['runs'] += 1
+                              elif action == 'pass': row['passed'] += 1
+                              elif action == 'fail': row['failed'].append(test)
+                              elif action == 'skip': row['skipped'] += 1
+                          output = event.get('Output', '')
+                          if '[DEBUG-journal-' in output:
+                              marker = output.index('[DEBUG-journal-')
+                              row['observations'].append({'test': test,
+                                  'value': output[marker:marker + 500].strip()})
+                  except (ValueError, TypeError, AttributeError):
+                      row['parse_error'] = True
+              row['passed_gate'] = (result.returncode == 0 and row['runs'] > 0
+                  and row['runs'] == row['passed'] and not row['failed']
+                  and row['skipped'] == 0 and not row['parse_error'])
+              phases.append(row)
+              print(json.dumps(row, ensure_ascii=False), flush=True)
+              (evidence / (name + '.json')).write_text(json.dumps(row, ensure_ascii=False))
+
+          # First record the exact unmodified source; a failure still fails this job.
+          run_phase('unmodified')
+          test_path = Path('backend/internal/guestaccount/journal_fault_test.go')
+          life_path = Path('backend/internal/guestaccount/lifecycle.go')
+          original_test, original_life = test_path.read_text(), life_path.read_text()
+          try:
+              start = original_test.index('func TestJournalReserveKeepsAllSixCleanupFramesAtCapacityBoundary')
+              end = original_test.index('\nfunc TestJournalRetainsRealPartialOpenAndBorrowedRootAlias', start)
+              part = original_test[start:end]
+              needle = 'e = owner.Prepare(testContext(t))'
+              if part.count(needle) != 1:
+                  raise ValueError('fixed observation seam changed')
+              part = part.replace(needle,
+                  'ctx := testContext(t)\n began := time.Now()\n before := k.writes\n'
+                  'e = owner.Prepare(ctx)\n'
+                  't.Logf("[DEBUG-journal-capacity] elapsed=%s error=%v ctx_error=%v '
+                  'before=%d after=%d frames=%d poisoned=%t uncertain=%t", '
+                  'time.Since(began), e, ctx.Err(), before, k.writes, next.count, '
+                  'next.poisoned, next.uncertain)')
+              test_path.write_text(original_test[:start] + part + original_test[end:])
+              needle = ('if ctx == nil || ctx.Err() != nil {\n\t\treturn false\n\t}\n'
+                        '\td, ok := ctx.Deadline()\n\treturn ok && time.Now().Before(d)')
+              if original_life.count(needle) != 1:
+                  raise ValueError('fixed finite seam changed')
+              life = original_life.replace('"context"', '"context"\n "fmt"', 1)
+              life = life.replace(needle,
+                  'if ctx == nil || ctx.Err() != nil {\n'
+                  'if ctx != nil { fmt.Printf("[DEBUG-journal-finite] rejected=Err ctx_error=%v\\n", ctx.Err()) }\n'
+                  'return false\n}\n d, ok := ctx.Deadline()\n'
+                  'live := ok && time.Now().Before(d)\n'
+                  'if !live { fmt.Printf("[DEBUG-journal-finite] rejected=Deadline known=%t ctx_error=%v\\n", ok, ctx.Err()) }\n'
+                  'return live')
+              life_path.write_text(life)
+              subprocess.run(['gofmt', '-w', str(test_path), str(life_path)], check=True)
+              run_phase('observed')
+          finally:
+              test_path.write_text(original_test)
+              life_path.write_text(original_life)
+          print(json.dumps({'diagnostic_only': True, 'clears_existing_failures': False,
+                            'source': expected, 'phases': len(phases)}), flush=True)
+          sys.exit(0 if len(phases) == 2 and all(p['passed_gate'] for p in phases) else 1)
+          PY
+      - name: Preserve only bounded synthetic observations
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: journal-diagnosis-${{ matrix.label }}
+          path: .work/journal-diagnostic/*.json
+          if-no-files-found: error
+          retention-days: 3
