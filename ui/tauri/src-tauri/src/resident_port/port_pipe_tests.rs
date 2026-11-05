@@ -49,13 +49,13 @@ impl Drop for OwnedDirectory {
         fs::remove_dir_all(&self.0).unwrap();
     }
 }
-struct Fixture {
+pub(super) struct Fixture {
     directory: OwnedDirectory,
     owner: Option<StandbyOwner>,
     port: ResidentPort,
 }
 impl Fixture {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
         let directory = OwnedDirectory::new();
         let mut command = Command::new("/usr/bin/python3");
         command.args(["-c", SCRIPT]).arg(&directory.0).env_clear();
@@ -95,7 +95,7 @@ impl Fixture {
             thread::sleep(Duration::from_millis(2));
         }
     }
-    fn finish(&mut self) -> Option<Outcome> {
+    pub(super) fn finish(&mut self) -> Option<Outcome> {
         // Release every test-only barrier even when an earlier observation failed.
         self.directory.release(0);
         self.directory.release(1);
@@ -105,6 +105,12 @@ impl Fixture {
             assert!(owner.gate.request_exit());
             outcome.unwrap()
         })
+    }
+    pub(super) fn take_port(&mut self) -> ResidentPort {
+        std::mem::take(&mut self.port)
+    }
+    pub(super) fn release(&self, phase: usize) {
+        self.directory.release(phase);
     }
 }
 impl Drop for Fixture {

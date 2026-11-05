@@ -74,6 +74,10 @@ fn ordinary_shell_has_no_allowed_resident_or_binding_commands() {
     let app = crate::commands(tauri::test::mock_builder())
         .build(tauri::generate_context!(test = true))
         .unwrap();
+    assert_eq!(
+        serde_json::to_value(&app.config().app.security.capabilities).unwrap(),
+        json!(["shell-local"])
+    );
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
@@ -101,9 +105,13 @@ fn ordinary_shell_has_no_allowed_resident_or_binding_commands() {
                 invoke_key: tauri::test::INVOKE_KEY.into(),
             },
         );
-        assert_eq!(
-            response.err(),
-            Some(json!(format!("{command} not allowed. Command not found")))
-        );
+        let reason = if matches!(command, "get_resident_status" | "request_resident_intent") {
+            // Metadata now describes the explicit profile, but this normal
+            // capability grants none of it. Keep the exact denial assertion.
+            format!("{command} not allowed. Permissions associated with this command: allow-{}, allow-resident-port", command.replace('_', "-"))
+        } else {
+            format!("{command} not allowed. Command not found")
+        };
+        assert_eq!(response.err(), Some(json!(reason)));
     }
 }

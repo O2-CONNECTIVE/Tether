@@ -1,5 +1,7 @@
 # 同じownerの状態観測と意図受付
 
+この文書は#202のcore範囲です。後続の[明示IPC source](RESIDENT_IPC.md)と通常shellの閉鎖を区別します。
+
 このsourceは未統合の#200、#201に依存します。
 #200のWindows session-create失敗、#201のstacked CI未実行は未解決のままで、mainへ適用したとは扱いません。
 
