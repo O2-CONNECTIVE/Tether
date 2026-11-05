@@ -26,18 +26,28 @@ jobs:
           go-version: '1.27.3'
           architecture: x64
           cache: false
-      - name: Reproduce original Go selection and Python launch only
+      - name: Reject joined Go paths and validate pinned single executable
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $found = @(Get-Command go -CommandType Application)
           [ordered]@{ prefix = '[DEBUG-go-path-a1]'; command_count = $found.Count; sources = @($found | ForEach-Object { $_.Source }) } | ConvertTo-Json -Compress
-          $env:GO = (Get-Command go -CommandType Application).Source
+          $env:OLD_GO = (Get-Command go -CommandType Application).Source
+          $goPath = Join-Path $env:GOROOT 'bin\go.exe'
+          if (-not (Test-Path -LiteralPath $goPath -PathType Leaf)) { throw 'Pinned official Go executable is missing.' }
+          $env:GO = $goPath
           @'
           import os, json, subprocess, sys
           go = os.environ.get('GO', 'go')
-          print(json.dumps({'prefix':'[DEBUG-go-path-a1]', 'go':go, 'is_file':os.path.isfile(go)}), flush=True)
+          old = os.environ['OLD_GO']
+          print(json.dumps({'prefix':'[DEBUG-go-path-a1]', 'old_go':old, 'old_is_file':os.path.isfile(old), 'go':go, 'is_file':os.path.isfile(go)}), flush=True)
           env = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off', GOFLAGS='-mod=readonly', GOEXPERIMENT='', GOOS='windows', GOARCH='amd64', GOAMD64='v1', CGO_ENABLED='0')
+          old_failed = False
+          try:
+              subprocess.check_output([old, 'version'], env=env, text=True)
+          except FileNotFoundError as error:
+              old_failed = error.winerror == 2
+          assert old_failed, 'Original two-path selection must reproduce WinError 2'
           results = []
           for i in range(3):
               try:
@@ -48,4 +58,4 @@ jobs:
           print(json.dumps({'prefix':'[DEBUG-go-path-a1]', 'results':results}), flush=True)
           sys.exit(0 if all(r['ok'] for r in results) else 1)
           '@ | python -
-          if ($LASTEXITCODE -ne 0) { throw 'Original Go executable selection cannot launch the Python child; no service operations.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned official Go path regression failed; no service operations.' }
