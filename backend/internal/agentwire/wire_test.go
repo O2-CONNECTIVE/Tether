@@ -230,14 +230,21 @@ func TestTransportLossRevokesBeforeTerminateWithoutResume(t *testing.T) {
 	p := r.proc()
 	var mu sync.Mutex
 	var atTerminate supervisor.State
+	terminated := make(chan struct{})
 	p.setTerminateHook(func() {
 		mu.Lock()
 		defer mu.Unlock()
 		atTerminate = r.authority.Snapshot(r.clock.Now()).State
+		close(terminated)
 	})
 	_ = r.client.Close()
 	if err := r.waitServed(); err != nil {
 		t.Fatalf("Serve after peer close = %v", err)
+	}
+	select {
+	case <-terminated:
+	case <-ctx.Done():
+		t.Fatalf("Terminate hook was not observed: %v", ctx.Err())
 	}
 	mu.Lock()
 	state := atTerminate

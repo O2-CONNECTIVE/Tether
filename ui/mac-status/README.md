@@ -19,8 +19,8 @@ SwiftUI の読み取り専用アプリです。macOS 13 以上を宣言し、Swi
 | version | 1 |
 | seq | 1..9007199254740991、厳密増加（gap 可） |
 | source_continuous_ms | 同じ Mac の mach_continuous_time 換算 ms、0..9007199254740991 |
-| phase | preparing / awaiting_approval / connecting / connected / stopping / closed / failed |
-| reason | none / revoked / deadline / transport_lost / runtime_fault / terminal_cleanup_unknown / canceled / command_timeout |
+| phase | checking_config / loading_key / preparing / awaiting_approval / connecting / connected / stopping / closed / failed |
+| reason | none / revoked / deadline / transport_lost / runtime_fault / terminal_cleanup_unknown / canceled / command_timeout / config_error / key_error / preparation_error / connection_error / approval_not_completed |
 | grant_remaining_ms | null または 0..86400000 |
 | starting_workers / running_workers / stopping_workers | 各0..1、合計最大1 |
 | cleanup | not_started / pending / confirmed / unknown |
@@ -110,7 +110,7 @@ real-agent connectivity or manual accessibility behavior.
 ## GitHub-hosted CI source preparation
 
 `.github/workflows/tether-mac-status.yml` is prepared for main pull requests and
-pushes to main or the specific Tether WIP branch. It has not yet run on GitHub.
+pushes to main or the specific Tether WIP branch. The main cf9fcec baseline has now passed GitHub-hosted CI (run 41287973206); this does not certify later source changes.
 It uses the standard arm64 `macos-26` image and requires the existing
 `/Applications/Xcode_26.5.app/Contents/Developer`; a missing selection fails
 rather than installing or falling back. The job records actual compiler/SDK/image
@@ -119,11 +119,11 @@ versions. Official image availability is not proof of Swift 6.3.3 patch parity.
 A dependency-free `Tests/run_ci_checks.py` has only source/gui modes and refuses
 execution unless its GitHub/macOS/arm64/selected-toolchain scope matches. The check
 is an accidental-local-execution guard, not authentication or a sandbox.
-Source checks build/core21/package10/local bundle. GUI checks require the real
-synthetic owned-window9, both bundled own-window cases and the exact8 own-content
+Source checks build/core26/headless output9/output-runner2/package10/local bundle. GUI checks require the real
+synthetic owned-window9, both bundled own-window cases and the exact20 own-content
 PNG outputs. Unavailable GUI session, missing PASS, nonzero exit, timeout or image
 mismatch fails the job; there is no skipped-success or continue-on-error fallback.
-The hosted WindowServer/GUI capability remains unproven until an actual run.
+The hosted WindowServer/GUI fixture capability was exercised successfully on that exact baseline run; other images and real-agent GUI operation remain separate checks.
 
 Timeout records an unreaped owned child and stops subsequent checks without force
 kill or success inference. This workflow is limited to ephemeral GitHub-hosted VMs,
@@ -138,3 +138,92 @@ private repositories, larger runners and artifact/cache storage have different
 allowances. No budget, paid runner, signing, deployment, secrets or permission
 change is part of this source preparation. Local fake helper tests do not certify
 a hosted GUI run or a signed product distribution.
+
+## 起動・接続時のフィードバック
+
+保護設定の確認、登録済み鍵の確認、ローカル準備、接続確認の**新鮮な実phase**だけで回転表示します。割合や完了予定時刻は推測しません。本人の承認待ちは回転せず「起動したターミナルで承認してください」と案内します。GUIに承認・再試行操作はありません。接続完了、terminal、stale、EOF、未知状態では回転を止めます。動きを減らす設定と静的renderでは処理中を固定アイコンで表します。
+
+設定／鍵／準備／接続構成の失敗はCLI実callerから固定reasonだけを送ります。approval_not_completedは拒否・時間切れ・中断・読取不能を本人の明示拒否と断定しません。既存通信断や回収不明をセットアップ失敗で隠しません。実際のエラー文字列、設定値、鍵、ユーザー名、commandは表示streamに加えません。設定や権限変更、鍵生成、自動再接続もありません。
+
+JSONL v1は同じ12キーのままenumを拡張しています。旧viewerは未知enumを安全に拒否するため、producer/viewerは対応する版を組み合わせてください。旧viewerへのsilent fallbackはしません。失敗reasonはfailed/terminal、worker0、残時間0/null、cleanup not_startedまたはconfirmedとの組合せだけを受理します。terminal_cleanup_unknownは常に優先して保持します。
+
+20状態のown-content画像はsynthetic fixtureであり、実agentの接続結果でもanimationの動作実証でもありません。既存の実機検証結果をこの変更の合格へ流用しません。
+
+## Pilot-only finite viewer observation
+
+Exact opt-in `--pilot-exit-on-stream-end` preserves ordinary visualization until
+actual pipe EOF or reader rejection/read failure. A terminal frame alone does not
+close the viewer. Default mode still stays open after EOF. This flag never stops
+an agent, issues a grant, opens a port, or changes consent.
+
+After a successful reader join, the viewer terminates its own application/windows
+and attempts one bounded JSON line on stdout:
+`{"version":1,"stream_end":"eof","result":"confirmed_terminal","fault":"eof","reader":"joined","exit_code":0}`.
+`stream_end` is eof/rejected/read_error/canceled/unavailable; `result` is
+confirmed_terminal/unknown; `fault` is unavailable/stale/malformed/clock/sequence/
+eof/read/rate/stopped. No IDs, paths, raw frames or commands are emitted.
+Exit 0 requires actual EOF and a validated closed terminal with confirmed cleanup,
+zero workers/remaining, no unknown, and source age at EOF at most three seconds.
+All other summaries exit 2. A partial final line is EOF with malformed fault,
+never a confirmed result. Missing/invalid stdout must be treated as unknown by
+an owner; stdout failure is nonzero.
+
+Pilot stdout must be a **dedicated write-only FIFO already configured with
+O_NONBLOCK and Darwin F_SETNOSIGPIPE=1** by its owner before launch. The owner
+must keep all aliases' flags stable until viewer exit; dedication cannot be
+proved by fstat. Ordinary blocking `subprocess.PIPE`, shell redirection, files,
+TTYs and sockets do not meet this pilot contract. The viewer duplicates the fd,
+validates that same descriptor, and never changes/restores shared flags or signal
+dispositions. This deliberately tightens the opt-in pilot's caller contract;
+normal visualization mode has no new stdout requirement. In Python on Darwin,
+create `read_fd, write_fd = os.pipe()`, call `os.set_blocking(write_fd, False)`
+and `fcntl.fcntl(write_fd, 73, 1)` (SDK F_SETNOSIGPIPE), then pass `write_fd` as
+child stdout and close the parent's write copy. Keep status stdin independent.
+
+The fixed line is bounded by PIPE_BUF (512 bytes) and written in one nonblocking
+attempt. Full pipe, reader loss, invalid sink, EINTR/other error or short write
+returns exit2 without retry, waiting for output capacity, or a writer thread.
+On failure there may be no usable summary; an owner must require both a complete
+valid line and the matching actual exit code. It must not infer cleanup success
+from exit2, a missing summary, or viewer exit. Successful close of the temporary
+output descriptor is required for exit0. Join refusal cancels termination, retaining
+reader ownership and freshness updates.
+
+Confirmed terminal is **producer-reported history**, not independent OS cleanup
+proof or agent exit evidence. Owners must capture viewer stdout separately from
+status stdin and keep agent exit/observations as separate evidence. Manual early
+viewer close is canceled/unknown, not successful completion.
+
+`python3 Tests/check_pilot_lifecycle.py` explicitly launches only finite synthetic
+viewer fixtures. It performs no agent launch or desktop capture. The internal
+`--check-own-window-eof` fixture checks that normal EOF retains its own visible
+window for 3.6 seconds, then closes it normally. No force-kill fallback is used;
+a timeout reports an unreaped owned viewer and stops the suite.
+
+`python3 Tests/check_pilot_output.py` compiles the exact application's output call
+with the real StatusCore reader/summary into a headless native harness. It checks
+full blocking/nonblocking pipes, normal output, reader loss, invalid sinks and
+alias flags; the Swift syscall seam also checks short writes and errors. This
+check runs in the existing source CI phase. It never launches AppKit/windows and
+does not replace the thirteen GUI lifecycle checks or certify real-agent cleanup.
+
+### Pilot caller inventory and hosted fault cases
+
+The public repository has no production launcher that invokes
+`--pilot-exit-on-stream-end`. Its public executable caller is the synthetic
+`Tests/check_pilot_lifecycle.py` fixture. That caller now creates its own dedicated
+nonblocking/SIGPIPE-suppressed summary pipe through `output_pipe()`; the headless
+output fixture uses the same preparation. `docs/agent-cli.md` shows ordinary
+viewer mode with a dedicated status stdin, not finite pilot summary capture.
+Private evaluation harnesses are outside this inventory and must be updated by
+their owners before using this pilot contract. No production launcher or real
+agent connection is added here.
+
+The existing hosted GUI lifecycle step checks thirteen cases: its original nine
+plus full nonblocking stdout, full blocking stdout, reader loss and empty
+blocking stdout. Fault cases wait for actual viewer exit before draining output,
+so `communicate()` cannot hide backpressure. A timed-out owned writer is drained
+and waited normally; it still fails the case. A child that remains unreaped is
+reported with its PID and stops the suite without force kill. These fixtures open
+only their synthetic hosted windows. Headless source checks cover the same output
+boundary and caller preparation without launching any window.

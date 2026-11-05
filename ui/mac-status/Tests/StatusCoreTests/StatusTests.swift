@@ -52,6 +52,19 @@ final class StatusTests {
         XCTAssertEqual(s.snapshot.remaining(at:12),118); XCTAssertNil(s.snapshot.remaining(at:20))
     }
     func testEOFNotCleanupEvidence() {
+        var terminal = FeedState()
+        terminal.ingest(line(1,["phase":"closed","terminal":true,"cleanup":"confirmed","running_workers":0,"grant_remaining_ms":0]),at:10)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:10,eof:false).exitCode,2)
+        terminal.fail(.eof)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:10,eof:true).exitCode,0)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:14,eof:true).exitCode,2)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:9,eof:true).exitCode,2)
+        XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:.nan,eof:true).exitCode,2)
+        for fault in [FeedFault.malformed,.stale,.clock,.sequence,.read,.rate,.stopped,.unavailable] {
+            terminal.fail(fault)
+            XCTAssertEqual(PilotSummary(snapshot:terminal.snapshot,at:10,eof:true).exitCode,2)
+        }
+
         var s=FeedState(); s.ingest(line(),at:10); s.fail(.eof)
         XCTAssertFalse(s.snapshot.fresh(at:10)); XCTAssertEqual(s.snapshot.frame?.cleanup,"pending")
     }
@@ -112,6 +125,52 @@ final class StatusTests {
         XCTAssertEqual(s.snapshot.frame?.terminal,true)
         XCTAssertTrue(s.snapshot.stickyUnknown)
     }
+    func testSetupStagesAndApprovalAreDistinct() {
+        for phase in ["checking_config","loading_key","preparing","awaiting_approval","connecting"] {
+            var s=FeedState(); s.ingest(line(1,["phase":phase,"running_workers":0,"cleanup":"not_started","grant_remaining_ms":NSNull()]),at:10)
+            let f=s.snapshot.setupFeedback(at:10)
+            XCTAssertTrue(f != nil); XCTAssertEqual(f?.isProcessing,phase != "awaiting_approval")
+            if phase == "awaiting_approval" { XCTAssertTrue(f!.title.contains("ターミナル")); XCTAssertTrue(f!.detail.contains("ここでは承認できません")) }
+        }
+    }
+    func testSetupMotionStopsOnStaleEOFAndFailure() {
+        var s=FeedState(); s.ingest(line(1,["phase":"connecting"]),at:10)
+        XCTAssertEqual(s.snapshot.setupFeedback(at:10)?.isProcessing,true)
+        XCTAssertNil(s.snapshot.setupFeedback(at:14))
+        s.fail(.eof); XCTAssertNil(s.snapshot.setupFeedback(at:10))
+        for reason in ["config_error","key_error","preparation_error","connection_error","approval_not_completed"] {
+            var failed=FeedState();failed.ingest(line(1,["phase":"failed","reason":reason,"terminal":true,"cleanup":"not_started","running_workers":0,"grant_remaining_ms":NSNull()]),at:10)
+            XCTAssertNil(failed.snapshot.fault)
+            XCTAssertEqual(failed.snapshot.setupFeedback(at:10)?.isProcessing,false)
+            failed.fail(.eof)
+            XCTAssertEqual(failed.snapshot.setupFeedback(at:20)?.isProcessing,false)
+        }
+    }
+    func testSetupFailureCannotLabelLiveOrUnknown() {
+        for changes:[String:Any] in [["reason":"config_error"],["phase":"failed","terminal":true,"reason":"key_error","cleanup":"unknown"],["phase":"failed","terminal":true,"reason":"approval_denied","running_workers":0,"grant_remaining_ms":0,"cleanup":"not_started"]] {
+            XCTAssertThrowsError(try Decoder.decode(line(1,changes)))
+        }
+        var unknown=FeedState();unknown.ingest(line(1,["phase":"failed","reason":"terminal_cleanup_unknown","cleanup":"unknown","terminal":true,"terminal_cleanup_unknown":true]),at:10)
+        XCTAssertNil(unknown.snapshot.setupFeedback(at:10))
+    }
+    func testSetupTransitionsAndNoPercentage() {
+        var s=FeedState()
+        for (i,phase) in ["checking_config","loading_key","preparing","awaiting_approval","connecting","connected","stopping"].enumerated() {
+            s.ingest(line(i+1,["phase":phase,"running_workers":0,"grant_remaining_ms":NSNull()]),at:10)
+            XCTAssertNil(s.snapshot.fault)
+            if let f=s.snapshot.setupFeedback(at:10) {
+                XCTAssertFalse(f.title.contains("%")); XCTAssertFalse(f.detail.contains("%"))
+            }
+        }
+        XCTAssertNil(s.snapshot.setupFeedback(at:10))
+        s.ingest(line(8,["phase":"closed","terminal":true,"cleanup":"confirmed","running_workers":0,"grant_remaining_ms":0]),at:10)
+        XCTAssertNil(s.snapshot.setupFeedback(at:10))
+    }
+    func testSetupDeadlineZeroDoesNotKeepSpinning() {
+        var s=FeedState();s.ingest(line(1,["phase":"connecting","grant_remaining_ms":0]),at:10)
+        XCTAssertNil(s.snapshot.setupFeedback(at:10))
+    }
+
     func testOwnedPipeCancelAndJoin() {
         let saved=dup(STDIN_FILENO); var ends:[Int32]=[0,0]; XCTAssertEqual(pipe(&ends),0)
         XCTAssertEqual(dup2(ends[0],STDIN_FILENO),STDIN_FILENO); close(ends[0])
@@ -147,4 +206,9 @@ do { let before=failures; tests.testTerminateCancelKeepsFreshnessUpdates(); coun
 do { let before=failures; tests.testConfirmedTerminalRequiresNoWorkersOrRemaining(); count += 1; print("testConfirmedTerminalRequiresNoWorkersOrRemaining",before == failures ? "PASS" : "FAIL") }
 do { let before=failures; do { try tests.testProductionGoEncoderInterop() } catch { failures += 1 }; count += 1; print("testProductionGoEncoderInterop",before == failures ? "PASS" : "FAIL") }
 do { let before=failures; tests.testOwnedPipeCancelAndJoin(); count += 1; print("testOwnedPipeCancelAndJoin",before == failures ? "PASS" : "FAIL") }
+do { let before=failures; tests.testSetupStagesAndApprovalAreDistinct(); count += 1; print("testSetupStagesAndApprovalAreDistinct",before == failures ? "PASS" : "FAIL") }
+do { let before=failures; tests.testSetupMotionStopsOnStaleEOFAndFailure(); count += 1; print("testSetupMotionStopsOnStaleEOFAndFailure",before == failures ? "PASS" : "FAIL") }
+do { let before=failures; tests.testSetupFailureCannotLabelLiveOrUnknown(); count += 1; print("testSetupFailureCannotLabelLiveOrUnknown",before == failures ? "PASS" : "FAIL") }
+do { let before=failures; tests.testSetupTransitionsAndNoPercentage(); count += 1; print("testSetupTransitionsAndNoPercentage",before == failures ? "PASS" : "FAIL") }
+do { let before=failures; tests.testSetupDeadlineZeroDoesNotKeepSpinning(); count += 1; print("testSetupDeadlineZeroDoesNotKeepSpinning",before == failures ? "PASS" : "FAIL") }
 print("CHECKS",count,"FAILURES",failures); exit(failures == 0 ? 0 : 1) } }

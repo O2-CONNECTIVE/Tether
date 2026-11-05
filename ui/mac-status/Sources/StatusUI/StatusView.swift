@@ -3,6 +3,7 @@ import AppKit
 import StatusCore
 
 public struct StatusView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let snapshot: Snapshot
     let now: TimeInterval
     let fixture: Bool
@@ -14,8 +15,10 @@ public struct StatusView: View {
     private var fresh: Bool { snapshot.fresh(at:now) }
     private var frame: Frame? { snapshot.frame }
     private var unknown: Bool { snapshot.stickyUnknown || frame?.cleanup == "unknown" }
+    private var feedback: SetupFeedback? { snapshot.setupFeedback(at:now) }
     private var title: String {
         if unknown { return "回収を確認できません" }
+        if let feedback { return feedback.title }
         if snapshot.terminalObserved && (fresh || snapshot.sourceClosed) {
             let prefix = snapshot.sourceClosed ? "状態配信終了・" : ""
             switch frame?.cleanup {
@@ -37,11 +40,13 @@ public struct StatusView: View {
     }
     private var subtitle: String {
         if unknown { return "操作が終わっていても、安全に回収されたとは限りません。" }
+        if let feedback { return feedback.detail + (snapshot.sourceClosed ? " 最終報告を表示しています。" : "") }
+        if snapshot.terminalObserved && (fresh || snapshot.sourceClosed) && frame?.reason == "transport_lost" { return "通信が終了しました。接続先とネットワークの状態を確認してください。自動で再接続はしません。" }
         if snapshot.sourceClosed && snapshot.terminalObserved { return "最終報告を保持しています。現在の接続を示す表示ではありません。" }
         if !fresh { return "接続や停止を確認できません。表示から状態を推定しないでください。" }
         return "この画面は状態の確認専用です。新しい操作を許可しません。"
     }
-    private var tone: Color { unknown ? .primary : (fresh ? .accentColor : .secondary) }
+    private var tone: Color { unknown || (frame?.phase == "failed" && feedback != nil) ? .primary : (fresh ? .accentColor : .secondary) }
     private var metricsCurrent: Bool { fresh && !unknown && frame?.terminal != true }
     private var remaining: String {
         guard metricsCurrent, let s = snapshot.remaining(at:now) else { return "—" }
@@ -56,8 +61,19 @@ public struct StatusView: View {
                 }
                 if fixture { Label("表示テスト・実接続なし",systemImage:"testtube.2").font(.system(size:14*textScale,weight:.semibold)).foregroundStyle(Color.primary.opacity(0.8)) }
                 VStack(alignment:.leading,spacing:10) {
-                    Label(title,systemImage:unknown ? "exclamationmark.triangle.fill" : (fresh ? "circle.inset.filled" : "questionmark.circle"))
-                        .font(.system(size:20*textScale,weight:.semibold)).foregroundStyle(tone).fixedSize(horizontal:false,vertical:true)
+                    HStack(alignment:.top,spacing:10) {
+                        if feedback?.isProcessing == true {
+                            if renderStatic || reduceMotion {
+                                Image(systemName:"hourglass").accessibilityLabel("処理中")
+                            } else {
+                                ProgressView().controlSize(.small).accessibilityLabel("処理中")
+                            }
+                        } else {
+                            Image(systemName:unknown ? "exclamationmark.triangle.fill" : (feedback?.symbol ?? (fresh ? "circle.inset.filled" : "questionmark.circle")))
+                                .accessibilityHidden(true)
+                        }
+                        Text(title).fixedSize(horizontal:false,vertical:true)
+                    }.font(.system(size:20*textScale,weight:.semibold)).foregroundStyle(tone)
                     Text(subtitle).foregroundStyle(Color.primary.opacity(0.72)).fixedSize(horizontal:false,vertical:true)
                 }.accessibilityElement(children:.combine)
                 ViewThatFits(in:.horizontal) {
@@ -87,7 +103,7 @@ public struct StatusView: View {
         .accessibilityLabel("Tether この Mac の状態")
     }
     private var endReason: String {
-        let names = ["none":"理由の報告なし", "revoked":"承認の失効", "deadline":"承認期限", "transport_lost":"通信断", "runtime_fault":"実行基盤の異常", "terminal_cleanup_unknown":"回収未確認", "canceled":"操作取消", "command_timeout":"操作の制限時間"]
+        let names = ["none":"理由の報告なし", "revoked":"承認の失効", "deadline":"承認期限", "transport_lost":"通信断", "runtime_fault":"実行基盤の異常", "terminal_cleanup_unknown":"回収未確認", "canceled":"操作取消", "command_timeout":"操作の制限時間", "config_error":"設定の確認失敗", "key_error":"接続用の鍵の確認失敗", "preparation_error":"実行環境の準備失敗", "connection_error":"接続構成の失敗", "approval_not_completed":"承認未完了"]
         return "最終報告の理由: " + (names[frame?.reason ?? ""] ?? "不明")
     }
     private var cleanupText: String {

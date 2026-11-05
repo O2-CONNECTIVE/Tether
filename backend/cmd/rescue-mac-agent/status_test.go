@@ -5,7 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
+	"golang.org/x/crypto/ssh"
 	"strings"
 	"sync"
 	"testing"
@@ -318,5 +323,150 @@ func TestDisplayRemainingDoesNotExtend(t *testing.T) {
 	wallForward := now.Round(0).Add(30 * time.Second)
 	if displayRemaining(end, wallForward) != 30000 {
 		t.Fatal("wall forward ignored")
+	}
+}
+
+func TestSetupFailureCallerFixedClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*recorder)
+		reason    string
+		code      int
+	}{
+		{"config-read", func(r *recorder) { r.readErr = errors.New("PRIVATE PATH") }, "config_error", 2},
+		{"config-parse", func(r *recorder) { r.doc = []byte("PRIVATE CONFIG") }, "config_error", 2},
+		{"key", func(r *recorder) { r.loadErr = errors.New("PRIVATE KEY") }, "key_error", 2},
+		{"preparation", func(r *recorder) { r.prepareErr = errors.New("PRIVATE PREP") }, "preparation_error", 2},
+		{"approval-timeout", func(r *recorder) { r.approval.owner = nil; r.approval.err = context.DeadlineExceeded }, "approval_not_completed", 1},
+		{"approval-cancel", func(r *recorder) { r.approval.owner = nil; r.approval.err = context.Canceled }, "approval_not_completed", 1},
+		{"approval-read", func(r *recorder) { r.approval.owner = nil; r.approval.err = errors.New("PRIVATE INPUT") }, "approval_not_completed", 1},
+		{"connection", func(r *recorder) { r.clientErr = errors.New("PRIVATE ENDPOINT") }, "connection_error", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRecorder(t, encode(t, macDoc(t)))
+			tc.configure(r)
+			sink := &memoryStatusSink{}
+			d := r.deps()
+			d.statusClock = func() (uint64, bool) { return 1234, true }
+			d.statusSink = func() (statusSink, error) { return sink, nil }
+			if got := execute(context.Background(), []string{"-config", configPath, "-status-stdout"}, nil, d); got != tc.code {
+				t.Fatal(got)
+			}
+			v := sink.last(t)
+			if !v.Terminal || v.Phase != "failed" || v.Reason != tc.reason || v.Unknown {
+				t.Fatal(v)
+			}
+			for _, b := range sink.frames {
+				if bytes.Contains(b, []byte("PRIVATE")) {
+					t.Fatal("private data leaked")
+				}
+			}
+		})
+	}
+}
+func TestSetupFailureNeverMasksCleanupUnknownOrOwnerReason(t *testing.T) {
+	f := &statusFeed{frame: statusFrame{Phase: "connecting", Reason: "none"}, wake: make(chan struct{}, 1), owner: summaryOwner{v: agentexec.LocalSummary{Revoked: true, Reason: agentexec.StopRevoked}, ok: true}}
+	f.failSetup(setupConnection, "confirmed")
+	v, ok := f.snapshot(1, 1234)
+	if !ok || v.Reason != "connection_error" || !v.Terminal {
+		t.Fatal(v)
+	}
+	f.unknown()
+	f.failSetup(setupConfig, "not_started")
+	v, ok = f.snapshot(2, 1234)
+	if !ok || !v.Unknown || v.Reason != "terminal_cleanup_unknown" || v.Cleanup != "unknown" {
+		t.Fatal(v)
+	}
+}
+func TestSetupProcessingUsesRealCallerStages(t *testing.T) {
+	r := newRecorder(t, encode(t, macDoc(t)))
+	sink := &memoryStatusSink{}
+	d := r.deps()
+	d.statusClock = func() (uint64, bool) { return 1234, true }
+	d.statusSink = func() (statusSink, error) { return sink, nil }
+	wait := func(phase string) {
+		t.Helper()
+		end := time.Now().Add(time.Second)
+		for time.Now().Before(end) {
+			sink.mu.Lock()
+			found := false
+			for _, b := range sink.frames {
+				var v statusFrame
+				if json.Unmarshal(b, &v) == nil && v.Phase == phase {
+					found = true
+				}
+			}
+			sink.mu.Unlock()
+			if found {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatal("missing actual stage", phase)
+	}
+	read := d.readTrust
+	d.readTrust = func(ctx context.Context, p string) ([]byte, error) { wait("checking_config"); return read(ctx, p) }
+	load := d.loadKey
+	d.loadKey = func(ctx context.Context, c agentkeys.Config) (ssh.Signer, error) {
+		wait("loading_key")
+		return load(ctx, c)
+	}
+	prepare := d.prepare
+	d.prepare = func(c maclaunch.Config) (approval, error) { wait("preparing"); return prepare(c) }
+	client := d.newClient
+	d.newClient = func(c agenttransport.ClientConfig, o agenttransport.Owner) (session, error) {
+		wait("connecting")
+		return client(c, o)
+	}
+	if execute(context.Background(), []string{"-config", configPath, "-status-stdout"}, nil, d) != 1 {
+		t.Fatal("exit changed")
+	}
+}
+
+func TestApprovalUnknownPrecedesEveryTerminalSetupFrame(t *testing.T) {
+	for _, prior := range []error{agentexec.ErrCleanupUnknown, agenttransport.ErrCleanupUnknown, agentchannel.ErrCleanupUnknown} {
+		for _, hasOwner := range []bool{false, true} {
+			for _, closeErr := range []error{nil, agentexec.ErrCleanupUnknown, errors.New("close incomplete")} {
+				r := newRecorder(t, encode(t, macDoc(t)))
+				r.approval.err = errors.Join(prior, errors.New("PRIVATE DETAIL"))
+				r.owner.closeErr = closeErr
+				if !hasOwner {
+					r.approval.owner = nil
+				}
+				sink := &memoryStatusSink{}
+				d := r.deps()
+				d.statusClock = func() (uint64, bool) { return 1234, true }
+				d.statusSink = func() (statusSink, error) { return sink, nil }
+				if execute(context.Background(), []string{"-config", configPath, "-status-stdout"}, nil, d) != 1 {
+					t.Fatal("exit changed")
+				}
+				v := sink.last(t)
+				if !v.Terminal || !v.Unknown || v.Cleanup != "unknown" || v.Reason != "terminal_cleanup_unknown" {
+					t.Fatal(v)
+				}
+				terminals := 0
+				for _, b := range sink.frames {
+					var f statusFrame
+					if json.Unmarshal(b, &f) != nil {
+						t.Fatal("invalid")
+					}
+					if f.Terminal {
+						terminals++
+						if !f.Unknown || f.Cleanup != "unknown" {
+							t.Fatal("premature terminal success", f)
+						}
+					}
+				}
+				if terminals != 1 {
+					t.Fatal("terminal correction", terminals)
+				}
+				if !hasOwner && strings.Contains(r.trace(), "owner-close") {
+					t.Fatal("invented owner")
+				}
+				if strings.Contains(r.trace(), "client") {
+					t.Fatal("continued after failed approval")
+				}
+			}
+		}
 	}
 }
