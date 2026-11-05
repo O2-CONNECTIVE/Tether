@@ -39,6 +39,7 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 - [fixed intentのwire／runtime引継ぎ](mac-fixed-intent-handoff.md): 正規namespace、固定内容、元の有限期限とtimer所有の維持。
 - [resident transport と protected policy](mac-resident-transport-policy.md): 相互proof・opaque receiver・同世代receiptと、strict source/workerの未接続閉包。
 - [Standby と owned pipe の source 組成](mac-resident-producer-composition.md): 同じ owner の終了と codec / mapper / owned IO を結び、sealed entrypoint と実機の未達を分けます。
+- [resident library の build record](mac-resident-library-build.md): 固定 source・lock・recipeとcompile-only archiveを結び、起動・配布はblockedのまま記録します。
 - [Go license inventory](go-license-inventory.md)、[配布条件](distribution.md)。旧配布条件の合格を新しいMac packageへ転用しない。
 - [検証状態](tether-pilot-status.md)のpackage節に、license閉包・署名・notarization・受領者起動の残件を集約。
 - [旧Python開発手順](development.md)はPython部分の検証用。Go/Swiftの全試験を包含しない。

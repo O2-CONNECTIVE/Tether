@@ -83,3 +83,10 @@ resident transport/policyを有効化せず、opaque receiver、protected source
 run loopはpackage内部だけで、汎用loaderと任意protected-policy flagを受けるprivate commandは移しません。通常CLI / IPC / GUIや認証・権限は未接続です。
 source上の残件はsealed entrypoint、trusted native policy選定と配布・配置・verify-to-execの根拠です。
 sourceのcompileやcomponent回帰を実producer / GUI / authenticated work / native全回収の成功に読み替えません。
+
+## library build record と残る起動根拠
+
+[build record工具](mac-resident-library-build.md) は固定Git source / lock / recipeと、実Go compilerのresidentpipe library archiveを結びます。
+新producer commandやlauncherではなく、recordは常にactivation / distribution blockedです。実artifactを起動せず、任意source/path/hash/argvを信頼入力にしません。
+source選択とarchiveの対応はbuilderの観測であり、publisher / compiler / SDKの独立真正性、署名済み配布 / 保護配置、verify-to-exec、trusted policy選定は別の未確立条件です。
+この契約がないままsealed entrypointを有効化せず、通常未接続・#200阻害・未統合stack / CI未実行を維持します。
