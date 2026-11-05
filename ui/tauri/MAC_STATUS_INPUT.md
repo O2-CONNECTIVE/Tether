@@ -3,6 +3,7 @@
 この候補は、専用の読取descriptorを所有する内部入力層を追加します。
 通常のMac起動とIPC応答は`source-unavailable`のままで、入力を登録する経路はありません。
 既存の[状態出力契約](MAC_STATUS_APP.md)とWindowsの5フィールド応答を維持します。
+後続の[子processとreaderの親所有](MAC_STATUS_OWNER.md)も内部前提に留め、通常起動へのsource登録は行いません。
 
 | 内部実装 | 責務 |
 | --- | --- |

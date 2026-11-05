@@ -12,5 +12,7 @@ mod golden_tests;
 mod continuous_clock;
 #[cfg(target_os = "macos")]
 mod native_input;
+#[cfg(target_os = "macos")]
+mod producer_owner;
 mod provider;
 mod reader_owner;
