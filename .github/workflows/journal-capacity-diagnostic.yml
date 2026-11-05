@@ -58,6 +58,7 @@ jobs:
           import platform
           import subprocess
           import sys
+          import tempfile
 
           def git(*args):
               return subprocess.check_output(['git', *args], text=True).strip()
@@ -77,21 +78,38 @@ jobs:
           evidence = Path('.work/journal-diagnostic')
           evidence.mkdir(parents=True, exist_ok=False)
           phases = []
+          driver_unconfirmed = False
           command = ['go', 'test', '-race', '-mod=readonly', '-trimpath',
                      '-count=10', '-json', '-p=1', '-parallel=1', '-cpu=2',
                      '-timeout=5m', './internal/guestaccount']
 
           def run_phase(name):
-              result = subprocess.run(command, cwd='backend', capture_output=True, text=True)
-              row = {'phase': name, 'exit_code': result.returncode, 'runs': 0,
+              global driver_unconfirmed
+              with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as output_file, tempfile.TemporaryFile() as error_file:
+                  child = subprocess.Popen(command, cwd='backend', stdout=output_file, stderr=error_file)
+                  try:
+                      exit_code = child.wait(timeout=420)
+                  except subprocess.TimeoutExpired:
+                      driver_unconfirmed = True
+                      row = {'phase': name, 'exit_code': None, 'go_driver_reaped': False,
+                             'timeout_child_unconfirmed': True, 'passed_gate': False}
+                      phases.append(row)
+                      print(json.dumps(row), flush=True)
+                      (evidence / (name + '.json')).write_text(json.dumps(row))
+                      raise SystemExit('DIAGNOSTIC_TIMEOUT_CHILD_UNCONFIRMED')
+                  output_file.seek(0)
+                  output = output_file.read(32 * 1024 * 1024 + 1)
+                  error_file.seek(0, 2)
+                  stderr_present = error_file.tell() > 0
+              row = {'phase': name, 'exit_code': exit_code, 'go_driver_reaped': True, 'runs': 0,
                      'passed': 0, 'failed': [], 'skipped': 0, 'observations': [],
                      'package_passes': 0,
-                     'stderr_present': bool(result.stderr), 'parse_error': False}
-              if len(result.stdout.encode()) > 32 * 1024 * 1024:
+                     'stderr_present': stderr_present, 'parse_error': False}
+              if len(output.encode()) > 32 * 1024 * 1024:
                   row['parse_error'] = True
               else:
                   try:
-                      for line in result.stdout.splitlines():
+                      for line in output.splitlines():
                           event = json.loads(line)
                           test, action = event.get('Test'), event.get('Action')
                           if test and '/' not in test:
@@ -107,7 +125,7 @@ jobs:
                                   'value': output[marker:marker + 500].strip()})
                   except (ValueError, TypeError, AttributeError):
                       row['parse_error'] = True
-              row['passed_gate'] = (result.returncode == 0 and row['runs'] > 0
+              row['passed_gate'] = (exit_code == 0 and row['runs'] > 0
                   and row['runs'] == row['passed'] and not row['failed']
                   and row['skipped'] == 0 and row['package_passes'] == 1
                   and not row['parse_error'])
@@ -151,8 +169,13 @@ jobs:
               subprocess.run(['gofmt', '-w', str(test_path), str(life_path)], check=True)
               run_phase('observed')
           finally:
-              test_path.write_text(original_test)
-              life_path.write_text(original_life)
+              if not driver_unconfirmed:
+                  test_path.write_text(original_test)
+                  life_path.write_text(original_life)
+              else:
+                  (evidence / 'restoration-unconfirmed.json').write_text(json.dumps({
+                      'restored': False, 'reason': 'go_driver_unconfirmed',
+                      'normal_cleanup_proven': False}))
           print(json.dumps({'diagnostic_only': True, 'clears_existing_failures': False,
                             'source': expected, 'phases': len(phases)}), flush=True)
           sys.exit(0 if len(phases) == 2 and all(p['passed_gate'] for p in phases) else 1)
