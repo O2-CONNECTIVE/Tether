@@ -4,9 +4,10 @@
 
 更新: 2026-11-05。
 製品の方向と機能別の完了条件は [製品目標 Issue #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189) に対応します。
-通常用途は、dot が MCP 経由で待機中の自分の Mac / Windows に仕事を依頼し、結果を受け取り、ホスト側で停止できる常駐ホストです。
+通常用途は、認可された操作クライアントが MCP 経由で待機中の自分の Mac / Windows に仕事を依頼し、結果を受け取り、ホスト側で停止できる常駐ホストです。
 必要なときだけ接続する単発派遣も、別の用途として維持します。
 利用者の開発 PC である Mac を先に完成させ、その後 Windows を完成対象とします。
+まず Mac 内のセルフホストで基本動作を検証し、その後に外部の操作クライアントから安全に届く経路を検証します。
 
 **この索引は目標と現在の実装を分ける入口です。**
 常駐版の完成、両 OS 対応、一般配布、本番利用可能を宣言するものではありません。
@@ -15,7 +16,7 @@
 
 | 確認したいこと | 正本と入口 | 読み取る範囲 |
 | --- | --- | --- |
-| 目指す体験と実施順 | [製品目標と完了条件](goals-and-acceptance.md)、[#189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189) | dots MCP と Mac GUI を先に完成させ、Windows GUI へ続ける目標 |
+| 目指す体験と実施順 | [製品目標と完了条件](goals-and-acceptance.md)、[#189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189) | MCP 接続と Mac GUI を先に完成させ、Windows GUI へ続ける目標 |
 | 実装と実機の確認状況 | [検証状態と残件](../tether-pilot-status.md)、対応 PR の固定 head と CI | 実証した版と境界。目標の記述から達成を推測しない |
 | 現在の利用と開発の入口 | [既存文書索引](../README.md)、[CLI](../agent-cli.md)、[共通開発手順](../agent-workflow.md) | その版で利用できる手順と制限 |
 | 現在の認可と停止の契約 | [command 契約](../agent-command-contract.md)、[gateway](../agent-gateway.md)、[Mac runtime](../mac-agent-runtime.md) | 本人同意、許可の寿命、所有と回収の現行ルール |
@@ -38,15 +39,3 @@
 この追加で文書やコードを移動しません。
 配置を変更する際は [配置方針](../repository-layout.md) と [編集所有権](../agent-workflow.md#開始と編集所有権) に従い、対象ファイルの担当と進行中 PR を確認します。
 個別の作業メモ、原ログ、個人環境情報、キャッシュは公開文書へ含めません。
-
-## 進行中レーンへの引継ぎ
-
-2026-11-05 の照合では、[待機入口 PR #176](https://github.com/O2-CONNECTIVE/rescue-host/pull/176)、[Windows 基盤 PR #180](https://github.com/O2-CONNECTIVE/rescue-host/pull/180)、[共通 GUI PR #182](https://github.com/O2-CONNECTIVE/rescue-host/pull/182)、[Mac 状態表示 PR #186](https://github.com/O2-CONNECTIVE/rescue-host/pull/186) などが open です。
-これらは既存の実装候補で、PR の存在だけでは #189 の完了条件を満たしません。
-
-この文書整理の編集範囲は `docs/product/` と `docs/repository-layout.md` です。
-ルート `README.md` はローカルで編集中のため、`docs/README.md` は #176 の変更対象のため、入口の直接更新を各担当との引継ぎに残します。
-`agent-cli.md`、`tether-pilot-status.md`、GUI、backend も各レーンの担当範囲を維持します。
-引継ぎ時に、それぞれの入口から本索引へリンクし、旧説明の対象版と新しい目標を区別します。
-進行中レーンを中断したり、診断専用 PR の統合条件を変えたりしません。
-Mac を先行する優先順位を理由に、進行中の Windows レーンを停止しません。
