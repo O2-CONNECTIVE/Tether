@@ -87,16 +87,18 @@ jobs:
               global driver_unconfirmed
               with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as output_file, tempfile.TemporaryFile() as error_file:
                   child = subprocess.Popen(command, cwd='backend', stdout=output_file, stderr=error_file)
+                  driver_unconfirmed = True
                   try:
                       exit_code = child.wait(timeout=420)
-                  except subprocess.TimeoutExpired:
-                      driver_unconfirmed = True
+                  except BaseException as error:
                       row = {'phase': name, 'exit_code': None, 'go_driver_reaped': False,
-                             'timeout_child_unconfirmed': True, 'passed_gate': False}
+                             'timeout_child_unconfirmed': isinstance(error, subprocess.TimeoutExpired),
+                             'wait_error': type(error).__name__, 'passed_gate': False}
                       phases.append(row)
-                      print(json.dumps(row), flush=True)
                       (evidence / (name + '.json')).write_text(json.dumps(row))
-                      raise SystemExit('DIAGNOSTIC_TIMEOUT_CHILD_UNCONFIRMED')
+                      print(json.dumps(row), flush=True)
+                      raise SystemExit('DIAGNOSTIC_CHILD_UNCONFIRMED')
+                  driver_unconfirmed = False
                   output_file.seek(0)
                   output = output_file.read(32 * 1024 * 1024 + 1)
                   error_file.seek(0, 2)
