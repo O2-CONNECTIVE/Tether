@@ -34,6 +34,7 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 ## 開発・配布
 
 - [Go CI](go-ci.md)、[viewer build/checks](../ui/mac-status/README.md)、[配置規約](repository-layout.md)。
+- [Mac resident sourceの段階計画](mac-resident-source-plan.md): 純粋transcriptの公開準備と、未接続のproducer/policy閉包・build/package/配置信頼の残件。
 - [Go license inventory](go-license-inventory.md)、[配布条件](distribution.md)。旧配布条件の合格を新しいMac packageへ転用しない。
 - [検証状態](tether-pilot-status.md)のpackage節に、license閉包・署名・notarization・受領者起動の残件を集約。
 - [旧Python開発手順](development.md)はPython部分の検証用。Go/Swiftの全試験を包含しない。
