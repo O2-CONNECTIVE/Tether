@@ -75,6 +75,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-gateway': {'main.go', 'config.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-echo-probe': {'main.go', 'probe.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-access-identity': {'main.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-host-standby': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mac-agent': {'main.go', 'config.go', 'status.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mcp': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent': {'runtime.go', 'process.go', 'cleanup_diagnostic.go', 'groupobserver.go', 'start_diagnostic.go', 'terminal_disposition.go'},
@@ -217,6 +218,7 @@ def product_files_for(goos, cgo_enabled=True):
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mac-agent'].update({
         'status_darwin.go' if goos == 'darwin' else 'status_other.go',
         'status_clock_darwin.go' if goos == 'darwin' and cgo_enabled else 'status_clock_other.go'})
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-host-standby'].add('status_darwin.go' if goos == 'darwin' else 'status_other.go')
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch'].add('terminal_darwin.go' if goos == 'darwin' else 'terminal_other.go')
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys'].add(
         'native_other.go' if goos == 'darwin' and not cgo_enabled else

@@ -256,3 +256,7 @@ Agent-only encrypted channel inventory: `internal/agentchannel` contains channel
 
 ### Local Access identity inspector
 `cmd/tether-access-identity/main.go` を全OS共通に登録します。公開issuer/AUD/JWKSを明示し、stdinのassertionを既存AccessVerifierで検証した後に限定claimsだけ出力するローカル登録補助です。認可・鍵発行・自動登録は行いません。試験は合成RSA/JWTとmemory inputのみ。詳細は [検証器手順](tether-access-identity.md) を参照してください。
+
+`cmd/tether-host-standby/main.go`とDarwinの`status_darwin.go`、他OSの`status_other.go`を対象別に通常buildの明示inventoryへ追加します。
+有限のcontextとメモリ出力によるCLI runner試験だけを実行し、待機programの実起動・signal送信・LaunchAgent登録は行いません。
+常駐化やログインsessionの実証は[待機入口の未達](tether-resident-standby.md)と区別します。
