@@ -29,6 +29,7 @@
     "eslint.config.mjs",
     "knip.config.ts",
     "native-smoke",
-    "operator"
+    "operator",
+    "host-status-fixture"
   ]
 }

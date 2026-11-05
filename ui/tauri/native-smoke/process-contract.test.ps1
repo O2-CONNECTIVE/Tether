@@ -168,3 +168,6 @@ try {
     if ($failures -ne 0) { throw 'STARTUP_DIAGNOSTIC_FAILURE_CONTRACT' }
 } finally { Remove-Item -LiteralPath $startupFolder -Recurse -Force }
 Write-Output 'STARTUP_DIAGNOSTIC_FAILURE_CONTRACT_PASS checks=2 (fixtures only; not native evidence)'
+
+# Separate scope keeps synthetic fixture helpers from changing the existing contract.
+& "$PSScriptRoot/lineage-baseline.test.ps1"
