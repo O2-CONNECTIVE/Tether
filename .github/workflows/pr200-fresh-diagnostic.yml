@@ -1,0 +1,33 @@
+name: DO NOT MERGE - PR200 three fresh runner observations
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths: ['diagnostics/pr200-fresh/**', '.github/workflows/pr200-fresh-*.yml']
+permissions:
+  contents: read
+concurrency:
+  group: pr200-fresh-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  trial1:
+    if: >-
+      github.run_attempt == 1 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diagnostic/pr200-fresh-start-20261106' &&
+      github.event.pull_request.draft == true
+    uses: ./.github/workflows/pr200-fresh-single.yml
+    with:
+      trial: 1
+  trial2:
+    needs: trial1
+    if: needs.trial1.result == 'success' && needs.trial1.outputs.continue == 'true'
+    uses: ./.github/workflows/pr200-fresh-single.yml
+    with:
+      trial: 2
+  trial3:
+    needs: trial2
+    if: needs.trial2.result == 'success' && needs.trial2.outputs.continue == 'true'
+    uses: ./.github/workflows/pr200-fresh-single.yml
+    with:
+      trial: 3
