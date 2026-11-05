@@ -17,6 +17,7 @@
 | 確認したいこと | 正本と入口 | 読み取る範囲 |
 | --- | --- | --- |
 | 目指す体験と実施順 | [製品目標と完了条件](goals-and-acceptance.md)、[#189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189) | MCP 接続と Mac GUI を先に完成させ、Windows GUI へ続ける目標 |
+| 接続構成の段階検証 | [接続検証 #190](https://github.com/O2-CONNECTIVE/rescue-host/issues/190) | Mac 内セルフホスト、外部実クライアント、必要な追加機能の順に検証する |
 | 実装と実機の確認状況 | [検証状態と残件](../tether-pilot-status.md)、対応 PR の固定 head と CI | 実証した版と境界。目標の記述から達成を推測しない |
 | 現在の利用と開発の入口 | [既存文書索引](../README.md)、[CLI](../agent-cli.md)、[共通開発手順](../agent-workflow.md) | その版で利用できる手順と制限 |
 | 現在の認可と停止の契約 | [command 契約](../agent-command-contract.md)、[gateway](../agent-gateway.md)、[Mac runtime](../mac-agent-runtime.md) | 本人同意、許可の寿命、所有と回収の現行ルール |
