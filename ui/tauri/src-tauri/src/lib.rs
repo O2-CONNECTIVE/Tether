@@ -4,6 +4,12 @@
 )]
 mod mac_status;
 
+#[allow(
+    dead_code,
+    reason = "resident wire Close evidence is not attached to process ownership or IPC"
+)]
+mod resident_port;
+
 #[cfg(any(test, feature = "startup-diagnostics"))]
 #[allow(dead_code, reason = "startup diagnostics are an opt-in test variant")]
 mod startup_diagnostics;
