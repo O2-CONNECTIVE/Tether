@@ -33,8 +33,10 @@ def synthetic_classification():
 
 
 def synthetic_preflight():
-    return {'schema': 1, 'kind': 'synthetic-powershell-ledger', 'runtimeExecuted': True,
-            'checksExpected': 5, 'checksVerified': 5, 'exitCode': 0, 'passed': True, 'code': 'pass'}
+    return {'schema': 2, 'kind': 'predicate-powershell-preflight', 'parseFilesExpected': 5,
+            'parseFilesVerified': 5, 'fixturesExpected': 2, 'fixturesVerified': 2, 'passed': True,
+            'stages': {key: {'runtimeExecuted': True, 'exitCode': 0, 'passed': True, 'code': 'pass'}
+                       for key in ('parse', 'ledger', 'detail')}}
 
 
 def reports():
@@ -163,8 +165,7 @@ class Phase2Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); source = root / 'source'; control = root / 'control'
             report.write(source / 'ui/tauri/native-smoke/tools.json', {'driverExeSha256': 'a' * 64})
-            report.write(root / 'safe/powershell-preflight.json', {'schema': 1, 'kind': 'synthetic-powershell-ledger',
-                'runtimeExecuted': True, 'checksExpected': 5, 'checksVerified': 5, 'exitCode': 0, 'passed': True, 'code': 'pass'})
+            report.write(root / 'safe/powershell-preflight.json', synthetic_preflight())
             (root / 'tools').mkdir()
             build = {'hashes': {key: 'a' * 64 for key in ['exeSha256', 'archiveSha256', 'builtExeSha256']},
                      'driverProvenance': {'binarySha256': 'a' * 64}}

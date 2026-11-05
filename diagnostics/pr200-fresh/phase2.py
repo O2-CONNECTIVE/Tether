@@ -12,6 +12,7 @@ import re
 import profile_contract
 import report
 import evidence_schema
+import powershell_preflight
 
 
 def profile_safe(value):
@@ -42,48 +43,8 @@ def capability_safe(value):
     return value
 
 
-def preflight_safe(value):
-    report.need(isinstance(value, dict) and set(value) == {'schema', 'kind', 'runtimeExecuted',
-        'checksExpected', 'checksVerified', 'exitCode', 'passed', 'code'})
-    report.need(type(value['schema']) is int and value['schema'] == 1 and value['kind'] == 'synthetic-powershell-ledger')
-    report.need(type(value['runtimeExecuted']) is bool and type(value['passed']) is bool)
-    report.need(type(value['checksExpected']) is int and value['checksExpected'] == 5 and
-                type(value['checksVerified']) is int and value['checksVerified'] in {0, 5})
-    report.need(value['exitCode'] is None or type(value['exitCode']) is int and -2147483648 <= value['exitCode'] <= 4294967295)
-    report.need(value['code'] in {'pass', 'fixture-rejected', 'command-timeout', 'command-unavailable'})
-    report.need(value['passed'] is (value['code'] == 'pass'))
-    if value['passed']:
-        report.need(value['runtimeExecuted'] and value['checksVerified'] == 5 and value['exitCode'] == 0)
-    else:
-        report.need(value['checksVerified'] == 0)
-    return value
-
-
-def preflight(control, root):
-    report.need(sys.platform == 'win32' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
-    private = root / 'powershell-preflight'
-    private.mkdir(exist_ok=False)
-    result = {'schema': 1, 'kind': 'synthetic-powershell-ledger', 'runtimeExecuted': False,
-        'checksExpected': 5, 'checksVerified': 0, 'exitCode': None, 'passed': False, 'code': 'command-unavailable'}
-    try:
-        with (private / 'stdout.log').open('wb') as stdout, (private / 'stderr.log').open('wb') as stderr:
-            process = subprocess.run(['pwsh', '-NoLogo', '-NoProfile', '-File',
-                str(control / 'diagnostics/pr200-fresh/observer-reasons.test.ps1')],
-                stdout=stdout, stderr=stderr, timeout=60, check=False)
-        result.update(runtimeExecuted=True, exitCode=process.returncode, code='fixture-rejected')
-        raw = (private / 'stdout.log').read_bytes() if (private / 'stdout.log').stat().st_size <= 4096 else b''
-        if (process.returncode == 0 and raw.decode('utf-8-sig').strip() == 'OBSERVER_LEDGER_SYNTHETIC_PASS checks=5'
-                and (private / 'stderr.log').stat().st_size == 0):
-            result.update(passed=True, checksVerified=5, code='pass')
-    except subprocess.TimeoutExpired:
-        result.update(runtimeExecuted=True, code='command-timeout')
-    except Exception:
-        # No raw exception or log is copied. Missing output never becomes a pass.
-        pass
-    report.write(root / 'safe/powershell-preflight.json', preflight_safe(result))
-    print('POWERSHELL_LEDGER_PREFLIGHT_PASS' if result['passed'] else 'POWERSHELL_LEDGER_PREFLIGHT_FAILED')
-    return 0 if result['passed'] else 1
-
+preflight_safe = powershell_preflight.preflight_safe
+preflight = powershell_preflight.preflight
 
 def decision(exits, reports, profile, capability, diagnostics=None):
     native, reason = report.verdict(*exits, reports)
@@ -192,7 +153,7 @@ def publish(root, index):
     if 'trial.json' in files:
         report.need(files['trial.json']['trial'] == index)
         if files['trial.json']['continue']:
-            report.need(preflight_safe(files.get('powershell-preflight.json', {}))['passed'])
+            report.need(powershell_preflight.current_passed(files.get('powershell-preflight.json', {})))
             report.need(evidence_schema.classification_complete(
                 {name: files[name] for name in ['profile-capability-shape.json', 'observer-failure-sites.json'] if name in files},
                 files.get('profile-observation.json', {}), files.get('profile-capability.json', {})))
@@ -214,7 +175,7 @@ def publish(root, index):
 def trial(source, control, root, index):
     report.need(sys.platform == 'win32' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
     report.need(index == 1)
-    report.need(preflight_safe(report.read(root / 'safe/powershell-preflight.json'))['passed'])
+    report.need(powershell_preflight.current_passed(report.read(root / 'safe/powershell-preflight.json')))
     build = report.identity(source, control, root, True)
     report.need(all(build['hashes'].values()) and build.get('driverProvenance'))
     report.need(build['hashes']['builtExeSha256'] == build['hashes']['exeSha256'])

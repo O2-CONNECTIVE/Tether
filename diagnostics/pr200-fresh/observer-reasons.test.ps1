@@ -13,7 +13,7 @@ if (@(Add-ObserverFailure $ledger 'snapshot-query').Count -ne 0) { throw 'LEDGER
 Add-ObserverFailure $ledger 'snapshot-query'
 if ($ledger.failureCount -ne 2 -or $ledger.sites.Count -ne 1) { throw 'LEDGER_DUPLICATE_SITE_FAILED' }
 Add-ObserverFailure $ledger 'PRIVATE_EXCEPTION_OR_PATH'
-if ($ledger.sites[-1] -cne 'unclassified-site' -or ($ledger | ConvertTo-Json).Contains('PRIVATE_')) { throw 'LEDGER_REDACTION_FAILED' }
+if ($ledger.sites[-1] -cne 'unclassified-site' -or ($ledger | ConvertTo-Json -Depth 5).Contains('PRIVATE_')) { throw 'LEDGER_REDACTION_FAILED' }
 $ledger = New-ObserverFailures
 for ($index = 0; $index -lt 5000; $index += 1) { Add-ObserverFailure $ledger 'snapshot-query' }
 if ($ledger.failureCount -ne 4096 -or -not $ledger.saturated -or $ledger.sites.Count -ne 1) { throw 'LEDGER_SATURATION_FAILED' }

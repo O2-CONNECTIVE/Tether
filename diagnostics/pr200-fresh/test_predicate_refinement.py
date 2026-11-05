@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import unittest
+from unittest.mock import patch
 
 import evidence_schema as schema
 import phase2
@@ -79,19 +80,31 @@ class PredicateRefinementTests(unittest.TestCase):
         shape = synthetic_classification()['profile-capability-shape.json']; shape['pathPredicate'] = 'PRIVATE_PATH'
         with self.assertRaises(ValueError): schema.capability_shape_safe(shape)
 
+    def test_synthetic_crlf_checkout_satisfies_same_exact_source_pin_contract(self):
+        native = REPO / 'ui/tauri/native-smoke/processes.ps1'
+        read_bytes = Path.read_bytes
+        crlf = read_bytes(native).replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+        def read(path):
+            return crlf if path == native else read_bytes(path)
+        with patch.object(Path, 'read_bytes', read):
+            self.test_static_native_source_pin_and_location_map_match_frozen_statements()
+
     def test_static_native_source_pin_and_location_map_match_frozen_statements(self):
         # Static contract, explicitly not a PowerShell runtime/stack-format proof.
         native = REPO / 'ui/tauri/native-smoke/processes.ps1'
-        digest = hashlib.sha256(native.read_bytes()).hexdigest()
+        actual = native.read_bytes()
+        lf = actual.replace(b'\r\n', b'\n')
+        digest = hashlib.sha256(lf).hexdigest()
         self.assertEqual(digest, 'a54b23fea4ed7bfc951701f2c2bee50bd3d414ca850915d5b01626670f086303')
         observer = (ROOT / 'observe-profile.ps1').read_text()
         self.assertIn(digest, observer)
-        crlf = native.read_bytes().replace(b'\n', b'\r\n')
+        crlf = lf.replace(b'\n', b'\r\n')
+        self.assertIn(actual, (lf, crlf))
         crlf_digest = hashlib.sha256(crlf).hexdigest()
         self.assertEqual(crlf_digest, '8667b375c8ba70aa06b36031888449ea796092cea2868bda16bf8709369bd72f')
         pins = re.search(r'\.Hash -in @\(([^)]+)\)', observer).group(1)
         self.assertEqual(set(re.findall(r"'([0-9a-f]{64})'", pins)), {digest, crlf_digest})
-        self.assertEqual(native.read_bytes().splitlines(), crlf.splitlines())
+        self.assertEqual(lf.splitlines(), crlf.splitlines())
         self.assertNotIn(hashlib.sha256(native.read_bytes() + b' ').hexdigest(), pins)
         detail = (ROOT / 'observer-detail.ps1').read_text()
         codes = set(re.findall(r"return '(lineage-[^']+)'", detail))
