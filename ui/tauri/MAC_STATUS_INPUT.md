@@ -23,3 +23,19 @@ EOF、readerのjoin、表示期限切れはhostや通信のcleanup確認を意�
 clockの整数演算、有限memory入力、取消と遅延入力の競合をGUIなしの試験で扱います。
 native入力の5試験は自己所有の匿名pipeだけを使う閉じたfixtureで、製品producerやGUIの受入とは別です。
 実行した範囲と未実行の範囲は固定候補headの検証記録で判定し、古いSwiftUIやbackendの実績をこの候補の実GUI検証へ持ち越しません。
+
+## GUIなしの検証入口
+
+frontend build後、既存のRust toolchainで両構成のlibrary試験を実行できます。
+5件のnative入力試験は自己所有の匿名pipe、固定memory frame、システム時刻と`/dev/null`の種別検査だけを使い、host、listener、credential、利用者の実データに接続しません。
+
+```sh
+cargo +1.99.1 test --locked --offline --manifest-path src-tauri/Cargo.toml --lib
+cargo +1.99.1 test --locked --offline --manifest-path src-tauri/Cargo.toml --features custom-protocol --lib
+```
+
+mock IPCのcontextは`generate_context!(test = true)`で生成します。
+固定依存のこの指定はruntime専用plistの埋込みを除き、生成したconfigとcapabilityの検査を保持します。
+通常起動のcontext生成は変更していません。
+`tauri-shell.yml`のMac jobは、依存をlockedで取得した後、両構成の全library試験とall-target clippyおよびbuildをofflineで行います。
+製品GUIを起動する試験はこのjobへ含めません。
