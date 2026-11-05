@@ -1,6 +1,6 @@
 #[allow(
     dead_code,
-    reason = "Mac status parity candidate has no native IO or presentation wiring"
+    reason = "Mac input prerequisites are not attached to production startup or IPC"
 )]
 mod mac_status;
 
