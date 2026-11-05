@@ -70,7 +70,7 @@ fn serialized_request_has_no_binding_path_command_or_credential_override() {
 }
 
 #[test]
-fn ordinary_shell_does_not_register_resident_or_binding_commands() {
+fn ordinary_shell_has_no_allowed_resident_or_binding_commands() {
     let app = crate::commands(tauri::test::mock_builder())
         .build(tauri::generate_context!(test = true))
         .unwrap();
@@ -103,7 +103,7 @@ fn ordinary_shell_does_not_register_resident_or_binding_commands() {
         );
         assert_eq!(
             response.err(),
-            Some(json!(format!("Command {command} not found")))
+            Some(json!(format!("{command} not allowed. Command not found")))
         );
     }
 }
