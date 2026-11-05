@@ -33,15 +33,18 @@ type HostConfig struct {
 
 // Host serves one granted Session over exactly one supplied connection.
 type Host struct {
-	mu            sync.Mutex
-	held          *agentchannel.Channel
-	accepting     bool
-	authenticated bool
-	statusClosing bool
-	started       bool
-	session       *agentexec.Session
-	channel       *agentchannel.Server
-	budget        agentchannel.Budgets
+	mu                   sync.Mutex
+	held                 *agentchannel.Channel
+	accepting            bool
+	authenticated        bool
+	statusClosing        bool
+	started              bool
+	finished             chan struct{}
+	serveCleanupErr      error
+	serveCleanupObserved bool
+	session              *agentexec.Session
+	channel              *agentchannel.Server
+	budget               agentchannel.Budgets
 }
 
 // NewHost takes the Session's single transport claim through
@@ -57,7 +60,18 @@ func NewHost(cfg HostConfig) (*Host, error) {
 	if err != nil {
 		return nil, errors.Join(ErrConfig, err)
 	}
-	return &Host{session: cfg.Session, channel: server, budget: cfg.Budgets}, nil
+	return &Host{session: cfg.Session, channel: server, budget: cfg.Budgets, finished: make(chan struct{})}, nil
+}
+
+// ChannelDispatch exposes only the held canonical channel's immutable public metadata.
+// A platform's original runtime owner may delegate this part of its transport
+// Owner port to Host; it must still own issuer/native-token/preparation cleanup.
+// This is neither connection state nor native provenance nor a live grant.
+func (h *Host) ChannelDispatch() agentchannel.Dispatch {
+	if h == nil || h.channel == nil {
+		return agentchannel.Dispatch{}
+	}
+	return h.channel.Dispatch()
 }
 
 // Serve takes ownership of conn and runs the whole host path to its end:
@@ -86,6 +100,7 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 	}
 	h.started, h.accepting = true, true
 	h.mu.Unlock()
+	defer close(h.finished)
 	ch, err := h.channel.Accept(ctx, conn)
 	h.mu.Lock()
 	h.held, h.accepting = ch, false
@@ -115,7 +130,11 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 func (h *Host) finish(ch *agentchannel.Channel, served error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), h.budget.Cleanup)
 	defer cancel()
-	return errors.Join(served, h.Close(ctx))
+	cleanupErr := h.Close(ctx)
+	h.mu.Lock()
+	h.serveCleanupErr, h.serveCleanupObserved = cleanupErr, true
+	h.mu.Unlock()
+	return errors.Join(served, cleanupErr)
 }
 
 // Close retains and retries only this Host's channel and Session. A Close while
@@ -158,5 +177,25 @@ func (h *Host) LocallyAuthenticated() (bool, bool) {
 		return false, true
 	default:
 		return true, true
+	}
+}
+
+// CleanupResult observes only the original cleanup performed by Serve, after
+// Serve actually returned. It performs no Close/retry/revoke and does not read
+// current OS state. A standalone or later explicit Close cannot overwrite this
+// historical result. The caller still owns any returned cleanup uncertainty.
+func (h *Host) CleanupResult() (error, bool) {
+	if h == nil || !h.mu.TryLock() {
+		return nil, false
+	}
+	defer h.mu.Unlock()
+	if !h.started || !h.serveCleanupObserved {
+		return nil, false
+	}
+	select {
+	case <-h.finished:
+		return h.serveCleanupErr, true
+	default:
+		return nil, false
 	}
 }

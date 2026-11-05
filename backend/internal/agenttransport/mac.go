@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 )
@@ -20,7 +20,7 @@ import (
 // Serve takes the stream and serves the one approved Session over it; Close
 // revokes and retries only that owner's unconfirmed cleanup.
 type Owner interface {
-	Dispatch() maclaunch.Dispatch
+	Dispatch() agentchannel.Dispatch
 	Serve(ctx context.Context, conn net.Conn) error
 	Close(ctx context.Context) error
 }
@@ -61,9 +61,11 @@ type Client struct {
 	cancel   context.CancelFunc
 	finished chan struct{}
 
-	cleanMu   sync.Mutex
-	link      *closer // the transport, retained until confirmed
-	ownerDone bool    // the owner's Close returned nil
+	cleanMu         sync.Mutex
+	link            *closer // the transport, retained until confirmed
+	ownerDone       bool    // the owner's Close returned nil
+	cleanupObserved bool    // completed original cleanup result, not Run error classification
+	cleanupErr      error
 }
 
 // NewClient validates the configuration against the owner's dispatch. It
@@ -219,7 +221,34 @@ func (c *Client) retry(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	return errors.Join(errs...)
+	c.cleanupErr = errors.Join(errs...)
+	c.cleanupObserved = true
+	return c.cleanupErr
+}
+
+// CleanupResult observes the last completed cleanup without retrying any owner,
+// transport or process operation. A running Run is not joined evidence, even if
+// an earlier cleanup observation exists. false means unknown/not yet observed.
+// The returned error is the original cleanup result, never inferred from Run.
+func (c *Client) CleanupResult() (error, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	ran := c.ran
+	c.mu.Unlock()
+	if ran {
+		select {
+		case <-c.finished:
+		default:
+			return nil, false
+		}
+	}
+	if !c.cleanMu.TryLock() {
+		return nil, false
+	}
+	defer c.cleanMu.Unlock()
+	return c.cleanupErr, c.cleanupObserved
 }
 
 // Close ends a running attempt, waits within ctx for Run to return and then

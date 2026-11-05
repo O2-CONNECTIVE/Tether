@@ -143,3 +143,6 @@ GOTOOLCHAIN=local GOPROXY=off GOWORK=off go test -race ./...
 
 [`internal/workerowner`](internal/workerowner/README.md)は同じ取得・Run・Closeと元source寿命を保持する内部依存です。
 通常caller・認証・実producerは追加せず、unknown後のowner保持とnative回収・退出guardは具体的callerの責任として残ります。
+
+既存channel/Host/Approved/Clientの[正規transport owner前提](../docs/mac-canonical-transport-owner.md)は、共通metadataと部分取得・cleanup観測を提供します。
+通常resident callerや認証を追加せず、実native回収・配置信頼は未実証です。

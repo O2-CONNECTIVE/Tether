@@ -14,6 +14,8 @@ resident source準備の`internal/residentwork`は`intent.go`の1fileだけを�
 同じ取得・Run・Closeとsource寿命の所有処理だけで、通常caller・policy承認・native Sessionは未接続です。
 この追加後の厳密なinventoryは、GoCI標準のcgo有効時に43package、Linux324/Darwin325/Windows355 production fileです。
 package/fileの欠落や未知fileは引き続き失敗し、直前の境界から1package/3fileだけ増えたことを検査します。
+正規transport ownerの次段は既存6 implementation file内の変更だけで、このinventoryのpackage/file集合を増やしません。
+[共通Dispatch・部分取得とcleanup観測](mac-canonical-transport-owner.md)をmemory経路と既存CLI fixtureで検査し、resident認証を有効化しません。
 実行対象は公開`backend/`だけで、存在しない対象やテスト0件を成功にしません。
 通常試験は`-cpu=1`、raceは`-cpu=2`で、試験内のGOMAXPROCS観測と照合します。
 race検出の有無と、指定した並列度の観測を区別します。

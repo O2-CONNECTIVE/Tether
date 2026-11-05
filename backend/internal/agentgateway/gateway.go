@@ -70,15 +70,9 @@ func ChannelBudgets() agentchannel.Budgets {
 		ReadStall: 30 * time.Second, WriteStall: 15 * time.Second, Cleanup: 5 * time.Second}
 }
 
-// Dispatch is the recipient-approved routing and pinning metadata, the same
-// fields as maclaunch.Dispatch. It is not a credential: the Mac host still
-// requires proof of the enrolled key and checks the binding commitment.
-// Delivering it authentically is the registration adapter's obligation.
-type Dispatch struct {
-	Binding  agentchannel.Binding
-	Deadline time.Time
-	HostKey  []byte // SSH wire bytes of the recipient's raw Ed25519 host key
-}
+// Dispatch aliases the channel's public routing/pinning metadata, not a
+// credential. Host authentication and binding checks are unchanged.
+type Dispatch = agentchannel.Dispatch
 
 type principal struct {
 	label, subject string

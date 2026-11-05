@@ -1,6 +1,6 @@
 # Mac resident producerの公開source段階
 
-未統合#200/#201/#202/#203/#204に依存する準備sourceです。
+未統合#200/#201/#202/#203/#204/#205に依存する準備sourceです。
 #200のWindows session-create阻害、stacked CI未実行、通常未接続を解除しません。
 
 ## 実際の閉包と今回の切り出し
@@ -55,3 +55,10 @@ policyは既存のtrusted native compositionから選択したalready-enrolled�
 この二つの証拠とpolicy供給が閉じて初めてsealed launcher→同じChild/pipes→first観測→既存ResidentPort/明示IPCへ接続できます。
 通常GUI/native Quitとの結合と実機再検証はその後です。
 今回、実producer/鍵/policy、署名・OS trust・運用設定、persistent accessを作る操作は行いません。
+
+## 正規transport ownerの前提
+
+次段は[共通Dispatchと具体的owner cleanup](mac-canonical-transport-owner.md)を既存6 implementation fileで閉じます。
+agenttransportからmaclaunchへのproduction型依存を取り除き、後続protected factoryからの逆向き依存が循環しないようにします。
+通常のTTY承認入口は維持し、部分取得ownerと元のcleanup結果を失わず観測します。
+resident transport/policyを有効化せず、fixed intentのrequest namespace・有限runtime deadline、opaque receiver、protected sourceとStandbyの実組成は後続です。
