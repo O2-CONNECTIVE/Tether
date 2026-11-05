@@ -9,7 +9,8 @@ fn ipc(
 ) -> Result<Value, Value> {
     let app =
         commands_with_presentation(tauri::test::mock_builder(), ShellRuntime::default(), output)
-            .build(tauri::generate_context!())
+            // Keep generated capabilities; omit runtime-only plist embedding.
+            .build(tauri::generate_context!(test = true))
             .unwrap();
     let window = tauri::WebviewWindowBuilder::new(&app, label, Default::default())
         .build()

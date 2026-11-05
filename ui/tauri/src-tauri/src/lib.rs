@@ -195,7 +195,8 @@ mod tests {
         body: serde_json::Value,
     ) -> Result<serde_json::Value, serde_json::Value> {
         let app = commands_with_runtime(tauri::test::mock_builder(), runtime)
-            .build(tauri::generate_context!())
+            // Keep generated capabilities; omit runtime-only plist embedding.
+            .build(tauri::generate_context!(test = true))
             .unwrap();
         let window = tauri::WebviewWindowBuilder::new(&app, label, Default::default())
             .build()
