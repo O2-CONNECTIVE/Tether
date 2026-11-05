@@ -35,7 +35,7 @@ func TestResidentWireRequiresGenuineOpaqueReceiverAndIntent(t *testing.T) {
 			t.Fatal("field-only receiver admitted", e)
 		}
 	}
-	s, e := f.OpenSource(context.Background())
+	s, e := f.openSource(context.Background())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -84,7 +84,7 @@ func TestResidentFixedPolicyRejectsAnyScopeExpansion(t *testing.T) {
 // cross-package execution/OAuth/macOS cleanup.
 func TestResidentNativeCoreSeparatesOuterCorrelationFromFixedStart(t *testing.T) {
 	f, rt := fixedNativeFixture(t)
-	s, e := f.OpenSource(context.Background())
+	s, e := f.openSource(context.Background())
 	if e != nil {
 		t.Fatal(e)
 	}

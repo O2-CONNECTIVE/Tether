@@ -60,7 +60,7 @@ func residentIntent(t *testing.T, s *ResidentSource, signer ssh.Signer, id strin
 	t.Helper()
 	var remote [32]byte
 	remote[0] = 9
-	if _, e := s.HostProof(remote); e != nil {
+	if _, e := s.hostProof(remote); e != nil {
 		t.Fatal(e)
 	}
 	a := s.Advertisement()
@@ -80,7 +80,7 @@ func TestResidentFactorySignedScopeCreatesActualCanonicalOwnerWithoutTTY(t *test
 	f, signer, _, rt := residentFixture(t)
 	host, stop := context.WithCancel(context.Background())
 	defer stop()
-	s, e := f.OpenSource(host)
+	s, e := f.openSource(host)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -88,7 +88,7 @@ func TestResidentFactorySignedScopeCreatesActualCanonicalOwnerWithoutTTY(t *test
 	i := residentIntent(t, s, *signer, "request1")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	r, e := s.NewRequest(ctx, i)
+	r, e := s.newRequest(ctx, i)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -106,7 +106,7 @@ func TestResidentFactorySignedScopeCreatesActualCanonicalOwnerWithoutTTY(t *test
 	if rt.starts.Load() != 0 {
 		t.Fatal("admission launched command")
 	}
-	if _, e = s.NewRequest(ctx, i); !errors.Is(e, ErrResident) {
+	if _, e = s.newRequest(ctx, i); !errors.Is(e, ErrResident) {
 		t.Fatal("intent replay accepted", e)
 	}
 	cleanup, done := context.WithTimeout(context.Background(), time.Second)
@@ -147,7 +147,7 @@ func TestResidentFactoryRejectsAlteredOrOutOfScopeIntents(t *testing.T) {
 	for _, kind := range []string{"signature", "missing-signature", "source", "server", "policy", "operation", "expiry", "request-length"} {
 		t.Run(kind, func(t *testing.T) {
 			f, key, _, rt := residentFixture(t)
-			s, e := f.OpenSource(context.Background())
+			s, e := f.openSource(context.Background())
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -175,7 +175,7 @@ func TestResidentFactoryRejectsAlteredOrOutOfScopeIntents(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			if r, e := s.NewRequest(ctx, i); r != nil || !errors.Is(e, ErrResident) {
+			if r, e := s.newRequest(ctx, i); r != nil || !errors.Is(e, ErrResident) {
 				t.Fatal("invalid intent admitted", kind, e)
 			}
 			if rt.starts.Load() != 0 {
@@ -186,11 +186,11 @@ func TestResidentFactoryRejectsAlteredOrOutOfScopeIntents(t *testing.T) {
 }
 func TestResidentFactoryOriginalScopeCannotBeReplacedByLongCaller(t *testing.T) {
 	f, key, _, _ := residentFixture(t)
-	s, _ := f.OpenSource(context.Background())
+	s, _ := f.openSource(context.Background())
 	defer s.Close()
 	i := residentIntent(t, s, *key, "original")
 	original, stop := context.WithTimeout(context.Background(), time.Minute)
-	r, e := s.NewRequest(original, i)
+	r, e := s.newRequest(original, i)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -205,12 +205,12 @@ func TestResidentFactoryOriginalScopeCannotBeReplacedByLongCaller(t *testing.T) 
 }
 func TestResidentFactoryProtectedPolicyDriftRefusesBeforeGrant(t *testing.T) {
 	f, key, raw, rt := residentFixture(t)
-	s, _ := f.OpenSource(context.Background())
+	s, _ := f.openSource(context.Background())
 	defer s.Close()
 	i := residentIntent(t, s, *key, "drift")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	r, e := s.NewRequest(ctx, i)
+	r, e := s.newRequest(ctx, i)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -226,12 +226,12 @@ func TestResidentFactoryProtectedPolicyDriftRefusesBeforeGrant(t *testing.T) {
 }
 func TestResidentFactoryCanonicalConstraintRejectsCommandExpansion(t *testing.T) {
 	f, key, _, rt := residentFixture(t)
-	s, _ := f.OpenSource(context.Background())
+	s, _ := f.openSource(context.Background())
 	defer s.Close()
 	i := residentIntent(t, s, *key, "fixed")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	r, e := s.NewRequest(ctx, i)
+	r, e := s.newRequest(ctx, i)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -268,12 +268,12 @@ func TestResidentFactoryCleanupUnknownAndPanicRetainCapsule(t *testing.T) {
 	for _, kind := range []string{"read-cleanup", "runtime-panic"} {
 		t.Run(kind, func(t *testing.T) {
 			f, key, _, _ := residentFixture(t)
-			s, _ := f.OpenSource(context.Background())
+			s, _ := f.openSource(context.Background())
 			defer s.Close()
 			i := residentIntent(t, s, *key, "partial")
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			r, e := s.NewRequest(ctx, i)
+			r, e := s.newRequest(ctx, i)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -286,7 +286,7 @@ func TestResidentFactoryCleanupUnknownAndPanicRetainCapsule(t *testing.T) {
 			if owned == nil || !errors.Is(e, ErrResidentUnknown) || strings.Contains(e.Error(), "SENTINEL") {
 				t.Fatal("partial state lost or raw failure leaked", e)
 			}
-			if fresh, e := f.OpenSource(context.Background()); fresh != nil || !errors.Is(e, ErrResident) {
+			if fresh, e := f.openSource(context.Background()); fresh != nil || !errors.Is(e, ErrResident) {
 				t.Fatal("uncertain factory admitted a replacement source", e)
 			}
 			w, observed := s.Worker("partial")
@@ -343,11 +343,11 @@ func TestResidentPolicySchemaIsStrict(t *testing.T) {
 }
 func TestResidentSourceCloseRevokesActualGrantAndBlocksFreshRequests(t *testing.T) {
 	f, key, _, _ := residentFixture(t)
-	s, _ := f.OpenSource(context.Background())
+	s, _ := f.openSource(context.Background())
 	i := residentIntent(t, s, *key, "revoke")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	r, e := s.NewRequest(ctx, i)
+	r, e := s.newRequest(ctx, i)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -360,7 +360,7 @@ func TestResidentSourceCloseRevokesActualGrantAndBlocksFreshRequests(t *testing.
 	if w.Dispatch().Binding.Profile != 0 || w.approved.issuer.Snapshot().HasAuthority {
 		t.Fatal("source closed without revoking original authority")
 	}
-	if _, e := s.NewRequest(ctx, i); !errors.Is(e, ErrResident) {
+	if _, e := s.newRequest(ctx, i); !errors.Is(e, ErrResident) {
 		t.Fatal("closed source accepted work", e)
 	}
 	closeResidentTest(t, owned)
@@ -408,12 +408,12 @@ func TestResidentWorkerRunKeepsOriginalDeadlineAndObservesCleanupOnce(t *testing
 		client = &residentObservedClient{owner: a, started: make(chan context.Context, 1)}
 		return client, nil
 	}
-	s, _ := f.OpenSource(context.Background())
+	s, _ := f.openSource(context.Background())
 	defer s.Close()
 	i := residentIntent(t, s, *key, "run")
 	original, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	r, e := s.NewRequest(original, i)
+	r, e := s.newRequest(original, i)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -475,12 +475,12 @@ func TestResidentWorkerUnknownRunJoinRetainsOriginalCapsule(t *testing.T) {
 		client = &residentObservedClient{owner: a, started: make(chan context.Context, 1), release: release}
 		return client, nil
 	}
-	s, _ := f.OpenSource(context.Background())
+	s, _ := f.openSource(context.Background())
 	defer s.Close()
 	i := residentIntent(t, s, *key, "unknown")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	r, _ := s.NewRequest(ctx, i)
+	r, _ := s.newRequest(ctx, i)
 	owned, e := r.Approve(ctx)
 	if e != nil {
 		t.Fatal(e)
@@ -527,12 +527,12 @@ func (c residentCancelAtRegistration) AfterFunc(f func()) func() bool {
 }
 func TestResidentWorkerCancellationBeforeClientEntryStillClosesRealClient(t *testing.T) {
 	f, key, _, _ := residentFixture(t)
-	s, _ := f.OpenSource(context.Background())
+	s, _ := f.openSource(context.Background())
 	defer s.Close()
 	i := residentIntent(t, s, *key, "entry-race")
 	original, stopOriginal := context.WithTimeout(context.Background(), time.Minute)
 	defer stopOriginal()
-	r, _ := s.NewRequest(original, i)
+	r, _ := s.newRequest(original, i)
 	owned, e := r.Approve(original)
 	if e != nil {
 		t.Fatal(e)
@@ -554,12 +554,12 @@ func TestResidentWorkerCancellationBeforeClientEntryStillClosesRealClient(t *tes
 }
 func TestResidentRequestCapturesMonotonicReceiptBeforeDelayedAdmission(t *testing.T) {
 	f, key, _, _ := residentFixture(t)
-	s, _ := f.OpenSource(context.Background())
+	s, _ := f.openSource(context.Background())
 	defer s.Close()
 	i := residentIntent(t, s, *key, "elapsed")
 	original, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
-	r, e := s.NewRequest(original, i)
+	r, e := s.newRequest(original, i)
 	if e != nil {
 		t.Fatal(e)
 	}

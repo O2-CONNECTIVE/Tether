@@ -14,6 +14,7 @@ receiver だけを型や callback に置き換えると、その認証・世代�
 - `ResidentReceiver` は完全な handshake の後にだけ内部生成します。zero value・struct copy・自己申告flag・caller実装のmetadataでは認証済みsourceを作れません。
 - 固定intentは署名・sequence・generation・request replay・operation・timeout・期限を検査し、receipt時のmonotonic lifetimeと元contextを保持します。後でwall clockから期限を作り直しません。
 - `ResidentSourceLease` は元のreaderをexclusiveに渡し、consumerの `Finish` を待ちます。取消だけでconsumer回収を推定せず、unknownでは元lease・transportを保持し、再接続・置換で成功扱いにしません。
+- 認証済みreceiver自身がnative sourceの単回claimを不可逆に保持します。同じfactory・別factory・同時呼出し・元source終了後でも、同じreceiverを再消費できません。claimは認証やgrantのproofを作るAPIではなく、既に認証されたobjectの所有操作です。
 - work登録は同じintentとcanonical dispatchに署名を結び、現在のhost/principal/generationと元期限を確認します。signed pendingは受付だけで、実行や回収の成功ではありません。
 - gateway/MCPは固定操作だけを公開する内部構成です。元のcommand状態、host-owner receipt、gatewayの元cleanupを別に保持し、確認済みの結果payloadだけを明示releaseできます。tombstoneはreplay用に残ります。MCP response取消やDELETEをwork停止・回収と混同しません。
 
@@ -32,6 +33,7 @@ policy再読取りのdigest変化やcleanup不明では元factoryをblockし、�
 protected fileの受理はpublisher・配置元や実行artifactの信頼証明ではありません。
 既存native file I/Oは同期的で、context期限はsyscall内部の停止を保証しません。
 
+公開するsource入力は `OpenWireSource` / `NewWireRequest` に限定します。旧signed-intent用の `openSource` / `hostProof` / `newRequest` はpackage内部のhelperで、公開入力として代用しません。
 `OpenWireSource` / `NewWireRequest` は実際のopaque receiver、endpoint、両key fingerprint、元generation/context/deadlineへ接続します。
 output側のclient factoryは認証済み入力を生成するportではありません。
 各requestは元issuer/Approved/clientと部分取得を同じ `ResidentWorker` に保持し、元の固定request IDへだけ渡します。
@@ -46,7 +48,7 @@ Run/Close・元cleanup・unknownを別々に観測し、source終了やreceipt�
 
 この正の試験は `NewWireRequest` までです。
 `Approve` / `Run` は呼ばず、grant/session/command/work transportを作りません。
-元context保持、receiverのcopy拒否、scope release後の復活拒否、policy drift拒否、同じcontrolのFinish/Close/Run、memory streamとhandler終了を確認します。
+元context保持、receiverのcopy拒否、同時claimの一勝者、同じreceiverのfactory跨ぎ・source終了後の再消費拒否、scope release後の復活拒否、policy drift拒否、同じcontrolのFinish/Close/Run、memory streamとhandler終了を確認します。
 `export_test.go` 相当のhelperは試験variantだけの観測IO注入で、production buildや認証constructorには含みません。
 
 source/workerの署名付き承認・部分取得・Run/Closeは別のmemory unitで確認しますが、これらを全authenticated consume/native実行の一つの証拠へ合算しません。

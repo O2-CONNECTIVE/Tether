@@ -47,7 +47,10 @@ func (f *ResidentFactory) OpenWireSource(receiver *agenttransport.ResidentReceiv
 	if e != nil {
 		return nil, e
 	}
-	s, e := f.OpenSource(receiver.Context())
+	if e := receiver.ClaimNativeSource(); e != nil {
+		return nil, ErrResident
+	}
+	s, e := f.openSource(receiver.Context())
 	if e != nil {
 		return nil, e
 	}

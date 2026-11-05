@@ -5,6 +5,7 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +25,21 @@ type ResidentReceiver struct {
 	seen                                  map[string]bool
 	workMu                                sync.Mutex
 	work                                  map[string]context.CancelFunc
+	nativeClaimed                         atomic.Bool
+}
+
+// ClaimNativeSource irreversibly reserves this already-authenticated receiver
+// for one native source, across factories and after source closure. It creates
+// no authentication, grant, execution, or cleanup proof. Failed construction
+// after a successful claim must not replace or reset this original source.
+func (r *ResidentReceiver) ClaimNativeSource() error {
+	if r == nil || r.self != r || r.ctx.Err() != nil {
+		return ErrClosed
+	}
+	if !r.nativeClaimed.CompareAndSwap(false, true) {
+		return ErrUsed
+	}
+	return nil
 }
 
 func newResidentReceiver(source context.Context, cfg ResidentClientConfig, ws *websocket.Conn) (*ResidentReceiver, error) {

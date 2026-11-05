@@ -45,7 +45,7 @@ type ResidentSource struct {
 	wireReceiver                       *agenttransport.ResidentReceiver
 }
 
-func (f *ResidentFactory) OpenSource(host context.Context) (*ResidentSource, error) {
+func (f *ResidentFactory) openSource(host context.Context) (*ResidentSource, error) {
 	if f == nil || f.self != f || f.blocked.Load() || host == nil || host.Err() != nil {
 		return nil, ErrResident
 	}
@@ -89,7 +89,7 @@ func (s *ResidentSource) liveLocked() bool {
 
 // HostProof signs only the fixed control-host domain. There is one attempt per
 // source, no caller-provided signing bytes or reusable approval result.
-func (s *ResidentSource) HostProof(server [32]byte) ([]byte, error) {
+func (s *ResidentSource) hostProof(server [32]byte) ([]byte, error) {
 	if s == nil || s.self != s {
 		return nil, ErrResident
 	}
@@ -122,7 +122,7 @@ func (s *ResidentSource) HostProof(server [32]byte) ([]byte, error) {
 	s.proofReady = true
 	return append([]byte(nil), sig.Blob...), nil
 }
-func (s *ResidentSource) NewRequest(original context.Context, i residentwork.Intent) (*workerowner.Request, error) {
+func (s *ResidentSource) newRequest(original context.Context, i residentwork.Intent) (*workerowner.Request, error) {
 	if s == nil || s.self != s || !finiteResident(original) || !residentwork.ValidRequestID(i.RequestID) || !residentwork.ValidOperationID(i.OperationID) {
 		return nil, ErrResident
 	}
