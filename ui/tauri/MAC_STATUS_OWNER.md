@@ -1,0 +1,24 @@
+# Mac読取側の子process所有
+
+このsourceは、将来の信頼したproducer結合に先立ち、exact Childとそのstdout readerを同じ親ownerで保持する内部前提です。
+通常のstartupとIPCは未接続のままで、production callerに公開するlaunch factoryはありません。
+Command、fd、path、callbackを外から渡して観測sourceを登録する入口も追加しません。
+
+`ProducerSupervisor`は監督threadを先に作り、その中で生成したexact Childを保持します。
+attachmentが失敗またはpanicしても同じChildをreapします。
+自然なChild終了だけを理由にreaderを取り消さず、読取取消やfaultがなければbuffered terminal bytesをEOFまでdrainします。
+明示的なviewer取消や読取faultではEOF前に読取を終える場合がありますが、どの場合も存在するreaderの実joinまで監督完了を報告しません。
+実joinが未完了ならpollはhandleを保持し、監督結果が不明なDropは親の終了を許可しません。
+
+viewer handleの`BoundSource`はsnapshotを読むときにcontinuous clockを新しく取得します。
+clock異常はreader取消を要求し、過去の時刻でfreshnessを復活させません。
+viewer破棄はreader取消だけを要求し、producerへのsignalやkillを行わず、親のChild所有も移しません。
+readerのEOF、Childのexit/reap、hostのcleanup確認は別の観測です。
+このownerだけで常駐版の終了や実行許可の失効を確認したとは扱いません。
+
+移植元の固定producer path/hashと`PreparedLaunch`は含めていません。
+実接続へ進むには、公開構成に合う信頼したproducer準備とprotected policy結合、その後にauthoritative close proofとouter monitor joinを持つ常駐lifecycleが必要です。
+任意Command factoryや単なるreap gateでこれを代替しません。
+
+閉じた試験は新しく生成した無害な自己所有childだけを使い、snapshot、terminal EOF drain、viewer破棄後のexact reap、attachment失敗/panic、spawn拒否、unknown保持を確認します。
+本物のnative producer、GUI、実認証、listener、利用者データには接続せず、合成childを本番live sourceとして表示しません。
