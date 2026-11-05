@@ -104,6 +104,17 @@ func protectedFixture(t *testing.T, hostKey ed25519.PrivateKey, principal ssh.Pu
 }
 
 func TestProtectedPolicyAcceptsActualReceiverBeforeWorkApproval(t *testing.T) {
+	protectedPolicyBridge(t, "request")
+}
+
+func TestProtectedPolicyReceiverClaimFailureRetainsOriginalOwner(t *testing.T) {
+	for _, scenario := range []string{"abandoned", "policy-drift", "canceled", "expired", "closed", "unknown"} {
+		t.Run(scenario, func(t *testing.T) { protectedPolicyBridge(t, scenario) })
+	}
+}
+
+func protectedPolicyBridge(t *testing.T, scenario string) {
+	t.Helper()
 	hostBytes := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x45}, ed25519.SeedSize))
 	principalBytes := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x46}, ed25519.SeedSize))
 	host, err := ssh.NewSignerFromKey(hostBytes)
@@ -116,13 +127,24 @@ func TestProtectedPolicyAcceptsActualReceiverBeforeWorkApproval(t *testing.T) {
 	}
 	const endpoint = "wss://resident.example.test/control"
 	path, drift := protectedFixture(t, hostBytes, principal.PublicKey(), endpoint)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	load, stopLoad := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stopLoad()
 	transport := &neverCreateClient{}
-	factory, err := maclaunch.LoadStandbyResident(ctx, path, transport, agentgateway.ChannelBudgets())
+	factory, err := maclaunch.LoadStandbyResident(load, path, transport, agentgateway.ChannelBudgets())
 	if err != nil {
 		t.Fatal("self-created protected fixture refused", err)
 	}
+	secondFactory, err := maclaunch.LoadStandbyResident(load, path, transport, agentgateway.ChannelBudgets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifetime := 15 * time.Second
+	if scenario == "expired" {
+		lifetime = 2 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), lifetime)
+	defer cancel()
+	var consumerResult error
 	registrar := &noGrantRegistrar{}
 	budgets := agenttransport.ExportResidentTestBudgets()
 	handler, err := agenttransport.NewHandler(agenttransport.HandlerConfig{Endpoint: endpoint, Registrar: registrar, Budgets: budgets,
@@ -144,16 +166,29 @@ func TestProtectedPolicyAcceptsActualReceiverBeforeWorkApproval(t *testing.T) {
 		cleanup, stop := context.WithTimeout(context.Background(), 4*time.Second)
 		defer stop()
 		if lease != nil {
-			if err := lease.Finish(cleanup, nil); err != nil {
+			err := lease.Finish(cleanup, consumerResult)
+			if consumerResult == nil && err != nil || consumerResult != nil && (!errors.Is(err, consumerResult) || !errors.Is(err, agenttransport.ErrCleanupUnknown)) {
 				t.Error("same source Finish", err)
 			}
+			if consumerResult != nil {
+				if repeated := lease.Finish(cleanup, nil); !errors.Is(repeated, consumerResult) {
+					t.Error("second Finish replaced the original unknown", repeated)
+				}
+			}
 		}
-		if err := client.Close(cleanup); err != nil {
+		if err := client.Close(cleanup); consumerResult == nil && err != nil || consumerResult != nil && !errors.Is(err, agenttransport.ErrCleanupUnknown) {
 			t.Error("same control Close", err)
 		}
 		select {
 		case err := <-done:
-			if !errors.Is(err, context.Canceled) {
+			expected := error(context.Canceled)
+			if scenario == "expired" {
+				expected = context.DeadlineExceeded
+			}
+			if consumerResult != nil {
+				expected = agenttransport.ErrCleanupUnknown
+			}
+			if !errors.Is(err, expected) {
 				t.Error("same control Run result", err)
 			}
 		case <-cleanup.Done():
@@ -162,7 +197,18 @@ func TestProtectedPolicyAcceptsActualReceiverBeforeWorkApproval(t *testing.T) {
 		if err := handler.Close(cleanup); err != nil {
 			t.Error("same handler Close", err)
 		}
+		if consumerResult != nil {
+			if result, seen := client.CleanupResult(); !seen || !errors.Is(result, agenttransport.ErrCleanupUnknown) || !errors.Is(result, consumerResult) {
+				t.Error("original client lost unknown", result, seen)
+			}
+			if _, err := client.Accept(cleanup); !errors.Is(err, agenttransport.ErrClosed) {
+				t.Error("unknown original connector admitted replacement", err)
+			}
+		}
 		memory.CheckStopped(t)
+		if registrar.calls.Load() != 0 || transport.calls.Load() != 0 {
+			t.Error("input acceptance created a work transport")
+		}
 	})
 	lease, err = client.Accept(ctx)
 	if err != nil {
@@ -174,6 +220,64 @@ func TestProtectedPolicyAcceptsActualReceiverBeforeWorkApproval(t *testing.T) {
 			t.Fatal("actual authenticated source not ready")
 		case <-time.After(time.Millisecond):
 		}
+	}
+	if scenario != "request" {
+		r := lease.Receiver()
+		switch scenario {
+		case "abandoned", "policy-drift", "canceled", "unknown":
+			// Reserve the genuine receiver without constructing a source. This
+			// tests the spent reservation, not an injected constructor callback.
+			if err := r.ClaimNativeSource(); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.ClaimNativeSource(); !errors.Is(err, agenttransport.ErrUsed) {
+				t.Fatal("claim was reset", err)
+			}
+			if scenario == "policy-drift" {
+				drift()
+			}
+			if scenario == "canceled" {
+				cancel()
+				<-r.Context().Done()
+			}
+			if scenario == "unknown" {
+				consumerResult = errors.New("original consumer cleanup remained unknown")
+			}
+		case "expired":
+			<-r.Context().Done()
+			if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.Fatal("original deadline did not expire")
+			}
+		case "closed":
+			r.Close()
+			<-r.Context().Done()
+		}
+		if scenario == "expired" || scenario == "closed" {
+			if err := r.ClaimNativeSource(); !errors.Is(err, agenttransport.ErrClosed) {
+				t.Fatal("ended receiver claimed", err)
+			}
+		}
+		for _, candidate := range []*maclaunch.ResidentFactory{factory, secondFactory} {
+			if source, err := candidate.OpenWireSource(r); source != nil || !errors.Is(err, maclaunch.ErrResident) {
+				if source != nil {
+					t.Cleanup(source.Close)
+				}
+				t.Fatal("failed/ended reservation acquired a source", err)
+			}
+		}
+		if scenario == "policy-drift" {
+			fresh, err := maclaunch.LoadStandbyResident(load, path, transport, agentgateway.ChannelBudgets())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if source, err := fresh.OpenWireSource(r); source != nil || !errors.Is(err, maclaunch.ErrResident) {
+				if source != nil {
+					t.Cleanup(source.Close)
+				}
+				t.Fatal("fresh policy factory reset the spent receiver", err)
+			}
+		}
+		return
 	}
 	cloned := *lease.Receiver()
 	if err := cloned.ClaimNativeSource(); !errors.Is(err, agenttransport.ErrClosed) {
@@ -187,9 +291,10 @@ func TestProtectedPolicyAcceptsActualReceiverBeforeWorkApproval(t *testing.T) {
 		err    error
 	}
 	results := make(chan sourceResult, 4)
-	for range 4 {
+	for index := range 4 {
+		candidate := []*maclaunch.ResidentFactory{factory, secondFactory}[index%2]
 		go func() {
-			source, err := factory.OpenWireSource(lease.Receiver())
+			source, err := candidate.OpenWireSource(lease.Receiver())
 			results <- sourceResult{source, err}
 		}()
 	}
@@ -223,10 +328,6 @@ func TestProtectedPolicyAcceptsActualReceiverBeforeWorkApproval(t *testing.T) {
 	}
 	if repeated, err := source.NewWireRequest(intent); repeated != nil || !errors.Is(err, maclaunch.ErrResident) {
 		t.Fatal("same source repeated its native request", err)
-	}
-	secondFactory, err := maclaunch.LoadStandbyResident(ctx, path, transport, agentgateway.ChannelBudgets())
-	if err != nil {
-		t.Fatal(err)
 	}
 	for index, candidate := range []*maclaunch.ResidentFactory{factory, secondFactory} {
 		duplicate, err := candidate.OpenWireSource(lease.Receiver())

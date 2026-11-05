@@ -57,3 +57,8 @@ source/workerの署名付き承認・部分取得・Run/Closeは別のmemory uni
 
 後続は具体的Standby、codec/mapper/owned pipe/startup/producer entry、sealed launcher、publisher・source/artifact対応・保護配置・verify-to-execの信頼です。
 [全体の段階計画](mac-resident-source-plan.md)を参照してください。
+
+
+追加回帰では、真正 receiver を claim したまま source を作らない場合、policy 変更、取消、実期限切れ、Close、consumer unknown を確認します。
+同一・別 factory 間の並行取得は一つだけが成功し、失敗後に予約を戻しません。元 lease の unknown 結果も2回目の Finish で上書きできません。
+これは修正後の source 回帰で、constructor 内の命令間 race、entropy failure、native work の実行や全 authenticated consume の証拠には含めません。

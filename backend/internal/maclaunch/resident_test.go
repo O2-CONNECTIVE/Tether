@@ -584,3 +584,21 @@ func TestResidentRequestCapturesMonotonicReceiptBeforeDelayedAdmission(t *testin
 
 // Shared dispatch conformance belongs with the concrete approval owner.
 var _ agenttransport.Owner = (*Approved)(nil)
+
+// This is the actual constructor's cancellation failure seam. Receiver claims
+// and same-owner cleanup are covered separately with a genuinely authenticated
+// receiver in agenttransport; no authenticated context is synthesized here.
+func TestResidentSourceConstructionRejectsCanceledOriginalContext(t *testing.T) {
+	factory, _, _, runtime := residentFixture(t)
+	original, cancel := context.WithCancel(context.Background())
+	cancel()
+	if source, err := factory.openSource(original); source != nil || !errors.Is(err, ErrResident) {
+		if source != nil {
+			t.Cleanup(source.Close)
+		}
+		t.Fatal("constructor replaced canceled original context", err)
+	}
+	if runtime.starts.Load() != 0 {
+		t.Fatal("failed source construction started runtime")
+	}
+}
