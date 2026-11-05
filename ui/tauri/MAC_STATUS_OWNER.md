@@ -5,7 +5,9 @@
 Command、fd、path、callbackを外から渡して観測sourceを登録する入口も追加しません。
 
 `ProducerSupervisor`は監督threadを先に作り、その中で生成したexact Childを保持します。
-attachmentが失敗またはpanicしても同じChildをreapし、readerがある場合はbuffered terminal bytesをEOFまでdrainして実joinするまで監督完了を報告しません。
+attachmentが失敗またはpanicしても同じChildをreapします。
+自然なChild終了だけを理由にreaderを取り消さず、読取取消やfaultがなければbuffered terminal bytesをEOFまでdrainします。
+明示的なviewer取消や読取faultではEOF前に読取を終える場合がありますが、どの場合も存在するreaderの実joinまで監督完了を報告しません。
 実joinが未完了ならpollはhandleを保持し、監督結果が不明なDropは親の終了を許可しません。
 
 viewer handleの`BoundSource`はsnapshotを読むときにcontinuous clockを新しく取得します。
