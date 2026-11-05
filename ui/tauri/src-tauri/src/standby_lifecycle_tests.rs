@@ -69,6 +69,10 @@ fn same_child_close_and_supervisor_join_precede_outer_join_and_exit() {
     let first = source.first_with_timeout(Duration::from_secs(2));
     let mut owner = StandbyOwner::start(producer).unwrap();
     let gate = owner.gate.clone();
+    // This barrier tests re-requesting an already latched exit intent. Seed
+    // only that intent, so a fast Close always reaches the blocking wake.
+    // All Close/EOF/Child/worker/outer-join evidence still comes from real IO.
+    gate.0.state.lock().unwrap().requested = true;
     let (entered, notified) = mpsc::channel();
     let (release, wait) = mpsc::channel();
     let wait = Mutex::new(wait);
@@ -132,6 +136,30 @@ fn same_child_close_and_supervisor_join_precede_outer_join_and_exit() {
     assert!(after_return || initial_after_return);
     assert!(gate.finish_requested() && gate.request_exit());
     assert!(gate.0.monitor.lock().unwrap().joined);
+}
+
+#[test]
+fn completion_before_first_exit_intent_returns_true_without_needing_a_wake() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (producer, source) = Supervisor::retained_close_fixture();
+    let first = source.first_with_timeout(Duration::from_secs(2));
+    let mut owner = StandbyOwner::start(producer).unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
+    let observed = count.clone();
+    owner.gate.set_wake(Arc::new(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+    }));
+    // Force the legal fast-completion order without fabricating an outcome:
+    // the same Close handle, actual Child/IO and monitor finish before intent.
+    owner.join();
+    let before = count.load(Ordering::SeqCst);
+    let exit = owner.gate.request_exit();
+    assert!(first.is_ok());
+    assert_eq!(owner.gate.outcome(), Some(Outcome::Confirmed));
+    assert!(owner.gate.0.monitor.lock().unwrap().joined);
+    assert_eq!(before, 0);
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    assert!(exit);
 }
 
 #[test]
