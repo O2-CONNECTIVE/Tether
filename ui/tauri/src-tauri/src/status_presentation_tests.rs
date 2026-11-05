@@ -34,7 +34,7 @@ fn default_command_route_is_compiled_target_and_never_fixture_observation() {
     let output = ipc(
         StatusPresentation::default(),
         "main",
-        "http://tauri.localhost",
+        local_ipc_origin(),
         json!({"protocolVersion": 1}),
     )
     .unwrap();
@@ -71,7 +71,7 @@ fn request_cannot_select_platform_or_inject_bytes_clock_and_source() {
         assert!(ipc(
             StatusPresentation::default(),
             "main",
-            "http://tauri.localhost",
+            local_ipc_origin(),
             request,
         )
         .is_err());
@@ -81,7 +81,7 @@ fn request_cannot_select_platform_or_inject_bytes_clock_and_source() {
 #[test]
 fn new_read_command_rejects_unauthorized_window_and_remote_origin() {
     for (label, origin) in [
-        ("other", "http://tauri.localhost"),
+        ("other", local_ipc_origin()),
         ("main", "https://example.invalid"),
     ] {
         assert!(ipc(
@@ -105,7 +105,7 @@ fn validated_finite_fixture_output_crosses_the_actual_mock_tauri_command() {
     let output = ipc(
         StatusPresentation::synthetic(state.snapshot(), 100.5),
         "main",
-        "http://tauri.localhost",
+        local_ipc_origin(),
         json!({"protocolVersion": 1}),
     )
     .unwrap();

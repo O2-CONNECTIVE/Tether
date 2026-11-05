@@ -1,5 +1,8 @@
 # Mac Snapshot の共通表示向け pure mapping
 
+この文書はpure mapper追加時点の設計と検証の記録です。
+現在の通常Appへの読取専用経路は[Mac状態出力の接続契約](MAC_STATUS_APP.md)を参照してください。
+
 ## 範囲と受入
 
 固定基点 `7420cf2d219aee5f98a861fe2f8c01d17673e35a` の Mac Decoder / FeedState / Snapshot を入力とする、表示だけの候補です。`mac_status/presentation.rs::present(&Snapshot, now)` は状態を変更せず、内部値 `MacPresentation { heading, detail, icon }` を返します。`StatusContent.tsx` の heading/detail と checking/neutral/warning の出力形に対応しますが、serde 型・新しい通信 wire・Tauri command は追加しません。
@@ -21,7 +24,10 @@ Swift比較元は固定 `050e48f90e8182e15f7c2ac6374ac45bc6b7097a` の Status.sw
 
 ローカルRust toolchainは未導入・利用不可のため、この追加コードのcompile/fmt/clippy/testは未実行です。実行red/greenやSwiftとの実行同値を主張しません。基点CIの成功はこの差分の成功ではありません。公開承認後は既存 `tauri-shell.yml` の fmt/clippy/test（custom-protocol）で検査でき、新workflowやcrateは不要です。
 
-通常 App はまだMac出力を取得しません。将来はMac専用read-only応答の境界検査とプラットフォーム分岐からStatusContentへ渡す必要があります。今回追加する内部値をそのまま公開wireとして扱いません。
+mapper追加時点では、通常AppはMac出力を取得していませんでした。
+現在はMac専用read-only応答の境界検査とプラットフォーム分岐からStatusContentへ渡す経路が追加されています。
+production Macの入力はsource-unavailableのままで、合成観測は試験専用です。
+このmapperの内部値と公開応答の契約は[Mac状態出力の接続契約](MAC_STATUS_APP.md)で区別します。
 
 ## 次工程の境界（未実装）
 

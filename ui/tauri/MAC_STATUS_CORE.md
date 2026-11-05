@@ -1,8 +1,13 @@
 # Mac status入力のpure Rust候補
 
+この文書はpure core追加時点の設計と検証の記録です。
+現在の通常Appへの読取専用経路は[Mac状態出力の接続契約](MAC_STATUS_APP.md)を参照してください。
+
 Tauri共通画面へ向けた第2段の **source候補** です。共通presentation outputとMac status入力を混同しません。`src-tauri/src/mac_status` は固定公開commit `050e48f90e8182e15f7c2ac6374ac45bc6b7097a` のSwift `ui/mac-status/Sources/StatusCore/Status.swift` のDecoder / FeedState / Snapshotを参照し、PipeReaderのread chunk処理だけをメモリmodelにしています。Swift source・既存GUIは変更しません。
 
-このmoduleはnative pipe、clock、Tauri command、React表示へ**未配線**です。起動、fd所有、signal、read thread、join、実行許可、IPC、再接続、viewerやagentの起動は追加しません。既存shellの未接続・開始停止不可は不変です。
+core追加時点では、このmoduleはnative pipe、clock、Tauri command、React表示へ未配線でした。
+現在は読取専用commandと通常Appの表示経路が追加されていますが、production Macの入力はsource-unavailableのままです。
+native pipe、clock、fd所有、read thread、join、実行許可、再接続、viewerやagentの起動は接続されておらず、開始と停止は無効です。
 
 ## 固定入力契約
 

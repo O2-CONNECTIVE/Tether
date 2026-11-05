@@ -167,6 +167,15 @@ pub fn run() {
 }
 
 #[cfg(test)]
+fn local_ipc_origin() -> &'static str {
+    if cfg!(any(windows, target_os = "android")) {
+        "http://tauri.localhost"
+    } else {
+        "tauri://localhost"
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -262,7 +271,7 @@ mod tests {
         let response = ipc_with_runtime(
             ShellRuntime::monitoring(connection),
             "main",
-            "http://tauri.localhost",
+            local_ipc_origin(),
             "get_shell_status",
             json!({"request": {"protocolVersion": 1}}),
         )
@@ -304,7 +313,7 @@ mod tests {
         let response = ipc_with_runtime(
             ShellRuntime::monitoring(connection),
             "main",
-            "http://tauri.localhost",
+            local_ipc_origin(),
             "get_shell_status",
             json!({"request": {"protocolVersion": 1}}),
         );
@@ -315,7 +324,7 @@ mod tests {
     fn public_ipc_reports_unwired_and_cannot_start_or_confirm_termination() {
         let response = ipc(
             "main",
-            "http://tauri.localhost",
+            local_ipc_origin(),
             "get_shell_status",
             json!({"request": {"protocolVersion": 1}}),
         )
@@ -333,7 +342,7 @@ mod tests {
     fn rejects_unsupported_version() {
         let error = ipc(
             "main",
-            "http://tauri.localhost",
+            local_ipc_origin(),
             "get_shell_status",
             json!({"request": {"protocolVersion": 2}}),
         )
@@ -349,7 +358,7 @@ mod tests {
         ] {
             assert!(ipc(
                 "main",
-                "http://tauri.localhost",
+                local_ipc_origin(),
                 "get_shell_status",
                 json!({"request": request})
             )
@@ -361,7 +370,7 @@ mod tests {
     fn denies_window_without_capability() {
         assert!(ipc(
             "other",
-            "http://tauri.localhost",
+            local_ipc_origin(),
             "get_shell_status",
             json!({"request": {"protocolVersion": 1}})
         )
@@ -381,7 +390,7 @@ mod tests {
 
     #[test]
     fn has_no_start_session_command() {
-        assert!(ipc("main", "http://tauri.localhost", "start_session", json!({})).is_err());
+        assert!(ipc("main", local_ipc_origin(), "start_session", json!({})).is_err());
     }
 
     #[test]
@@ -392,7 +401,7 @@ mod tests {
         let command = fixture["command"].as_str().unwrap();
         let response = ipc(
             "main",
-            "http://tauri.localhost",
+            local_ipc_origin(),
             command,
             json!({"request": fixture["request"]}),
         )
@@ -409,7 +418,7 @@ mod tests {
             assert!(
                 ipc(
                     "main",
-                    "http://tauri.localhost",
+                    local_ipc_origin(),
                     command,
                     json!({"request": case["payload"]}),
                 )
