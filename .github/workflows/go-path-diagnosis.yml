@@ -33,7 +33,7 @@ jobs:
           $found = @(Get-Command go -CommandType Application)
           [ordered]@{ prefix = '[DEBUG-go-path-a1]'; command_count = $found.Count; sources = @($found | ForEach-Object { $_.Source }) } | ConvertTo-Json -Compress
           $env:OLD_GO = (Get-Command go -CommandType Application).Source
-          $goPath = Join-Path $env:GOROOT 'bin\go.exe'
+          $goPath = (Get-Command go -CommandType Application | Select-Object -First 1).Source
           if (-not (Test-Path -LiteralPath $goPath -PathType Leaf)) { throw 'Pinned official Go executable is missing.' }
           $env:GO = $goPath
           @'
