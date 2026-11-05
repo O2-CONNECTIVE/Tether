@@ -1,3 +1,9 @@
+#[allow(
+    dead_code,
+    reason = "Mac status parity candidate has no native IO or presentation wiring"
+)]
+mod mac_status;
+
 #[cfg(any(test, feature = "startup-diagnostics"))]
 #[allow(dead_code, reason = "startup diagnostics are an opt-in test variant")]
 mod startup_diagnostics;
@@ -11,7 +17,9 @@ mod windows_client;
 
 use serde::{Deserialize, Serialize};
 mod shell_runtime;
+mod status_presentation;
 use shell_runtime::ShellRuntime;
+use status_presentation::StatusPresentation;
 
 #[allow(
     dead_code,
@@ -70,6 +78,17 @@ fn get_shell_status(
     runtime.status()
 }
 
+#[tauri::command]
+fn get_status_presentation(
+    request: StatusRequest,
+    output: tauri::State<'_, StatusPresentation>,
+) -> Result<StatusPresentation, &'static str> {
+    if request.protocol_version != 1 {
+        return Err("UNSUPPORTED_PRESENTATION_VERSION");
+    }
+    Ok(output.inner().clone())
+}
+
 fn commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     commands_with_runtime(builder, ShellRuntime::default())
 }
@@ -78,9 +97,21 @@ fn commands_with_runtime<R: tauri::Runtime>(
     builder: tauri::Builder<R>,
     runtime: ShellRuntime,
 ) -> tauri::Builder<R> {
+    commands_with_presentation(builder, runtime, StatusPresentation::default())
+}
+
+fn commands_with_presentation<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+    runtime: ShellRuntime,
+    output: StatusPresentation,
+) -> tauri::Builder<R> {
     builder
         .manage(runtime)
-        .invoke_handler(tauri::generate_handler![get_shell_status])
+        .manage(output)
+        .invoke_handler(tauri::generate_handler![
+            get_shell_status,
+            get_status_presentation
+        ])
 }
 
 pub fn run() {
@@ -388,3 +419,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod status_presentation_tests;
