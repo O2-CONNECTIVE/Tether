@@ -8,7 +8,7 @@
 `scripts/build_mac_resident_source.py` は、現在の clean Git HEAD と tree を固定し、既存 GoCI の Darwin / cgo production inventory を選びます。
 Git blob から Go source と go.mod / go.sum を専用 compile snapshot へ置き、実 source の Go 選択が厳密 inventory と一致することも検査します。
 未登録の commit 済み Go file、別 package、追加 C/header/object/embed input を黙って省いて成功にしません。recipe の2 source fileも同じ Git HEAD の bytes に一致させます。
-module は offline / readonly で verifyし、replacement を拒否します。dependencyのversion/checksum、固定recipe、選択source、Go version / target / flagsを記録します。
+module は offline / readonly で verifyし、replacement を拒否します。実library closureからmoduleを選び、そのversion/checksumだけを照合します。未使用のtest-only推移moduleまで `go list -m all` で列挙してdownloadを要求しません。固定recipe、選択source、Go version / target / flagsも記録します。
 
 build 対象は `internal/residentpipe` の library archive 一つだけです。Go 1.27.3、Darwinの現在のarm64 / amd64 host、cgo有効、trimpath、buildvcs=false、buildmode=archive、並列1に限定します。
 Go cacheは新しい専用temporary directoryで、既存のmodule cacheはcallerが事前に用意したものを使います。GOPROXYはoffで、download / install / toolchain変更をしません。

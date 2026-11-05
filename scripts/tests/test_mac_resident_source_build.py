@@ -40,12 +40,14 @@ class ResidentSourceBuildTests(unittest.TestCase):
         self.calls = []
         self.settings = {'GOVERSION': tool.GO_VERSION, 'GOOS': 'darwin',
                          'GOARCH': 'arm64', 'CGO_ENABLED': '1'}
+        self.uncached_all = False
         self.modules = [{'Path': tool.PROJECT, 'Main': True},
                         {'Path': 'example.test/dependency', 'Version': 'v1.0.0',
                          'Sum': 'h1:fixture', 'GoModSum': 'h1:fixture-mod'}]
         self.package = {'ImportPath': tool.ROLE, 'GoFiles': ['codec.go']}
         self.live_files = ['codec.go']
         self.live_extra = {}
+        self.external_path = 'example.test/dependency/helper'
         self.archive_bytes = b'!<arch>\nsynthetic compiler archive; never executable'
         self.during_build = lambda stage: None
         self.patches = [patch.object(tool, 'ROOT', self.repo),
@@ -77,12 +79,17 @@ class ResidentSourceBuildTests(unittest.TestCase):
         if args[1:3] == ['mod', 'verify']:
             return b'all modules verified\n'
         if args[1] == 'list' and '-m' in args:
+            if self.uncached_all and 'all' in args:
+                raise tool.BuildError('BUILD_COMMAND_FAILED')
             return '\n'.join(json.dumps(item) for item in self.modules).encode()
         if args[1] == 'list' and args[-1] == './...':
             return json.dumps({'ImportPath': tool.ROLE, 'GoFiles': self.live_files, **self.live_extra}).encode()
         if args[1] == 'list':
-            package = {'Dir': str(Path(cwd) / 'internal/residentpipe'), **self.package}
-            return json.dumps(package).encode()
+            package = {'Dir': str(Path(cwd) / 'internal/residentpipe'),
+                       'Module': self.modules[0] if self.modules else {}, **self.package}
+            external = {'ImportPath': self.external_path,
+                        'Module': self.modules[1] if len(self.modules) > 1 else {}}
+            return (json.dumps(package) + '\n' + json.dumps(external)).encode()
         if args[1] == 'build':
             self.assertIn('-buildmode=archive', args)
             self.assertEqual(args[-1], tool.ROLE)
@@ -185,6 +192,20 @@ class ResidentSourceBuildTests(unittest.TestCase):
                            ('GOARCH', 'amd64'), ('CGO_ENABLED', '0')]:
             with self.subTest(key=key), patch.dict(self.settings, {key: value}):
                 self.rejected('TOOLCHAIN_MISMATCH')
+
+    def test_metadata_stays_with_actual_library_modules_in_offline_cache(self):
+        self.uncached_all = True
+        record = tool.build(self.output)
+        self.assertEqual(record['status'], 'blocked')
+        queries = [args for args, _ in self.calls if '-m' in args]
+        self.assertEqual(len(queries), 1)
+        self.assertNotIn('all', queries[0])
+        self.assertEqual(set(queries[0][5:]), {tool.PROJECT, 'example.test/dependency'})
+
+    def test_module_root_package_is_part_of_the_closed_dependency_set(self):
+        self.external_path = 'example.test/dependency'
+        record = tool.build(self.output)
+        self.assertEqual(record['modules'][0]['Path'], self.external_path)
 
     def test_module_replacement_is_rejected(self):
         self.modules[1]['Replace'] = {'Dir': 'PRIVATE_ARGUMENT'}

@@ -25,6 +25,7 @@ BLOCKERS = (
     'TOOLCHAIN_SDK_INTEGRITY_UNVERIFIED', 'RUNTIME_COMPATIBILITY_UNVERIFIED',
     'LICENSE_ARTIFACT_CONTENTS_UNAUDITED',
 )
+COMPILE_FLAGS = ('-mod=readonly', '-trimpath', '-buildvcs=false', '-buildmode=archive', '-p=1')
 LIMIT = 64 * 1024 * 1024
 EXTRA_INPUTS = ('CFiles', 'CXXFiles', 'MFiles', 'HFiles', 'FFiles', 'SFiles',
                 'SwigFiles', 'SwigCXXFiles', 'SysoFiles', 'EmbedFiles')
@@ -140,10 +141,14 @@ def build_metadata(module, env, arch):
     require(settings == {'GOVERSION': GO_VERSION, 'GOOS': 'darwin',
                          'GOARCH': arch, 'CGO_ENABLED': '1'}, 'TOOLCHAIN_MISMATCH')
     command(['go', 'mod', 'verify'], module, env)
+    return settings
+
+
+def module_metadata(module, env, paths):
     modules = []
     mains = 0
     seen = set()
-    for item in json_objects(command(['go', 'list', '-mod=readonly', '-m', '-json', 'all'],
+    for item in json_objects(command(['go', 'list', '-mod=readonly', '-m', '-json', PROJECT, *paths],
                                      module, env).decode()):
         require(not item.get('Replace'), 'MODULE_REPLACEMENT')
         require(item.get('Path') not in seen, 'MODULE_INVALID')
@@ -155,8 +160,8 @@ def build_metadata(module, env, arch):
             require(all(isinstance(item.get(key), str) and item[key]
                         for key in ('Path', 'Version', 'Sum', 'GoModSum')), 'MODULE_INVALID')
             modules.append({key: item[key] for key in ('Path', 'Version', 'Sum', 'GoModSum')})
-    require(mains == 1, 'MODULE_INVALID')
-    return settings, sorted(modules, key=lambda item: item['Path'])
+    require(mains == 1 and seen == {PROJECT, *paths}, 'MODULE_INVALID')
+    return sorted(modules, key=lambda item: item['Path'])
 
 
 def go_files(package):
@@ -178,20 +183,31 @@ def source_inventory(env):
 def closure(module, env):
     """Confirm the fixed package really uses the reviewed snapshot selections."""
     selected = []
+    paths = set()
     expected = product_files_for('darwin', True)
     raw = command(['go', 'list', '-mod=readonly', '-deps', '-json', ROLE], module, env)
     for package in json_objects(raw.decode()):
         path = package.get('ImportPath', '')
+        info = package.get('Module', {})
+        require(not info.get('Replace'), 'MODULE_REPLACEMENT')
         if not path.startswith(PROJECT):
-            require(not package.get('Module', {}).get('Replace'), 'MODULE_REPLACEMENT')
+            if info:
+                name = info.get('Path')
+                require(isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9./_+~-]*', name)
+                        and '.' in name.split('/')[0] and '..' not in name.split('/')
+                        and not info.get('Main') and (path == name or path.startswith(name + '/')), 'MODULE_INVALID')
+                paths.add(name)
+            else:
+                require(package.get('Standard'), 'MODULE_INVALID')
             continue
+        require(info.get('Main') is True and info.get('Path') == PROJECT, 'MODULE_INVALID')
         require(path in expected, 'INVENTORY_INVALID')
         require(go_files(package) == expected[path], 'INVENTORY_INVALID')
         require(Path(package['Dir']).resolve() ==
                 (module / path[len(PROJECT):].lstrip('/')).resolve(), 'SOURCE_ROOT_INVALID')
         selected.append(path)
     require(ROLE in selected, 'INVENTORY_INVALID')
-    return sorted(selected)
+    return sorted(selected), sorted(paths)
 
 
 def archive(path):
@@ -227,13 +243,13 @@ def build(output):
             files, locks, recipe = snapshot(revision, stage)
             module = stage / 'backend'
             env = environment(stage / 'cache', arch)
-            settings, modules = build_metadata(module, env, arch)
+            settings = build_metadata(module, env, arch)
             source_inventory(env)
-            packages = closure(module, env)
+            packages, paths = closure(module, env)
+            modules = module_metadata(module, env, paths)
             name = 'residentpipe-darwin-' + arch + '.a'
             result = stage / name
-            flags = ['build', '-mod=readonly', '-trimpath', '-buildvcs=false',
-                     '-buildmode=archive', '-p=1', '-o', str(result), ROLE]
+            flags = ['build', *COMPILE_FLAGS, '-o', str(result), ROLE]
             command(['go', *flags], module, env)
             for relative, expected in (files | locks).items():
                 require(digest((stage / relative).read_bytes()) == expected, 'BUILD_INPUT_CHANGED')
@@ -244,8 +260,7 @@ def build(output):
                       'status': 'blocked', 'activation': 'blocked', 'distribution': 'blocked',
                       'repository': 'O2-CONNECTIVE/rescue-host', 'sourceCommit': revision,
                       'sourceTree': tree, 'role': ROLE, 'settings': settings,
-                      'flags': ['-mod=readonly', '-trimpath', '-buildvcs=false',
-                                '-buildmode=archive', '-p=1'],
+                      'flags': list(COMPILE_FLAGS),
                       'snapshotGoFiles': files, 'locks': locks, 'recipe': recipe,
                       'compiledRepositoryPackages': packages, 'modules': modules,
                       'archive': artifact, 'producerExecutable': False,
