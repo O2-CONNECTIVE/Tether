@@ -1,6 +1,6 @@
 # Mac resident producerの公開source段階
 
-未統合#200/#201/#202/#203に依存する準備sourceです。
+未統合#200/#201/#202/#203/#204に依存する準備sourceです。
 #200のWindows session-create阻害、stacked CI未実行、通常未接続を解除しません。
 
 ## 実際の閉包と今回の切り出し
@@ -10,11 +10,23 @@
 test、他OS、外部moduleや配布物の閉包はこの数字と別です。
 13fileの直前private deltaだけを公開差分だと扱わず、既存public APIの変更も含めて調べます。
 
-今回は[`internal/residentwork`](../backend/internal/residentwork/README.md)だけを完全なpackageとして切り出します。
+前段は[`internal/residentwork`](../backend/internal/residentwork/README.md)だけを完全なpackageとして切り出します。
 policy・client・serverが共有する具体的なv1 transcriptで、標準library以外の依存がありません。
 署名対象byte形式とfield制約を保持しますが、署名検証・現在の期限・認証・承認・実行許可を判定しません。
 通常caller/CLI、鍵/設定/通信/常駐起動、第二のpolicy承認器を追加しません。
 GoCIは当該1 production fileを厳密に列挙し、未知file/fixture/native factoryの混入を拒否します。
+
+## 次段のworker owner閉包
+
+続いて[`internal/workerowner`](../backend/internal/workerowner/README.md)をpackage全体で移します。
+3 production fileと5つの元試験fileで、取得・Run・Close、RunOnceの元cleanup予算、source切断とhost停止を同じownerへ結びます。
+標準library以外の依存はなく、元試験はメモリ内fixtureだけです。
+wire/mapperは具体的Standby、policy/transportは既存public APIの追加差分を必要とするため、今回はその代わりの汎用portや架空ownerを作りません。
+
+後続の具体的接続先はmaclaunchのresident worker adapterとresidentmac.Standbyです。
+protected policy・transport・具体的Sessionの終了証拠を揃えるまで通常callerを追加しません。
+この所有slotの完了と、実EOF/exact Child/IO/supervisor/outer joinの完了は別です。
+unknownでは同じOwnerを保持し、別ownerで回復したことにしません。
 
 ## 後続の具体的な依存
 

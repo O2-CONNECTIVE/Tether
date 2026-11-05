@@ -138,3 +138,8 @@ GOTOOLCHAIN=local GOPROXY=off GOWORK=off go test -race ./...
 外側通信の終了は、汎用 sshd が別に起動した処理や既実行の変更の取消ではありません。
 両モードの外側権限は同じであり、full でも管理者昇格を認可しません。
 実接続の再有効化には既存の `docs/SECURITY_BACKEND_CONTRACT.md` の全条件と別途の承認が必要です。
+
+## resident workerのsource準備
+
+[`internal/workerowner`](internal/workerowner/README.md)は同じ取得・Run・Closeと元source寿命を保持する内部依存です。
+通常caller・認証・実producerは追加せず、unknown後のowner保持とnative回収・退出guardは具体的callerの責任として残ります。

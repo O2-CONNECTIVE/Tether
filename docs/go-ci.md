@@ -10,8 +10,10 @@ PythonとTauriのworkflowは独立しています。
 
 resident source準備の`internal/residentwork`は`intent.go`の1fileだけを製品inventoryへ追加します。
 純粋なtranscript形式で、通常caller・署名検証・認証・grant・通信を有効化しません。
-この追加後の厳密なinventoryは、GoCI標準のcgo有効時に42package、Linux321/Darwin322/Windows352 production fileです。
-package/fileの欠落や未知fileは引き続き失敗し、元の境界から1package/1fileだけ増えたことを検査します。
+続く`internal/workerowner`は`owner.go`・`run_once.go`・`wait_source.go`の3fileを限定登録します。
+同じ取得・Run・Closeとsource寿命の所有処理だけで、通常caller・policy承認・native Sessionは未接続です。
+この追加後の厳密なinventoryは、GoCI標準のcgo有効時に43package、Linux324/Darwin325/Windows355 production fileです。
+package/fileの欠落や未知fileは引き続き失敗し、直前の境界から1package/3fileだけ増えたことを検査します。
 実行対象は公開`backend/`だけで、存在しない対象やテスト0件を成功にしません。
 通常試験は`-cpu=1`、raceは`-cpu=2`で、試験内のGOMAXPROCS観測と照合します。
 race検出の有無と、指定した並列度の観測を区別します。
