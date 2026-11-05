@@ -1,0 +1,145 @@
+name: DO NOT MERGE - PR200 bounded session diagnostic
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths: ['diagnostics/pr200-session/**', '.github/workflows/pr200-session-diagnostic.yml']
+permissions:
+  contents: read
+concurrency:
+  group: pr200-session-diagnostic-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  diagnostic-only:
+    # No fork, merge ref, manual dispatch, automatic rerun, or other branch launch.
+    if: >-
+      github.run_attempt == 1 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diagnostic/pr200-session-timeout-20261106' &&
+      github.event.pull_request.draft == true
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - name: Check out diagnostic control at the exact PR head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          persist-credentials: false
+      - name: Check out immutable PR200 source separately
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da
+          path: source
+          persist-credentials: false
+      - name: Verify hosted runner and exact control checkout
+        env:
+          EXPECTED_CONTROL: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows' -or $env:RUNNER_ARCH -cne 'X64') { throw 'HOSTED_WINDOWS_REQUIRED' }
+          if ((git -C ../control rev-parse HEAD).Trim() -cne $env:EXPECTED_CONTROL) { throw 'CONTROL_HEAD_MISMATCH' }
+          if (git -C ../control status --porcelain --untracked-files=no) { throw 'CONTROL_DIRTY' }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.17'
+          architecture: x64
+      - name: Record fixed source and test archive boundary
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($sha -cne 'c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da' -or $tree -cne 'e278496a55b4accc6caafa7a7a99538e5c8ceeca') { throw 'FIXED_SOURCE_OR_TREE_MISMATCH' }
+          if (git status --porcelain --untracked-files=no) { throw 'FIXED_SOURCE_DIRTY' }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP/pr200-diagnostic/safe" -ErrorAction Stop | Out-Null
+          python -B ../control/diagnostics/pr200-session/diagnostic.py identity --source . --control ../control --root "$env:RUNNER_TEMP/pr200-diagnostic"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'SOURCE_SHA_INVALID' }
+          "EVALUATION_SOURCE_SHA=$sha" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$env:RUNNER_TEMP/pr200-diagnostic/target" >> $env:GITHUB_ENV
+          python -B -m unittest discover -s scripts/tests -p 'test_tauri_evaluation_*.py' -v
+          exit $LASTEXITCODE
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+      - name: Build locked frontend with runtime notices
+        working-directory: source/ui/tauri
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/notices.mjs --check
+          exit $LASTEXITCODE
+      - name: Select fixed official Rust in disposable CI
+        run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
+      - name: Read locked Cargo metadata before compiling
+        working-directory: source/ui/tauri
+        run: |
+          cargo +1.99.1 metadata --locked --format-version 1 --features custom-protocol --filter-platform x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml > "$env:RUNNER_TEMP/pr200-diagnostic/cargo-metadata.json"
+          exit $LASTEXITCODE
+      - name: Collect complete dependency license texts before compiling
+        run: |
+          $sysroot = (rustc +1.99.1 --print sysroot).Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem -LiteralPath "$sysroot/share/doc/rust" -File | Select-Object -ExpandProperty Name
+          python -B scripts/collect_tauri_licenses.py --metadata "$env:RUNNER_TEMP/pr200-diagnostic/cargo-metadata.json" --frontend-notice ui/tauri/dist/THIRD_PARTY_NOTICES.txt --rust-docs "$sysroot/share/doc/rust" --output "$env:RUNNER_TEMP/pr200-diagnostic/evaluation-licenses"
+          exit $LASTEXITCODE
+      - name: Build locked release executable
+        working-directory: source/ui/tauri
+        run: cargo +1.99.1 build --release --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol
+      - name: Create source-bound evaluation archive
+        run: |
+          $exe = "$env:CARGO_TARGET_DIR/release/rescue-host-shell.exe"
+          if ((Get-AuthenticodeSignature $exe).Status -ne 'NotSigned') { throw 'UNEXPECTED_SIGNATURE_STATE' }
+          python -B scripts/package_tauri_evaluation.py --exe $exe --licenses "$env:RUNNER_TEMP/pr200-diagnostic/evaluation-licenses" --source-sha $env:EVALUATION_SOURCE_SHA --output "$env:RUNNER_TEMP/pr200-diagnostic/evaluation-package"
+          exit $LASTEXITCODE
+      - name: Extract the exact distribution ZIP and check every file hash
+        run: |
+          $zip = "$env:RUNNER_TEMP/pr200-diagnostic/evaluation-package/RescueHostTauriUnwiredEvaluation-x64.zip"
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $exeHash = (Get-FileHash "$env:CARGO_TARGET_DIR/release/rescue-host-shell.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          python -B scripts/verify_tauri_evaluation.py --archive $zip --source $env:EVALUATION_SOURCE_SHA --archive-sha256 $zipHash --exe-sha256 $exeHash > "$env:RUNNER_TEMP/pr200-diagnostic/evaluation-package/verification.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP/pr200-diagnostic/evaluation-unpacked"
+          $root = "$env:RUNNER_TEMP/pr200-diagnostic/evaluation-unpacked/RescueHostTauriUnwiredEvaluation"
+          $manifest = Get-Content "$root/MANIFEST.json" -Raw | ConvertFrom-Json
+          if ($manifest.sourceCommit -ne $env:EVALUATION_SOURCE_SHA -or $manifest.integration -ne 'not_connected' -or $manifest.canStart -or $manifest.canStop -or -not $manifest.productionGateClosed) { throw 'PACKAGE_BOUNDARY_MISMATCH' }
+          foreach ($file in $manifest.files.PSObject.Properties) {
+            if ((Get-FileHash (Join-Path $root $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) { throw 'PACKAGE_FILE_HASH_MISMATCH' }
+          }
+      - name: Preserve verified build identity before tool preparation
+        run: |
+          python -B ../control/diagnostics/pr200-session/diagnostic.py identity --source . --control ../control --root "$env:RUNNER_TEMP/pr200-diagnostic"
+          exit $LASTEXITCODE
+      - name: Read existing CI WebView2 without updating it
+        run: ./ui/tauri/native-smoke/inventory.ps1 -OutputPath "$env:RUNNER_TEMP/pr200-diagnostic/inventory.json"
+      - name: Prepare existing pinned native test tools in runner temp
+        timeout-minutes: 6
+        run: ./ui/tauri/native-smoke/setup.ps1 -ToolsDirectory "$env:RUNNER_TEMP/pr200-diagnostic/tools" -InventoryPath "$env:RUNNER_TEMP/pr200-diagnostic/inventory.json"
+      - name: Record verified ordinary build and tool identities
+        run: |
+          python -B ../control/diagnostics/pr200-session/diagnostic.py tools --source . --control ../control --root "$env:RUNNER_TEMP/pr200-diagnostic"
+          exit $LASTEXITCODE
+      - name: At most ten serial observations, stop on first failure or cleanup uncertainty
+        timeout-minutes: 31
+        run: |
+          python -B ../control/diagnostics/pr200-session/diagnostic.py run --source . --control ../control --root "$env:RUNNER_TEMP/pr200-diagnostic"
+          exit $LASTEXITCODE
+      - name: Preserve safe partial build identity even on failure
+        if: always()
+        run: |
+          python -B ../control/diagnostics/pr200-session/diagnostic.py identity --source . --control ../control --root "$env:RUNNER_TEMP/pr200-diagnostic"
+          exit $LASTEXITCODE
+      - name: Save sanitized observations only, never EXE ZIP raw logs or screenshots
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: pr200-session-diagnostic-only-evidence
+          path: ${{ runner.temp }}/pr200-diagnostic/safe/**/*.json
+          if-no-files-found: error
+          retention-days: 7
