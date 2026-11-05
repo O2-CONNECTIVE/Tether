@@ -1,0 +1,43 @@
+name: Service-free Windows null SID binding regression
+"on":
+  push:
+    branches: ['verify/system-sddl-binding-check-20261105']
+permissions:
+  contents: read
+jobs:
+  binding-parser-only:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require parser-only native call surface
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $text = [IO.File]::ReadAllText('tools/scm-observer-sourcecheck/test-null-sid-binding.ps1')
+          $declared = @([regex]::Matches($text, 'static extern [^;]+;') | ForEach-Object { $_.Value })
+          if ($declared.Count -ne 2 -or
+              $declared[0] -notmatch 'ConvertStringSecurityDescriptorToSecurityDescriptor\(' -or
+              $declared[1] -notmatch 'LocalFree\(' -or
+              $text -match 'OpenSCManager|CreateService|StartService|DeleteService|CreateFile|SetServiceObjectSecurity|Set-Acl|Set-ExecutionPolicy') {
+              throw 'Parser-only source boundary differs; no probe execution.'
+          }
+      - name: Reproduce original binding as required native failure
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $seen = $false
+          try {
+              & ./tools/scm-observer-sourcecheck/test-null-sid-binding.ps1 -Mode Original
+          } catch {
+              if ($_.Exception.Message -cne 'EXPECTED_ORIGINAL_EMPTY_TRUSTEE_PARSE_FAILURE') { throw }
+              $seen = $true
+              Write-Output 'PASS: original null binding reproduced empty trustee and native parse failure.'
+          }
+          if (-not $seen) { throw 'Expected original failure did not occur.' }
+      - name: Preserve explicit null and exact approved file descriptor policy
+        shell: powershell
+        run: ./tools/scm-observer-sourcecheck/test-null-sid-binding.ps1 -Mode ExplicitNull
