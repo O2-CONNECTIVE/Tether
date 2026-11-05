@@ -48,7 +48,7 @@ func newStatusFeedClock(sink statusSink, clock func() (uint64, bool)) *statusFee
 	if sink == nil || clock == nil {
 		return nil
 	}
-	f := &statusFeed{clock: clock, sink: sink, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), frame: statusFrame{Version: 1, Phase: "preparing", Reason: "none", Cleanup: "not_started"}}
+	f := &statusFeed{clock: clock, sink: sink, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), frame: statusFrame{Version: 1, Phase: "checking_config", Reason: "none", Cleanup: "not_started"}}
 	go f.run()
 	return f
 }
@@ -61,6 +61,43 @@ func (f *statusFeed) update(phase, cleanup string, terminal bool) {
 		f.frame.Phase = phase
 		f.frame.Cleanup = cleanup
 		f.frame.Terminal = terminal
+	}
+	f.mu.Unlock()
+	select {
+	case f.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Only fixed local setup stages are exported; errors, paths and credentials
+// are never converted to strings or sent to the display.
+type setupFailure string
+
+const (
+	setupConfig      setupFailure = "config_error"
+	setupKey         setupFailure = "key_error"
+	setupPreparation setupFailure = "preparation_error"
+	setupConnection  setupFailure = "connection_error"
+	setupApproval    setupFailure = "approval_not_completed"
+)
+
+func setupReason(reason string) bool {
+	switch setupFailure(reason) {
+	case setupConfig, setupKey, setupPreparation, setupConnection, setupApproval:
+		return true
+	}
+	return false
+}
+func (f *statusFeed) failSetup(reason setupFailure, cleanup string) {
+	if f == nil || !setupReason(string(reason)) {
+		return
+	}
+	f.mu.Lock()
+	if !f.frame.Unknown && !f.frame.Terminal {
+		f.frame.Phase = "failed"
+		f.frame.Reason = string(reason)
+		f.frame.Cleanup = cleanup
+		f.frame.Terminal = true
 	}
 	f.mu.Unlock()
 	select {
@@ -136,7 +173,7 @@ func (f *statusFeed) snapshot(seq, stamp uint64) (statusFrame, bool) {
 		}
 		v.Remaining = &ms
 		v.Starting, v.Running, v.Stopping = summary.Starting, summary.Running, summary.Stopping
-		if !v.Unknown {
+		if !v.Unknown && !setupReason(v.Reason) {
 			v.Reason = localStopReason(summary.Reason)
 		}
 		if !v.Terminal {

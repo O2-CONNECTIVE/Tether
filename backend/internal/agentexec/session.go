@@ -13,6 +13,28 @@ import (
 	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor/ephemeral"
 )
 
+// FixedStartConstraint is trusted local admission narrowing, not wire authority.
+// Command is a string so a value copy has no caller-mutable byte backing store.
+// A non-nil constraint admits at most one exact request for this grant. It does
+// not sandbox that command or change its OS identity, binding or hard deadline.
+type FixedStartConstraint struct {
+	RequestID     string
+	Command       string
+	TimeoutMillis uint32
+}
+
+// Validate checks the default request bounds before local consent. New also
+// checks any stricter owner Limits. It neither issues nor consumes authority.
+func (c FixedStartConstraint) Validate() error {
+	return c.validate(Limits{}.normalized())
+}
+func (c FixedStartConstraint) validate(l Limits) error {
+	if !validRequestID(c.RequestID) || len(c.Command) == 0 || len(c.Command) > l.MaxCommandBytes || c.TimeoutMillis == 0 || c.TimeoutMillis > l.MaxTimeout {
+		return ErrUnconfigured
+	}
+	return nil
+}
+
 // Config is supplied only by the protected owner that received Authority from
 // the same Issuer.Launch. Request fields never select or replace these values.
 // The approved mode is not configurable: it is derived from the grant policy.
@@ -22,6 +44,7 @@ type Config struct {
 	// maclaunch passes Prepare's time.Now().Add(initialBudget), retaining its
 	// monotonic component. It is not accepted from wire requests.
 	ElapsedDeadline time.Time
+	FixedStart      *FixedStartConstraint
 	Issuer          *ephemeral.Issuer
 	Authority       *supervisor.Authority
 	Runtime         GuestRuntime
@@ -44,6 +67,7 @@ type Session struct {
 	runtime        GuestRuntime
 	clock          func() time.Time
 	limits         Limits
+	fixedStart     *FixedStartConstraint
 	cleanupTimeout time.Duration
 	random         io.Reader
 	afterFunc      func(time.Duration, func()) func() bool
@@ -114,6 +138,15 @@ func newSession(cfg Config, after func(time.Duration, func()) func() bool) (*Ses
 		return nil, ErrDenied
 	}
 	limits := cfg.Limits.normalized()
+	var fixed *FixedStartConstraint
+	if cfg.FixedStart != nil {
+		copied := *cfg.FixedStart
+		if err := copied.validate(limits); err != nil {
+			return nil, err
+		}
+		fixed = &copied
+		limits.MaxCommands = 1
+	}
 	if limits.MaxRetained <= recordOverhead || limits.MaxTotalOutput == 0 {
 		return nil, ErrUnconfigured
 	}
@@ -155,7 +188,7 @@ func newSession(cfg Config, after func(time.Duration, func()) func() bool) (*Ses
 	}
 	s := &Session{
 		issuer: cfg.Issuer, authority: cfg.Authority, binding: binding, keySet: grant.KeySetDigest, profile: profile, mode: mode, deadline: grant.HardDeadline,
-		runtime: cfg.Runtime, clock: clock, limits: limits, cleanupTimeout: cfg.CleanupTimeout, random: rand.Reader, afterFunc: after,
+		runtime: cfg.Runtime, clock: clock, limits: limits, fixedStart: fixed, cleanupTimeout: cfg.CleanupTimeout, random: rand.Reader, afterFunc: after,
 		byRequest: map[string]*command{}, byID: map[string]*command{},
 	}
 	s.base, s.cancelBase = context.WithCancel(context.Background())
@@ -422,6 +455,9 @@ func (s *Session) Start(r StartRequest) (Status, error) {
 		return Status{}, ErrDenied
 	}
 	defer s.mu.Unlock()
+	if f := s.fixedStart; f != nil && (r.RequestID != f.RequestID || string(r.Command) != f.Command || r.TimeoutMillis != f.TimeoutMillis) {
+		return Status{}, ErrPolicy
+	}
 	if n := len(s.order); n > 0 {
 		last := s.order[n-1]
 		switch {

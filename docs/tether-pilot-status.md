@@ -116,3 +116,23 @@ viewer は macOS 13 以上を宣言しますが、現在の agent build は macO
 実agent、grant、command、認証情報、公開endpoint、署名identity、notarization、恒久installは使っていません。Finder/Gatekeeper起動、手動アクセシビリティ、macOS 13実機、実agentとのGUI同時動作は未検証です。linkerのad-hoc署名のみでresourcesは未seal、license inventory・release noticesも未完のため、bundle生成は配布許可ではありません。
 
 [viewerの手順](../ui/mac-status/README.md)に契約と検証方法をまとめています。同梱はviewer executable・固定Info.plist・評価用noticeのみで、Go agent・鍵・設定・tests・fixture dataは含みません。既存native4case、Claude HTTP/OAuthの結果は別snapshotの証拠として保持します。
+
+## GitHub CI の確認済み基点（2026-11-01）
+
+[PR #171](https://github.com/O2-CONNECTIVE/rescue-host/pull/171) の統合後、
+main `cf9fcec91727901527a8e7446184132b5246c2b8` の関連5 workflow・11ジョブが成功しました。
+[Go 3 OS](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/41287973146) は全41 package の normal/race と native vet/build、
+[Python 3 OS](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/41287973215)、
+[Swift](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/41287973206)、
+[日本語コミット検査](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/41287973217)、
+[Windows wheel lock 3 OS](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/41287973136) が対象です。
+Windows の POSIX FIFO fixture を分離し、非regular拒否は全OSで検査します。
+Python にはOS固有の予定された skip があり、全検査 skip0とはしません。
+
+Swift は実 hosted runner 上で build、core21、package10、専用window9、
+.app専用fixture2、8状態renderを確認しました。実agentとのGUI結合、手動UX、
+署名・配布の成立を証明するものではありません。
+
+この基点以降の固定コマンド試験モードと絶対期限pilot gateは別差分です。
+基点のgreenを新差分のCI成功として流用せず、個別レビュー・試験・CIと
+実機統合の確認を分けて管理します。
