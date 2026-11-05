@@ -1,0 +1,105 @@
+name: SCM Session I/O prerequisite observation
+"on":
+  push:
+    branches: ['verify/system-observation-once-20261105']
+permissions:
+  contents: read
+concurrency:
+  group: scm-system-observation-${{ github.repository_id }}
+  cancel-in-progress: false
+jobs:
+  observe-system-service:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/verify/system-observation-once-20261105' && github.event.before == '40a2d5887a2dd1d363c120a765991168fef18c06' && github.event.created == false && github.event.forced == false && github.run_attempt == 1
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+        working-directory: experiments/scm-system-observation
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOENV: 'off'
+      GOFLAGS: '-mod=readonly'
+      GOEXPERIMENT: ''
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      EXPECTED_PACKET_SHA256: '24c89751408af38606a406cdd3377bbdbb3e499f4ce734d811965a907390bf93'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select fixed official Go without cache or credentials
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.3'
+          architecture: x64
+          cache: false
+      - name: Validate fresh platform, frozen source and exact approved packet
+        id: packet
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or -not [Environment]::Is64BitProcess -or
+              [Environment]::OSVersion.Version.Build -ne 20348 -or
+              [IO.DriveInfo]::new('C:\').DriveFormat -cne 'NTFS' -or
+              $env:EXPECTED_PACKET_SHA256 -cnotmatch '^[0-9a-f]{64}$') { throw 'Fixed fresh-platform/packet prerequisite not met.' }
+          $env:GO = (Get-Command go -CommandType Application).Source
+          python build-bundle.py
+          if ($LASTEXITCODE -ne 0) { throw 'Fixed source build failed; no setup.' }
+          $digest = (Get-FileHash artifacts\manifest.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -cne $env:EXPECTED_PACKET_SHA256) { throw 'Approved immutable packet differs; no setup or fallback.' }
+          "packet_ready=true" >> $env:GITHUB_OUTPUT
+          Write-Output 'Fixed source and packet verified. No Windows service created.'
+      - name: Parse controller and compile declarations without invoking setup
+        run: ./check-setup-source.ps1
+      - name: Prepare only the approved new observation service
+        id: prepare
+        run: |
+          powershell.exe -NoProfile -File artifacts\Invoke-ProtectionProbe.ps1 -Phase Prepare -ExpectedPacketSha256 $env:EXPECTED_PACKET_SHA256 *> "$env:RUNNER_TEMP\system-observation-prepare.private.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Prepare failed; partial state retained, no retry.' }
+          "prepared=true" >> $env:GITHUB_OUTPUT
+          Write-Output 'Prepared one owned stopped service; no start yet.'
+      - name: Consume and run once, preserving controller output privately
+        id: run
+        run: |
+          powershell.exe -NoProfile -File artifacts\Invoke-ProtectionProbe.ps1 -Phase Run -ExpectedPacketSha256 $env:EXPECTED_PACKET_SHA256 *> "$env:RUNNER_TEMP\system-observation-run.private.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Run/exit unconfirmed; no retry or kill.' }
+          Write-Output 'Original process exit receipt recorded; capture success not implied.'
+      - name: Collect only receipt-proved owned resources
+        id: cleanup
+        if: always() && steps.packet.outputs.packet_ready == 'true' && steps.prepare.outputs.prepared == 'true'
+        run: |
+          powershell.exe -NoProfile -File artifacts\Invoke-ProtectionProbe.ps1 -Phase Cleanup -ExpectedPacketSha256 $env:EXPECTED_PACKET_SHA256 *> "$env:RUNNER_TEMP\system-observation-cleanup.private.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup unconfirmed; retain failure and disposable VM containment.' }
+          "collected=true" >> $env:GITHUB_OUTPUT
+          Write-Output 'Owned registration/files collected; private evidence remains only in this VM.'
+      - name: Emit bounded anonymous observations only
+        if: always() && steps.cleanup.outputs.collected == 'true'
+        run: |
+          $evidenceRoot = 'C:\ProgramData\RescueSessionIOPrereq-20261104-evidence'
+          $exitProof = [IO.File]::ReadAllText((Join-Path $evidenceRoot 'exit.json')) | ConvertFrom-Json
+          if ($exitProof.consumed -isnot [bool] -or $exitProof.consumed -ne $true -or
+              $exitProof.processExitConfirmed -isnot [bool] -or $exitProof.processExitConfirmed -ne $true -or
+              $exitProof.proof.processExitCode -ne 0 -or $exitProof.proof.serviceWin32Exit -ne 0 -or
+              $exitProof.proof.serviceSpecificExit -ne 0 -or
+              $exitProof.proof.binding.manifestSha256 -cne $env:EXPECTED_PACKET_SHA256 -or
+              $exitProof.proof.binding.service -cne 'RescueSessionIOPrereq-20261104') { throw 'Original process/service exit did not confirm observation persistence.' }
+          $rawPath = Join-Path $evidenceRoot 'subject.json'
+          if ((Get-Item -LiteralPath $rawPath).Length -gt 262144) { throw 'Private report exceeds bound.' }
+          $raw = [IO.File]::ReadAllText($rawPath, [Text.UTF8Encoding]::new($false, $true))
+          $public = $raw | & .\artifacts\scm-token-observer.exe --summary 2>$null
+          $summaryExit = $LASTEXITCODE
+          $publicText = $public -join "`n"
+          if ([Text.Encoding]::UTF8.GetByteCount($publicText) -gt 65536) { throw 'Public summary exceeds bound.' }
+          $summary = $publicText | ConvertFrom-Json
+          if ($summary.report_sha256 -cne $exitProof.reportSha256 -or
+              $summary.native_acceptance -cne 'NOT_EVALUATED' -or $summary.product_gate -cne 'CLOSED') { throw 'Original report digest/scope mismatch; no observation publication.' }
+          if ($public) { Write-Output $public; Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $public -Encoding UTF8 }
+          if ($summaryExit -ne 0) { throw 'Incomplete observation; native acceptance NOT_EVALUATED and gate CLOSED.' }
+      - name: Preserve honest outcome without exporting raw artifacts
+        if: always()
+        run: |
+          Write-Output 'No raw report, SID/SDDL/LUID/PID, private controller log, binary artifact or cache is uploaded.'
+          Write-Output 'Provider VM disposal is containment, never physical-stop or protected-native acceptance.'
