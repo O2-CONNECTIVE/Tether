@@ -161,8 +161,8 @@ Darwin API の source 照合（2026-10-31）: Apple の [acl_file.c](https://git
 
 ## resident入力の限定file fixture
 
-resident transportのDarwin/cgo入力試験は、checkout内に試験自身が作る合成policyと固定seedのkey vectorを、このnative readerで読みます。
-実相互proofからstrict policy入力へ進むための限定試験で、既存key/policyや運用配置を読まず、ACL/CA/OS trustを変更しません。
+resident transport の Darwin/cgo 入力試験と、owned pipe の idle component 試験は、checkout 内に試験自身が作る合成 policy と固定 seed の key vector を、この native reader で読みます。
+前者は実相互 proof から NewWireRequest まで、後者は接続・ON・work を行わない同じ idle Standby.Close と pipe EOF までの限定試験です。既存 key/policy や運用配置を読まず、ACL/CA/OS trust を変更しません。
 全handleの検査・同一性・close条件を維持し、fixtureは削除します。
-この一つの自己所有fixtureの成功を、実enrollment、全ACLケース、署名済み配布/配置元、実native実行の成功に広げません。
+これらの自己所有 fixture の成功を、実 enrollment、全 ACL ケース、署名済み配布/配置元、実 native 実行の成功に広げません。
 運用対象のowner/ACL照会と変更には、上記の対象・範囲を固定した別承認が必要です。

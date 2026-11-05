@@ -10,7 +10,9 @@
 Standby は accepted lease を逐次消費し、receiver 自身の単回 claim を通して source を1回だけ開きます。
 元 source の終了時には同じ common owner の WaitSource を待ち、元 lease の Finish と control の Run / Close を分けます。
 host の停止は source cleanup 中でも同じ Owner.Stop と元の予算へ合流し、monitor と cycle の終了が確定するまで OFF 完了や再 ON を許しません。
-unknown は元 cycle と owner を保持し、遅い物理終了でも unknown を成功へ変えません。
+元 cleanup の terminal unknown は元 cycle と owner に保持し、遅い物理終了でも成功へ変えません。
+Close の caller 待機期限は別です。caller が待ち切れず返した ErrStandbyUnknown は、その呼出しの結果のままです。同じ回収処理が後で完了すれば、次の待機はその元結果を観測できますが、cleanup の再試行や新 owner の作成ではなく、閉じた owner は再 ON できません。
+内部 run は最初の Close 結果を一度だけ採用し、待機期限の unknown でも元 owner を無期限に保持します。後の観測を新しい成功退出の証拠へ変換しません。
 
 codec は有限 frame、LF、strict UTF-8 / JSON、重複 field、canonical integer、固定 intent を検査します。
 mapper は元 revision、monotonic freshness、request high-water、receipt と transition を分け、観測だけで実行許可を作りません。unknown は sticky で、過去の認証履歴を現在の認証と表示しません。
