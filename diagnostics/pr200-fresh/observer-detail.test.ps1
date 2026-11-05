@@ -1,0 +1,86 @@
+# Synthetic location/ledger fixtures only. No CIM, native argv, process or supervisor calls.
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+. "$PSScriptRoot/observer-detail.ps1"
+$source = 'PRIVATE_SOURCE'
+foreach ($case in @(
+    @('Stop-UnconfirmedLineage', 73, 'Get-Descendants', 77, 'lineage-parent-row-guard-site'),
+    @('Stop-UnconfirmedLineage', 73, 'Get-Descendants', 78, 'lineage-parent-creation-guard-site'),
+    @('Stop-UnconfirmedLineage', 73, 'Get-Descendants', 88, 'lineage-child-row-guard-site'),
+    @('Stop-UnconfirmedLineage', 73, 'Get-Descendants', 90, 'lineage-child-creation-guard-site'),
+    @('Stop-UnconfirmedLineage', 73, 'Get-Descendants', 92, 'lineage-child-order-guard-site'),
+    @('Require-Live', 7, 'Get-OwnedApp', 113, 'lineage-driver-live-check-site'),
+    @('Require-Live', 7, 'Get-OwnedApp', 114, 'lineage-edge-live-check-site')
+)) {
+    $stack = "at $($case[0]), ${source}: line $($case[1])`nat $($case[2]), ${source}: line $($case[3])"
+    if ((Resolve-LineageFailure $stack $source $true) -cne $case[4]) { throw 'SYNTHETIC_LOCATION_FAILED' }
+    if ((Resolve-LineageFailure $stack $source $false) -cne 'unclassified-detail') { throw 'UNTRUSTED_SOURCE_ACCEPTED' }
+}
+foreach ($stack in @('PRIVATE_EXCEPTION', "at Get-OwnedApp, ${source}: line 999", "at Get-OwnedApp, OTHER_SOURCE: line 118", ('x' * 16385))) {
+    if ((Resolve-LineageFailure $stack $source $true) -cne 'unclassified-detail') { throw 'UNKNOWN_LOCATION_ACCEPTED' }
+}
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'observe-profile.ps1'), [ref]$tokens, [ref]$errors)
+if ($errors.Count -ne 0) { throw 'OBSERVER_SOURCE_SYNTAX_FAILED' }
+$functions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('New-ObserverFailures', 'Add-ObserverFailure') }, $true))
+if ($functions.Count -ne 2) { throw 'LEDGER_SEAM_MISSING' }
+foreach ($definition in $functions) { . ([scriptblock]::Create($definition.Extent.Text)) }
+$ledger = New-ObserverFailures
+if (@(Add-ObserverFailure $ledger 'webview-metadata' 'metadata-creation-guard').Count -ne 0) { throw 'DETAIL_UNEXPECTED_OUTPUT' }
+Add-ObserverFailure $ledger 'webview-metadata' 'metadata-creation-guard'
+Add-ObserverFailure $ledger 'webview-metadata' 'metadata-command-line-guard'
+if ($ledger.failureCount -ne 3 -or $ledger.details.Count -ne 2) { throw 'DETAIL_DEDUP_FAILED' }
+Add-ObserverFailure $ledger 'lineage-query' 'PRIVATE_EXCEPTION'
+if ($ledger.details[-1].code -cne 'unclassified-detail' -or ($ledger | ConvertTo-Json -Depth 5).Contains('PRIVATE')) { throw 'DETAIL_REDACTION_FAILED' }
+$ledger = New-ObserverFailures
+foreach ($code in @('lineage-parent-row-guard-site', 'lineage-parent-creation-guard-site', 'lineage-child-row-guard-site',
+    'lineage-child-creation-guard-site', 'lineage-child-order-guard-site', 'lineage-driver-live-check-site',
+    'lineage-edge-live-check-site', 'lineage-reference-check-site', 'lineage-driver-descendants-call-site',
+    'lineage-app-selection-site', 'lineage-app-count-check-site', 'lineage-app-descendants-call-site',
+    'lineage-webview-selection-site', 'lineage-webview-count-check-site', 'lineage-root-selection-site',
+    'lineage-root-count-check-site', 'lineage-root-creation-check-site')) { Add-ObserverFailure $ledger 'lineage-query' $code }
+if ($ledger.details.Count -ne 16 -or -not $ledger.truncated -or $ledger.failureCount -ne 17) { throw 'DETAIL_BOUND_FAILED' }
+# Execute the actual metadata guard text against synthetic getters. This tests
+# short-circuit/read/error behavior without loading processes.ps1 or any OS API.
+$text = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'observe-profile.ps1'))
+$start = $text.IndexOf("                    `$detail = 'metadata-creation-check-exception'", [StringComparison]::Ordinal)
+$end = $text.IndexOf("                    `$detail = 'metadata-identity-key-exception'", [StringComparison]::Ordinal)
+if ($start -lt 0 -or $end -le $start) { throw 'METADATA_GUARD_SEAM_MISSING' }
+$after = [scriptblock]::Create($text.Substring($start, $end - $start))
+$before = { if (-not (Test-LineageCreation $view) -or -not $view.CommandLine) { throw 'PROFILE_IDENTITY_UNKNOWN' } }
+function Test-LineageCreation($Entry) {
+    $script:creationCalls += 1
+    if ($script:creationMode -eq 'error') { throw $script:sentinel }
+    return $script:creationMode -eq 'true'
+}
+function Invoke-SyntheticGuard($Block, $Creation, $Command, $CommandError) {
+    $script:creationMode = $Creation; $script:commandValue = $Command; $script:commandError = $CommandError
+    $script:creationCalls = 0; $script:reads = 0
+    $view = [pscustomobject]@{}
+    $view | Add-Member ScriptProperty CommandLine {
+        $script:reads += 1
+        if ($script:commandError) { throw $script:sentinel }
+        return $script:commandValue
+    }
+    $detail = 'not-observed'; $caught = $null
+    try { . $Block } catch { $caught = $_ }
+    return @{ caught = $caught; detail = $detail; reads = $script:reads; calls = $script:creationCalls }
+}
+$script:sentinel = [Exception]::new('SYNTHETIC_ERROR_NOT_PUBLISHED')
+foreach ($case in @(
+    @('false', 'value', $true, 'metadata-creation-guard', 0),
+    @('error', 'value', $true, 'metadata-creation-check-exception', 0),
+    @('true', '', $false, 'metadata-command-line-guard', 1),
+    @('true', 'value', $true, 'metadata-command-line-read-exception', 1),
+    @('true', 'value', $false, 'metadata-command-line-read-exception', 1)
+)) {
+    $old = Invoke-SyntheticGuard $before $case[0] $case[1] $case[2]
+    $new = Invoke-SyntheticGuard $after $case[0] $case[1] $case[2]
+    if ($old.calls -ne 1 -or $new.calls -ne 1 -or $old.reads -ne $case[4] -or $new.reads -ne $case[4] -or $new.detail -cne $case[3]) { throw 'METADATA_SHORT_CIRCUIT_CHANGED' }
+    if (($null -eq $old.caught) -ne ($null -eq $new.caught)) { throw 'METADATA_VERDICT_CHANGED' }
+    if ($null -ne $old.caught -and $old.caught.Exception.Message -cne $new.caught.Exception.Message) { throw 'METADATA_ERROR_CHANGED' }
+    # Getter exceptions may be wrapped by PowerShell; the original inner cause
+    # must retain reference identity, never replaced by classification machinery.
+    if ($case[0] -eq 'error' -and (-not [object]::ReferenceEquals($old.caught.Exception, $script:sentinel) -or -not [object]::ReferenceEquals($new.caught.Exception, $script:sentinel))) { throw 'METADATA_ERROR_IDENTITY_CHANGED' }
+}
+Write-Output 'OBSERVER_DETAIL_SYNTHETIC_PASS'

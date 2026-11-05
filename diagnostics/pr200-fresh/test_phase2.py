@@ -24,12 +24,12 @@ def capability(mapping='requested-root'):
 
 
 def synthetic_classification():
-    return {'profile-capability-shape.json': {'schema': 1, 'requests': 1, 'settlements': 1,
+    return {'profile-capability-shape.json': {'schema': 2, 'requests': 1, 'settlements': 1,
         'envelopeShape': 'object', 'valueShape': 'object', 'capabilitiesShape': 'object',
         'flatShape': 'missing', 'nestedContainerShape': 'object', 'nestedShape': 'string',
-        'candidateClass': 'candidate-valid-nested', 'failureSites': []},
-        'observer-failure-sites.json': {'schema': 1, 'failureCount': 0, 'sites': [],
-                                      'saturated': False, 'truncated': False}}
+        'candidateClass': 'candidate-valid-nested', 'pathPredicate': 'accepted', 'failureSites': []},
+        'observer-failure-sites.json': {'schema': 2, 'failureCount': 0, 'sites': [],
+                                      'saturated': False, 'truncated': False, 'details': []}}
 
 
 def synthetic_preflight():

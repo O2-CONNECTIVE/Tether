@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { classifyCapabilityShape, unobservedShape } from './capability-shape.mjs';
+import { normalizeProfilePath } from './path-validation.mjs';
 
 export function installCapture({ target, responseType, profile, output, filesystem }) {
   const originalFetch = target.fetch;
@@ -15,12 +16,7 @@ export function installCapture({ target, responseType, profile, output, filesyst
   let shape = unobservedShape();
   const failureSites = [];
   const note = site => { if (!failureSites.includes(site)) failureSites.push(site); };
-  const normalize = value => {
-    if (typeof value !== 'string' || !/^[A-Za-z]:[\\/].+/.test(value) || /[\x00\r\n"*?<>|]/.test(value) || value.slice(2).includes(':')) return null;
-    const normalized = value.replaceAll('/', '\\');
-    if (normalized.slice(3).split('\\').some(part => !part || part === '.' || part === '..' || /[ .]$/.test(part))) return null;
-    return path.win32.normalize(normalized).toLowerCase();
-  };
+  const normalize = normalizeProfilePath;
   const save = record => {
     try { filesystem.writeFileSync(path.join(output, 'profile-capability.json'), JSON.stringify(record)); }
     catch { captureFailed = true; note('legacy-record-write'); }
@@ -28,7 +24,7 @@ export function installCapture({ target, responseType, profile, output, filesyst
   const saveShape = () => {
     try {
       filesystem.writeFileSync(path.join(output, 'profile-capability-shape.json'), JSON.stringify({
-        schema: 1, requests, settlements, ...shape, failureSites: [...failureSites]
+        schema: 2, requests, settlements, ...shape, failureSites: [...failureSites]
       }));
     } catch { note('shape-record-write'); }
   };
@@ -72,7 +68,7 @@ export function installCapture({ target, responseType, profile, output, filesyst
             'requested-child-ebwebview' : 'outside-requested-profile';
       } catch { captureFailed = true; note('capability-classification'); }
       try { shape = classifyCapabilityShape(value, normalize); }
-      catch { shape = { ...unobservedShape(), candidateClass: 'classification-error' }; note('shape-classification'); }
+      catch { shape = { ...unobservedShape(), candidateClass: 'classification-error', pathPredicate: 'classification-error' }; note('shape-classification'); }
       save({ schema: 1, requests, settlements, requestedMatchesEnvironment, requestedAbsentBeforeRequest,
         capabilityObserved, capabilityMatchesRequested, capabilityMapping, captureFailed });
       saveShape();

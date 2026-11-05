@@ -4,12 +4,17 @@ param([Parameter(Mandatory)][string]$SourceDirectory, [Parameter(Mandatory)][str
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . "$SourceDirectory/ui/tauri/native-smoke/processes.ps1"
+. "$PSScriptRoot/observer-detail.ps1"
+# A changed source/line table remains unknown. This read never grants ownership.
+$lineageSource = Join-Path $SourceDirectory 'ui/tauri/native-smoke/processes.ps1'
+$lineageSourceTrusted = $false
+try { $lineageSourceTrusted = (Get-FileHash -LiteralPath $lineageSource -Algorithm SHA256).Hash -in @('a54b23fea4ed7bfc951701f2c2bee50bd3d414ca850915d5b01626670f086303', '8667b375c8ba70aa06b36031888449ea796092cea2868bda16bf8709369bd72f') } catch { }
 
 # Observation sites only: these codes never classify discarded exception text.
 function New-ObserverFailures {
-    return [ordered]@{ schema = 1; failureCount = 0; sites = @(); saturated = $false; truncated = $false }
+    return [ordered]@{ schema = 2; failureCount = 0; sites = @(); details = @(); saturated = $false; truncated = $false }
 }
-function Add-ObserverFailure($Ledger, [string]$Site) {
+function Add-ObserverFailure($Ledger, [string]$Site, [string]$Detail = 'operation-exception') {
     $known = @('platform-check', 'profile-path-validation', 'prelaunch-existence', 'owned-parent-path',
         'owned-parent-reparse', 'prelaunch-validation', 'baseline-snapshot', 'ready-marker-write',
         'snapshot-query', 'snapshot-limit', 'candidate-selection', 'candidate-count', 'driver-count',
@@ -19,6 +24,25 @@ function Add-ObserverFailure($Ledger, [string]$Site) {
         'requested-directory-reparse', 'row-record', 'process-handle-dispose', 'finish-marker-query',
         'poll-wait', 'observer-deadline', 'unclassified-site')
     $safeSite = if ($Site -cin $known) { $Site } else { 'unclassified-site' }
+    $knownDetails = @('operation-exception', 'unclassified-detail',
+        'metadata-creation-check-exception', 'metadata-creation-guard', 'metadata-command-line-read-exception',
+        'metadata-command-line-guard', 'metadata-identity-key-exception', 'metadata-tracking-check-exception',
+        'lineage-parent-row-guard-site', 'lineage-parent-creation-guard-site', 'lineage-child-row-guard-site',
+        'lineage-child-creation-guard-site', 'lineage-child-order-guard-site', 'lineage-driver-live-check-site',
+        'lineage-edge-live-check-site', 'lineage-reference-check-site', 'lineage-driver-descendants-call-site',
+        'lineage-app-selection-site', 'lineage-app-count-check-site', 'lineage-app-descendants-call-site',
+        'lineage-webview-selection-site', 'lineage-webview-count-check-site', 'lineage-root-selection-site',
+        'lineage-root-count-check-site', 'lineage-root-creation-check-site', 'lineage-child-selection-site',
+        'lineage-child-identity-check-site', 'lineage-child-creation-check-site', 'lineage-child-order-check-site')
+    $safeDetail = if ($Detail -cin $knownDetails -and (
+        ($safeSite -ceq 'lineage-query' -and $Detail.StartsWith('lineage-', [StringComparison]::Ordinal)) -or
+        ($safeSite -ceq 'webview-metadata' -and $Detail.StartsWith('metadata-', [StringComparison]::Ordinal)) -or
+        ($safeSite -cnotin @('lineage-query', 'webview-metadata', 'unclassified-site') -and $Detail -ceq 'operation-exception')
+    )) { $Detail } else { 'unclassified-detail' }
+    $pair = @($Ledger.details | Where-Object { $_.site -ceq $safeSite -and $_.code -ceq $safeDetail })
+    if ($pair.Count -eq 0) {
+        if ($Ledger.details.Count -lt 16) { $Ledger.details += [ordered]@{ site = $safeSite; code = $safeDetail } } else { $Ledger.truncated = $true }
+    }
     if ($Ledger.failureCount -lt 4096) { $Ledger.failureCount += 1 } else { $Ledger.saturated = $true }
     if ($safeSite -cnotin $Ledger.sites) {
         if ($Ledger.sites.Count -lt 16) { $Ledger.sites += $safeSite } else { $Ledger.truncated = $true }
@@ -108,8 +132,13 @@ try {
                 $facts.lineageConfirmed = $true
                 foreach ($view in $owned.Webviews) {
                     $site = 'webview-metadata'
-                    if (-not (Test-LineageCreation $view) -or -not $view.CommandLine) { throw 'PROFILE_IDENTITY_UNKNOWN' }
+                    $detail = 'metadata-creation-check-exception'
+                    if (-not (Test-LineageCreation $view)) { $detail = 'metadata-creation-guard'; throw 'PROFILE_IDENTITY_UNKNOWN' }
+                    $detail = 'metadata-command-line-read-exception'
+                    if (-not $view.CommandLine) { $detail = 'metadata-command-line-guard'; throw 'PROFILE_IDENTITY_UNKNOWN' }
+                    $detail = 'metadata-identity-key-exception'
                     $key = "$($view.ProcessId):$($view.CreationDate.ToUniversalTime().Ticks)"
+                    $detail = 'metadata-tracking-check-exception'
                     if ($tracked.ContainsKey($key)) { continue }
                     $site = 'row-limit'
                     if ($tracked.Count -ge 32) { $facts.omittedRows += 1; throw 'PROFILE_ROW_LIMIT' }
@@ -149,8 +178,13 @@ try {
                 }
             }
         } catch {
-            # Site identifies the failed observation, not its OS/runtime cause.
-            Add-ObserverFailure $observerFailures $site
+            # Never inspect exception text/type. Only a trusted, bounded source location.
+            $failureDetail = 'operation-exception'
+            if ($site -ceq 'lineage-query') {
+                try { $failureDetail = Resolve-LineageFailure $_.ScriptStackTrace $lineageSource $lineageSourceTrusted }
+                catch { $failureDetail = 'unclassified-detail' }
+            } elseif ($site -ceq 'webview-metadata') { $failureDetail = $detail }
+            Add-ObserverFailure $observerFailures $site $failureDetail
             $queryFailed = $true
         }
         $site = 'finish-marker-query'
@@ -170,7 +204,7 @@ finally {
     $facts | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $OutputPath -Encoding utf8
     # A missing/failed sidecar stays unknown at the controller; never alter the native verdict.
     try {
-        $observerFailures | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path (Split-Path $OutputPath -Parent) 'observer-failure-sites.json') -Encoding utf8
+        $observerFailures | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path (Split-Path $OutputPath -Parent) 'observer-failure-sites.json') -Encoding utf8
     } catch { }
 }
 if (-not $facts.queryComplete) { exit 1 }

@@ -29,7 +29,8 @@ class EvidenceClassificationTests(unittest.TestCase):
         for name, value in record['files'].items():
             self.assertEqual(hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest(), record['fileSha256'][name])
         self.assertEqual(schema.retained_classification(record), {
-            'capabilityClass': 'not-retained', 'observerSites': ['not-retained']})
+            'capabilityClass': 'not-retained', 'observerSites': ['not-retained'],
+            'pathPredicate': 'not-retained', 'observerDetails': 'not-retained'})
         files = record['files']; cap = files['profile-capability.json']; profile = files['profile-observation.json']
         self.assertFalse(cap['capabilityObserved']); self.assertFalse(profile['queryComplete'])
         self.assertEqual(len(profile['rows']), 6)
@@ -55,12 +56,13 @@ class EvidenceClassificationTests(unittest.TestCase):
     def test_synthetic_catch_sites_do_not_invent_exception_causes(self):
         data = synthetic_classification(); profile = valid(); profile['queryComplete'] = False
         for site in ['snapshot-query', 'lineage-query', 'process-handle-dispose']:
-            data['observer-failure-sites.json'].update(failureCount=1, sites=[site])
+            data['observer-failure-sites.json'].update(failureCount=1, sites=[site], details=[{
+                'site': site, 'code': 'lineage-app-count-check-site' if site == 'lineage-query' else 'operation-exception'}])
             self.assertTrue(schema.classification_complete(data, profile, capability()))
             self.assertFalse(phase2.decision([0, 0, 0], reports(), profile, capability(), data)['continue'])
-        data['observer-failure-sites.json']['sites'] = ['unclassified-site']
+        data['observer-failure-sites.json'].update(sites=['unclassified-site'], details=[{'site': 'unclassified-site', 'code': 'unclassified-detail'}])
         self.assertFalse(schema.classification_complete(data, profile, capability()))
-        data['observer-failure-sites.json'].update(failureCount=0, sites=[])
+        data['observer-failure-sites.json'].update(failureCount=0, sites=[], details=[])
         self.assertFalse(schema.classification_complete(data, profile, capability()))
 
     def test_synthetic_unknown_fields_strings_and_unbounded_counters_reject(self):
@@ -113,6 +115,8 @@ class EvidenceClassificationTests(unittest.TestCase):
         self.assertIn('failureCount -lt 4096', text)
         self.assertIn('sites.Count -lt 16', text)
         self.assertNotIn('$_.Exception', text)
+        details = text.split('$knownDetails = @(', 1)[1].split(')\n', 1)[0]
+        self.assertEqual(set(re.findall(r"'([^']+)'", details)), schema.OBSERVER_DETAILS)
 
 
 if __name__ == '__main__':

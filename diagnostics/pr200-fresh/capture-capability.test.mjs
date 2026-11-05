@@ -177,3 +177,25 @@ test('original timeout object propagates and capture write failure never changes
     assert.equal(x.saved.length, 0);
   } finally { x.restore(); }
 });
+
+
+test('synthetic rejected path records the first validator predicate without changing native objects', async () => {
+  for (const [candidate, predicate] of [['relative?', 'drive-prefix'], ['C:\\bad?:colon', 'forbidden-character'],
+    ['C:\\bad:colon', 'extra-colon'], ['C:\\ok\\', 'empty-component'],
+    ['C:\\..', 'dot-component'], ['C:\\name.', 'trailing-dot-or-space']]) {
+    const x = fixture({ msedge: { userDataDir: candidate } });
+    try {
+      const response = await x.target.fetch('http://127.0.0.1:4444/session', x.request);
+      assert.equal(response, x.response); assert.equal(await response.json(), x.value);
+      assert.equal(x.shapes.at(-1).schema, 2);
+      assert.equal(x.shapes.at(-1).pathPredicate, predicate);
+      assert.equal(x.shapes.at(-1).candidateClass, 'candidate-invalid-path');
+      assert.equal(x.saved.at(-1).capabilityObserved, false);
+      assert.equal(x.saved.at(-1).capabilityMatchesRequested, false);
+      assert.equal(x.saved.at(-1).captureFailed, false);
+      assert.equal(x.calls.length, 1); assert.equal(x.jsonCalls(), 1);
+      assert.equal(x.calls[0][1], x.request); assert.equal(x.calls[0][1].signal, x.request.signal);
+      assert.ok(!JSON.stringify(x.shapes).includes(candidate));
+    } finally { x.restore(); }
+  }
+});
