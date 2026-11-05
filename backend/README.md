@@ -146,3 +146,6 @@ GOTOOLCHAIN=local GOPROXY=off GOWORK=off go test -race ./...
 
 既存channel/Host/Approved/Clientの[正規transport owner前提](../docs/mac-canonical-transport-owner.md)は、共通metadataと部分取得・cleanup観測を提供します。
 通常resident callerや認証を追加せず、実native回収・配置信頼は未実証です。
+
+[fixed intentの引継ぎ](../docs/mac-fixed-intent-handoff.md)は既存Session／wire内で正規namespaceと有限runtime期限を保ちます。
+元timer・取消・単回ownerを維持し、通常resident／認証や実producerは未接続です。

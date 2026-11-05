@@ -94,7 +94,18 @@ type Session struct {
 	// ClaimTransport and never cleared.
 	adapterClaimed   bool
 	transportClaimed bool
+	adapterPrefix    string // fixed by the one trusted wire adapter's claim
 }
+
+// runtimeCommandContext exposes the existing finite command/Session budget.
+// It deliberately owns no timer: Session's existing deadline owner still
+// revokes canonical authority before canceling a grant-capped command.
+type runtimeCommandContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c *runtimeCommandContext) Deadline() (time.Time, bool) { return c.deadline, true }
 
 type command struct {
 	id, requestID string
@@ -333,6 +344,27 @@ func (s *Session) KeySetDigest() [32]byte {
 // serve, replay into or adopt the first adapter's commands.
 func (s *Session) Claim() error { return s.claim(&s.adapterClaimed) }
 
+// ClaimWithRequestPrefix takes the same single adapter claim as Claim and
+// records its locally generated request namespace. Wire still passes the full
+// prefixed ID for idempotency, while FixedStart checks the approved client ID
+// in that exact namespace. Direct owner starts keep their separate raw IDs.
+// The prefix is trusted composition input, never a wire or MCP request field.
+func (s *Session) ClaimWithRequestPrefix(prefix string) error {
+	if s == nil || s.issuer == nil || !validRequestID(prefix) {
+		return ErrUnconfigured
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.adapterClaimed {
+		return ErrSessionClaimed
+	}
+	if s.fixedStart != nil && !validRequestID(prefix+s.fixedStart.RequestID) {
+		return ErrUnconfigured
+	}
+	s.adapterClaimed, s.adapterPrefix = true, prefix
+	return nil
+}
+
 // ClaimTransport reserves this Session for exactly one authenticated channel
 // server. Like Claim it is single-use and never released: there is no second
 // channel, reconnect or reset for the same grant.
@@ -455,8 +487,11 @@ func (s *Session) Start(r StartRequest) (Status, error) {
 		return Status{}, ErrDenied
 	}
 	defer s.mu.Unlock()
-	if f := s.fixedStart; f != nil && (r.RequestID != f.RequestID || string(r.Command) != f.Command || r.TimeoutMillis != f.TimeoutMillis) {
-		return Status{}, ErrPolicy
+	if f := s.fixedStart; f != nil {
+		matchingID := r.RequestID == f.RequestID || (s.adapterPrefix != "" && r.RequestID == s.adapterPrefix+f.RequestID)
+		if !matchingID || string(r.Command) != f.Command || r.TimeoutMillis != f.TimeoutMillis {
+			return Status{}, ErrPolicy
+		}
 	}
 	if n := len(s.order); n > 0 {
 		last := s.order[n-1]
@@ -495,7 +530,16 @@ func (s *Session) Start(r StartRequest) (Status, error) {
 		stdin: append([]byte(nil), r.Command...), done: make(chan struct{}), out: newOutputBuffer(),
 		phase: PhaseStarting, cleanup: CleanupPending,
 	}
-	c.ctx, c.cancel = context.WithCancel(s.base)
+	owned, cancel := context.WithCancel(s.base)
+	// Keep the existing timer and cancellation owner. Metadata can only shorten
+	// admission: requested timeout, canonical hard deadline, and the immutable
+	// Session elapsed cap all bound what StartShell may observe.
+	deadline := until
+	elapsedDeadline := time.Now().Add(max(s.budget-s.elapsed(), 0))
+	if elapsedDeadline.Before(deadline) {
+		deadline = elapsedDeadline
+	}
+	c.ctx, c.cancel = &runtimeCommandContext{Context: owned, deadline: deadline}, cancel
 	s.byRequest[c.requestID], s.byID[c.id] = c, c
 	s.order = append(s.order, c)
 	c.timerStop = s.afterFunc(until.Sub(now), func() {

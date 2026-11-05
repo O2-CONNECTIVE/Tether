@@ -1,6 +1,6 @@
 # Mac resident producerの公開source段階
 
-未統合#200/#201/#202/#203/#204/#205に依存する準備sourceです。
+未統合#200/#201/#202/#203/#204/#205/#206に依存する準備sourceです。
 #200のWindows session-create阻害、stacked CI未実行、通常未接続を解除しません。
 
 ## 実際の閉包と今回の切り出し
@@ -61,4 +61,10 @@ policyは既存のtrusted native compositionから選択したalready-enrolled�
 次段は[共通Dispatchと具体的owner cleanup](mac-canonical-transport-owner.md)を既存6 implementation fileで閉じます。
 agenttransportからmaclaunchへのproduction型依存を取り除き、後続protected factoryからの逆向き依存が循環しないようにします。
 通常のTTY承認入口は維持し、部分取得ownerと元のcleanup結果を失わず観測します。
-resident transport/policyを有効化せず、fixed intentのrequest namespace・有限runtime deadline、opaque receiver、protected sourceとStandbyの実組成は後続です。
+resident transport/policyを有効化せず、opaque receiver、protected sourceとStandbyの実組成は後続です。
+
+## fixed intentの実引継ぎ
+
+[既存Session／wireの次段](mac-fixed-intent-handoff.md)では、正規adapterのnamespaceと固定内容、有限runtime deadlineを同じSessionへ渡します。
+元のclaim・replay・timer／cancel ownerを維持し、新しい認証や通常resident入口は追加しません。
+具体的resident transport／opaque receiver／work registration、protected policy／source／worker、Standby／wire／producer組成と配置信頼は未接続です。
