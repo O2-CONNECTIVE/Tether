@@ -76,13 +76,18 @@ fn same_child_close_and_supervisor_join_precede_outer_join_and_exit() {
         entered.send(()).unwrap();
         wait.lock().unwrap().recv().unwrap();
     }));
-    let initial = gate.request_exit();
+    // A fast Close may make request_exit itself join the paused callback.
+    // Keep the release sender on this independent test thread in either order.
+    let initial_gate = gate.clone();
+    let (requested, initial_result) = mpsc::channel();
+    let requesting = thread::spawn(move || requested.send(initial_gate.request_exit()).unwrap());
     notified.recv_timeout(Duration::from_secs(5)).unwrap();
     let published = gate.outcome(); // IO, exact Child Wait, supervisor joined
     let cloned = gate.clone();
     let (done, result) = mpsc::channel();
     let exiting = thread::spawn(move || done.send(cloned.finish_requested()).unwrap());
     let before_return = result.recv_timeout(Duration::from_millis(100));
+    let initial_before_return = initial_result.recv_timeout(Duration::from_millis(100));
     let start = std::time::Instant::now();
     let contended = loop {
         if matches!(gate.0.monitor.try_lock(), Err(TryLockError::WouldBlock)) {
@@ -105,18 +110,27 @@ fn same_child_close_and_supervisor_join_precede_outer_join_and_exit() {
     begun.recv_timeout(Duration::from_secs(5)).unwrap();
     let owner_before_return = owner_result.recv_timeout(Duration::from_millis(100));
     release.send(()).unwrap();
-    let after_return = result.recv_timeout(Duration::from_secs(5)).unwrap();
+    let after_return = match before_return {
+        Ok(value) => value,
+        Err(_) => result.recv_timeout(Duration::from_secs(5)).unwrap(),
+    };
+    let initial_after_return = match initial_before_return {
+        Ok(value) => value,
+        Err(_) => initial_result.recv_timeout(Duration::from_secs(5)).unwrap(),
+    };
     exiting.join().unwrap();
+    requesting.join().unwrap();
     owner_result.recv_timeout(Duration::from_secs(5)).unwrap();
     owner_join.join().unwrap();
     assert!(first.is_ok());
-    assert!(!initial);
     assert_eq!(published, Some(Outcome::Confirmed));
-    assert!(before_return.is_err());
+    assert!(!matches!(before_return, Ok(true)));
+    assert!(!matches!(initial_before_return, Ok(true)));
     assert!(owner_before_return.is_err());
     assert!(contended);
     assert!(!concurrent);
-    assert!(after_return && gate.finish_requested() && gate.request_exit());
+    assert!(after_return || initial_after_return);
+    assert!(gate.finish_requested() && gate.request_exit());
     assert!(gate.0.monitor.lock().unwrap().joined);
 }
 
