@@ -33,7 +33,11 @@ public sealed class DescriptorBindingProbe {
             result.Parsed = ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1, out descriptor, out size);
             result.Win32Error = result.Parsed ? 0 : Marshal.GetLastWin32Error();
             if (result.Parsed) {
-                var sd = new RawSecurityDescriptor(sddl);
+                if (descriptor == IntPtr.Zero || size < 20 || size > 65536)
+                    throw new InvalidOperationException("Native descriptor buffer size refused.");
+                byte[] bytes = new byte[(int)size];
+                Marshal.Copy(descriptor, bytes, 0, bytes.Length);
+                var sd = new RawSecurityDescriptor(bytes, 0);
                 result.AceCount = sd.DiscretionaryAcl.Count;
                 result.OwnerGroupCorrect = sd.Owner.Value == "S-1-5-32-544" && sd.Group.Value == "S-1-5-32-544";
                 result.DaclProtected = (sd.ControlFlags & ControlFlags.DiscretionaryAclProtected) != 0;
@@ -79,6 +83,7 @@ if ($Mode -eq 'Original') {
     ownerGroupCorrect = $result.OwnerGroupCorrect
     daclProtected = $result.DaclProtected
     exactAcePolicy = $result.AcePolicyCorrect
+    descriptorSource = 'NATIVE_RETURNED_BUFFER'
     serviceOperations = $false
 } | ConvertTo-Json -Compress
 if ($Mode -eq 'Original') {
