@@ -22,10 +22,12 @@ symlink や非正規 home の解決、別 path への fallback も行いませ�
 新しい export / factory / loader callback はなく、producer の `run`、通常 CLI / IPC / GUI から呼ぶ入口もありません。
 sealed entrypoint の後続実装はこの内部組成を使い、任意 policy flag を再導入しません。
 
-Go 1.27.3 の `UserHomeDir` / `UserConfigDir` は環境変数を使い、`user.Current` は初回結果を cache するため、選択元にしません。
-Darwin / cgo の `user.LookupId` を使い、現在の real / effective UID・GID が変わっていないこと、非 root、lookup 結果の UID、有限の context と canonical absolute home を照合します。
+Go 1.27.3 の `UserHomeDir` / `UserConfigDir` は環境変数を使い、`user.Current` は初回結果を cache します。同じ UID の `user.LookupId` もこの cache を返すため、選択元にしません。
+Darwin / cgo の private wrapper から `getpwuid_r` を毎回呼び、現在の real / effective UID・GID が変わっていないこと、非 root、lookup 結果の UID、有限の context と canonical absolute home を照合します。
+OS record は最大64 KiB、home は最大1023 bytesで、それを超える結果や未終端 / 不正 pointer を拒否します。OS directory service 内部の cache や更新の即時反映までは保証しません。
 Darwin / cgo 以外と `osusergo` build は拒否します。同期 OS lookup の途中を強制終了する時間保証はなく、復帰後に期限と identity を再確認します。
 [Go os/user](https://pkg.go.dev/os/user@go1.27.3)、[Go os](https://pkg.go.dev/os@go1.27.3#UserHomeDir)、[Apple getpwuid](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/getpwuid.3.html)
+同 UID の cache shortcut は [Go 1.27.3 lookup.go](https://github.com/golang/go/blob/go1.27.3/src/os/user/lookup.go) に対応します。
 
 選択は enrollment・認証・実行許可の証明ではありません。
 既存の `ReadTrustConfig` と strict factory が ancestor / owner / ACL / same-handle / cleanup、schema / fixed scope / key fingerprint / policy digest を検査する契約はそのままです。
@@ -68,6 +70,11 @@ resident の verified-launch 機能にこの OS 下限を採る設計を推奨�
 fixed relative name、env 無視、UID / GID / home / deadline の拒否、unsupported build を検査し、native の正の lookup / policy / key read は行いません。
 合成 account は登録済み identity や起動許可を作らず、製品 API へ入力できません。
 native provider の前後 identity sampling と lookup は source review / compile の範囲で、実 OS の改変競合・停止時刻を実証していません。
+
+Darwin/cgo と既存 Go 1.27.3 / module cache がある環境では、`python3 -B scripts/check_mac_enrollment_lookup.py` が実 provider callsite の専用 replay を行います。
+一時 compiler overlay の中だけで OS lookup を合成し、native wrapper の連続呼出しで別 home を返すこと、error / missing / UID 不一致 / 不正 pointer / 未終端 / oversized / 空 / 相対 / root home の拒否を検査します。
+Go の os/user cache 処理は変更せず、誤って LookupId に戻ると cached home の負例で失敗します。製品 source の native helper を test-only provider に置換する経路は compiler fixture 内だけで、公開 API / 通常 startup にはありません。
+実 account database / policy / key は読まず、probe の test process だけを実行し、同じ Go driver の終了を待って temporary source / cache を削除します。unsupported 環境、準備不足、0件やskipは成功にしません。この明示 fixture は通常の Python unit discovery や他OSのruntime試験へ混ぜません。
 
 後続の bridge fixture は、誤 signer / signing ID / release hash / category / script の拒否、起動前取消、部分生成、同じ owner の EOF / Wait / IO / supervisor / outer join、unknown 保持を対象にします。
 fake の成功を実 launch requirement の enforcement としません。署名済み実物と置換競合、全対応 architecture / Rosetta、library injection の制限は、別途許可された実機試験が必要です。

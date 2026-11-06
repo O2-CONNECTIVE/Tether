@@ -279,9 +279,9 @@ Agent-only encrypted channel inventory: `internal/agentchannel` contains channel
 
 ## Standby / owned pipe の source inventory
 
-現在は45 packageです。新しい residentmac は factory.go / standby.go / standby_types.go / wire.go、residentpipe は共通 codec.go / mapper.go / startup.go だけです。
-Darwin / cgo のときだけ owned_darwin.go / run_darwin.go を追加します。通常 CLI / command entrypoint は登録しません。
-cgo有効時は Linux348 / Darwin351 / Windows379 production file、Darwinでcgo無効なら349 fileです。他43 roleのfile集合は変えません。
+Standby / owned pipe の組成段階は45 packageで、residentmac は factory.go / standby.go / standby_types.go / wire.go、residentpipe は共通 codec.go / mapper.go / startup.go でした。
+Darwin / cgo のときだけ owned_darwin.go / run_darwin.go を追加しました。通常 CLI / command entrypoint は登録しません。
+この段階の cgo 有効時は Linux348 / Darwin351 / Windows379 production file、Darwin で cgo 無効なら349 fileでした。次の native enrollment 選択では residentmac に共通 / OS 別の2 fileを追加し、現在の350 / 353 / 381（Darwin cgo 無効351）へ進めます。他43 roleのfile集合は変えません。
 各新fileの欠落・未知launcher、package結果の欠落をhelperで拒否し、fixture / 実producer idle/startup / Rust integration / 評価TLSをproductionや標準試験へ混ぜません。
 source unit は自己所有pipe、専用の無害test child、checkout内の合成保護fileだけです。実producer / 実鍵 / 実policy / ON / 外部 / GUI / OS trustは使いません。
 strict vet / build と runtime unit、cross compile、実機の証拠を分けます。詳細は [source組成](mac-resident-producer-composition.md) を参照してください。
