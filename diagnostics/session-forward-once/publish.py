@@ -269,6 +269,14 @@ def finalize(source, root):
         summary, passed = decision(files, state, stable, sorted(rejected))
     except Exception:
         summary, passed = uncertain(state, stable, sorted(rejected), files), False
+    sites, valid_sites = runner.rejection_facts(root, state, stable)
+    summary['rejectionSites'] = sites
+    summary['rejectionEvidenceValid'] = valid_sites
+    if not valid_sites or any(v is not None for v in sites.values()):
+        passed = False
+        summary['diagnosticSucceeded'] = False
+        if summary['interpretation'] == 'no-repro-inconclusive':
+            summary['interpretation'] = 'failure-or-uncertain'
     files['outcome.json'] = summary
     body = encode(files)
     digest = overlay.sha(body)

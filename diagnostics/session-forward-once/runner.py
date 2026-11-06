@@ -16,7 +16,7 @@ import probe_schema
 HERE = Path(__file__).resolve().parent
 STAGES = ('environment', 'preflight', 'tools', 'frontend', 'build', 'trial')
 COMMANDS = ('original-process-contract', 'inventory', 'control-python', 'original-python',
-    'original-node', 'powershell-parser', 'tools', 'npm-ci', 'frontend', 'product-build', 'native', 'audit')
+    'generated-python', 'original-node', 'powershell-parser', 'tools', 'npm-ci', 'frontend', 'product-build', 'native', 'audit')
 NODE_SUMMARY = r'# tests 15[\s\S]*# pass 15[\s\S]*# fail 0[\s\S]*# cancelled 0[\s\S]*# skipped 0[\s\S]*# todo 0'
 NATIVE_FILES = ('native-result.json', 'native-observation.json', 'session-startup-timing.json', 'webview-result.json')
 
@@ -33,6 +33,51 @@ def write(path, value):
 
 def read(path):
     return legacy.read(path)
+
+
+def validate_rejections(value):
+    overlay.need(type(value) is dict and set(value) == {'schema', 'stage', 'finalIdentity'})
+    overlay.need(type(value['schema']) is int and value['schema'] == 1)
+    overlay.need(all(value[k] is None or type(value[k]) is str and value[k] in overlay.SITES
+                     for k in ('stage', 'finalIdentity')))
+    return value
+
+
+def read_rejections(root):
+    path = root / 'safe/rejection-sites.json'
+    overlay.need(path.stat().st_size <= 512)
+    return validate_rejections(read(path))
+
+
+def record_rejection(root, key, error, fallback):
+    # First failure per boundary wins. No exception text/type/value is serialized.
+    overlay.need(key in {'stage', 'finalIdentity'} and fallback in overlay.SITES)
+    path = root / 'safe/rejection-sites.json'
+    value = read_rejections(root) if path.exists() else {'schema': 1, 'stage': None, 'finalIdentity': None}
+    if value[key] is None:
+        value[key] = error.site if isinstance(error, overlay.Rejection) else fallback
+        write(path, validate_rejections(value))
+
+
+def rejection_facts(root, state, stable):
+    failed = any(s == 'failed' for s in state['stages'].values())
+    unknown = {'stage': 'unknown' if failed else None, 'finalIdentity': 'unknown' if not stable else None}
+    try:
+        path = root / 'safe/rejection-sites.json'
+        value = read_rejections(root) if path.exists() else {'schema': 1, 'stage': None, 'finalIdentity': None}
+        overlay.need(not failed or value['stage'] is not None)
+        overlay.need(stable or value['finalIdentity'] is not None)
+        return {k: value[k] for k in unknown}, True
+    except Exception:
+        return unknown, False
+
+
+def build_verified(root):
+    path = root / 'safe/command-ledger.json'
+    if not path.exists():
+        return False
+    value = validate_ledger(read(path))['commands']['product-build']
+    return value == {'state': 'succeeded', 'exitCode': 0, 'outputContractVerified': True}
 
 
 def validate_state(value):
@@ -126,13 +171,14 @@ def boundary(source, root, create=False):
     overlay.need(len(names) >= 8)
     for name in names:
         overlay.blob(control, name)
-    overlay.checkout(source, pins.PRODUCT, pins.PRODUCT_TREE, True)
+    generated = build_verified(root)
+    overlay.checkout(source, pins.PRODUCT, pins.PRODUCT_TREE, True, generated)
     overlay.checkout(diagnostic, pins.DIAGNOSTIC, pins.DIAGNOSTIC_TREE)
     if create:
         overlay.need(not root.exists())
         (root / 'private').mkdir(parents=True)
         (root / 'safe').mkdir()
-    digest, count = overlay.materialize(source, diagnostic, root, create)
+    digest, count = overlay.materialize(source, diagnostic, root, create, generated)
     return control, diagnostic, head, digest, count
 
 
@@ -144,23 +190,34 @@ def allow_native_codes(source):
 
 
 def identity(source, root, final=False):
-    control, _, head, digest, count = boundary(source, root)
-    exe = source / 'ui/tauri/src-tauri/target/debug/rescue-host-shell.exe'
-    binary = root / 'tools/tauri/bin/tauri-driver.exe'
-    value = {'schema': 1, 'product': pins.PRODUCT, 'productTree': pins.PRODUCT_TREE,
-        'diagnostic': pins.DIAGNOSTIC, 'diagnosticTree': pins.DIAGNOSTIC_TREE,
-        'control': head, 'controlTree': overlay.git(control, 'rev-parse', 'HEAD^{tree}'),
-        'base': pins.BASE_SHA, 'overlaySha256': digest, 'overlayFileCount': count,
-        'supervisorSha256': overlay.sha((root / 'overlay/ui/tauri/native-smoke/supervise.ps1').read_bytes()),
-        'setupSha256': overlay.sha((root / 'overlay/ui/tauri/native-smoke/setup.ps1').read_bytes()),
-        'exeSha256': legacy.digest(exe) if exe.exists() else None,
-        'driverSha256': legacy.digest(binary) if binary.exists() else None,
-        'cargoLockSha256': pins.LOCK, 'instrumentationEnabled': True,
-        'productFeatures': 'custom-protocol', 'productProfile': 'debug', 'nativeRequestDeadlineMs': 15000}
-    if final and (root / 'safe/launch-identity.json').exists():
-        overlay.need(value == read(root / 'safe/launch-identity.json'))
-    write(root / 'safe' / ('final-identity.json' if final else 'build-identity.json'), value)
-    return value
+    site = 'identity-boundary'
+    try:
+        control, _, head, digest, count = boundary(source, root)
+        exe = source / 'ui/tauri/src-tauri/target/debug/rescue-host-shell.exe'
+        binary = root / 'tools/tauri/bin/tauri-driver.exe'
+        site = 'identity-hash'
+        value = {'schema': 1, 'product': pins.PRODUCT, 'productTree': pins.PRODUCT_TREE,
+            'diagnostic': pins.DIAGNOSTIC, 'diagnosticTree': pins.DIAGNOSTIC_TREE,
+            'control': head, 'controlTree': overlay.git(control, 'rev-parse', 'HEAD^{tree}'),
+            'base': pins.BASE_SHA, 'overlaySha256': digest, 'overlayFileCount': count,
+            'supervisorSha256': overlay.sha((root / 'overlay/ui/tauri/native-smoke/supervise.ps1').read_bytes()),
+            'setupSha256': overlay.sha((root / 'overlay/ui/tauri/native-smoke/setup.ps1').read_bytes()),
+            'exeSha256': legacy.digest(exe) if exe.exists() else None,
+            'driverSha256': legacy.digest(binary) if binary.exists() else None,
+            'cargoLockSha256': pins.LOCK, 'instrumentationEnabled': True,
+            'productFeatures': 'custom-protocol', 'productProfile': 'debug', 'nativeRequestDeadlineMs': 15000}
+        site = 'identity-comparison'
+        if final and (root / 'safe/launch-identity.json').exists():
+            overlay.need(value == read(root / 'safe/launch-identity.json'), site)
+        site = 'identity-write'
+        write(root / 'safe' / ('final-identity.json' if final else 'build-identity.json'), value)
+        return value
+    except Exception as error:
+        try:
+            record_rejection(root, 'finalIdentity' if final else 'stage', error, site)
+        except Exception:
+            pass
+        raise
 
 
 def audit(source, root, state):
@@ -247,6 +304,7 @@ def perform(stage, source, root, state):
     elif stage == 'preflight':
         versions(root)
         checked(root, 'control-python', [sys.executable, '-B', '-m', 'unittest', 'discover', '-s', str(HERE), '-p', 'test_once.py', '-v'], expected=r'Ran 23 tests[\s\S]*\nOK\s*$')
+        checked(root, 'generated-python', [sys.executable, '-B', '-m', 'unittest', 'discover', '-s', str(HERE), '-p', 'test_generated.py', '-v'], expected=r'Ran 8 tests[\s\S]*\nOK\s*$')
         checked(root, 'original-python', [sys.executable, '-B', '-m', 'unittest', 'discover', '-s', str(source / 'scripts/tests'), '-p', 'test_driver_*.py', '-v'], expected=r'Ran 10 tests[\s\S]*\nOK\s*$')
         checked(root, 'original-node', ['node', '--test', '--test-reporter=tap', str(source / 'ui/tauri/tests/native-contract.test.ts'), str(source / 'ui/tauri/tests/session-observation.test.ts')], expected=NODE_SUMMARY)
         count = len(list(native.glob('*.ps1')))
@@ -312,7 +370,12 @@ def main():
             perform(args.stage, source, root, state)
             state['stages'][args.stage] = 'passed'
             write(root / 'safe/run-status.json', state)
-    except Exception:
+    except Exception as error:
+        if 'root' in locals() and (root / 'safe').is_dir():
+            try:
+                record_rejection(root, 'stage', error, 'unknown')
+            except Exception:
+                pass
         if entered and state is not None and 'args' in locals() and args.stage in STAGES:
             state['stages'][args.stage] = 'failed'
             try:
