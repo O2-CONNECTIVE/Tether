@@ -79,7 +79,9 @@ def expected(source, diagnostic):
     for name in names:
         canonical, _ = blob(diagnostic, name)
         scope[name] = canonical
-    for name in ['scripts/apply_driver_trace.py', *git(source, 'ls-tree', '-r', '--name-only', 'HEAD', 'tools/native-driver-trace').splitlines()]:
+    for name in ['scripts/apply_driver_trace.py', 'scripts/verify_driver_trace.py',
+                 'scripts/verify_tauri_evaluation.py', 'scripts/package_tauri_evaluation.py',
+                 *git(source, 'ls-tree', '-r', '--name-only', 'HEAD', 'tools/native-driver-trace').splitlines()]:
         scope[name] = blob(source, name)[0]
     return files, scope
 
