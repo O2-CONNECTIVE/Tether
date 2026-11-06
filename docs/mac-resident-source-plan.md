@@ -96,3 +96,9 @@ source選択とarchiveの対応はbuilderの観測であり、publisher / compil
 [固定 enrollment の準備](mac-resident-trusted-preparation.md) は、現在 UID の OS account home から製品専用の一つの相対名を選び、既存 strict loader に内部接続します。
 env / UI / CLI の path override、profile 探索、新しい権限や通常 caller は追加しません。固定位置を選んだことと enrollment・認証の証明は別です。
 署名・配置と同じ image の起動は OS launch requirement と単一 owner の具体的な bridge を後続に残し、通常起動は未接続です。
+
+## Typed requirement と起動前 native owner
+
+[Apple API の準備 source](mac-launch-requirement-preparation.md) は typed な publisher / exact-release 条件と、一つの未起動 Foundation Process の保持までを独立 compile / 合成 fixture で確認します。
+production の publisher は未設定で拒否し、Tauri / Rust / Go へ link・起動配線しません。14.4 未満は機能を拒否し、アプリの minimum OS は変更しません。
+owned I/O / exact Process Wait / supervisor / outer joins と実物の launch enforcement は後続であり、準備 object を admission や回収完了の証明にしません。

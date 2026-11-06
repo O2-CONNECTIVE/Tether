@@ -41,6 +41,7 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 - [Standby と owned pipe の source 組成](mac-resident-producer-composition.md): 同じ owner の終了と codec / mapper / owned IO を結び、sealed entrypoint と実機の未達を分けます。
 - [resident library の build record](mac-resident-library-build.md): 固定 source・lock・recipeとcompile-only archiveを結び、起動・配布はblockedのまま記録します。
 - [native enrollment 選択と起動信頼](mac-resident-trusted-preparation.md): OS account 由来の固定 policy 選択を内部準備し、署名・配置・launch-time enforcement の残る条件を分けます。
+- [typed launch requirement の準備](mac-launch-requirement-preparation.md): 未起動 Foundation owner と型付き条件の source fixture。実 publisher 未設定、通常起動・実 enforcement は未接続です。
 - [Go license inventory](go-license-inventory.md)、[配布条件](distribution.md)。旧配布条件の合格を新しいMac packageへ転用しない。
 - [検証状態](tether-pilot-status.md)のpackage節に、license閉包・署名・notarization・受領者起動の残件を集約。
 - [旧Python開発手順](development.md)はPython部分の検証用。Go/Swiftの全試験を包含しない。
