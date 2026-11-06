@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -35,6 +36,71 @@ def example(stages=None):
 
 
 class RecordTests(unittest.TestCase):
+    def test_atomic_checkpoint_failure_preserves_previous_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "steps.json"
+            original = [{"stage": "pins", "exitCode": 0}]
+            ci.checkpoint(path, original)
+            with patch.object(ci.os, "replace", side_effect=OSError("PRIVATE_SENTINEL")):
+                with self.assertRaises(OSError): ci.checkpoint(path, original + [{"stage": "rust", "exitCode": 1}])
+            self.assertEqual(ci.load(path), original)
+            self.assertEqual([p.name for p in path.parent.iterdir()], ["steps.json"])
+
+    def test_actual_publisher_requires_all_critical_sections_and_handles_bad_host_rows(self):
+        # Synthetic complete record: proves publisher policy, not Windows/runtime success.
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory); (temp / "evidence").mkdir(); (temp / "tools/app-startup").mkdir(parents=True); (temp / "unpacked").mkdir()
+            def write(name, value):
+                (temp / name).write_bytes(ci.canonical(value))
+            write("steps.json", [{"stage": name, "exitCode": 0} for name in ci.STEPS])
+            write("evidence/native-result.json", {"nativeTestsRun": 1, "nativeTestsPassed": 1, "normalCloseVerified": True,
+                "cleanupStarted": True, "cleanupFailures": 0, "childHandleDisposeFailures": 0,
+                "driverExitObservedAfterCleanup": True, "appStartupFileClosed": True})
+            observation = {"status": "webview-passed-awaiting-close", "phase": "complete", "elapsedMs": 100,
+                           "documentObservations": 1, "droppedRequests": 0, "errorCode": "",
+                           "requests": [{"operation": "create-session", "outcome": "started", "elapsedMs": 0},
+                                        {"operation": "create-session", "outcome": "ok", "elapsedMs": 80, "status": 200}]}
+            write("evidence/native-observation.json", observation)
+            # Preserve Rust writer's canonical field order, checked by read_record.
+            (temp / "tools/app-startup/wry-completion-probe.json").write_text(json.dumps(example(), separators=(",", ":")))
+            meta = {key: "a" * 64 for key in ("overlayLockSha256", "vendorTreeSha256", "exeSha256", "driverSha256", "archiveSha256", "edgeDriverSha256", "driverPatchSha256", "driverLockSha256")}
+            meta.update(sourceCommit=ci.git(ROOT, "rev-parse", "HEAD").decode().strip(), sourceTree=ci.git(ROOT, "rev-parse", "HEAD^{tree}").decode().strip())
+            write("unpacked/BUILD.json", {"schema": 1, "variant": "host-startup-diagnostic-1", "sourceCommit": meta["sourceCommit"],
+                "features": ["custom-protocol", "startup-diagnostics"], "profile": "release", "exeSha256": "a" * 64, "distribution": False})
+            write("launch.json", meta); write("final.json", meta)
+            overlay = {"schema": 1, "variant": "wry-completion-overlay-1", "files": 84,
+                       "crateSha256": prepare.CRATE_SHA, "originalLockSha256": prepare.LOCK_SHA,
+                       "originalSha256": "9ef674af12e52bc3519b0e300752c1042798b7f336e0e0dafca6a8944f348888",
+                       "patchedSha256": "8d4a637727ce94dab6c6fb8e676dde8f2e7a4d0c10681fef0b82dbda42654700", "overlayLockSha256": "a" * 64}
+            write("overlay.json", overlay)
+            host = {"diagnostic": "complete", "startup": {"phase": "first-page-load-finished", "events": [
+                {"seq": i + 1, "stage": stage, "elapsedUs": i + 1} for i, stage in enumerate(
+                    ("setup-enter", "webview-build-start", "webview-build-ok", "setup-return", "first-page-load-finished"))]}}
+            write("evidence/app-startup-report.json", host)
+            stages = ("connection-open", "session-received", "forward-start", "native-headers", "connection-end")
+            states = ("idle", "received", "forward-pending", "headers-returned", "headers-returned")
+            rows = [{"type": "header", "schema": 1, "variant": "tauri-driver-2.1.0-stage-1"}]
+            rows += [{"type": "event", "seq": i + 1, "connection": 1, "request": int(i != 0), "stage": stage,
+                      "state": states[i], "error": "none", "elapsedUs": i + 1} for i, stage in enumerate(stages)]
+            rows += [{"type": "summary", "lastSequence": 5, "attempted": 5, "enqueued": 5, "written": 5, "dropped": 0, "sealed": True, "pendingRequests": 0}]
+            (temp / "tools/driver-stage.jsonl").write_text("\n".join(json.dumps(row, separators=(",", ":")) for row in rows) + "\n")
+            def run():
+                result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/wry_probe_ci.py"), "publish", "--root", str(ROOT), "--temp", str(temp)],
+                    env={**os.environ, "CONTROL_HEAD": "a" * 40}, capture_output=True, timeout=15)
+                self.assertEqual(result.stderr, b"")
+                return result.returncode, json.loads(result.stdout.decode().splitlines()[1])
+            self.assertEqual(run()[0], 0)
+            for name in ("overlay.json", "evidence/native-observation.json"):
+                data = (temp / name).read_bytes(); (temp / name).unlink()
+                self.assertEqual(run()[0], 1)
+                (temp / name).write_bytes(data)
+            host["startup"]["events"] = [None]
+            write("evidence/app-startup-report.json", host)
+            code, result = run()
+            self.assertEqual(code, 1)
+            self.assertEqual(result["files"]["host"]["data"], {"state": "unavailable-or-rejected"})
+            self.assertEqual(result["files"]["steps"]["data"][-1]["stage"], "final-identity")
+
     def test_retained_actual_failure_projection_stays_red(self):
         value = json.loads((ROOT / "scripts/tests/fixtures/wry240-baseline.json").read_text())
         native = ci.native_summary(value["native"])
@@ -57,6 +123,7 @@ class RecordTests(unittest.TestCase):
             with self.assertRaises(ValueError): ci.permissions(root, True)
             generated = folder / "autogenerated"; generated.mkdir()
             for name, data in expected.items(): (generated / name).write_bytes(data.encode())
+            with self.assertRaises(ValueError): ci.permissions(root, False)
             ci.permissions(root, True)
             bad = generated / "unknown.json"; bad.write_bytes(b"{}")
             with self.assertRaises(ValueError): ci.permissions(root, True)
@@ -175,7 +242,9 @@ class OverlayTests(unittest.TestCase):
             self.assertTrue(all(row["onTraceThread"] for row in value["events"]))
 
     def test_actual_lock_projection_accepts_only_two_exact_representations(self):
-        data = (ROOT / "ui/tauri/src-tauri/Cargo.lock").read_bytes().replace(b"\r\n", b"\n")
+        # HEAD's own blob exists in a depth-one checkout, even after prepare has
+        # intentionally replaced the working lock for the diagnostic path patch.
+        data = ci.git(ROOT, "show", "HEAD:ui/tauri/src-tauri/Cargo.lock")
         lf = prepare.project_lock(data)
         self.assertEqual(prepare.project_lock(data.replace(b"\n", b"\r\n")), lf)
         self.assertEqual(lf.count(b'name = "wry"\nversion = "0.57.1"\n'), 1)
