@@ -38,7 +38,7 @@ sys.exit(1 if mode=='exit-error' else 0)
 pub(super) fn command(mode: &str) -> Command {
     let mut command = Command::new("/usr/bin/python3");
     command
-        .args(["-c", SCRIPT, mode, &status(1, 0, json!(null))])
+        .args(["-I", "-S", "-c", SCRIPT, mode, &status(1, 0, json!(null))])
         .env_clear();
     command
 }
@@ -96,6 +96,22 @@ fn unknown_duplicate_following_frame_missing_truncated_and_exit_error_never_conf
         assert!(!owner.cleanup_confirmed(), "confirmed {mode}");
     }
 }
+#[test]
+fn no_output_child_still_hits_readiness_deadline_and_reap_is_not_cleanup() {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "IFS= read -r line; exit 0"])
+        .env_clear();
+    let (mut owner, source) = Supervisor::fixture(command).unwrap();
+    let source = source.unwrap();
+    assert!(source
+        .first_with_timeout(Duration::from_millis(20))
+        .is_err());
+    join(&mut owner);
+    assert!(source.current().is_none());
+    assert!(!owner.cleanup_confirmed());
+}
+
 #[test]
 fn unsolicited_terminal_is_not_a_close_proof() {
     let (mut owner, source) = launch("unsolicited");

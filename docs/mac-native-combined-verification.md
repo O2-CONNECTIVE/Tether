@@ -66,3 +66,7 @@ Go source archive は arm64 と Intel の各 host 上で別に build し、Intel
 
 owned pipe fixture の初回観測失敗は、timeout / clock / tracking fault / startup rejection を同じ製品 code だけで診断しません。test build の有限 read / frame 観測と native timestamp、元 fixture child の phase / stderr を別に記録します。2秒の閾値、通常の並列度、parser、Close / EOF / exact Wait / join の判定は維持します。
 この観測は test-only であり、通常 runtime の出力・認証・回収証明を追加しません。ローカル再現なしや別の head での成功だけでは、元 CI の失敗原因を解消扱いにしません。
+
+
+初回 CI の3件では、同じ child が2秒期限まで bytes / frame を出さず、出力は spawn 後約2.33〜2.40秒でした。tracking fault や parser・出力後 IO の失敗ではありません。stdlib のみを使う fixture は `-I -S` で暗黙の site / user-site 起動を除きます。warmup や追加 sleep は使わず、新しい cold child の2秒境界を維持します。
+loader / cache / site 内部の唯一原因は断定しません。隔離 flag の局所 probe は通常 suite で interpreter を先に温めないよう診断時だけ実行し、既存149件は維持します。永続する追加負例は Python を使わない無出力 child で、期限拒否・観測なし・実 reap だけでは cleanup 未確認を要求します。解消の判定は新しい固定 head の CI 観測と元ログへ照合します。
