@@ -38,3 +38,8 @@ pub(crate) use active_checks::run as run_active;
 mod supervisor_checks;
 #[cfg(resident_native_source)]
 pub(crate) use supervisor_checks::run as run_supervisor;
+
+#[cfg(resident_native_source)]
+mod outer_checks;
+#[cfg(resident_native_source)]
+pub(crate) use outer_checks::run as run_outer;

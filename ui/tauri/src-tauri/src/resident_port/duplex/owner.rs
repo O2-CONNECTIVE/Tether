@@ -245,4 +245,4 @@ mod proof;
 
 #[cfg(resident_native_source)]
 #[path = "native_supervisor.rs"]
-pub(in crate::resident_port::duplex) mod native;
+pub(crate) mod native;

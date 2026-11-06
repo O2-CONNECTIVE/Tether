@@ -7,6 +7,9 @@ mod mac_status;
 #[path = "../../../rust/owner.rs"]
 mod native_preparation;
 mod resident_port;
+#[cfg(resident_native_source)]
+#[path = "../../../../../src-tauri/src/standby_lifecycle.rs"]
+mod standby_lifecycle;
 
 fn require_duplex<T: std::io::Read + std::io::Write>() {}
 
@@ -23,6 +26,11 @@ fn main() {
         native_preparation::NativePreparation::prepare(),
         native_preparation::Preparation::Refused
     ));
+    #[cfg(resident_native_source)]
+    if arguments[1].starts_with("outer-") {
+        resident_port::duplex::run_outer(&arguments[1]);
+        return;
+    }
     #[cfg(resident_native_source)]
     if arguments[1].starts_with("supervisor-") {
         resident_port::duplex::run_supervisor(&arguments[1]);

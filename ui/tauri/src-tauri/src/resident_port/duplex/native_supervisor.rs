@@ -3,7 +3,7 @@ use super::*;
 use crate::native_preparation::{ExitObservation, NativePreparation, Preparation, State};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::resident_port::duplex) enum NativeOutcome {
+pub(crate) enum NativeOutcome {
     Refused,
     Prepared(State),
     Active {
@@ -14,16 +14,16 @@ pub(in crate::resident_port::duplex) enum NativeOutcome {
     Unknown,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::resident_port::duplex) struct NativeJoined {
+pub(crate) struct NativeJoined {
     outcome: NativeOutcome,
 }
 impl NativeJoined {
-    pub(in crate::resident_port::duplex) fn outcome(self) -> NativeOutcome {
+    pub(crate) fn outcome(self) -> NativeOutcome {
         self.outcome
     }
 }
 
-pub(in crate::resident_port::duplex) struct NativeIoSupervisor {
+pub(crate) struct NativeIoSupervisor {
     shared: Arc<Mutex<Shared>>,
     worker: Option<JoinHandle<NativeOutcome>>,
     joined: Option<NativeJoined>,
@@ -51,20 +51,18 @@ impl Bootstrap {
 }
 impl NativeIoSupervisor {
     // Concrete closed preparation only. No signed active launcher exists yet.
-    pub(in crate::resident_port::duplex) fn prepare() -> io::Result<(Self, io::Result<BoundDuplex>)>
-    {
+    pub(crate) fn prepare() -> io::Result<(Self, io::Result<BoundDuplex>)> {
         Self::start(Bootstrap::Preparation)
     }
     #[cfg(resident_launch_fixture)]
-    pub(in crate::resident_port::duplex) fn fixture(
+    pub(crate) fn fixture(
         mode: crate::native_preparation::FixedActiveFixture,
         unwind: bool,
     ) -> io::Result<(Self, io::Result<BoundDuplex>)> {
         Self::start(Bootstrap::Fixture(mode, unwind))
     }
     #[cfg(resident_launch_fixture)]
-    pub(in crate::resident_port::duplex) fn fixture_prepared(
-    ) -> io::Result<(Self, io::Result<BoundDuplex>)> {
+    pub(crate) fn fixture_prepared() -> io::Result<(Self, io::Result<BoundDuplex>)> {
         Self::start(Bootstrap::PreparedFixture)
     }
     fn start(bootstrap: Bootstrap) -> io::Result<(Self, io::Result<BoundDuplex>)> {
@@ -83,16 +81,16 @@ impl NativeIoSupervisor {
         let source = receive.recv().unwrap_or_else(|_| Err(unavailable()));
         Ok((supervisor, source))
     }
-    pub(in crate::resident_port::duplex) fn close_handle(&self) -> CloseHandle {
+    pub(crate) fn close_handle(&self) -> CloseHandle {
         CloseHandle(self.shared.clone())
     }
-    pub(in crate::resident_port::duplex) fn request_close_transport(&self) {
+    pub(crate) fn request_close_transport(&self) {
         self.close_handle().request();
     }
-    pub(in crate::resident_port::duplex) fn joined(&self) -> Option<NativeJoined> {
+    pub(crate) fn joined(&self) -> Option<NativeJoined> {
         self.joined
     }
-    pub(in crate::resident_port::duplex) fn poll_join(&mut self) -> Option<NativeJoined> {
+    pub(crate) fn poll_join(&mut self) -> Option<NativeJoined> {
         if !self.worker.as_ref()?.is_finished() {
             return None;
         }
@@ -110,7 +108,7 @@ impl NativeIoSupervisor {
         joined
     }
     // Wire component only, never cleanup_confirmed / outer joins / Quit.
-    pub(in crate::resident_port::duplex) fn wire_close_confirmed(&self) -> bool {
+    pub(crate) fn wire_close_confirmed(&self) -> bool {
         self.joined.is_some()
             && self
                 .shared

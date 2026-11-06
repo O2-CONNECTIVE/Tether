@@ -171,3 +171,7 @@ impl Drop for StandbyOwner {
 #[cfg(test)]
 #[path = "standby_lifecycle_tests.rs"]
 mod tests;
+
+#[cfg(resident_native_source)]
+#[path = "native_outer_lifecycle.rs"]
+pub(crate) mod native;
