@@ -24,7 +24,11 @@ port と owner の fields は private です。caller が得るのは借用 view
 python3 scripts/check_mac_native_session.py
 ```
 
-202 条件、normal 1 / fixture 9 modes。固定自己 child 9 件の元 Wait、36 endpoint closes、明示的 outer joins 8 件と session Drop guard join 1 件、Unknown record 9 件の保持、実 native slot の replacement 拒否 9 件、Quit permits 0 を検査します。normal nil 拒否、confirmed / unknown / missing / malformed Close、attach 前の lost-close receipt、不正 startup、startup rejection、IO unwind、session Drop を含みます。
+251 条件、normal 1 / fixture 11 modes。固定自己 child 11 件の元 Wait、44 endpoint closes、明示的 outer joins 10 件と session Drop guard join 1 件、Unknown record 11 件の保持、実 native slot の replacement 拒否 11 件、Quit permits 0 を検査します。normal nil 拒否、confirmed / unknown / missing / malformed Close、attach 前の lost-close receipt、不正 startup、startup rejection、IO unwind、session Drop を含みます。
+
+close 後の既存回帰も、Receiver が作れたことだけでなく、unbound は unavailable、bound は rejected という実 receipt を要求します。追加した idle-close と pending-close は、元 NativeSession / control / Process の実経路を通ります。pending child は request 5 を読み、revision 2 の pending 観測を返した後、元 control EOF まで accepted receipt を保留します。close はその待機中 receiver を Unknown として完了し、後着 accepted を重ねず、新規 intent を拒否し、status の ON / OFF 要求能力を無効にすることを検査します。
+
+これは製品動作を変えない後付け回帰です。local copy にだけ入れた「discard 時 Unknown を accepted にする」「close admission seal を外す」という意図的な誤りを、各 3/3 検出しました。negative の判定は元 owner の Wait / join / close 後に行い、各回の Wait 1 / open 0 を確認しました。元 source を SHA 一致で復元後、両ケースが各 3/3 成功しました。この mutation は公開差分に含めず、現行製品の不具合修正や Windows timeout の解決とは扱いません。
 
 同じ実 ResidentPort core を Tauri command module から振る舞いを変えずに分離し、既存の locked/offline fixture crate に import します。mock port や認証済み marker は使いません。normal / fixture の build / clippy と、実借用 view に対する E0505 compile refusal を要求します。期待どおりの borrow refusal 以外の compile error を成功にしません。既存 app 両構成・port / IPC 回帰と outer / supervisor / Pump の aggregate checker を維持します。
 

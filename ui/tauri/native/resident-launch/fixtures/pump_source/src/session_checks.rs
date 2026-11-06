@@ -30,7 +30,15 @@ fn join(session: &NativeSession) -> NativeOuterJoined {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
+#[cfg(resident_launch_fixture)]
+#[path = "session_close_checks.rs"]
+mod close;
 pub(crate) fn run(mode: &str) {
+    #[cfg(resident_launch_fixture)]
+    if matches!(mode, "session-close-pending" | "session-close-idle") {
+        close::run(mode);
+        return;
+    }
     let mut passed = 0;
     let mut check = |v: bool| {
         assert!(v, "session condition {}", passed + 1);
@@ -128,10 +136,12 @@ fn active(mode: &str) {
                 || status(&session)["validForMs"] == 0,
         );
         check(
-            session
-                .port()
-                .request(serde_json::from_value(intent(id)).unwrap())
-                .is_ok(),
+            receipt(&session, id)["disposition"]
+                == if unavailable {
+                    "unavailable"
+                } else {
+                    "rejected"
+                },
         );
     }
     drop(session); // Original outer guard closes/joins; never detached on failure.

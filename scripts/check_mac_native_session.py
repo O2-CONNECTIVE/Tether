@@ -10,7 +10,8 @@ from check_mac_native_source_variants import source_variants, validate_dependenc
 CASES = {'session-confirmed': 26, 'session-unknown': 26,
          'session-missing': 26, 'session-malformed': 26,
          'session-lost': 18, 'session-invalid': 18, 'session-rejected': 18,
-         'session-unwind': 18, 'session-drop': 18}
+         'session-unwind': 18, 'session-drop': 18,
+         'session-close-pending': 28, 'session-close-idle': 21}
 NO_CHILD = {'session-normal'}
 
 
@@ -43,11 +44,11 @@ def run():
                                     env=variant.env, text=True, capture_output=True, timeout=60)
             validate_borrow_refusal(result.returncode, result.stderr)
     print(json.dumps({'fixture': 'native-session-source', 'passed': passed,
-                      'normalModes': 1, 'fixtureModes': 9,
-                      'fixtureChildrenStarted': 9, 'fixtureChildrenWaited': 9,
-                      'physicalActiveEndpointsClosed': 36, 'retainedNativeUnknownRecords': 9,
-                      'explicitOuterJoins': 8, 'sessionDropJoins': 1,
-                      'replacementRefusals': 9, 'quitPermits': 0,
+                      'normalModes': 1, 'fixtureModes': 11,
+                      'fixtureChildrenStarted': 11, 'fixtureChildrenWaited': 11,
+                      'physicalActiveEndpointsClosed': 44, 'retainedNativeUnknownRecords': 11,
+                      'explicitOuterJoins': 10, 'sessionDropJoins': 1,
+                      'replacementRefusals': 11, 'quitPermits': 0,
                       'lockedOffline': True, 'existingDependencyPackages': 11,
                       'clippyVariants': 2, 'compileRefusals': 1, 'producerLaunches': 0,
                       'scope': 'same native owner and borrowed typed status/intent port; no normal startup / IPC / auth / Quit permission'}))
