@@ -6,7 +6,7 @@ macOS 14.4 未満も拒否します。fixture の compile target 11.0 は製品�
 
 ## 所有契約
 
-[`ResidentPreparation.h`](../ui/tauri/native/resident-launch/ResidentPreparation.h)は create / state / retire だけです。
+この #221 段階の [`ResidentPreparation.h`](../ui/tauri/native/resident-launch/ResidentPreparation.h) は create / state / retire です。現在の source には後続の[借用 byte IO](mac-native-byte-io.md)もありますが、起動や回収完了の許可は追加していません。
 外部へ raw object pointer を渡さず、path / argv / fd / hash / publisher も受け取りません。
 UInt64 handle は process 内の所有確認用で、認証・起動許可ではありません。
 

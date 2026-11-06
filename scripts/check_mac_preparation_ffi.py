@@ -10,7 +10,7 @@ import tempfile
 from check_mac_enrollment_lookup import command
 from check_mac_launch_requirement import NATIVE, validate_weak_link
 
-CASES = {'lifetime': 20, 'io': 10, 'unknown': 12, 'thread-exit': 12, 'partial': 10, 'overflow': 10}
+CASES = {'lifetime': 20, 'io': 10, 'unknown': 12, 'thread-exit': 12, 'partial': 10, 'overflow': 10, 'peer-repeat': 16}
 
 
 def validate_report(mode, output):
@@ -35,7 +35,7 @@ def run():
         raise ValueError('native tools unavailable')
     with tempfile.TemporaryDirectory(prefix='resident-preparation-ffi-') as temporary:
         directory = Path(temporary)
-        sources = [str(NATIVE / name) for name in ('ResidentLaunchPreparation.swift', 'OwnedPreparationIO.swift', 'ResidentPreparationABI.swift')]
+        sources = [str(NATIVE / name) for name in ('ResidentLaunchPreparation.swift', 'OwnedPreparationIO.swift', 'ResidentPreparationABI.swift', 'PreparedByteIO.swift')]
         header = str(NATIVE / 'ResidentPreparation.h')
         passed = 0
         for target_arch in (arch, 'x86_64' if arch == 'arm64' else 'arm64'):

@@ -12,10 +12,11 @@ from check_mac_enrollment_lookup import command, completed
 from check_mac_launch_requirement import NATIVE, validate_weak_link
 
 CASES = {'lifetime': 12, 'drop': 6, 'io': 7, 'unknown': 9,
-         'acquire-unknown': 7, 'thread-exit': 5, 'unwind': 6}
-NORMAL_EXPORTS = {'_rh_resident_preparation_' + name for name in ('create', 'state', 'retire')}
+         'acquire-unknown': 7, 'thread-exit': 5, 'unwind': 6,
+         'byte-stream': 23, 'byte-unknown': 9, 'byte-reject': 7}
+NORMAL_EXPORTS = {'_rh_resident_preparation_' + name for name in ('create', 'state', 'retire', 'read', 'write', 'half_close')}
 FIXTURE_EXPORTS = {'_rh_fixture_preparation_' + name for name in
-                   ('create', 'probe', 'exchange', 'close_count', 'open_count', 'exhaust', 'retire_calls')}
+                   ('create', 'probe', 'exchange', 'close_count', 'open_count', 'exhaust', 'retire_calls', 'peer')}
 
 
 def validate_report(mode, output):
@@ -55,7 +56,9 @@ def rust_variant(rust, directory, fixture, env):
     passed = 0
     for mode in CASES if fixture else ('normal',):
         passed += validate_report(mode, command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'}))
-    for name, code, message in [('NotSend', 'E0277', 'cannot be sent'), ('NotSync', 'E0277', 'cannot be shared')]:
+    for name, code, message in [('NotSend', 'E0277', 'cannot be sent'), ('NotSync', 'E0277', 'cannot be shared'),
+                                ('BorrowRetire', 'E0499', 'more than once'),
+                                ('BorrowDrop', 'E0505', 'because it is borrowed')]:
         result = completed(base + [str(NATIVE / ('fixtures/' + name + '.rs'))] + external +
                            ['--emit=metadata', '--error-format=json', '-o', str(directory / (name + '.rmeta'))], env)
         validate_rejection(result, code, message)
@@ -83,7 +86,7 @@ def run():
     with tempfile.TemporaryDirectory(prefix='resident-rust-owner-') as temporary:
         root = Path(temporary)
         passed = 0
-        sources = [str(NATIVE / name) for name in ('ResidentLaunchPreparation.swift', 'OwnedPreparationIO.swift', 'ResidentPreparationABI.swift')]
+        sources = [str(NATIVE / name) for name in ('ResidentLaunchPreparation.swift', 'OwnedPreparationIO.swift', 'ResidentPreparationABI.swift', 'PreparedByteIO.swift')]
         for target_arch in (arch, 'x86_64' if arch == 'arm64' else 'arm64'):
             for fixture in (False, True):
                 directory = root / (target_arch + ('-fixture' if fixture else '-normal'))
@@ -102,7 +105,7 @@ def run():
                 validate_weak_link(command(['/usr/bin/otool', '-l', str(library)], env))
                 if target_arch == arch:
                     passed += rust_variant(rust, directory, fixture, env)
-    print(json.dumps({'fixture': 'resident-rust-owner', 'passed': passed, 'compileRefusals': 5,
+    print(json.dumps({'fixture': 'resident-rust-owner', 'passed': passed, 'compileRefusals': 9,
                       'swiftCompileTargets': 2, 'rustCompileTargets': 1, 'variants': ['normal', 'fixture'],
                       'foreignRustCompile': False, 'foreignExecution': False, 'producerLaunches': 0,
                       'scope': 'unlaunched owner and owned anonymous IO; no active EOF / Wait / joins proof'}))

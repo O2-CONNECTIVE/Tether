@@ -115,3 +115,9 @@ sealed 実行、atomic inheritance 境界、active owner の IO transfer / 全�
 [具体的 Rust adapter](mac-native-rust-owner.md)は #221 の実 C ABI と link し、元 thread の handle 保持、明示 retire / Drop、unknown と禁止置換を同じ匿名 IO の解放まで検証します。
 通常 library と fixture library の export を区別し、safe Rust の thread 間移動・共有を拒否します。通常 Cargo / IPC は未接続です。
 未起動 retire を実 producer EOF / exact Wait / active joins に拡張せず、次に同じ owner の sealed 実行・IO transfer を既存 duplex worker へ結ぶ工程を残します。
+
+## 同じ owner の借用 byte IO
+
+[具体的 byte adapter](mac-native-byte-io.md)は fd 所有を Swift に残し、Rust の mutable borrow から bounded Read / Write / half-close を呼びます。
+pending / raw EOF / half-close / unknown と元 owner の回収を区別し、既存 Pump が使う IO 契約の前提を閉じます。Pump / supervisor / 通常起動への登録は行いません。
+sealed 実行・起動後の端点解放と SIGPIPE / inheritance・exact Wait / 全 joins の証拠を後続に残します。

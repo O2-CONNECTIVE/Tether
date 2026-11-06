@@ -77,9 +77,11 @@ final class ResidentLaunchPreparation {
     // Slot adopts this same owner before IO acquisition can fail.
     func prepareIO(partial: Bool) throws { try io.configure(task, partial: partial) }
     func retireIO() -> Bool { io.retire(task) }
+    func bytes(_ operation: PreparedByteOperation) -> PreparedByteResult { io.perform(operation) }
 
     #if RESIDENT_LAUNCH_FIXTURE
     func fixtureCounts() -> (open: UInt32, closed: UInt32) { (io.open, io.closed) }
+    func peer(_ action: UInt32) -> Bool { io.peer(task, action: action) }
     func loseCloseAcknowledgement() { io.loseCloseAcknowledgement = true }
     func exchange() -> Bool { io.exchange(task) }
     func ioIntact() -> Bool { io.intact(task) }

@@ -6,6 +6,8 @@ use std::{marker::PhantomData, num::NonZeroU64, rc::Rc};
 mod fixture;
 #[cfg(resident_launch_fixture)]
 pub use fixture::{Counts, FixedFixture};
+mod byte_io;
+pub use byte_io::PreparedIo;
 
 unsafe extern "C" {
     fn rh_resident_preparation_create() -> u64;

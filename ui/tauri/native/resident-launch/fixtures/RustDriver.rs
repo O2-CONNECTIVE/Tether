@@ -209,6 +209,95 @@ fn fixture(mode: &str, checks: &mut Checks) {
                     },
             );
         }
+        "byte-stream" => {
+            use std::io::{ErrorKind, Read, Write};
+            let mut owner = owned(F::Normal);
+            checks.check(owner.fixture_probe());
+            {
+                let mut view = owner.io();
+                checks.check(view.read(&mut []).unwrap() == 0);
+                checks.check(view.write(&[]).unwrap() == 0);
+                checks.check(view.flush().is_ok());
+                checks.check(view.read(&mut [0]).unwrap_err().kind() == ErrorKind::WouldBlock);
+            }
+            checks.check(owner.fixture_peer(0));
+            {
+                let mut view = owner.io();
+                let mut bytes = [0; 8];
+                checks.check(view.read(&mut bytes).unwrap() == 4 && &bytes[..4] == b"obs\n");
+                checks.check(view.write(b"ctl\n").unwrap() == 4);
+            }
+            checks.check(owner.fixture_peer(1));
+            {
+                let mut view = owner.io();
+                checks.check(view.half_close_control().is_ok());
+                checks.check(view.half_close_control().is_ok());
+                checks.check(view.write(b"x").unwrap_err().kind() == ErrorKind::BrokenPipe);
+                checks.check(view.flush().is_ok());
+            }
+            checks.check(NativePreparation::fixture_counts().closes == 1);
+            checks.check(owner.fixture_peer(3));
+            checks.check(owner.state() == S::OwnedUnlaunched);
+            checks.check(owner.fixture_peer(2));
+            checks.check(owner.io().read(&mut [0]).unwrap() == 0);
+            checks.check(owner.state() == S::OwnedUnlaunched);
+            checks.check(owner.retire() == S::RetiredUnlaunched);
+            checks.check(
+                NativePreparation::fixture_counts()
+                    == Counts {
+                        open: 0,
+                        closes: 4,
+                        retire_calls: 1,
+                    },
+            );
+        }
+        "byte-unknown" => {
+            use std::io::{ErrorKind, Read};
+            let mut owner = owned(F::LostCloseReceipt);
+            {
+                let mut view = owner.io();
+                checks.check(view.half_close_control().unwrap_err().kind() == ErrorKind::Other);
+                checks.check(view.read(&mut [0]).unwrap_err().kind() == ErrorKind::NotConnected);
+            }
+            checks.check(
+                NativePreparation::fixture_counts()
+                    == Counts {
+                        open: 0,
+                        closes: 4,
+                        retire_calls: 0,
+                    },
+            );
+            checks.check(owner.state() == S::Unknown);
+            checks.check(owner.retire() == S::Unknown);
+            checks.check(
+                NativePreparation::fixture_counts()
+                    == Counts {
+                        open: 0,
+                        closes: 4,
+                        retire_calls: 0,
+                    },
+            );
+            drop(owner);
+            checks.check(matches!(
+                NativePreparation::fixture(F::Normal),
+                Preparation::Refused
+            ));
+        }
+        "byte-reject" => {
+            let mut owner = owned(F::Normal);
+            checks.check(owner.fixture_reject_bad_io());
+            checks.check(owner.fixture_probe());
+            checks.check(owner.state() == S::OwnedUnlaunched);
+            checks.check(owner.retire() == S::RetiredUnlaunched);
+            checks.check(
+                NativePreparation::fixture_counts()
+                    == Counts {
+                        open: 0,
+                        closes: 4,
+                        retire_calls: 1,
+                    },
+            );
+        }
         _ => panic!("unknown fixture mode"),
     }
     checks.check(NativePreparation::fixture_counts().open == 0);

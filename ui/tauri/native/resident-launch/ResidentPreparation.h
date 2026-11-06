@@ -17,6 +17,14 @@ enum {
 uint64_t rh_resident_preparation_create(void);
 uint32_t rh_resident_preparation_state(uint64_t handle);
 uint32_t rh_resident_preparation_retire(uint64_t handle);
+/* Borrowed bytes only; owner retains every fd. Null/zero/excessive counts are
+ * rejected. Non-null buffers must be live and large enough for count (1..4096).
+ * No pointer is retained. Result: tag in high32,
+ * transferred count in low32. Tags: rejected0 bytes1 pending2 rawEOF3
+ * halfClosed4 unknown5. EOF/halfClosed are never exit/Close/Wait proofs. */
+uint64_t rh_resident_preparation_read(uint64_t handle, uint8_t * _Nullable bytes, uint32_t count);
+uint64_t rh_resident_preparation_write(uint64_t handle, const uint8_t * _Nullable bytes, uint32_t count);
+uint64_t rh_resident_preparation_half_close(uint64_t handle);
 
 #ifdef RESIDENT_LAUNCH_FIXTURE
 /* Test compilation only: fixed synthetic identity, no caller-supplied release.
@@ -29,5 +37,6 @@ uint32_t rh_fixture_preparation_close_count(void);
 uint32_t rh_fixture_preparation_open_count(void);
 uint32_t rh_fixture_preparation_exhaust(void);
 uint32_t rh_fixture_preparation_retire_calls(void);
+uint32_t rh_fixture_preparation_peer(uint64_t handle, uint32_t action);
 #endif
 #endif

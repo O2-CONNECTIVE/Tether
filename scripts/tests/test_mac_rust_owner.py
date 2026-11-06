@@ -48,6 +48,14 @@ class NativeRustOwnerCheckerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tool.validate_report('other', 'NATIVE_RUST_OWNER mode=other passed=1 failed=0 launched=0')
 
+    def test_missing_io_api_is_not_a_valid_borrow_rejection(self):
+        for code, message in [('E0499', 'more than once'), ('E0505', 'because it is borrowed')]:
+            entry = {'level': 'error', 'code': {'code': code}, 'message': message}
+            tool.validate_rejection(subprocess.CompletedProcess([], 1, '', json.dumps(entry)), code, message)
+            missing = {**entry, 'code': {'code': 'E0599'}, 'message': 'no method named io'}
+            with self.assertRaises(ValueError):
+                tool.validate_rejection(subprocess.CompletedProcess([], 1, '', json.dumps(missing)), code, message)
+
     def test_non_mac_refuses_before_any_compiler(self):
         with patch.object(tool.sys, 'platform', 'linux'), patch.object(tool, 'command') as start:
             with self.assertRaises(ValueError):

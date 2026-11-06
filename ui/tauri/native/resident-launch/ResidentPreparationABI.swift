@@ -110,6 +110,20 @@ private final class PreparationSlot: @unchecked Sendable {
         record = nil
     }
 
+    func bytes(_ handle: UInt64, _ operation: PreparedByteOperation) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard stateLocked(handle) == .ownedUnlaunched, let owner = record?.owner else {
+            return PreparedByteResult(tag: .rejected).packed
+        }
+        let result = owner.bytes(operation)
+        if result.tag == .unknown {
+            _ = owner.retireIO() // Same owner; never retry an attempted close.
+            record?.unknown = true
+        }
+        return result.packed
+    }
+
     private func workerExited(_ identity: WorkerIdentity) {
         lock.lock()
         defer { lock.unlock() }
@@ -122,6 +136,12 @@ private final class PreparationSlot: @unchecked Sendable {
     }
 
     #if RESIDENT_LAUNCH_FIXTURE
+    func peer(_ handle: UInt64, action: UInt32) -> UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard stateLocked(handle) == .ownedUnlaunched, let owner = record?.owner else { return 0 }
+        return owner.peer(action) ? 1 : 0
+    }
     func probe(_ handle: UInt64, exchange: Bool) -> UInt32 {
         lock.lock()
         defer { lock.unlock() }
@@ -168,8 +188,20 @@ private let preparationSlot = PreparationSlot()
 @c @implementation public func rh_resident_preparation_retire(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.state(handle, retire: true).rawValue }
 }
+@c @implementation public func rh_resident_preparation_read(_ handle: UInt64, _ bytes: UnsafeMutablePointer<UInt8>?, _ count: UInt32) -> UInt64 {
+    autoreleasepool { preparationSlot.bytes(handle, .read(bytes, count)) }
+}
+@c @implementation public func rh_resident_preparation_write(_ handle: UInt64, _ bytes: UnsafePointer<UInt8>?, _ count: UInt32) -> UInt64 {
+    autoreleasepool { preparationSlot.bytes(handle, .write(bytes, count)) }
+}
+@c @implementation public func rh_resident_preparation_half_close(_ handle: UInt64) -> UInt64 {
+    autoreleasepool { preparationSlot.bytes(handle, .halfClose) }
+}
 
 #if RESIDENT_LAUNCH_FIXTURE
+@c @implementation public func rh_fixture_preparation_peer(_ handle: UInt64, _ action: UInt32) -> UInt32 {
+    autoreleasepool { preparationSlot.peer(handle, action: action) }
+}
 @c @implementation public func rh_fixture_preparation_create(_ mode: UInt32) -> UInt64 {
     autoreleasepool { preparationSlot.create(fixtureMode: mode) }
 }

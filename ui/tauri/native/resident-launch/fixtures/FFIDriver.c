@@ -2,6 +2,8 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 static unsigned passed, failed;
 static uint64_t handle;
@@ -91,6 +93,25 @@ int main(int argc, char **argv) {
         check(handle == UINT64_MAX);
         check(rh_resident_preparation_retire(handle) == RH_PREPARATION_RETIRED_UNLAUNCHED);
         check(rh_fixture_preparation_create(0) == 0);
+        check(rh_fixture_preparation_close_count() == 4);
+    } else if (strcmp(argv[1], "peer-repeat") == 0) {
+        handle = rh_fixture_preparation_create(0);
+        check(handle != 0);
+        check(rh_fixture_preparation_peer(handle, 2) == 1);
+        check(rh_fixture_preparation_close_count() == 1);
+        /* Only this fixture's newly returned descriptors are inspected.
+         * They may reuse the now-closed integer; never inspect other fds. */
+        int pair[2] = {-1, -1};
+        if (pipe(pair) != 0) return 2;
+        check(pair[0] >= 0 && pair[1] >= 0);
+        int before0 = fcntl(pair[0], F_GETFL);
+        int before1 = fcntl(pair[1], F_GETFL);
+        check(before0 >= 0 && before1 >= 0);
+        check(rh_fixture_preparation_peer(handle, 2) == 1);
+        check(fcntl(pair[0], F_GETFL) == before0 && fcntl(pair[1], F_GETFL) == before1);
+        check(close(pair[0]) == 0);
+        check(close(pair[1]) == 0);
+        check(rh_resident_preparation_retire(handle) == RH_PREPARATION_RETIRED_UNLAUNCHED);
         check(rh_fixture_preparation_close_count() == 4);
     } else return 2;
     check(rh_fixture_preparation_open_count() == 0);

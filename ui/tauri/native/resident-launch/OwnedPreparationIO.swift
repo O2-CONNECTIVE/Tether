@@ -87,7 +87,61 @@ final class OwnedPreparationIO {
         #endif
     }
 
+    func perform(_ operation: PreparedByteOperation) -> PreparedByteResult {
+        guard !retired, ends.count == 4 else { return .init(tag: .rejected) }
+        switch operation {
+        case let .read(pointer, limit):
+            guard let pointer, (1...4096).contains(limit), !ends[2].attempted else { return .init(tag: .rejected) }
+            let count = Darwin.read(ends[2].fd, pointer, Int(limit))
+            if count == 0 { return .init(tag: .eof) } // Raw pipe EOF only.
+            return byteResult(count)
+        case let .write(pointer, limit):
+            guard let pointer, (1...4096).contains(limit) else { return .init(tag: .rejected) }
+            if ends[1].attempted { return .init(tag: ends[1].confirmed ? .halfClosed : .unknown) }
+            let count = Darwin.write(ends[1].fd, pointer, Int(limit))
+            return count == 0 ? .init(tag: .unknown) : byteResult(count)
+        case .halfClose:
+            closeOnce(1) // Parent control writer, never its child FileHandle.
+            return .init(tag: ends[1].confirmed ? .halfClosed : .unknown)
+        }
+    }
+
+    private func byteResult(_ count: Int) -> PreparedByteResult {
+        if count > 0 { return .init(tag: .bytes, count: UInt32(count)) }
+        let error = errno
+        return .init(tag: [EAGAIN, EINTR].contains(error) ? .pending : .unknown)
+    }
+
     #if RESIDENT_LAUNCH_FIXTURE
+    func peer(_ task: Process, action: UInt32) -> Bool {
+        guard ends.count == 4, !retired else { return false }
+        switch action {
+        case 0:
+            guard preparePeerEnd(3) else { return false }
+            return [UInt8]("obs\n".utf8).withUnsafeBytes { Darwin.write(ends[3].fd, $0.baseAddress, 4) == 4 }
+        case 1:
+            guard preparePeerEnd(0) else { return false }
+            var bytes = [UInt8](repeating: 0, count: 4)
+            return Darwin.read(ends[0].fd, &bytes, 4) == 4 && bytes == [UInt8]("ctl\n".utf8)
+        case 2:
+            if ends[3].attempted { return ends[3].confirmed }
+            task.standardOutput = nil
+            guard outputWrapper == nil else { return false }
+            closeOnce(3)
+            return ends[3].confirmed
+        case 3:
+            guard preparePeerEnd(0) else { return false }
+            var byte: UInt8 = 0
+            return Darwin.read(ends[0].fd, &byte, 1) == 0
+        default: return false
+        }
+    }
+
+    private func preparePeerEnd(_ index: Int) -> Bool {
+        guard !ends[index].attempted else { return false }
+        do { try nonblocking(ends[index].fd); return true }
+        catch { return false }
+    }
     func intact(_ task: Process) -> Bool {
         guard ends.count == 4, !retired,
               (task.standardInput as? FileHandle) === inputWrapper,
