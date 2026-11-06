@@ -37,8 +37,9 @@ that the build script ran.
 Before Cargo and after it, the permissions input subtree is enumerated directly,
 independently of Git ignores. Only its two tracked TOMLs and the four supported
 outputs are allowed. Ordinary in-checkout ancestor directories and regular,
-single-link files are required; symlink/junction/reparse/extra/partial/content
-uncertainty rejects. Checks are sequential observations, not an atomic filesystem
+single-link generated files are required; generated symlink/junction/reparse,
+extra/partial/content uncertainty rejects. The two tracked TOMLs retain their
+existing exact blob/is_file/is_symlink checks. Checks are sequential observations, not an atomic filesystem
 lease against a concurrent adversarial writer. No rights or settings are changed.
 
 ## Bounded evidence
