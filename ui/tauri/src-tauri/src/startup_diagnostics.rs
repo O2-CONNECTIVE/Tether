@@ -1,4 +1,6 @@
 // 診断feature専用。UI hookは固定memoryとtry_lockだけを使い、I/Oやjoinを待たない。
+#[path = "wry_startup_probe.rs"]
+mod wry_probe;
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -141,6 +143,8 @@ impl Trace {
             return Self::default();
         };
         let recorder = Recorder::memory();
+        let probe = wry_probe::Probe::memory();
+        let registration = probe.register();
         let worker = recorder.clone();
         let path = PathBuf::from(directory);
         // 専用の既存・非競合CI tempを前提とする。新directoryは作らない。
@@ -153,6 +157,19 @@ impl Trace {
                     thread::sleep(Duration::from_millis(50));
                 }
                 let text = worker.snapshot(worker.complete() || marker.is_file());
+                // Separate diagnostic evidence; never replaces the original six-stage verdict.
+                // Write it first: the original exclusive-file close observation remains last.
+                let probe_text =
+                    probe.snapshot(registration, worker.complete() || marker.is_file());
+                if probe_text.len() <= 2048 {
+                    if let Ok(mut file) = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path.join("wry-completion-probe.json"))
+                    {
+                        let _ = file.write_all(probe_text.as_bytes());
+                    }
+                }
                 if text.len() <= 2048 {
                     if let Ok(mut file) = OpenOptions::new()
                         .write(true)
