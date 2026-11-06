@@ -1,0 +1,196 @@
+name: DO NOT MERGE - one same-wait SDK delivery observation
+on:
+  pull_request:
+    branches: ['diagnostic/wry-sdk-delivery-base-20261106']
+    types: [opened]
+permissions:
+  contents: read
+concurrency:
+  group: wry-sdk-delivery-once-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  wry-once:
+    if: >-
+      github.run_attempt == 1 && github.event.action == 'opened' &&
+      github.event.repository.private == false && github.event.pull_request.draft == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diagnostic/wry-sdk-delivery-once-20261106' &&
+      github.event.pull_request.base.ref == 'diagnostic/wry-sdk-delivery-base-20261106' &&
+      github.event.pull_request.base.sha == 'f8f322f67c6196295d4671aa267c443d88249603'
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      WRY_DELIVERY_ENABLED: '1'
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      CONTROL_HEAD: ${{ github.event.pull_request.head.sha }}
+      WRY_PIN: 93e1993b9e5b4d5e7eb4d09427d5f8abbf3b372c
+      WRY_TREE: 0be0d20b384c2ca9315644263eab0c2bb9f2f760
+      WRY_SOURCE: ${{ github.workspace }}/.source
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: .control
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: source
+        with:
+          ref: 93e1993b9e5b4d5e7eb4d09427d5f8abbf3b372c
+          path: .source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13.17'
+          architecture: x64
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Select fresh disposable directories
+        run: |
+          "WRY_TEMP=$env:RUNNER_TEMP/wry-sdk-delivery" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$env:RUNNER_TEMP/wry-sdk-delivery/target" >> $env:GITHUB_ENV
+      - name: Verify exact control, source, clean inputs and permission boundary
+        run: |
+          New-Item -ItemType Directory $env:WRY_TEMP -ErrorAction Stop | Out-Null
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep pins {
+            if ((git -C "$env:GITHUB_WORKSPACE/.control" rev-parse HEAD).Trim() -cne $env:CONTROL_HEAD) { throw 'PIN' }
+            if ((git -C $env:WRY_SOURCE rev-parse HEAD).Trim() -cne $env:WRY_PIN) { throw 'PIN' }
+            if ((git -C $env:WRY_SOURCE rev-parse 'HEAD^{tree}').Trim() -cne $env:WRY_TREE) { throw 'PIN' }
+            git -C $env:WRY_SOURCE diff --exit-code HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'PIN' }
+            python -B "$env:WRY_SOURCE/scripts/wry_probe_ci.py" permissions --root $env:WRY_SOURCE --temp $env:WRY_TEMP
+          }
+      - name: Select existing fixed CI Rust
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep rust { rustup toolchain install 1.99.1 --profile minimal --no-self-update }
+      - name: Prepare exact two-vendor diagnostic overlay without registry mutation
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep prepare {
+            Invoke-WebRequest 'https://static.crates.io/crates/wry/wry-0.57.1.crate' -OutFile "$env:WRY_TEMP/wry.crate" -TimeoutSec 60
+            Invoke-WebRequest 'https://static.crates.io/crates/webview2-com/webview2-com-0.39.1.crate' -OutFile "$env:WRY_TEMP/completion.crate" -TimeoutSec 60
+            python -B "$env:WRY_SOURCE/scripts/prepare_wry_delivery.py" --archive "$env:WRY_TEMP/wry.crate" --output "$env:WRY_TEMP/wry" --completion-archive "$env:WRY_TEMP/completion.crate" --completion-output "$env:WRY_TEMP/completion" --project $env:WRY_SOURCE > "$env:WRY_TEMP/overlay.json"
+          }
+      - name: Run actual projection, subprocess, FFI and bounded record fixtures once
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep python {
+            $env:WRY_PROBE_CRATE = "$env:WRY_TEMP/wry.crate"
+            $env:WRY_COMPLETION_CRATE = "$env:WRY_TEMP/completion.crate"
+            $env:WRY_PROBE_RUSTC = (rustup which --toolchain 1.99.1 rustc).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'RUST' }
+            # Historical fixtures select the old schema; new fixtures explicitly enable theirs.
+            # Both suites run once. Restore the experiment's mode even if a test fails.
+            Remove-Item Env:WRY_DELIVERY_ENABLED
+            try {
+              python -B -m unittest discover -s "$env:WRY_SOURCE/scripts/tests" -p 'test_wry*.py' -v
+              if ($LASTEXITCODE -ne 0) { throw 'FIXTURE' }
+            } finally { $env:WRY_DELIVERY_ENABLED = '1' }
+          }
+      - name: Run original Host classification fixtures once
+        working-directory: .source/ui/tauri
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep node { node --test tests/app-startup-stages.test.ts tests/app-startup-files.test.ts tests/app-startup-cli.test.ts }
+      - name: Parse exact required PowerShell sources once
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep parse {
+            foreach ($file in @('scripts/wry-probe-step.ps1', 'scripts/wry-probe-step.test.ps1', 'ui/tauri/native-smoke/supervise.ps1', 'ui/tauri/native-smoke/app-startup-observation.ps1', 'ui/tauri/native-smoke/app-startup-contract.test.ps1', 'ui/tauri/native-smoke/setup.ps1')) {
+              $tokens = $null; $errors = $null
+              [void][Management.Automation.Language.Parser]::ParseFile("$env:WRY_SOURCE/$file", [ref]$tokens, [ref]$errors)
+              if ($errors.Count -ne 0) { throw 'PARSE' }
+            }
+            pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/scripts/wry-probe-step.test.ps1"
+          }
+      - name: Run original finite collection fixture once
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep harness { pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/app-startup-contract.test.ps1" }
+      - name: Verify existing runtime and prepare original pinned driver variant
+        timeout-minutes: 8
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep driver {
+            & "$env:WRY_SOURCE/ui/tauri/native-smoke/inventory.ps1" -OutputPath "$env:WRY_TEMP/inventory.json"
+            pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/setup.ps1" -ToolsDirectory "$env:WRY_TEMP/tools" -InventoryPath "$env:WRY_TEMP/inventory.json"
+          }
+      - name: Build original bundled frontend
+        working-directory: .source/ui/tauri
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep frontend {
+            npm ci --ignore-scripts --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'NPM' }
+            npm run build
+          }
+      - name: Run diagnostic-feature Rust tests once before native
+        working-directory: .source/ui/tauri
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep rust-tests {
+            python -B "$env:WRY_SOURCE/scripts/wry_probe_ci.py" permissions --root $env:WRY_SOURCE --temp $env:WRY_TEMP
+            if ($LASTEXITCODE -ne 0) { throw 'INPUT' }
+            cargo +1.99.1 test --locked --manifest-path src-tauri/Cargo.toml --config "$env:WRY_TEMP/wry-probe.toml" --features custom-protocol,startup-diagnostics
+          }
+      - name: Build one new instrumented release specimen
+        id: build
+        working-directory: .source/ui/tauri
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep build {
+            python -B "$env:WRY_SOURCE/scripts/wry_probe_ci.py" permissions --root $env:WRY_SOURCE --temp $env:WRY_TEMP --stage build
+            if ($LASTEXITCODE -ne 0) { throw 'INPUT' }
+            cargo +1.99.1 build --locked --release --manifest-path src-tauri/Cargo.toml --config "$env:WRY_TEMP/wry-probe.toml" --features custom-protocol,startup-diagnostics
+          }
+      - name: Bind source, overlay, driver, archive and extracted specimen
+        id: fixture
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep fixture {
+            New-Item -ItemType Directory "$env:WRY_TEMP/fixture" -ErrorAction Stop | Out-Null
+            $exe = "$env:CARGO_TARGET_DIR/release/rescue-host-shell.exe"
+            $manifest = [ordered]@{ schema = 1; variant = 'host-startup-diagnostic-1'; sourceCommit = $env:WRY_PIN; features = @('custom-protocol', 'startup-diagnostics'); profile = 'release'; exeSha256 = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant(); distribution = $false }
+            Copy-Item -LiteralPath $exe -Destination "$env:WRY_TEMP/fixture/rescue-host-shell.exe"
+            [IO.File]::WriteAllText("$env:WRY_TEMP/fixture/BUILD.json", ($manifest | ConvertTo-Json -Compress))
+            Compress-Archive -Path "$env:WRY_TEMP/fixture/*" -DestinationPath "$env:WRY_TEMP/fixture.zip"
+            Expand-Archive "$env:WRY_TEMP/fixture.zip" -DestinationPath "$env:WRY_TEMP/unpacked"
+            node "$env:WRY_SOURCE/ui/tauri/native-smoke/inspect-app-startup.ts" --manifest "$env:WRY_TEMP/unpacked/BUILD.json" --exe "$env:WRY_TEMP/unpacked/rescue-host-shell.exe" --source $env:WRY_PIN --build-only
+            if ($LASTEXITCODE -ne 0) { throw 'BUILD' }
+            python -B "$env:WRY_SOURCE/scripts/wry_probe_ci.py" identity --root $env:WRY_SOURCE --temp $env:WRY_TEMP --stage fixture
+          }
+      - name: At most one original 15000ms session and owned cleanup
+        id: native
+        timeout-minutes: 3
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep native {
+            pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/supervise.ps1" -ToolsDirectory "$env:WRY_TEMP/tools" -OutputDirectory "$env:WRY_TEMP/evidence" -ApplicationPath "$env:WRY_TEMP/unpacked/rescue-host-shell.exe" -StartupDiagnostic -StartupManifest "$env:WRY_TEMP/unpacked/BUILD.json" -StartupSource $env:WRY_PIN
+          }
+      - name: Preserve original Host verdict after cleanup
+        if: always() && steps.native.outcome != 'skipped'
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep host-report {
+            node "$env:WRY_SOURCE/ui/tauri/native-smoke/inspect-app-startup.ts" --directory "$env:WRY_TEMP/tools/app-startup" --manifest "$env:WRY_TEMP/unpacked/BUILD.json" --exe "$env:WRY_TEMP/unpacked/rescue-host-shell.exe" --source $env:WRY_PIN --collection "$env:WRY_TEMP/evidence/native-result.json" > "$env:WRY_TEMP/evidence/app-startup-report.json"
+          }
+      - name: Preserve original driver provenance and trace after cleanup
+        if: always() && steps.native.outcome != 'skipped'
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep driver-report { pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/inspect-driver-trace.ps1" -ToolsDirectory "$env:WRY_TEMP/tools" -OutputDirectory "$env:WRY_TEMP/evidence" }
+      - name: Verify final source, overlay and specimen stability
+        if: always() && steps.fixture.outcome == 'success'
+        run: |
+          . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
+          Invoke-ProbeStep final-identity { python -B "$env:WRY_SOURCE/scripts/wry_probe_ci.py" identity --root $env:WRY_SOURCE --temp $env:WRY_TEMP --stage final-identity }
+      - name: Publish bounded sanitized JSON and hashes only
+        if: always() && steps.source.outcome == 'success'
+        run: python -B "$env:WRY_SOURCE/scripts/wry_probe_ci.py" publish --root $env:WRY_SOURCE --temp $env:WRY_TEMP
