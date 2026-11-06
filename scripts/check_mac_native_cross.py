@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 from check_mac_enrollment_lookup import command, completed
+from check_mac_active_bridge import active_variant
 from check_mac_native_pump import CRATE, validate_dependencies
 from check_mac_rust_owner import NATIVE, build_swift, validate_rejection
 
@@ -47,7 +48,9 @@ def compile_owner(rust, directory, fixture, env):
         result = completed(base + [str(NATIVE / ('fixtures/' + name + '.rs'))] + external +
                            ['--emit=metadata', '--error-format=json', '-o', str(directory / (name + '.rmeta'))], env)
         validate_rejection(result, code, message)
-    return len(refusals)
+    _, active_refusals, active_executable = active_variant(rust, directory, fixture, env, target=TARGET, execute=False)
+    require_intel_image(active_executable, env)
+    return len(refusals) + active_refusals
 
 
 def compile_pump(cargo, directory, fixture, env):
@@ -89,7 +92,7 @@ def run():
             refused += compile_owner(rust, directory, fixture, env)
             compile_pump(cargo, directory, fixture, env)
     print(json.dumps({'fixture': 'native-intel-source', 'target': TARGET,
-                      'ownerLinkedVariants': 2, 'pumpLinkedVariants': 2, 'clippyVariants': 2,
+                      'ownerLinkedVariants': 2, 'pumpLinkedVariants': 2, 'activeLinkedVariants': 2, 'clippyVariants': 2,
                       'compileRefusals': refused, 'foreignExecution': False,
                       'producerLaunches': 0, 'scope': 'compile/link only; no Intel runtime or Process Wait proof'}))
 

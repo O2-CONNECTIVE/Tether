@@ -33,6 +33,9 @@ struct ObservedProcessExit: Equatable {
     let reason: Reason
     let status: Int32
 }
+enum ProcessCompletionObservation {
+    case unavailable, pending, observed(ObservedProcessExit), unknown
+}
 private enum ProcessCompletionPhase {
     case unlaunched, running, waited(ObservedProcessExit), unknown
 }
@@ -110,6 +113,20 @@ final class ResidentLaunchPreparation {
         return result
     }
 
+    var hasObservedExit: Bool {
+        if case .waited = completion { return true }
+        return false
+    }
+    func pollCompletion() -> ProcessCompletionObservation {
+        if let exit = processExit() { return .observed(exit) }
+        switch completion {
+        case .unlaunched: return .unavailable
+        case .running: return .pending
+        case let .waited(exit): return .observed(exit)
+        case .unknown: return .unknown
+        }
+    }
+
     deinit {
         switch completion {
         case .unlaunched, .waited:
@@ -165,7 +182,7 @@ final class ResidentLaunchPreparation {
         try task.run()
         completion = .running
     }
-    enum OwnedIOFixtureMode: String { case echo, early, lost, missing }
+    enum OwnedIOFixtureMode: String { case echo, early, lost, missing, exitTwo = "exit-two", signal }
     func runOwnedIOFixture(_ mode: OwnedIOFixtureMode) throws -> Bool {
         guard isCompletionFixture, case .unlaunched = completion else { throw PreparationFailure.invalidRelease }
         let description: String
@@ -178,7 +195,14 @@ final class ResidentLaunchPreparation {
             throw error
         }
         task.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-        task.arguments = ["active-child", (mode == .early || mode == .missing) ? "early" : "echo", description]
+        let childMode: String
+        switch mode {
+        case .early, .missing: childMode = "early"
+        case .exitTwo: childMode = "exit-two"
+        case .signal: childMode = "signal"
+        case .echo, .lost: childMode = "echo"
+        }
+        task.arguments = ["active-child", childMode, description]
         if mode == .lost { io.loseCloseAcknowledgement = true }
         task.environment = [:]
         task.standardError = FileHandle.nullDevice

@@ -73,6 +73,7 @@ jobs:
           python scripts/check_mac_launch_requirement.py | tee "$RUNNER_TEMP/native-source-evidence/requirement.json"
           python scripts/check_mac_process_completion.py | tee "$RUNNER_TEMP/native-source-evidence/completion.json"
           python scripts/check_mac_active_io.py | tee "$RUNNER_TEMP/native-source-evidence/active-io.json"
+          python scripts/check_mac_active_bridge.py | tee "$RUNNER_TEMP/native-source-evidence/active-bridge.json"
           python scripts/check_mac_preparation_ffi.py | tee "$RUNNER_TEMP/native-source-evidence/ffi.json"
           python scripts/check_mac_rust_owner.py | tee "$RUNNER_TEMP/native-source-evidence/owner.json"
           python scripts/check_mac_native_pump.py | tee "$RUNNER_TEMP/native-source-evidence/pump.json"

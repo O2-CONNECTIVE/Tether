@@ -22,7 +22,8 @@ struct ActiveIODriver {
             try guards()
             report("guards", children: 0, unknown: 0)
         }
-        guard let mode = ResidentLaunchPreparation.OwnedIOFixtureMode(rawValue: arguments[0]) else { Darwin.exit(78) }
+        guard ["echo", "early", "lost", "missing"].contains(arguments[0]),
+              let mode = ResidentLaunchPreparation.OwnedIOFixtureMode(rawValue: arguments[0]) else { Darwin.exit(78) }
         // This newly compiled test parent starts with the default signal policy.
         _ = Darwin.signal(SIGPIPE, SIG_DFL)
         let expectedUnknown = mode != .echo

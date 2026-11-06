@@ -19,7 +19,7 @@ supervisor / owner proof / startup / Closure / Tracking / Sharedの判定コー�
 ## 明示的source構成
 
 `resident_native_source` compile cfg はprivateなnative moduleとPump接続を認識するためのもので、通常buildでは設定しません。build scriptはcheck-cfgを宣言するだけでenableしません。Cargo featureや運用設定・信頼根overrideではありません。
-fixture peerの送受信は別の `resident_launch_fixture` compile cfgだけに存在します。通常のnative export6件は維持し、追加peerを含むfixture16件と区別します。
+fixture peerの送受信は別の `resident_launch_fixture` compile cfgだけに存在します。この時点の通常 native export6件を、追加 peer を含む fixture16件と区別します。[後続 active bridge](mac-native-active-bridge.md)を含む現在は通常9 / fixture23 を厳密に検査します。
 fixture crateのserde / serde_jsonと推移依存11件は、既存アプリlockの同じversion / checksumだけです。独立lockでoffline / locked buildし、通常アプリのCargo.lockを変更しません。
 
 ```sh
