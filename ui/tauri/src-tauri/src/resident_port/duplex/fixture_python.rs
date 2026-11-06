@@ -25,7 +25,7 @@ fn wait_lookup(child: &mut Child, budget: Duration) -> io::Result<ExitStatus> {
             Ok(Some(status)) => return Ok(status),
             Ok(None) => {}
             Err(error) => {
-                let _ = child.kill();
+                // A wait error does not authorize signalling a numeric PID.
                 reap_lookup(child);
                 return Err(error);
             }
