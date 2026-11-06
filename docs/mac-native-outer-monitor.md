@@ -27,9 +27,11 @@ Drop は同じ control を閉じて元 monitor を join し、pending worker を
 python3 scripts/check_mac_native_outer.py
 ```
 
-229条件、normal1＋fixture13 modes。12 original children の Wait、48 active＋4 unlaunched physical closes、12 actual IO worker joins、11 successful active outer joins /1 failed outer join、2 preparation outer joinsを検査します。native Unknown12、Quit permits0です。outer panic は元 child の Wait / IO join 後だけに注入し、失敗した親を fixture 内で保持します。生存 child を放棄した成功や実 producer の試験ではありません。
+253 条件、normal 2＋fixture 14 modes。13 original children の Wait、52 active＋4 unlaunched physical closes、13 actual IO worker joins、12 successful active outer joins /1 failed outer join、3 preparation outer joinsを検査します。native Unknown 13、Quit permits0です。outer panic は元 child の Wait / IO join 後だけに注入し、失敗した親を fixture 内で保持します。生存 child を放棄した成功や実 producer の試験ではありません。
 
 held fixture は実 monitor handle 登録後に同じ monitor の自己 join 拒否を確認し、IO evidence が保存されても outer join 前は proof 不在と Quit 拒否を要求します。別の自己所有 thread による Mutex 競合 join も false を要求します。これらの同期と panic は fixture cfg に限定し、通常の信頼入口へ流用しません。
+
+先に同じ supervisor の IO join を取得済みの場合も、保存済み NativeJoined を元 owner の証拠として再利用します。未起動・active 両方の prejoined 回帰を実行し、外側 monitor の実 join は別途要求します。再 Wait や別 owner への置換は行いません。
 
 normal / fixture は locked / offline、既存11 dependencies、clippy 両構成。従来の177条件・app 両構成・native source 全検査を維持し、Intel は同じ source の compile / link のみで foreign 実行はしません。
 

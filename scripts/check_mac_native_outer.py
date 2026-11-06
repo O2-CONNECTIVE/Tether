@@ -15,12 +15,12 @@ from check_mac_rust_owner import build_swift
 CASES = {'outer-prepared': 13, 'outer-confirmed': 20, 'outer-unknown': 20,
          'outer-missing': 20, 'outer-malformed': 20, 'outer-invalid': 16,
          'outer-rejected': 16, 'outer-signal': 16, 'outer-lost-receipt': 16,
-         'outer-unwind': 16, 'outer-drop': 12, 'outer-held': 20, 'outer-panic': 16}
-NO_CHILD = {'outer-normal', 'outer-prepared'}
+         'outer-unwind': 16, 'outer-drop': 12, 'outer-held': 20, 'outer-panic': 16, 'outer-prejoined': 16}
+NO_CHILD = {'outer-normal', 'outer-normal-prejoined', 'outer-prepared'}
 
 
 def validate_report(mode, output):
-    expected = 8 if mode == 'outer-normal' else CASES.get(mode)
+    expected = 8 if mode in ('outer-normal', 'outer-normal-prejoined') else CASES.get(mode)
     child = int(mode not in NO_CHILD)
     match = re.fullmatch(r'NATIVE_OUTER_FIXTURE mode=([a-z-]+) passed=(\d+) failed=(\d+) childrenStarted=(\d+) childrenWaited=(\d+) open=(\d+) nativeUnknown=(\d+) producer=(\d+)\n?', output)
     if expected is None or not match or match.group(1) != mode or tuple(map(int, match.groups()[1:])) != (expected, 0, child, child, 0, child, 0):
@@ -60,16 +60,16 @@ def run():
             command([cargo, 'build', '--locked', '--offline', '--jobs', '2'] + manifest, variant)
             command([cargo, 'clippy', '--locked', '--offline', '--jobs', '2'] + manifest + ['--', '-Dwarnings'], variant)
             executable = directory / 'target/debug/native-pump-source-fixture'
-            for mode in CASES if fixture else ('outer-normal',):
+            for mode in CASES if fixture else ('outer-normal', 'outer-normal-prejoined'):
                 output = command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
                 passed += validate_report(mode, output)
     print(json.dumps({'fixture': 'native-outer-monitor-source', 'passed': passed,
-                      'normalModes': 1, 'fixtureModes': 13, 'activeModes': 12,
-                      'fixtureChildrenStarted': 12, 'fixtureChildrenWaited': 12,
-                      'physicalActiveEndpointsClosed': 48, 'unlaunchedEndpointsClosed': 4,
-                      'actualActiveIoWorkerJoins': 12, 'successfulActiveOuterJoins': 11,
-                      'failedActiveOuterJoins': 1, 'preparationOuterJoins': 2,
-                      'retainedNativeUnknownRecords': 12, 'quitPermits': 0,
+                      'normalModes': 2, 'fixtureModes': 14, 'activeModes': 13,
+                      'fixtureChildrenStarted': 13, 'fixtureChildrenWaited': 13,
+                      'physicalActiveEndpointsClosed': 52, 'unlaunchedEndpointsClosed': 4,
+                      'actualActiveIoWorkerJoins': 13, 'successfulActiveOuterJoins': 12,
+                      'failedActiveOuterJoins': 1, 'preparationOuterJoins': 3,
+                      'retainedNativeUnknownRecords': 13, 'quitPermits': 0,
                       'lockedOffline': True, 'existingDependencyPackages': 11,
                       'clippyVariants': 2, 'producerLaunches': 0, 'hostOnly': True,
                       'scope': 'same native IO + actual outer monitor joins; UNKNOWN and no application Quit permission'}))

@@ -33,6 +33,9 @@ impl Finish {
     }
 }
 impl NativeOuterOwner {
+    pub(crate) fn fixture_observe_join(producer: &mut NativeIoSupervisor) -> bool {
+        super::observe_join(producer).is_some()
+    }
     pub(crate) fn fixture_held(
         producer: NativeIoSupervisor,
         panic: bool,

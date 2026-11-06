@@ -40,11 +40,8 @@ impl NativeOuterOwner {
             .name("resident-native-outer-owner".into())
             .spawn(move || {
                 loop {
-                    if let Some(native) = producer.poll_join() {
-                        *output.lock().unwrap_or_else(|e| e.into_inner()) = Some(Observed {
-                            native,
-                            wire: producer.wire_close_confirmed(),
-                        });
+                    if let Some(observed) = observe_join(&mut producer) {
+                        *output.lock().unwrap_or_else(|e| e.into_inner()) = Some(observed);
                         // Even Exit(0) + EOF/close + IO join cannot release the
                         // retained UNKNOWN native record or authorize full Quit.
                         state.complete(Outcome::Unknown);
@@ -112,6 +109,15 @@ impl Drop for NativeOuterOwner {
         // Component monitor ownership only. ExitGate remains UNKNOWN/false;
         // the original native record is retained, with no full cleanup permit.
     }
+}
+fn observe_join(producer: &mut NativeIoSupervisor) -> Option<Observed> {
+    producer
+        .joined()
+        .or_else(|| producer.poll_join())
+        .map(|native| Observed {
+            native,
+            wire: producer.wire_close_confirmed(),
+        })
 }
 enum Finish {
     Normal,

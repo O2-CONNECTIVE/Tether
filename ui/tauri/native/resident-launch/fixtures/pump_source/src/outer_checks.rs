@@ -21,8 +21,13 @@ fn join(owner: &NativeOuterOwner) -> NativeOuterJoined {
     }
 }
 pub(crate) fn run(mode: &str) {
-    if mode == "outer-normal" {
-        let (producer, source) = NativeIoSupervisor::prepare().unwrap();
+    if matches!(mode, "outer-normal" | "outer-normal-prejoined") {
+        let (mut producer, source) = NativeIoSupervisor::prepare().unwrap();
+        if mode == "outer-normal-prejoined" {
+            while producer.poll_join().is_none() {
+                pause();
+            }
+        }
         let owner = NativeOuterOwner::start(producer).unwrap();
         let mut passed = 0;
         let mut check = |v: bool| {
@@ -86,13 +91,25 @@ fn active(mode: &str) {
         "outer-rejected" => (FixedActiveFixture::ExitTwo, None),
         "outer-signal" => (FixedActiveFixture::Signal, None),
         "outer-lost-receipt" => (FixedActiveFixture::LostCloseReceipt, None),
-        "outer-unwind" | "outer-drop" | "outer-held" | "outer-panic" => {
+        "outer-unwind" | "outer-drop" | "outer-held" | "outer-panic" | "outer-prejoined" => {
             (FixedActiveFixture::Echo, None)
         }
         _ => panic!("unknown outer fixture"),
     };
-    let (producer, source) = NativeIoSupervisor::fixture(fixture, mode == "outer-unwind").unwrap();
+    let (mut producer, source) =
+        NativeIoSupervisor::fixture(fixture, mode == "outer-unwind").unwrap();
     let first = source.as_ref().ok().and_then(|view| view.first().ok());
+    if mode == "outer-prejoined" {
+        producer.request_close_transport();
+        while producer.poll_join().is_none() {
+            pause();
+        }
+        // Same lookup as the real monitor; original child already collected.
+        assert!(
+            NativeOuterOwner::fixture_observe_join(&mut producer),
+            "same cached join must be observable by the monitor"
+        );
+    }
     let (owner, finish) = if matches!(mode, "outer-held" | "outer-panic") {
         let (o, f) = NativeOuterOwner::fixture_held(producer, mode == "outer-panic").unwrap();
         (o, Some(f))
@@ -193,7 +210,8 @@ fn active(mode: &str) {
                     },
             );
             check(
-                joined.wire_close_confirmed() == matches!(mode, "outer-confirmed" | "outer-held"),
+                joined.wire_close_confirmed()
+                    == matches!(mode, "outer-confirmed" | "outer-held" | "outer-prejoined"),
             );
             check(owner.outcome() == Some(Outcome::Unknown));
             check(!owner.finish_requested());

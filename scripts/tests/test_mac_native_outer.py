@@ -14,7 +14,7 @@ sys.path.pop(0)
 
 class NativeOuterReportTests(unittest.TestCase):
     def test_every_mode_requires_exact_complete_report(self):
-        for mode, count in {'outer-normal': 8, **tool.CASES}.items():
+        for mode, count in {'outer-normal': 8, 'outer-normal-prejoined': 8, **tool.CASES}.items():
             child = int(mode not in tool.NO_CHILD)
             report = f'NATIVE_OUTER_FIXTURE mode={mode} passed={count} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={child} producer=0\n'
             self.assertEqual(tool.validate_report(mode, report), count)
