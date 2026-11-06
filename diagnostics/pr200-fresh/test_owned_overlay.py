@@ -1,17 +1,17 @@
 import copy
 from pathlib import Path
-import subprocess
 import unittest
 import owned_overlay as overlay
 import owned_control
 import owned_schema as schema
+from projection_sources import fixed_blob
 
 ROOT=Path(__file__).resolve().parent
 
 
 class OwnedOverlayTests(unittest.TestCase):
     def test_exact_lf_crlf_overlay_projects_to_fixed_supervisor(self):
-        original=subprocess.check_output(['git','show',overlay.PRODUCT+':ui/tauri/native-smoke/supervise.ps1'],cwd=ROOT)
+        original=fixed_blob('source')
         for data in (original,original.replace(b'\n',b'\r\n')):
             changed=overlay.overlay_bytes(data);text=changed.decode().replace('\r\n','\n')
             projected=text.replace(overlay.PRELUDE,'').replace(overlay.WRAP_START,'').replace(overlay.HOOK,'').replace(overlay.PERSIST,'')
@@ -29,7 +29,7 @@ class OwnedOverlayTests(unittest.TestCase):
 
     def test_old_trial_request_inspector_and_acceptance_project_exactly(self):
         current=(ROOT/'phase2.py').read_bytes()
-        expected=subprocess.check_output(['git','show','613f4ff550cd65334b00b262a0beebbc3e069fad:diagnostics/pr200-fresh/phase2.py'],cwd=ROOT)
+        expected=fixed_blob('contract')
         self.assertEqual(owned_control.phase2_projection(current),expected)
         self.assertIn("str(native / 'inspect-driver-trace.ps1')",current.decode())
 

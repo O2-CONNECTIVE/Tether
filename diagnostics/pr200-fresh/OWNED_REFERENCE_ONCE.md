@@ -1,0 +1,11 @@
+# PR225の固定checkout参照を修正する一回限定診断
+
+DO NOT MERGE。元PR225/run42162643601/attempt1は変更しない。base diagnostic/pr200-owned-hook-once-20261106@5ed7f2f03f3ae026e062c9ff7b2507b53e5606fe、新head diagnostic/pr225-owned-reference-once-20261106。新workflowだけopened/draft/samerepo/exactbranch/baseSHA/attempt1で起動する。旧workflowとmain/Mac laneは対象外。
+
+変更はprojectionテストの固定baseline読取りだけ。OWNED_TEST_SOURCE/OWNED_TEST_CONTRACTの明示absolute checkoutでtoplevel、固定HEAD/tree、clean、Git blobと実fileのLF/CRLF同一性を確認する。現在branchやcontrol内の履歴へfallbackしない。元projection比較、hook、15000ms、全既存gate、cleanupを変えない。別checkoutは既に検証する元sourceとcontractそのもので、broadhistoryfetchは追加しない。
+
+offline regressionは実固定commitをlocal bare seedへdepth1で取り込み、独立した三つのshallow cloneを作る。controlから両baseline commitが本当に欠けることと元git showがexit128になる赤い境界を確認し、同じprojection比較が明示した正しい固定checkoutで通ることを検証する。欠測、relative/nested/wrong/swapped checkout、HEAD/tree不一致、tracked/untracked変更を拒否する。これはGit/test seamの回帰であり、PowerShell/nativeの実証ではない。
+
+一fresh標準windows-2022、一attemptのみ。全Python/Node、旧strict PS preflight、新parse/C#/58-case hook fixtureが成功してからだけ、固定PR200 ordinary/custom-protocolを一回buildし、最大一回instrumented native観測。productc6c5ae5342fcde6b1bf77eff744ad48ddce5b8da/treee278496a55b4accc6caafa7a7a99538e5c8ceeca、contract613f4ff550cd65334b00b262a0beebbc3e069fad/tree627bdb664be8f3a9b807077466c7473e915387b2は不変。hook/overlayはPR225と同じbytesでcontrol identityだけを区別する。cooperative2000msは強制取消でなく、超過/不明はfailclosed。root/EBWebViewと元profileMatchは別判定、元所有slot/borrowedhandle/normalclose/cleanup/request/error identityは不変。
+
+失敗/不明なら停止しretry/rerun/source repushしない。no artifact/cache/binary transfer、raw dataはmemoryだけ、fixed-schema sanitized JSON/hashはlog/summaryだけ。public standard/free/no secretsを再確認し、新credential/security/permission/persistentaccess/費用を要したら開始しない。draft/DO NOT MERGEを維持し、PR200元timeout原因と現在stack blockerを解除しない。
