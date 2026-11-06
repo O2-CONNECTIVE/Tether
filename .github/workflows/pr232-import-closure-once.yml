@@ -1,0 +1,117 @@
+name: DO NOT MERGE - PR232 closure repair one connection observation
+on:
+  pull_request:
+    branches: ['diagnostic/pr231-connection-once-20261106']
+    types: [opened]
+    paths: ['diagnostics/session-forward-once/**', '.github/workflows/pr232-import-closure-once.yml']
+permissions:
+  contents: read
+concurrency:
+  group: pr232-import-closure-once-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  connection-once:
+    if: >-
+      github.run_attempt == 1 && github.event.action == 'opened' &&
+      github.event.pull_request.draft == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diagnostic/pr232-import-closure-once-20261106' &&
+      github.event.pull_request.base.ref == 'diagnostic/pr231-connection-once-20261106' &&
+      github.event.pull_request.base.sha == '2aabff397747b3b58185a26c84a9b928f7e499c0'
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      EXPECTED_CONTROL: ${{ github.event.pull_request.head.sha }}
+      FORWARD_CONTROL: ${{ github.workspace }}/.control
+      FORWARD_TEST_PRODUCT: ${{ github.workspace }}
+      FORWARD_TEST_DIAGNOSTIC: ${{ github.workspace }}/.diagnostic
+      FORWARD_TEST_CONTROL: ${{ github.workspace }}/.control
+    steps:
+      # Product remains at the original workspace/cache/build location.
+      - name: Check out exact ordinary PR231 specimen source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 93b099a2c4b0eb396033bc13e303312041ae8fb4
+          persist-credentials: false
+      - name: Check out event-pinned reviewed control separately
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: .control
+          persist-credentials: false
+      - name: Check out exact reviewed diagnostic source separately
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: 6a0f75a2f595a14853185d415a6c2d5f8fc7416b
+          path: .diagnostic
+          persist-credentials: false
+      - name: Guard hosted scope, source pins and clean private overlays
+        run: |
+          $env:FORWARD_ROOT = Join-Path $env:RUNNER_TEMP 'pr231-connection-once'
+          "FORWARD_ROOT=$env:FORWARD_ROOT" >> $env:GITHUB_ENV
+          python -B "$env:FORWARD_CONTROL/diagnostics/session-forward-once/runner.py" guard --source "$env:GITHUB_WORKSPACE" --root "$env:FORWARD_ROOT"
+          exit $LASTEXITCODE
+      - name: Original pure ownership contract and read-only environment inventory
+        run: python -B "$env:FORWARD_CONTROL/diagnostics/session-forward-once/runner.py" environment --source "$env:GITHUB_WORKSPACE" --root "$env:FORWARD_ROOT"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13.17'
+          architecture: x64
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Closed schema, source projection, original Python Node and PowerShell preflight
+        timeout-minutes: 5
+        run: python -B "$env:FORWARD_CONTROL/diagnostics/session-forward-once/runner.py" preflight --source "$env:GITHUB_WORKSPACE" --root "$env:FORWARD_ROOT"
+      - name: Select original approved fixed Rust
+        run: |
+          $log = "$env:FORWARD_ROOT/private/rust-selection.log"
+          & rustup toolchain install 1.99.1 --profile minimal --no-self-update *> $log
+          if ($LASTEXITCODE -ne 0) { Write-Output 'FORWARD_RUST_SELECTION_REJECTED'; exit 1 }
+          Write-Output 'FORWARD_RUST_SELECTION_VERIFIED'
+      - name: Pinned driver preparation and one pure real-handler fixture preflight
+        timeout-minutes: 12
+        run: python -B "$env:FORWARD_CONTROL/diagnostics/session-forward-once/runner.py" tools --source "$env:GITHUB_WORKSPACE" --root "$env:FORWARD_ROOT"
+      - name: Original locked frontend preparation
+        run: python -B "$env:FORWARD_CONTROL/diagnostics/session-forward-once/runner.py" frontend --source "$env:GITHUB_WORKSPACE" --root "$env:FORWARD_ROOT"
+      - name: Look up existing original exact native cache without downloading bytes
+        id: cache_lookup
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ui/tauri/src-tauri/target
+          key: tauri-windows-rust-1.99.1-${{ hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml') }}
+          lookup-only: true
+      - name: Restore only after an exact original key lookup
+        id: native_cache
+        if: >-
+          steps.cache_lookup.outputs['cache-hit'] == 'true' &&
+          steps.cache_lookup.outputs['cache-matched-key'] == format('tauri-windows-rust-1.99.1-{0}', hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml'))
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ui/tauri/src-tauri/target
+          key: tauri-windows-rust-1.99.1-${{ hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml') }}
+      - name: Verify actual cache result and build original debug specimen once
+        timeout-minutes: 15
+        env:
+          REQUESTED_CACHE_KEY: tauri-windows-rust-1.99.1-${{ hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml') }}
+          CACHE_LOOKUP_EXACT: ${{ steps.cache_lookup.outputs['cache-hit'] == 'true' && steps.cache_lookup.outputs['cache-matched-key'] == format('tauri-windows-rust-1.99.1-{0}', hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml')) }}
+          CACHE_HIT: ${{ steps.native_cache.outputs['cache-hit'] }}
+          CACHE_MATCHED_KEY: ${{ steps.native_cache.outputs['cache-matched-key'] }}
+        run: python -B "$env:FORWARD_CONTROL/diagnostics/session-forward-once/runner.py" build --source "$env:GITHUB_WORKSPACE" --root "$env:FORWARD_ROOT"
+      - name: At most one instrumented native trial with original deadline and cleanup
+        timeout-minutes: 3
+        run: python -B "$env:FORWARD_CONTROL/diagnostics/session-forward-once/runner.py" trial --source "$env:GITHUB_WORKSPACE" --root "$env:FORWARD_ROOT"
+      - name: Validate and retain bounded sanitized records after cleanup or failure
+        if: always()
+        timeout-minutes: 2
+        run: python -B "$env:FORWARD_CONTROL/diagnostics/session-forward-once/runner.py" finalize --source "$env:GITHUB_WORKSPACE" --root "$env:FORWARD_ROOT"
