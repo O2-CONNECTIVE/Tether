@@ -36,7 +36,7 @@ class ConsumeReplayCheckerTests(unittest.TestCase):
         overlay = tool.overlay_files()['Replace']
         self.assertEqual(len(overlay), 3)
         self.assertTrue(all(not Path(target).exists() for target in overlay))
-        self.assertTrue(all('/testdata/' in source and Path(source).is_file() for source in overlay.values()))
+        self.assertTrue(all('testdata' in Path(source).parts and Path(source).is_file() for source in overlay.values()))
 
     def test_non_mac_refuses_before_compiler(self):
         with patch.object(tool.sys, 'platform', 'linux'), patch.object(tool, 'command') as start:

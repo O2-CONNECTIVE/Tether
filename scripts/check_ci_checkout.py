@@ -31,7 +31,7 @@ def run():
         raise ValueError('unexpected checkout arguments')
     name = os.environ['GITHUB_EVENT_NAME']
     event_sha = os.environ['GITHUB_SHA']
-    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
     expected = expected_head(event, name, event_sha)
     workflow_sha = sha(os.environ['GITHUB_WORKFLOW_SHA'])
     workflow_ref = os.environ['GITHUB_WORKFLOW_REF']
@@ -39,7 +39,7 @@ def run():
         raise ValueError('invalid workflow revision')
     base = sha(event['pull_request']['base']['sha']) if name == 'pull_request' else None
     result = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD', 'HEAD^{tree}'],
-                            check=True, text=True, capture_output=True)
+                            check=True, text=True, encoding='utf-8', capture_output=True)
     actual, tree = map(sha, result.stdout.splitlines())
     if actual != expected:
         raise ValueError('checkout is not the exact event source head')
@@ -48,7 +48,7 @@ def run():
     output = json.dumps(evidence, sort_keys=True)
     print(output)
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
-        with Path(summary).open('a') as stream:
+        with Path(summary).open('a', encoding='utf-8') as stream:
             stream.write('\nChecked-out source (event SHA may be a synthetic merge ref):\n\n```json\n' + output + '\n```\n')
 
 

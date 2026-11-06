@@ -15,17 +15,20 @@ SPEC.loader.exec_module(tool)
 
 
 class ExactCheckoutTests(unittest.TestCase):
-    def invoke(self, name, event, event_sha):
+    def invoke(self, name, event, event_sha, strict_encoding=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             payload, summary = root / 'event.json', root / 'summary.md'
-            payload.write_text(json.dumps(event))
+            payload.write_text(json.dumps(event, ensure_ascii=False), encoding='utf-8')
             env = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'TMPDIR')}
             env.update(GITHUB_EVENT_NAME=name, GITHUB_EVENT_PATH=str(payload),
                        GITHUB_SHA=event_sha, GITHUB_STEP_SUMMARY=str(summary),
                        GITHUB_WORKFLOW_SHA='b' * 40,
                        GITHUB_WORKFLOW_REF='owner/repo/.github/workflows/source.yml@refs/heads/test')
-            result = subprocess.run([sys.executable, '-B', str(SCRIPT)], env=env,
+            args = [sys.executable, '-B']
+            if strict_encoding:
+                args += ['-X', 'warn_default_encoding', '-W', 'error::EncodingWarning']
+            result = subprocess.run(args + [str(SCRIPT)], env=env,
                                     text=True, capture_output=True, cwd=root)
             return result, summary.read_text() if summary.exists() else ''
 
@@ -65,3 +68,11 @@ class ExactCheckoutTests(unittest.TestCase):
                 result, summary = self.invoke(name, event, event_sha)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(summary, '')
+
+    def test_utf8_event_never_uses_platform_default_encoding(self):
+        head = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+        event = {'pull_request': {'head': {'sha': head}, 'base': {'sha': head}, 'body': '日本語の説明を含む'}}
+        result, summary = self.invoke('pull_request', event, 'a' * 40, strict_encoding=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['checkoutSha'], head)
+        self.assertIn(head, summary)
