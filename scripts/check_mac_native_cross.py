@@ -57,8 +57,9 @@ def compile_pump(cargo, directory, fixture, env):
     variant = dict(env, CARGO_TARGET_DIR=str(directory / 'target'))
     flags = ['-Dwarnings', '-L', 'native=' + str(directory), '-l', 'dylib=ResidentPreparation',
              '-C', 'link-arg=-Wl,-rpath,' + str(directory)]
+    flags += ['--cfg', 'resident_native_source']
     if fixture:
-        flags += ['--cfg', 'resident_native_source', '--cfg', 'resident_launch_fixture']
+        flags += ['--cfg', 'resident_launch_fixture']
     variant['CARGO_ENCODED_RUSTFLAGS'] = '\x1f'.join(flags)
     base = ['--locked', '--offline', '--jobs', '2', '--target', TARGET,
             '--manifest-path', str(CRATE / 'Cargo.toml')]

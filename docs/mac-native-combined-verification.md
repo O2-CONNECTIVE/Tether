@@ -86,3 +86,5 @@ loader / cache / site 内部の唯一原因は断定しません。隔離 flag �
 ## 後続の active component bridge
 
 [同じ C ABI / Rust owner の接点](mac-native-active-bridge.md)は、この Swift leaf の終了観測と active IO を同じ handle / TLS worker へ渡します。IO 回収後も native record を保持し、replacement / full joins / Quit の許可にはしません。通常起動は未接続です。既存 Pump / supervisor の active 配線、signed launch と全 joins は引き続き残件です。上記の未接続説明は各 leaf 単独の保証範囲を表します。
+
+[同じ native IO worker の supervisor](mac-native-io-supervisor.md) の177条件と両構成clippyを通常native workflowで検査します。Intel Pumpのnormal側もresident_native_sourceを明示し、normal / fixtureの同じowner moduleをcompile/linkします。借用close拒否を追加したIntelcompile refusalは16条件。全joins / Quit / signedlaunchの実証は別です。

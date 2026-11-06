@@ -23,6 +23,11 @@ fn main() {
         native_preparation::NativePreparation::prepare(),
         native_preparation::Preparation::Refused
     ));
+    #[cfg(resident_native_source)]
+    if arguments[1].starts_with("supervisor-") {
+        resident_port::duplex::run_supervisor(&arguments[1]);
+        return;
+    }
     #[cfg(all(resident_native_source, resident_launch_fixture))]
     if arguments[1].starts_with("active-") {
         resident_port::duplex::run_active(&arguments[1]);

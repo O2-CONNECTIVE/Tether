@@ -33,3 +33,8 @@ pub(crate) use active_child::run as run_active_child;
 mod active_checks;
 #[cfg(all(resident_native_source, resident_launch_fixture))]
 pub(crate) use active_checks::run as run_active;
+
+#[cfg(resident_native_source)]
+mod supervisor_checks;
+#[cfg(resident_native_source)]
+pub(crate) use supervisor_checks::run as run_supervisor;

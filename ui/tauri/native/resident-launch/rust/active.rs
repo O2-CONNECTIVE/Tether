@@ -64,6 +64,14 @@ impl NativePreparation {
         self.state
     }
 
+    /// Requests close-once control shutdown without dropping this affine guard.
+    /// No receipt, EOF, Wait or join is established; UNKNOWN stays retained.
+    pub fn request_active_close(&mut self) {
+        if self.active {
+            self.abandon_active();
+        }
+    }
+
     pub(super) fn abandon_active(&mut self) {
         // SAFETY: same original handle. Native performs only close-once and a
         // nonblocking completion observation, retaining UNKNOWN unconditionally.
