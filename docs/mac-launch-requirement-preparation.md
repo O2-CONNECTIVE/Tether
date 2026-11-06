@@ -36,15 +36,15 @@ Team / identifier / category だけでは同 publisher の別 release も一致�
 script の場合は interpreter が対象なので、固定 Mach-O producer の代わりに shell / env / script を選びません。
 [Apple CodeDirectoryHash](https://developer.apple.com/documentation/lightweightcoderequirements/codedirectoryhash)
 
-今回の owner は executableURL / argv / launch / run / PID / signal / Wait / readiness の API を持ちません。
-未起動の object を保持するだけで、producer の起動や same-image enforcement を実証していません。
+この requirement 準備の製品入口は executableURL / argv / launch / run / PID / signal / Wait / readiness を公開しません。
+後続の [Swift 内部の終了観測](mac-foundation-process-completion.md)は固定 self-child の exact Wait を試験しますが、この requirement 準備の producer 起動や same-image enforcement は未実証です。
 型付き setter/getter が使えること、同じ object が残ること、OS が実際に拒否することは別の証拠です。
 静的署名検査や PID / path / hash の再確認を起動時保証へ昇格しません。
 [Apple static validation](https://developer.apple.com/documentation/security/secstaticcodecheckvalidity(_:_:_:))
 
 ObjC の launchRequirementData に raw dictionary / PropertyList / 独自 JSON を渡す bridge は作りません。
 Swift の typed setter を使い、Codable は fixture の観測だけに用います。観測 JSON を起動要件の bytes として再投入しません。
-将来 Rust と結ぶときも、private な Process を同じ worker に保持して native I/O / Wait をつなぐ設計が必要です。
+将来 Rust と結ぶときも、private な Process を同じ worker に保持して native I/O と内部終了観測をつなぐ設計が必要です。固定 child の Swift Wait 成功だけでは、製品経路の Wait / joins は成立しません。
 現在の Rust std::process::Child / Pump / supervisor / outer monitor は不変です。Swift の別親を挟んで exact Child の意味を変える方式は採用しません。
 [Apple launchRequirementData](https://developer.apple.com/documentation/foundation/process/launchrequirementdata)
 

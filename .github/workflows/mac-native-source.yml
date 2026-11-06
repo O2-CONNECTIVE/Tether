@@ -67,10 +67,11 @@ jobs:
         run: |
           python -m unittest discover -s scripts/tests -p 'test_ci_checkout.py' -v
           python -m unittest discover -s scripts/tests -p 'test_mac_*.py' -v
-      - name: Check inert requirement, C ABI and same-owner Rust fixtures
+      - name: Check preparation, fixed self-child completion and same-owner fixtures
         run: |
           mkdir -p "$RUNNER_TEMP/native-source-evidence"
           python scripts/check_mac_launch_requirement.py | tee "$RUNNER_TEMP/native-source-evidence/requirement.json"
+          python scripts/check_mac_process_completion.py | tee "$RUNNER_TEMP/native-source-evidence/completion.json"
           python scripts/check_mac_preparation_ffi.py | tee "$RUNNER_TEMP/native-source-evidence/ffi.json"
           python scripts/check_mac_rust_owner.py | tee "$RUNNER_TEMP/native-source-evidence/owner.json"
           python scripts/check_mac_native_pump.py | tee "$RUNNER_TEMP/native-source-evidence/pump.json"
