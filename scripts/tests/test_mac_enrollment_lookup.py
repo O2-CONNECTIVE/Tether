@@ -9,6 +9,14 @@ SPEC.loader.exec_module(tool)
 
 
 class EnrollmentLookupDriverTests(unittest.TestCase):
+    def test_completed_preserves_failure_without_approving_it(self):
+        process = Mock(returncode=1)
+        process.communicate.return_value = ('out', 'compiler error')
+        with patch.object(tool.subprocess, 'Popen', return_value=process) as start:
+            result = tool.completed(['rustc', 'negative.rs'], {})
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (1, 'out', 'compiler error'))
+        self.assertEqual(start.call_count, 1)
+
     def test_interrupt_awaits_the_same_driver_and_refuses_success(self):
         process = Mock(returncode=0)
         process.communicate.side_effect = [KeyboardInterrupt(), ('fixture', '')]

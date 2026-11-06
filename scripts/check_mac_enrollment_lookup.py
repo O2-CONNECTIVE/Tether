@@ -63,21 +63,29 @@ func TestNativeEnrollmentLookupReplay(t *testing.T) {
 '''
 
 
-def command(arguments, env, cwd=None):
+def completed(arguments, env, cwd=None):
+    """Wait for this exact owned child; return its outcome without approving it."""
     process = subprocess.Popen(arguments, cwd=cwd, env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     interrupted = False
     while True:
         try:
-            stdout, _ = process.communicate()
+            stdout, stderr = process.communicate()
             break
         except KeyboardInterrupt:
             # Keep the same compiler/test driver until it exits; do not kill
             # only its parent, replace it, or clean its live source/cache.
             interrupted = True
-    if interrupted or process.returncode:
+    if interrupted:
         raise ValueError('fixture driver failed or interrupted')
-    return stdout
+    return subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
+
+
+def command(arguments, env, cwd=None):
+    result = completed(arguments, env, cwd)
+    if result.returncode:
+        raise ValueError('fixture driver failed or interrupted')
+    return result.stdout
 
 
 def run():

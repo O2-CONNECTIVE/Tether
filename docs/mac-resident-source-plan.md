@@ -109,3 +109,9 @@ owned I/O / exact Process Wait / supervisor / outer joins と実物の launch en
 未知結果と元 thread 喪失は同じ元 record を保持して置換を拒みます。通常起動への link はありません。
 匿名 fixture EOF と fixture pthread join は、実 producer EOF / exact Wait / IO・supervisor・outer joins の代わりにしません。
 sealed 実行、atomic inheritance 境界、active owner の IO transfer / 全回収証拠は後続です。
+
+## 同じ native owner への Rust 接続
+
+[具体的 Rust adapter](mac-native-rust-owner.md)は #221 の実 C ABI と link し、元 thread の handle 保持、明示 retire / Drop、unknown と禁止置換を同じ匿名 IO の解放まで検証します。
+通常 library と fixture library の export を区別し、safe Rust の thread 間移動・共有を拒否します。通常 Cargo / IPC は未接続です。
+未起動 retire を実 producer EOF / exact Wait / active joins に拡張せず、次に同じ owner の sealed 実行・IO transfer を既存 duplex worker へ結ぶ工程を残します。

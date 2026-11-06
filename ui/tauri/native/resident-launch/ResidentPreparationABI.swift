@@ -21,6 +21,7 @@ private final class PreparationSlot: @unchecked Sendable {
     private var record: Record?
     #if RESIDENT_LAUNCH_FIXTURE
     private var completedCloses: UInt32 = 0
+    private var retirementCalls: UInt32 = 0
     #endif
 
     init() {
@@ -55,7 +56,7 @@ private final class PreparationSlot: @unchecked Sendable {
         do {
             #if RESIDENT_LAUNCH_FIXTURE
             if let mode = fixtureMode {
-                guard mode <= 2 else { return 0 }
+                guard mode <= 3 else { return 0 }
                 owner = try ResidentLaunchPreparation.fixture(team: "SYNTHETIC1", hashes: [Data(repeating: 7, count: 20)],
                     version: ProcessInfo.processInfo.operatingSystemVersion)
             } else { owner = try ResidentLaunchPreparation.prepare() }
@@ -69,8 +70,8 @@ private final class PreparationSlot: @unchecked Sendable {
         record = Record(handle: handle, worker: identity, owner: owner)
         do {
             #if RESIDENT_LAUNCH_FIXTURE
-            if fixtureMode == 1 { owner.loseCloseAcknowledgement() }
-            try owner.prepareIO(partial: fixtureMode == 2)
+            if fixtureMode == 1 || fixtureMode == 3 { owner.loseCloseAcknowledgement() }
+            try owner.prepareIO(partial: fixtureMode == 2 || fixtureMode == 3)
             #else
             try owner.prepareIO(partial: false)
             #endif
@@ -92,6 +93,9 @@ private final class PreparationSlot: @unchecked Sendable {
     func state(_ handle: UInt64, retire: Bool) -> PreparationState {
         lock.lock()
         defer { lock.unlock() }
+        #if RESIDENT_LAUNCH_FIXTURE
+        if retire { retirementCalls += 1 }
+        #endif
         let state = stateLocked(handle)
         guard state == .ownedUnlaunched, retire, let owner = record?.owner else { return state }
         guard owner.retireIO() else { record?.unknown = true; return .unknown }
@@ -138,6 +142,11 @@ private final class PreparationSlot: @unchecked Sendable {
         let counts = record?.owner.fixtureCounts() ?? (open: 0, closed: 0)
         return open ? counts.open : completedCloses + counts.closed
     }
+    func retireCalls() -> UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        return retirementCalls
+    }
     func exhaust() -> UInt32 {
         lock.lock()
         defer { lock.unlock() }
@@ -150,27 +159,28 @@ private final class PreparationSlot: @unchecked Sendable {
 
 private let preparationSlot = PreparationSlot()
 
-@c @implementation func rh_resident_preparation_create() -> UInt64 {
+@c @implementation public func rh_resident_preparation_create() -> UInt64 {
     autoreleasepool { preparationSlot.create(fixtureMode: nil) }
 }
-@c @implementation func rh_resident_preparation_state(_ handle: UInt64) -> UInt32 {
+@c @implementation public func rh_resident_preparation_state(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.state(handle, retire: false).rawValue }
 }
-@c @implementation func rh_resident_preparation_retire(_ handle: UInt64) -> UInt32 {
+@c @implementation public func rh_resident_preparation_retire(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.state(handle, retire: true).rawValue }
 }
 
 #if RESIDENT_LAUNCH_FIXTURE
-@c @implementation func rh_fixture_preparation_create(_ mode: UInt32) -> UInt64 {
+@c @implementation public func rh_fixture_preparation_create(_ mode: UInt32) -> UInt64 {
     autoreleasepool { preparationSlot.create(fixtureMode: mode) }
 }
-@c @implementation func rh_fixture_preparation_probe(_ handle: UInt64) -> UInt32 {
+@c @implementation public func rh_fixture_preparation_probe(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.probe(handle, exchange: false) }
 }
-@c @implementation func rh_fixture_preparation_exchange(_ handle: UInt64) -> UInt32 {
+@c @implementation public func rh_fixture_preparation_exchange(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.probe(handle, exchange: true) }
 }
-@c @implementation func rh_fixture_preparation_close_count() -> UInt32 { preparationSlot.counts(open: false) }
-@c @implementation func rh_fixture_preparation_open_count() -> UInt32 { preparationSlot.counts(open: true) }
-@c @implementation func rh_fixture_preparation_exhaust() -> UInt32 { preparationSlot.exhaust() }
+@c @implementation public func rh_fixture_preparation_close_count() -> UInt32 { preparationSlot.counts(open: false) }
+@c @implementation public func rh_fixture_preparation_open_count() -> UInt32 { preparationSlot.counts(open: true) }
+@c @implementation public func rh_fixture_preparation_exhaust() -> UInt32 { preparationSlot.exhaust() }
+@c @implementation public func rh_fixture_preparation_retire_calls() -> UInt32 { preparationSlot.retireCalls() }
 #endif
