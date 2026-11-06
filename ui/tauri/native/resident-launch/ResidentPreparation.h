@@ -8,7 +8,9 @@ enum {
     RH_PREPARATION_OWNED_UNLAUNCHED = 1,
     RH_PREPARATION_RETIRED_UNLAUNCHED = 2,
     RH_PREPARATION_UNKNOWN = 3,
-    RH_PREPARATION_WRONG_THREAD = 4
+    RH_PREPARATION_WRONG_THREAD = 4,
+    RH_PREPARATION_OWNED_ACTIVE = 5,
+    RH_PREPARATION_ACTIVE_IO_RETIRED = 6
 };
 
 /* 0: refused, no returned ownership. Nonzero: inspect state, retain handle.
@@ -26,7 +28,28 @@ uint64_t rh_resident_preparation_read(uint64_t handle, uint8_t * _Nullable bytes
 uint64_t rh_resident_preparation_write(uint64_t handle, const uint8_t * _Nullable bytes, uint32_t count);
 uint64_t rh_resident_preparation_half_close(uint64_t handle);
 
+/* No launch API. Same-worker completion observation: high32 tag unavailable0,
+ * pending1, exit2, signal3, unknown4, wrong-thread5; low32 signed status bits
+ * only for exit/signal. Not EOF, IO cleanup or full joins. */
+uint64_t rh_resident_preparation_exit(uint64_t handle);
+/* Requires actual observed same-Process Wait. IO retirement additionally needs
+ * EOF, every original close receipt, no IO fault. Retains native record even
+ * on ACTIVE_IO_RETIRED; no replacement/full-join permission. */
+uint32_t rh_resident_preparation_retire_active_io(uint64_t handle);
+/* Controller abandonment keeps original record UNKNOWN. Only original writer
+ * half-close and nonblocking same-owner collection; no kill or close retry. */
+uint32_t rh_resident_preparation_abandon_active(uint64_t handle);
+
 #ifdef RESIDENT_LAUNCH_FIXTURE
+/* Separate untrusted self-child owner. mode0 echo,1 early exit,2 early lost ack,3 exit2,4 self SIGTERM.
+ * Not callable from a requirement-bearing production preparation. */
+uint64_t rh_fixture_preparation_create_active(uint32_t mode);
+/* Same original worker/record collection after incomplete fixture Drop only. */
+uint64_t rh_fixture_preparation_collect_active(void);
+/* high32 actual same-Process Wait calls, low32 active abandonment calls. */
+uint64_t rh_fixture_preparation_active_stats(void);
+uint32_t rh_fixture_preparation_retained_state(void);
+
 /* Test compilation only: fixed synthetic identity, no caller-supplied release.
  * mode 0 normal, 1 lost close acknowledgement, 2 partial pipe acquisition,
  * 3 lost acknowledgement after partial acquisition. */

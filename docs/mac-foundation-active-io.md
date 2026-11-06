@@ -30,3 +30,7 @@ Wait 成功や全 fd の物理 close だけでは IO confirmed にしません�
 製品の sealed launch と publisher / exact release、保護配置・policy・署名・verify-to-exec、C ABI / 同じ Rust owner の終了・IO 接続、authoritative Close、IO worker / supervisor / outer monitor の実 join は未接続・未実証です。固定 child の EOF / Wait と未起動 worker の join を、実 producer の回収完了や GUI Quit 許可に合算しません。
 
 実 GUI / producer 起動、実鍵 / policy、署名・配置・OS trust は未実行です。凍結 a4 / a5 は変更せず、旧実機証拠をこの source pin へ引き継ぎません。既存 Windows timeout の根因を解消したとは扱いません。
+
+## 後続の active component bridge
+
+[同じ C ABI / Rust owner の接点](mac-native-active-bridge.md)は、この Swift leaf の終了観測と active IO を同じ handle / TLS worker へ渡します。IO 回収後も native record を保持し、replacement / full joins / Quit の許可にはしません。通常起動は未接続です。既存 Pump / supervisor の active 配線、signed launch と全 joins は引き続き残件です。上記の未接続説明は各 leaf 単独の保証範囲を表します。

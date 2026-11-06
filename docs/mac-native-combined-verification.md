@@ -82,3 +82,7 @@ loader / cache / site 内部の唯一原因は断定しません。隔離 flag �
 同じ test-only factory は固定の `xcrun --find python3` を終了まで待ち、絶対 file path と非 shim を確認してから、その image を直接起動します。探索は interpreter を実行せず、warmup・cache・OnceLock・追加 sleep はありません。探索は5秒で元 child に停止を要求し、同じ Child の Wait を確認してから失敗を返します。Wait 未確認なら同じ owner を保持し、回収の時間上限や成功を捏造しません。探索時だけ既存の `DEVELOPER_DIR` を compiler 選択として保持し、実 interpreter の環境は従来同様に空にします。ユーザー指定の path や argv を受ける製品入口は作りません。
 
 実 child は観測を出す前に、期待した image と `sys.executable` の realpath 一致を要求します。同じ fixture seam は shim 指定で red、直接 image で green です。この regression は wrapper を含めない fixture 契約を確認し、元の cold delay 自体のローカル再現や OS 内部の唯一原因を証明しません。開発 tool 探索の時間と、元 owner が実 image を spawn した後の2秒観測期限を区別します。既存150件に探索 child の timeout / nonzero 終了の負例2件を追加し、通常の並列度、実 pipe / EOF / exact Child Wait / joins と cleanup unknown の判定は維持し、修正の実効性は新固定 head と実 merge SHA の hosted CI で別に確認します。
+
+## 後続の active component bridge
+
+[同じ C ABI / Rust owner の接点](mac-native-active-bridge.md)は、この Swift leaf の終了観測と active IO を同じ handle / TLS worker へ渡します。IO 回収後も native record を保持し、replacement / full joins / Quit の許可にはしません。通常起動は未接続です。既存 Pump / supervisor の active 配線、signed launch と全 joins は引き続き残件です。上記の未接続説明は各 leaf 単独の保証範囲を表します。

@@ -1,11 +1,17 @@
 //! Concrete client of ResidentPreparation.h. Not linked into normal Tauri.
-//! Every native operation uses the same non-transferable, unlaunched owner.
+//! Every native operation uses the same non-transferable owner; no launch API.
 use std::{marker::PhantomData, num::NonZeroU64, rc::Rc};
 
 #[cfg(resident_launch_fixture)]
 mod fixture;
 #[cfg(resident_launch_fixture)]
 pub use fixture::{Counts, FixedFixture};
+mod active;
+pub use active::ExitObservation;
+#[cfg(resident_launch_fixture)]
+mod active_fixture;
+#[cfg(resident_launch_fixture)]
+pub use active_fixture::{ActiveStats, FixedActiveFixture};
 mod byte_io;
 pub use byte_io::PreparedIo;
 
@@ -19,6 +25,8 @@ unsafe extern "C" {
 pub enum State {
     OwnedUnlaunched,
     RetiredUnlaunched,
+    Active,
+    ActiveIoRetired,
     Unknown,
 }
 
@@ -33,6 +41,7 @@ pub enum Preparation {
 pub struct NativePreparation {
     handle: NonZeroU64,
     state: State,
+    active: bool,
     // Both Send and Sync are forbidden, including for shared references.
     original_thread: PhantomData<Rc<()>>,
 }
@@ -56,6 +65,7 @@ impl NativePreparation {
         let owner = Self {
             handle,
             state,
+            active: false,
             original_thread: PhantomData,
         };
         if state == State::OwnedUnlaunched {
@@ -66,11 +76,15 @@ impl NativePreparation {
     }
 
     pub fn state(&mut self) -> State {
-        if self.state == State::OwnedUnlaunched {
-            // SAFETY: private handle, same thread enforced by !Send/!Sync and TLS.
-            if unsafe { rh_resident_preparation_state(self.handle.get()) } != 1 {
-                self.state = State::Unknown;
-            }
+        let expected = match self.state {
+            State::OwnedUnlaunched => 1,
+            State::Active => 5,
+            State::ActiveIoRetired => 6,
+            _ => return self.state,
+        };
+        // SAFETY: private handle, same thread enforced by !Send/!Sync and TLS.
+        if unsafe { rh_resident_preparation_state(self.handle.get()) } != expected {
+            self.state = State::Unknown;
         }
         self.state
     }
@@ -94,6 +108,10 @@ impl Drop for NativePreparation {
     fn drop(&mut self) {
         // No success notification, replacement or second close after unknown.
         // The native slot retains the original Process on any uncertain result.
-        let _ = self.retire();
+        if self.active {
+            self.abandon_active();
+        } else {
+            let _ = self.retire();
+        }
     }
 }

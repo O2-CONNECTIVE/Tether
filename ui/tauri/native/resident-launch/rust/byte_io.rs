@@ -7,7 +7,7 @@ unsafe extern "C" {
     fn rh_resident_preparation_half_close(handle: u64) -> u64;
 }
 
-/// Borrowed prepared pipes, not authenticated observation or active child IO.
+/// Borrowed owned pipes (prepared or active), never authenticated observation.
 pub struct PreparedIo<'owner> {
     owner: &'owner mut NativePreparation,
 }
@@ -32,7 +32,7 @@ impl PreparedIo<'_> {
         self.owner.fixture_peer(action)
     }
     fn available(&self) -> io::Result<()> {
-        if self.owner.state == State::OwnedUnlaunched {
+        if matches!(self.owner.state, State::OwnedUnlaunched | State::Active) {
             Ok(())
         } else {
             Err(io::Error::from(ErrorKind::NotConnected))

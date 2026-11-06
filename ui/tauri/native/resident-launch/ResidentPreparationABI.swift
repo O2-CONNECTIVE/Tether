@@ -3,7 +3,7 @@ import Foundation
 
 private final class WorkerIdentity {}
 private enum PreparationState: UInt32 {
-    case invalid = 0, ownedUnlaunched = 1, retiredUnlaunched = 2, unknown = 3, wrongThread = 4
+    case invalid = 0, ownedUnlaunched = 1, retiredUnlaunched = 2, unknown = 3, wrongThread = 4, ownedActive = 5, activeIORetired = 6
 }
 
 // The only unchecked sharing is this bounded slot. Every field access is under
@@ -14,6 +14,8 @@ private final class PreparationSlot: @unchecked Sendable {
         let worker: WorkerIdentity
         let owner: ResidentLaunchPreparation
         var unknown = false
+        var active = false
+        var activeIORetired = false
     }
     private let lock = NSLock()
     private let key: pthread_key_t?
@@ -22,6 +24,7 @@ private final class PreparationSlot: @unchecked Sendable {
     #if RESIDENT_LAUNCH_FIXTURE
     private var completedCloses: UInt32 = 0
     private var retirementCalls: UInt32 = 0
+    private var activeAbandons: UInt32 = 0
     #endif
 
     init() {
@@ -87,6 +90,7 @@ private final class PreparationSlot: @unchecked Sendable {
         guard let record, handle != 0, record.handle == handle else { return .invalid }
         if record.unknown { return .unknown }
         guard worker(create: false) === record.worker else { return .wrongThread }
+        if record.active { return record.activeIORetired ? .activeIORetired : .ownedActive }
         return .ownedUnlaunched
     }
 
@@ -113,12 +117,13 @@ private final class PreparationSlot: @unchecked Sendable {
     func bytes(_ handle: UInt64, _ operation: PreparedByteOperation) -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        guard stateLocked(handle) == .ownedUnlaunched, let owner = record?.owner else {
+        let state = stateLocked(handle)
+        guard (state == .ownedUnlaunched || state == .ownedActive), let owner = record?.owner else {
             return PreparedByteResult(tag: .rejected).packed
         }
         let result = owner.bytes(operation)
         if result.tag == .unknown {
-            _ = owner.retireIO() // Same owner; never retry an attempted close.
+            if record?.active != true { _ = owner.retireIO() } // Active Wait is separate.
             record?.unknown = true
         }
         return result.packed
@@ -131,11 +136,105 @@ private final class PreparationSlot: @unchecked Sendable {
         // Destructor still runs on the original thread. Never touch another
         // thread's owner. Loss of its controller remains unknown even if these
         // unlaunched pipes close; never discard/replace the Process record.
+        if record?.active == true { _ = abandonActiveLocked(); return }
         if record?.unknown == false { _ = record?.owner.retireIO() }
         record?.unknown = true
     }
 
+    // Every active operation checks the original TLS identity BEFORE touching
+    // Process/IO, including when the record is already unknown.
+    func completion(_ handle: UInt64) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, handle != 0, record.handle == handle else { return 0 }
+        guard worker(create: false) === record.worker else { return 5 << 32 }
+        guard record.active else { return 0 }
+        let observation = record.owner.pollCompletion()
+        if case .unknown = observation { self.record?.unknown = true }
+        if case .unavailable = observation { self.record?.unknown = true; return 4 << 32 }
+        return packed(observation)
+    }
+
+    private func packed(_ observation: ProcessCompletionObservation) -> UInt64 {
+        switch observation {
+        case .unavailable: return 0
+        case .pending: return 1 << 32
+        case .unknown: return 4 << 32
+        case let .observed(exit):
+            let tag: UInt64 = exit.reason == .exit ? 2 : 3
+            return tag << 32 | UInt64(UInt32(bitPattern: exit.status))
+        }
+    }
+
+    func retireActiveIO(_ handle: UInt64) -> PreparationState {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, handle != 0, record.handle == handle else { return .invalid }
+        guard worker(create: false) === record.worker else { return .wrongThread }
+        guard record.active else { return stateLocked(handle) }
+        guard record.owner.hasObservedExit else { return stateLocked(handle) }
+        if record.owner.retireIO() { self.record?.activeIORetired = true }
+        else { self.record?.unknown = true }
+        // Keep the original record even on success. No full-join/replacement
+        // permission exists yet. This is an IO component observation only.
+        return stateLocked(handle)
+    }
+
+    func abandonActive(_ handle: UInt64) -> PreparationState {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, handle != 0, record.handle == handle else { return .invalid }
+        guard worker(create: false) === record.worker else { return .wrongThread }
+        guard record.active else { return stateLocked(handle) }
+        return abandonActiveLocked()
+    }
+
+    private func abandonActiveLocked() -> PreparationState {
+        guard let owner = record?.owner else { return .invalid }
+        #if RESIDENT_LAUNCH_FIXTURE
+        activeAbandons += 1
+        #endif
+        _ = owner.bytes(.halfClose) // Original writer, never kill/replace/retry close.
+        if case .observed = owner.pollCompletion() { _ = owner.retireIO() }
+        record?.unknown = true // Loss of controller is not completion permission.
+        return .unknown
+    }
+
     #if RESIDENT_LAUNCH_FIXTURE
+    func createActive(_ mode: UInt32) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard mode <= 4, record == nil, issued < UInt64.max,
+              let identity = worker(create: true) else { return 0 }
+        let owner = ResidentLaunchPreparation.completionFixture()
+        issued += 1
+        record = Record(handle: issued, worker: identity, owner: owner, active: true)
+        if mode == 2 { owner.loseCloseAcknowledgement() }
+        do {
+            if try !owner.runOwnedIOFixture(mode == 0 ? .echo : mode == 3 ? .exitTwo : mode == 4 ? .signal : .early) { record?.unknown = true }
+        } catch { record?.unknown = true }
+        return issued
+    }
+    func collectActiveFixture() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, record.active, record.unknown,
+              worker(create: false) === record.worker else { return 0 }
+        let observation = record.owner.pollCompletion()
+        if case .observed = observation { _ = record.owner.retireIO() }
+        // Only same retained record cleanup; unknown never clears.
+        return packed(observation)
+    }
+    func retainedState() -> UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        return record.map { stateLocked($0.handle).rawValue } ?? 0
+    }
+    func activeStats() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return UInt64(record?.owner.completionFixtureWaits() ?? 0) << 32 | UInt64(activeAbandons)
+    }
     func peer(_ handle: UInt64, action: UInt32) -> UInt32 {
         lock.lock()
         defer { lock.unlock() }
@@ -210,7 +309,25 @@ private let preparationSlot = PreparationSlot()
     autoreleasepool { preparationSlot.bytes(handle, .halfClose) }
 }
 
+@c @implementation public func rh_resident_preparation_exit(_ handle: UInt64) -> UInt64 {
+    autoreleasepool { preparationSlot.completion(handle) }
+}
+@c @implementation public func rh_resident_preparation_retire_active_io(_ handle: UInt64) -> UInt32 {
+    autoreleasepool { preparationSlot.retireActiveIO(handle).rawValue }
+}
+@c @implementation public func rh_resident_preparation_abandon_active(_ handle: UInt64) -> UInt32 {
+    autoreleasepool { preparationSlot.abandonActive(handle).rawValue }
+}
+
 #if RESIDENT_LAUNCH_FIXTURE
+@c @implementation public func rh_fixture_preparation_create_active(_ mode: UInt32) -> UInt64 {
+    autoreleasepool { preparationSlot.createActive(mode) }
+}
+@c @implementation public func rh_fixture_preparation_collect_active() -> UInt64 {
+    autoreleasepool { preparationSlot.collectActiveFixture() }
+}
+@c @implementation public func rh_fixture_preparation_active_stats() -> UInt64 { preparationSlot.activeStats() }
+@c @implementation public func rh_fixture_preparation_retained_state() -> UInt32 { preparationSlot.retainedState() }
 @c @implementation public func rh_fixture_preparation_peer(_ handle: UInt64, _ action: UInt32) -> UInt32 {
     autoreleasepool { preparationSlot.peer(handle, action: action) }
 }
