@@ -7,11 +7,13 @@ mod fixture;
 #[cfg(resident_launch_fixture)]
 pub use fixture::{Counts, FixedFixture};
 mod active;
-pub use active::ExitObservation;
+pub type ExitObservation = active::ExitObservation;
 #[cfg(resident_launch_fixture)]
 mod active_fixture;
 #[cfg(resident_launch_fixture)]
-pub use active_fixture::{ActiveStats, FixedActiveFixture};
+pub type ActiveStats = active_fixture::ActiveStats;
+#[cfg(resident_launch_fixture)]
+pub type FixedActiveFixture = active_fixture::FixedActiveFixture;
 mod byte_io;
 pub use byte_io::PreparedIo;
 

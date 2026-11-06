@@ -14,7 +14,7 @@
 
 ## 独立した観測と保持
 
-`rh_resident_preparation_exit` は、同じ Process の実 Wait と reason / status を返します。未起動、pending、unknown、wrong worker は exit 0 ではありません。packed status の不正な tag / count / 範囲も Rust が Unknown にし、正しい終了観測で既存 IO / owner の Unknown を解除しません。
+`rh_resident_preparation_exit` は、同じ Process の実 Wait と reason / status を返します。未起動、pending、unknown、wrong worker は exit 0 ではありません。packed status の不正な tag / status / 範囲も Rust が Unknown にし、正しい終了観測で既存 IO / owner の Unknown を解除しません。
 
 `rh_resident_preparation_retire_active_io` は、元 owner に保存された実 Wait を要求します。caller の bool や status は受け取りません。Wait 未観測では端点を閉じず、元の state を返します。Wait 成功だけでは IO confirmed にせず、実 EOF、4端点それぞれの receipt、IO fault を確認します。prelaunch retire を active の証明に流用しません。
 
@@ -37,3 +37,7 @@ fixture 専用 constructor は bare owner が新しく compile した自分自�
 既存 requirement35 / completion34 / active IO129 / C ABI90 / Rust owner92＋compile refusal9 / Pump133 を保持します。新 bridge は normal / fixture の239条件、9 child の元 Wait、36 original 端点の回収と、追加 borrow / normal-fixture isolation の compile refusal5 を検査します。Intel は compile/link だけで、Intel native runtime は未実行です。実 signed image の launch enforcement、atomic inheritance、通常起動への配線、既存 Pump / supervisor への active 接続と全 joins は残件です。
 
 実 GUI / host / producer / 実鍵 / protected policy / OS trust / 実 release 署名・配置は未実行です。a4 / a5 と task-7 は無変更、解除連絡待ちです。既往 Windows timeout の根因解消とは扱いません。
+
+## 未接続 consumer の compile 回帰
+
+新しい型を `pub use` だけで再 export すると、active 接続をまだ使わない既存 private module の埋め込みで unused-import error になります。公開 type alias により同じ型・API を保ち、警告抑制は追加しません。実際の owner source を埋め込む metadata-only fixture を追加し、2021 /2024 edition × normal /fixture の4構成で red → green を確認します。既存 app の明示 native cfg と Pump build / clippy も別に検査します。

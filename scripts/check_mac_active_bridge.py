@@ -50,6 +50,16 @@ def active_variant(rust, directory, fixture, env, target=None, execute=True):
     return passed, len(negatives), executable
 
 
+
+def validate_embedding(rust, directory, fixture, env):
+    # Reproduce the real nested source consumer, where active observations are
+    # deliberately not wired yet. This is metadata only: no actor is launched.
+    for edition in ('2021', '2024'):
+        flags = ['--edition=' + edition, '-Dwarnings'] + (['--cfg', 'resident_launch_fixture'] if fixture else [])
+        command([rust] + flags + [str(NATIVE / 'fixtures/EmbeddedOwner.rs'), '--emit=metadata',
+                '-o', str(directory / ('embedded-' + edition + '.rmeta'))], env)
+
+
 def run():
     if len(sys.argv) != 1 or sys.platform != 'darwin':
         raise ValueError('unsupported active bridge invocation')
@@ -75,12 +85,13 @@ def run():
                     flags = ['--edition=2024', '-Dwarnings'] + (['--cfg', 'resident_launch_fixture'] if fixture else [])
                     command([rust] + flags + ['--crate-type=rlib', '--crate-name', 'resident_preparation',
                             str(NATIVE / 'rust/owner.rs'), '-o', str(directory / 'libresident_preparation.rlib')], env)
+                    validate_embedding(rust, directory, fixture, env)
                     count, negatives, _ = active_variant(rust, directory, fixture, env)
                     passed += count
                     refused += negatives
     print(json.dumps({'fixture': 'native-active-component-bridge', 'passed': passed,
                       'fixtureChildrenStarted': 9, 'fixtureChildrenWaited': 9, 'physicalOriginalEndpointsClosed': 36,
-                      'compileRefusals': refused, 'swiftCompileTargets': 2, 'rustCompileTargets': 1,
+                      'compileRefusals': refused, 'embeddedMetadataVariants': 4, 'swiftCompileTargets': 2, 'rustCompileTargets': 1,
                       'foreignExecution': False, 'producerLaunches': 0,
                       'scope': 'same native record exit/IO components; no signed launch / full joins / replacement permission'}))
 
