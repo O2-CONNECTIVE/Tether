@@ -74,7 +74,8 @@ supported host の完全な fixture は35件・失敗0・producer起動0を要�
 
 ## 残る具体接続
 
-次は native owner の ABI と lifetime、owned input/output、実 EOF、exact Process の終了待ちと終了結果、supervisor / outer monitor joins を既存 owner に接続する工程です。
+[後続の未起動 FFI / IO 準備](mac-prelaunch-ffi-io.md)は、同じ owner の保持と匿名 pipe の準備・解放までを扱います。
+実 producer の EOF、exact Process の終了待ちと終了結果、active IO / supervisor / outer monitor joins を既存 owner に接続する工程は残ります。
 requirement / owner を作っただけでは Closed、OFF、回収完了や GUI Quit の許可にしません。unknown の元 owner を保持し、別 process に置換して回復したことにしません。
 actual signed release、未対応 OS、不一致 publisher / code hash、置換、部分失敗、architecture / Rosetta、runtime / library の制約を、別途許可した実物試験で検証する必要があります。
 production config は未設定、通常起動は未接続です。a4 / task-7 / private は変更せず、GUI 再開はユーザーの解除連絡まで待機します。

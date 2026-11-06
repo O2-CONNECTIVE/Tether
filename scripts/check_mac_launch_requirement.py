@@ -54,9 +54,10 @@ def run():
             base = [compiler, '-swift-version', '6', '-warnings-as-errors', '-sdk', sdk,
                     '-target', target_arch + '-apple-macosx11.0', '-parse-as-library',
                     '-module-cache-path', str(directory / ('cache-' + target_arch))]
-            command(base + ['-emit-object', str(source), '-o', str(directory / (target_arch + '.o'))], env)
+            sources = [str(source), str(NATIVE / 'OwnedPreparationIO.swift')]
+            command(base + ['-whole-module-optimization', '-emit-object'] + sources + ['-o', str(directory / (target_arch + '.o'))], env)
             executable = directory / (target_arch + '-fixture')
-            command(base + ['-D', 'RESIDENT_LAUNCH_FIXTURE', str(source), str(fixture),
+            command(base + ['-D', 'RESIDENT_LAUNCH_FIXTURE'] + sources + [str(fixture),
                             '-Xlinker', '-weak_framework', '-Xlinker', 'LightweightCodeRequirements',
                             '-o', str(executable)], env)
             validate_weak_link(command(['/usr/bin/otool', '-l', str(executable)], env))

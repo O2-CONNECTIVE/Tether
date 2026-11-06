@@ -102,3 +102,10 @@ env / UI / CLI の path override、profile 探索、新しい権限や通常 cal
 [Apple API の準備 source](mac-launch-requirement-preparation.md) は typed な publisher / exact-release 条件と、一つの未起動 Foundation Process の保持までを独立 compile / 合成 fixture で確認します。
 production の publisher は未設定で拒否し、Tauri / Rust / Go へ link・起動配線しません。14.4 未満は機能を拒否し、アプリの minimum OS は変更しません。
 owned I/O / exact Process Wait / supervisor / outer joins と実物の launch enforcement は後続であり、準備 object を admission や回収完了の証明にしません。
+
+## 未起動 owner の C ABI と匿名 IO
+
+[FFI / IO 準備](mac-prelaunch-ffi-io.md)は同じ未起動 Process の保持、元 thread の TLS、非再利用 handle、匿名 pipe 4 端点の close-once を閉じます。
+未知結果と元 thread 喪失は同じ元 record を保持して置換を拒みます。通常起動への link はありません。
+匿名 fixture EOF と fixture pthread join は、実 producer EOF / exact Wait / IO・supervisor・outer joins の代わりにしません。
+sealed 実行、atomic inheritance 境界、active owner の IO transfer / 全回収証拠は後続です。

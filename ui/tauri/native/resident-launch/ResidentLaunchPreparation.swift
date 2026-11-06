@@ -6,6 +6,7 @@ enum PreparationFailure: Error {
     case publisherUnconfigured
     case invalidRelease
     case requirementNotRetained
+    case ioPreparation
 }
 
 private struct ApprovedRelease: Sendable {
@@ -31,6 +32,7 @@ private struct ApprovedRelease: Sendable {
 // This object is not Sendable: later FFI must retain it on its original worker.
 final class ResidentLaunchPreparation {
     private let task: Process
+    private let io = OwnedPreparationIO()
     #if RESIDENT_LAUNCH_FIXTURE
     private let expectedStructure: Data
     #endif
@@ -72,7 +74,15 @@ final class ResidentLaunchPreparation {
         #endif
     }
 
+    // Slot adopts this same owner before IO acquisition can fail.
+    func prepareIO(partial: Bool) throws { try io.configure(task, partial: partial) }
+    func retireIO() -> Bool { io.retire(task) }
+
     #if RESIDENT_LAUNCH_FIXTURE
+    func fixtureCounts() -> (open: UInt32, closed: UInt32) { (io.open, io.closed) }
+    func loseCloseAcknowledgement() { io.loseCloseAcknowledgement = true }
+    func exchange() -> Bool { io.exchange(task) }
+    func ioIntact() -> Bool { io.intact(task) }
     // Test compilation only. These values cannot configure the production entry.
     static func fixture(team: String, hashes: [Data], version: OperatingSystemVersion) throws -> ResidentLaunchPreparation {
         guard supports(version), #available(macOS 14.4, *) else {
