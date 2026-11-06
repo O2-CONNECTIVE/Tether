@@ -1,4 +1,6 @@
 // 診断feature専用。UI hookは固定memoryとtry_lockだけを使い、I/Oやjoinを待たない。
+#[path = "wry_delivery_probe.rs"]
+mod delivery_probe;
 #[path = "wry_startup_probe.rs"]
 mod wry_probe;
 use std::{
@@ -145,6 +147,8 @@ impl Trace {
         let recorder = Recorder::memory();
         let probe = wry_probe::Probe::memory();
         let registration = probe.register();
+        let delivery = delivery_probe::Probe::memory();
+        let delivery_registration = delivery.register();
         let worker = recorder.clone();
         let path = PathBuf::from(directory);
         // 専用の既存・非競合CI tempを前提とする。新directoryは作らない。
@@ -161,6 +165,17 @@ impl Trace {
                 // Write it first: the original exclusive-file close observation remains last.
                 let probe_text =
                     probe.snapshot(registration, worker.complete() || marker.is_file());
+                let delivery_text =
+                    delivery.snapshot(delivery_registration, worker.complete() || marker.is_file());
+                if delivery_text.len() <= 8192 {
+                    if let Ok(mut file) = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path.join("wry-sdk-delivery.json"))
+                    {
+                        let _ = file.write_all(delivery_text.as_bytes());
+                    }
+                }
                 if probe_text.len() <= 2048 {
                     if let Ok(mut file) = OpenOptions::new()
                         .write(true)

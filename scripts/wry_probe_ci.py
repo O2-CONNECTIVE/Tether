@@ -81,20 +81,35 @@ def safe_steps(value):
     return value
 
 
-def safe_meta(value, overlay=False):
+def safe_meta(value, overlay=False, delivery=False):
     keys = ({"schema", "variant", "crateSha256", "originalSha256", "patchedSha256", "files",
              "originalLockSha256", "overlayLockSha256"} if overlay else
             {"sourceCommit", "sourceTree", "overlayLockSha256", "vendorTreeSha256", "exeSha256", "driverSha256", "archiveSha256",
              "edgeDriverSha256", "driverPatchSha256", "driverLockSha256"})
+    if delivery:
+        keys |= ({"completionCrateSha256", "completionOriginalSha256", "completionPatchedSha256",
+                  "completionFiles", "protocolSha256"} if overlay else
+                 {"completionVendorTreeSha256", "patchConfigVerified"})
     if not isinstance(value, dict) or set(value) != keys: raise ValueError()
-    for key in keys - {"schema", "variant", "files"}:
+    for key in keys - {"schema", "variant", "files", "completionFiles", "patchConfigVerified"}:
         length = 40 if key in {"sourceCommit", "sourceTree"} else 64
         if type(value[key]) is not str or not re.fullmatch(f"[0-9a-f]{{{length}}}", value[key]): raise ValueError()
+    if delivery and not overlay and value["patchConfigVerified"] is not True: raise ValueError()
     if overlay:
-        if (type(value["schema"]) is not int or value["schema"] != 1 or value["variant"] != "wry-completion-overlay-1"
+        expected_variant = "wry-sdk-delivery-overlay-1" if delivery else "wry-completion-overlay-1"
+        expected_post = "8d4a637727ce94dab6c6fb8e676dde8f2e7a4d0c10681fef0b82dbda42654700"
+        if delivery:
+            import prepare_wry_delivery as extra
+            expected_post = extra.WRY_POST
+            if (value["completionCrateSha256"] != extra.COM_SHA
+                    or value["completionOriginalSha256"] != extra.COM_ORIGINAL
+                    or value["completionPatchedSha256"] != extra.COM_POST
+                    or value["completionFiles"] != extra.COM_FILES or value["protocolSha256"] != extra.PROTOCOL_SHA):
+                raise ValueError()
+        if (type(value["schema"]) is not int or value["schema"] != 1 or value["variant"] != expected_variant
                 or value["files"] != 84 or value["crateSha256"] != CRATE_SHA or value["originalLockSha256"] != LOCK_SHA
                 or value["originalSha256"] != "9ef674af12e52bc3519b0e300752c1042798b7f336e0e0dafca6a8944f348888"
-                or value["patchedSha256"] != "8d4a637727ce94dab6c6fb8e676dde8f2e7a4d0c10681fef0b82dbda42654700"): raise ValueError()
+                or value["patchedSha256"] != expected_post): raise ValueError()
     return value
 
 
@@ -102,33 +117,61 @@ def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], stderr=subprocess.DEVNULL, timeout=30)
 
 
-def source_identity(root, vendor, archive):
+def source_identity(root, vendor, archive, delivery=False):
     # All tracked inputs remain exact, except the strictly projected Wry lock.
     git(root, "diff", "--exit-code", "HEAD", "--", ".", ":(exclude)ui/tauri/src-tauri/Cargo.lock")
     lock = git(root, "show", "HEAD:ui/tauri/src-tauri/Cargo.lock")
-    if (root / "ui/tauri/src-tauri/Cargo.lock").read_bytes() != project_lock(lock):
+    projector = project_lock
+    if delivery:
+        from prepare_wry_delivery import project_lock as projector
+    if (root / "ui/tauri/src-tauri/Cargo.lock").read_bytes() != projector(lock):
         raise ValueError("SOURCE_CHANGED")
     # Rebuild the expected vendor tree from the pinned archive without changing the active tree.
     import tempfile
     from prepare_wry_probe import materialize
     with tempfile.TemporaryDirectory() as directory:
         expected = Path(directory) / "expected"
-        materialize(archive, expected)
-        names = sorted(p.relative_to(expected).as_posix() for p in expected.rglob("*") if p.is_file())
-        actual = sorted(p.relative_to(vendor).as_posix() for p in vendor.rglob("*") if p.is_file())
-        if actual != names or vendor.is_symlink(): raise ValueError("VENDOR_CHANGED")
-        rows = []
-        for name in names:
-            path = vendor / name
-            if path.is_symlink() or path.read_bytes() != (expected / name).read_bytes():
+        pairs = [(vendor, expected)]
+        if delivery:
+            from prepare_wry_delivery import materialize as make_delivery, config_bytes
+            completion = vendor.parent / "completion"
+            expected_completion = expected.parent / "expected-completion"
+            make_delivery(archive, expected, vendor.parent / "completion.crate", expected_completion)
+            pairs.append((completion, expected_completion))
+            config = vendor.parent / "wry-probe.toml"
+            info = config.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or getattr(info, "st_file_attributes", 0) & 1024
+                    or config.read_bytes() != config_bytes(vendor, completion)): raise ValueError("VENDOR_CHANGED")
+        else:
+            materialize(archive, expected)
+        tree_hashes = []
+        for actual_root, expected_root in pairs:
+            names = sorted(p.relative_to(expected_root).as_posix() for p in expected_root.rglob("*"))
+            actual = sorted(p.relative_to(actual_root).as_posix() for p in actual_root.rglob("*"))
+            info = actual_root.lstat()
+            if actual != names or not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & 1024:
                 raise ValueError("VENDOR_CHANGED")
-            rows.append([name, digest(path.read_bytes())])
+            rows = []
+            for name in names:
+                path, wanted = actual_root / name, expected_root / name
+                info = path.lstat()
+                if getattr(info, "st_file_attributes", 0) & 1024: raise ValueError("VENDOR_CHANGED")
+                if wanted.is_dir():
+                    if not stat.S_ISDIR(info.st_mode): raise ValueError("VENDOR_CHANGED")
+                else:
+                    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or path.read_bytes() != wanted.read_bytes()):
+                        raise ValueError("VENDOR_CHANGED")
+                    rows.append([name, digest(path.read_bytes())])
+            tree_hashes.append(digest(canonical(rows)))
     head = git(root, "rev-parse", "HEAD").decode().strip()
     tree = git(root, "rev-parse", "HEAD^{tree}").decode().strip()
     if not re.fullmatch("[0-9a-f]{40}", head) or not re.fullmatch("[0-9a-f]{40}", tree):
         raise ValueError("SOURCE_CHANGED")
-    return {"sourceCommit": head, "sourceTree": tree, "overlayLockSha256": digest(project_lock(lock)),
-            "vendorTreeSha256": digest(canonical(rows))}
+    value = {"sourceCommit": head, "sourceTree": tree, "overlayLockSha256": digest(projector(lock)),
+             "vendorTreeSha256": tree_hashes[0]}
+    if delivery:
+        value.update(completionVendorTreeSha256=tree_hashes[1], patchConfigVerified=True)
+    return value
 
 
 def permissions(root, required):
@@ -199,7 +242,7 @@ def observation_summary(value):
     return result
 
 
-def publish(root, temp):
+def publish(root, temp, delivery=False):
     files = {}
     def add(name, operation):
         try: value = operation()
@@ -211,6 +254,10 @@ def publish(root, temp):
     add("observation", lambda: observation_summary(load(temp / "evidence/native-observation.json")))
     add("wry", lambda: read_record(temp / "tools/app-startup/wry-completion-probe.json",
                                    load(temp / "evidence/native-result.json")))
+    if delivery:
+        from wry_delivery_record import read_record as read_delivery
+        add("delivery", lambda: read_delivery(temp / "tools/app-startup/wry-sdk-delivery.json",
+                                             load(temp / "evidence/native-result.json")))
     def driver():
         path = temp / "tools/driver-stage.jsonl"
         if path.is_symlink() or path.stat().st_size > 8192: raise ValueError()
@@ -229,9 +276,9 @@ def publish(root, temp):
                     "webview-built-page-load-not-observed", "webview-build-not-observed", "setup-entered-build-not-observed", "setup-not-observed", "diagnostic-incomplete"}),
                 "events": [{"stage": enum(row.get("stage"), allowed), "elapsedUs": number(row.get("elapsedUs"))} for row in stages]}
     add("host", host)
-    add("launch", lambda: safe_meta(load(temp / "launch.json", 4096)))
-    add("final", lambda: safe_meta(load(temp / "final.json", 4096)))
-    add("overlay", lambda: safe_meta(load(temp / "overlay.json", 4096), True))
+    add("launch", lambda: safe_meta(load(temp / "launch.json", 4096), delivery=delivery))
+    add("final", lambda: safe_meta(load(temp / "final.json", 4096), delivery=delivery))
+    add("overlay", lambda: safe_meta(load(temp / "overlay.json", 4096), True, delivery))
     def build():
         value = load(temp / "unpacked/BUILD.json", 2048)
         if (not isinstance(value, dict) or set(value) != {"schema", "variant", "sourceCommit", "features", "profile", "exeSha256", "distribution"}
@@ -274,11 +321,19 @@ def publish(root, temp):
     if not re.fullmatch("[0-9a-f]{40}", source) or not re.fullmatch("[0-9a-f]{40}", tree): raise ValueError()
     passed = passed and files["launch"]["data"].get("sourceCommit") == source and files["launch"]["data"].get("sourceTree") == tree
     passed = passed and files["build"]["data"].get("sourceCommit") == source
+    if delivery:
+        from wry_delivery_record import complete
+        try: classified = complete(files["delivery"]["data"])
+        except (ValueError, TypeError, KeyError): classified = False
+        passed = passed and classified
     body = {"schema": 1, "variant": "wry240-once-record-1", "purpose": "diagnostic-hints-only",
             "productReference": "4ba768e910af595f26176eb69aaf2e21d663b726", "files": files,
             "controlCommit": control, "sourceCommit": source, "sourceTree": tree, "sourceAndSpecimenStable": stable,
             "allOriginalAndDiagnosticChecksPassed": passed,
             "rootCauseEstablished": False, "timeoutFixed": False}
+    if delivery:
+        body.update(variant="wry240-sdk-delivery-record-1", enabledScope="wry-sdk-delivery-1",
+                    deliveryClassificationComplete=classified)
     encoded = canonical(body)
     if len(encoded) > 32768: raise ValueError("RECORD_LIMIT")
     text = encoded.decode()
@@ -293,6 +348,9 @@ def publish(root, temp):
 
 def main():
     try:
+        delivery = os.environ.get("WRY_DELIVERY_ENABLED", "")
+        if delivery not in ("", "1"): raise ValueError("DELIVERY_MODE_REJECTED")
+        delivery = delivery == "1"
         parser = Parser(add_help=False)
         parser.add_argument("mode", choices=("step", "identity", "permissions", "publish"))
         parser.add_argument("--root", type=Path, required=True)
@@ -310,7 +368,10 @@ def main():
             checkpoint(path, value)
         elif args.mode == "identity":
             permissions(args.root, True)
-            value = source_identity(args.root, args.temp / "wry", args.temp / "wry.crate")
+            value = source_identity(args.root, args.temp / "wry", args.temp / "wry.crate", delivery)
+            if delivery and (value["sourceCommit"] != os.environ.get("WRY_PIN")
+                             or value["sourceTree"] != os.environ.get("WRY_TREE")):
+                raise ValueError("DELIVERY_SOURCE_PIN_REJECTED")
             exe = args.temp / "unpacked/rescue-host-shell.exe"
             if exe.read_bytes() != (args.temp / "fixture/rescue-host-shell.exe").read_bytes(): raise ValueError()
             if (args.temp / "unpacked/BUILD.json").read_bytes() != (args.temp / "fixture/BUILD.json").read_bytes(): raise ValueError()
@@ -325,9 +386,10 @@ def main():
             path.write_bytes(canonical(value))
             if args.stage == "final-identity" and path.read_bytes() != (args.temp / "launch.json").read_bytes(): raise ValueError()
         elif args.mode == "permissions":
-            permissions(args.root, False)
+            if args.stage is not None and (not delivery or args.stage != "build"): raise ValueError()
+            permissions(args.root, args.stage == "build")
         else:
-            return 0 if publish(args.root, args.temp) else 1
+            return 0 if publish(args.root, args.temp, delivery) else 1
         return 0
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         print('{"code":"WRY_DIAGNOSTIC_RECORD_REJECTED"}')

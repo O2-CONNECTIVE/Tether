@@ -50,6 +50,7 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 - [検証状態](tether-pilot-status.md)のpackage節に、license閉包・署名・notarization・受領者起動の残件を集約。
 - [旧Python開発手順](development.md)はPython部分の検証用。Go/Swiftの全試験を包含しない。
 - [Windows completionとwake契約の調査](windows-callback-wake-research.md): 固定source・一次資料とlocal modelを照合。実SDKの配送と起動timeout根因は未観測・未確定です。
+- [SDK completionのphase限定診断](windows-sdk-delivery-probe.md): 同じcreation／元Receiverへのbinding、欠測・nesting・lossと一回の観測上限。製品修正ではありません。
 
 ## 保存する旧設計・履歴
 
