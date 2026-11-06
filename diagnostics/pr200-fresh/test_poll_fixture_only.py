@@ -72,12 +72,15 @@ class PollFixtureOnlyTests(unittest.TestCase):
             self.assertEqual(out.getvalue(),'')
 
     def test_observe_fixed_chain_once_and_source_drift_or_runtime_boundary_stops(self):
-        for drift, platform, expected_outcome, expected_calls in ((False,'win32','fixture-passed',2),(True,'win32','recorder-rejected',2),(False,'linux','boundary-rejected',0)):
+        for drift, platform, expected_outcome, expected_calls, setup_failure in ((False,'win32','fixture-passed',2,False),(True,'win32','recorder-rejected',2,False),(False,'linux','boundary-rejected',0,False),(False,'win32','recorder-rejected',1,True)):
             with tempfile.TemporaryDirectory() as f:
                 root=Path(f);control=root/'control';source=root/'fixture-source'
                 parser=control/'diagnostics/pr200-fresh/parse-poll-sources.ps1';parser.parent.mkdir(parents=True);parser.write_bytes(b'fixed parser\n')
                 calls=[]
-                def run(script,marker,private):calls.append(script);return stage()
+                def run(script,marker,private):
+                    calls.append(script)
+                    if setup_failure: (private.parent/'poll').mkdir()
+                    return stage()
                 module=SimpleNamespace(run_stage=run)
                 def git(path,*args):
                     if args==('rev-parse','HEAD'):return ('a'*40).encode()
@@ -92,6 +95,33 @@ class PollFixtureOnlyTests(unittest.TestCase):
                 record=json.loads('\n'.join(output.getvalue().splitlines()[1:-1]));self.assertEqual(record['outcome'],expected_outcome)
                 self.assertEqual(len(calls),expected_calls);self.assertEqual(exit_code,0 if expected_outcome=='fixture-passed' else 1)
                 self.assertNotIn(str(root),output.getvalue())
+                if setup_failure:
+                    partial=record['files']['poll-preflight.json'];self.assertEqual(partial['parseFilesVerified'],4)
+                    self.assertEqual(partial['stages']['parse']['code'],'pass');self.assertEqual(partial['stages']['poll']['code'],'not-run')
+                    self.assertFalse(partial['passed']);self.assertEqual(partial['casesCompleted'],0)
+
+    def test_partial_checkpoint_preserves_parse_after_poll_setup_failure(self):
+        with tempfile.TemporaryDirectory() as f:
+            root=Path(f);(root/'poll').mkdir();calls=[]
+            def run(script,marker,private):calls.append(script);return stage()
+            with self.assertRaises(FileExistsError):recorder.run_chain(SimpleNamespace(run_stage=run),root/'source',root/'parser.ps1',root)
+            partial=recorder.chain_safe(json.loads((root/'safe/poll-preflight.json').read_text()))
+            self.assertEqual(len(calls),1);self.assertEqual(partial['parseFilesVerified'],4)
+            self.assertEqual(partial['stages']['poll']['code'],'not-run');self.assertFalse(partial['passed'])
+
+    def test_exception_after_stage_entry_retains_uncertainty_without_claiming_not_run(self):
+        with tempfile.TemporaryDirectory() as f:
+            root=Path(f);calls=[]
+            def run(script,marker,private):
+                calls.append(script)
+                if len(calls)==2:raise OSError('PRIVATE_WRAPPER_ERROR')
+                return stage()
+            with self.assertRaises(OSError):recorder.run_chain(SimpleNamespace(run_stage=run),root/'source',root/'parser.ps1',root)
+            partial=recorder.chain_safe(json.loads((root/'safe/poll-preflight.json').read_text()))
+            self.assertEqual(len(calls),2);self.assertEqual(partial['parseFilesVerified'],4)
+            self.assertEqual(partial['stages']['poll']['code'],'wrapper-uncertain')
+            self.assertIsNone(partial['stages']['poll']['runtimeExecuted']);self.assertFalse(partial['passed'])
+            self.assertNotIn('PRIVATE',json.dumps(partial))
 
     def test_static_workflow_scope_and_source_pin(self):
         root=Path(__file__).resolve().parents[2];text=(root/'.github/workflows/pr220-poll-fixture-once.yml').read_text()

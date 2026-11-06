@@ -105,12 +105,14 @@ def chain_safe(value):
     need(type(value['passed']) is bool and isinstance(value['stages'], dict) and set(value['stages']) == set(STAGES))
     for stage in value['stages'].values():
         need(isinstance(stage, dict) and set(stage) == {'runtimeExecuted', 'exitCode', 'passed', 'code'})
-        need(type(stage['runtimeExecuted']) is bool and type(stage['passed']) is bool)
+        need(type(stage['passed']) is bool)
+        need(stage['runtimeExecuted'] is None if stage['code'] == 'wrapper-uncertain' else type(stage['runtimeExecuted']) is bool)
         need(stage['exitCode'] is None or type(stage['exitCode']) is int and -2147483648 <= stage['exitCode'] <= 4294967295)
-        need(stage['code'] in {'not-run','pass','fixture-rejected','command-timeout','command-unavailable'})
+        need(stage['code'] in {'not-run','pass','fixture-rejected','command-timeout','command-unavailable','wrapper-uncertain'})
         need(stage['passed'] is (stage['code'] == 'pass'))
         need(stage['code'] not in {'not-run','command-unavailable'} or not stage['runtimeExecuted'] and stage['exitCode'] is None)
         need(stage['code'] != 'command-timeout' or stage['runtimeExecuted'] and stage['exitCode'] is None)
+        need(stage['code'] != 'wrapper-uncertain' or stage['exitCode'] is None)
         need(stage['code'] not in {'pass','fixture-rejected'} or stage['runtimeExecuted'] and type(stage['exitCode']) is int)
         need(not stage['passed'] or stage['exitCode'] == 0)
     parse, poll = (value['stages'][key] for key in STAGES)
@@ -124,14 +126,26 @@ def chain_safe(value):
     return value
 
 
+def checkpoint(root, result):
+    value = chain_safe(result)
+    target = root / 'safe/poll-preflight.json'
+    target.parent.mkdir(exist_ok=True)
+    pending = target.with_suffix('.tmp')
+    pending.write_text(json.dumps(value, sort_keys=True, separators=(',', ':')), encoding='utf-8')
+    pending.replace(target)
+
+
 def run_chain(module, source, parser, root):
     result = {'schema': 1, 'kind': 'pure-poll-fixture', 'parseFilesExpected': 4,
         'parseFilesVerified': 0, 'casesExpected': 6, 'casesCompleted': 0, 'passed': False,
         'stages': {key: {'runtimeExecuted': False, 'exitCode': None, 'passed': False, 'code': 'not-run'} for key in STAGES},
         'failure': 'not-observed'}
+    checkpoint(root, result)
     scripts = (parser, source / FILES['pollFixture'])
     for key, script, marker in zip(STAGES, scripts, MARKERS):
         private = root / key; private.mkdir(exist_ok=False)
+        result['stages'][key] = {'runtimeExecuted': None, 'exitCode': None, 'passed': False, 'code': 'wrapper-uncertain'}
+        checkpoint(root, result)
         result['stages'][key] = module.run_stage(script, marker, private)
         if key == 'parse' and result['stages'][key]['passed']: result['parseFilesVerified'] = 4
         if key == 'poll':
@@ -142,6 +156,8 @@ def run_chain(module, source, parser, root):
                 try:
                     with (private / 'stdout.log').open('rb') as stream: result['failure'] = failure_marker(stream.read(4097), stage['exitCode'])
                 except Exception: result['failure'] = 'missing'
+        result['passed'] = all(stage['passed'] for stage in result['stages'].values())
+        checkpoint(root, result)
         if not result['stages'][key]['passed']: break
     result['passed'] = all(stage['passed'] for stage in result['stages'].values())
     return chain_safe(result)
@@ -211,7 +227,13 @@ def observe(source, control, root):
         need(identity['sourceStableAfter'])
         outcome = 'fixture-passed' if code == 0 else 'fixture-failed'
     except Exception:
-        pass  # No exception type/text, raw output or unvalidated value is copied.
+        # Salvage validated completed/uncertain stages; never invoke a stage again.
+        if data is None:
+            try:
+                data = chain_safe(json.loads((root / 'safe/poll-preflight.json').read_text(encoding='utf-8')))
+            except Exception:
+                pass
+        # No exception type/text, raw output or unvalidated value is copied.
     publish(identity, data, outcome, chain_safe if data is not None else None)
     return 0 if outcome == 'fixture-passed' else 1
 
