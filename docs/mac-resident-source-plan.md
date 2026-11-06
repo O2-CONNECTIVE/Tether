@@ -90,3 +90,9 @@ sourceのcompileやcomponent回帰を実producer / GUI / authenticated work / na
 新producer commandやlauncherではなく、recordは常にactivation / distribution blockedです。実artifactを起動せず、任意source/path/hash/argvを信頼入力にしません。
 source選択とarchiveの対応はbuilderの観測であり、publisher / compiler / SDKの独立真正性、署名済み配布 / 保護配置、verify-to-exec、trusted policy選定は別の未確立条件です。
 この契約がないままsealed entrypointを有効化せず、通常未接続・#200阻害・未統合stack / CI未実行を維持します。
+
+## Native enrollment 選択と残る verified launch
+
+[固定 enrollment の準備](mac-resident-trusted-preparation.md) は、現在 UID の OS account home から製品専用の一つの相対名を選び、既存 strict loader に内部接続します。
+env / UI / CLI の path override、profile 探索、新しい権限や通常 caller は追加しません。固定位置を選んだことと enrollment・認証の証明は別です。
+署名・配置と同じ image の起動は OS launch requirement と単一 owner の具体的な bridge を後続に残し、通常起動は未接続です。

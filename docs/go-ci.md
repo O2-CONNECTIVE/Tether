@@ -24,6 +24,9 @@ transport / policy 段階は43 package、cgo有効時 Linux341 / Darwin342 / Win
 正のpolicy入力試験はDarwin/cgoの自己所有fileだけをnative readerで読み、実鍵や運用設定・OS trustを使いません。
 詳しくは[境界と未実証](mac-resident-transport-policy.md)を参照してください。
 実行対象は公開`backend/`だけで、存在しない対象やテスト0件を成功にしません。
+native enrollment 選択では residentmac の共通 `enrollment.go` と、Darwin/cgo の `enrollment_darwin.go` または拒否側 `enrollment_other.go` を追加します。
+現 inventory は 45 package、cgo 有効時 Linux350 / Darwin353 / Windows381 production file、Darwin の cgo 無効時は351 fileです。
+不足・未知 file の拒否と package 集合は維持し、selector の合成 account 試験を実 policy・鍵・producer の検証に広げません。
 通常試験は`-cpu=1`、raceは`-cpu=2`で、試験内のGOMAXPROCS観測と照合します。
 race検出の有無と、指定した並列度の観測を区別します。
 Goのrace runtimeは終了直前に既定で1000ms待つため、CIでは`GORACE=atexit_sleep_ms=0`を明示します。
