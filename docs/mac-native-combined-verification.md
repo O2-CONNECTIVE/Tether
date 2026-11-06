@@ -70,3 +70,13 @@ owned pipe fixture の初回観測失敗は、timeout / clock / tracking fault /
 
 初回 CI の3件では、同じ child が2秒期限まで bytes / frame を出さず、出力は spawn 後約2.33〜2.40秒でした。tracking fault や parser・出力後 IO の失敗ではありません。stdlib のみを使う fixture は `-I -S` で暗黙の site / user-site 起動を除きます。warmup や追加 sleep は使わず、新しい cold child の2秒境界を維持します。
 loader / cache / site 内部の唯一原因は断定しません。隔離 flag の局所 probe は通常 suite で interpreter を先に温めないよう診断時だけ実行し、既存149件は維持します。永続する追加負例は Python を使わない無出力 child で、期限拒否・観測なし・実 reap だけでは cleanup 未確認を要求します。解消の判定は新しい固定 head の CI 観測と元ログへ照合します。
+
+
+## 開発 tool の探索と fixture image
+
+統合後の実 merge SHA でも、同じ3件は147成功・3失敗となりました。`-I -S` だけでは解消していません。同一 PID の spawn → emit は3.199〜3.349秒、早い本文 marker → emit は約123msで、主な観測遅延は本文 marker より前にあります。PR head の一度の成功を、元失敗の解消とは扱いません。
+
+[Apple TN2339](https://developer.apple.com/library/archive/technotes/tn2339/_index.html) は `/usr/bin` の開発 tool が Xcode 内の tool へ対応する shim であることと、`xcrun` による探索を説明しています。fixture の `/usr/bin/python3` と実 `sys.executable` が異なることも実 child で確認しました。
+同じ test-only factory は固定の `xcrun --find python3` を終了まで待ち、絶対 file path と非 shim を確認してから、その image を直接起動します。探索は interpreter を実行せず、warmup・cache・OnceLock・追加 sleep はありません。探索は5秒で元 child に停止を要求し、同じ Child の Wait を確認してから失敗を返します。Wait 未確認なら同じ owner を保持し、回収の時間上限や成功を捏造しません。探索時だけ既存の `DEVELOPER_DIR` を compiler 選択として保持し、実 interpreter の環境は従来同様に空にします。ユーザー指定の path や argv を受ける製品入口は作りません。
+
+実 child は観測を出す前に、期待した image と `sys.executable` の realpath 一致を要求します。同じ fixture seam は shim 指定で red、直接 image で green です。この regression は wrapper を含めない fixture 契約を確認し、元の cold delay 自体のローカル再現や OS 内部の唯一原因を証明しません。開発 tool 探索の時間と、元 owner が実 image を spawn した後の2秒観測期限を区別します。既存150件に探索 child の timeout / nonzero 終了の負例2件を追加し、通常の並列度、実 pipe / EOF / exact Child Wait / joins と cleanup unknown の判定は維持し、修正の実効性は新固定 head と実 merge SHA の hosted CI で別に確認します。

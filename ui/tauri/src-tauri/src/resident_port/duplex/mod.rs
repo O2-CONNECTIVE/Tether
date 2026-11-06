@@ -10,6 +10,8 @@ mod tracking;
 mod wire;
 
 #[cfg(all(test, target_os = "macos"))]
+mod fixture_python;
+#[cfg(all(test, target_os = "macos"))]
 mod owned_close_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod pipe_tests;
