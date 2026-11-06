@@ -1,0 +1,10 @@
+"""Exact fixed source boundaries for the one diagnostic observation."""
+PRODUCT = '93b099a2c4b0eb396033bc13e303312041ae8fb4'
+PRODUCT_TREE = '55c29583aa75bb79efe889efc01f0bd94acdceb5'
+DIAGNOSTIC = '6a0f75a2f595a14853185d415a6c2d5f8fc7416b'
+DIAGNOSTIC_TREE = 'f59d689a3bae5bfd1d1ee1c92c4a6e77cb90d38f'
+BASE = 'diagnostic/pr226-projection-text-once-20261106'
+BASE_SHA = '65c627acf1047044daa296b100eec7411a40aa83'
+BRANCH = 'diagnostic/pr231-connection-once-20261106'
+PREFIX = 'tauri-windows-rust-1.99.1-'
+LOCK = '94bf7caee3f76ca1d558e2636a846f12738db64264abe6dd7fa930548d3f03e1'
