@@ -52,29 +52,41 @@ impl BoundDuplex {
                 .now_millis()
                 .is_none_or(|now| now < start || u128::from(now - start) >= timeout.as_millis())
             {
+                #[cfg(test)]
+                self.trace_first("deadline-or-clock", start);
                 CloseHandle(self.shared.clone()).request();
                 return Err(unavailable());
             }
-            if self
+            let rejected = self
                 .shared
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .startup
-                .received()
-            {
+                .received();
+            if rejected {
+                #[cfg(test)]
+                self.trace_first("startup-rejected", start);
                 return Err(unavailable());
             }
-            if self
+            let failed = self
                 .shared
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .tracking
-                .failed
-            {
+                .failed;
+            if failed {
+                #[cfg(test)]
+                self.trace_first("tracking-fault", start);
                 return Err(unavailable());
             }
             thread::sleep(Duration::from_millis(5));
         }
+    }
+    #[cfg(test)]
+    fn trace_first(&self, reason: &str, start: u64) {
+        let state = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        eprintln!("RESIDENT_FIXTURE_FIRST reason={reason} shared={:p} start={start} now={:?} source={:?} failed={} read={:?}",
+            Arc::as_ptr(&self.shared), self.clock.now_millis(), state.tracking.source_time(), state.tracking.failed, state.fixture_trace);
     }
 }
 // No Drop: losing/hiding a viewer must NOT close the process control pipe.

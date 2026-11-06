@@ -91,6 +91,8 @@ impl<I: Read + Write> Pump<I> {
         // Producer can timestamp/write between our earlier sample and read.
         // Compare captured bytes against actual time sampled AFTER the read.
         let now = clock.now_millis().ok_or(())?;
+        #[cfg(test)]
+        shared.fixture_trace.read(&read, now);
         shared.sample(now)?;
         self.check_partial(now)?;
         if !shared.closure.requested()
@@ -133,7 +135,12 @@ impl<I: Read + Write> Pump<I> {
         self.check_partial(now)?;
         for byte in bytes {
             if *byte == b'\n' {
-                let event = wire::Event::parse(&self.line)?;
+                let event = wire::Event::parse(&self.line).inspect_err(|_| {
+                    #[cfg(test)]
+                    shared.fixture_trace.parse_failed();
+                })?;
+                #[cfg(test)]
+                shared.fixture_trace.frame(&event);
                 self.line.clear();
                 self.line_started = None;
                 if shared.startup.event(&event, now)? {

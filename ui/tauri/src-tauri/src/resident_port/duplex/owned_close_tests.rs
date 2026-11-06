@@ -12,14 +12,18 @@ use std::{
     time::{Duration, Instant},
 };
 const SCRIPT: &str = r#"
-import ctypes,json,sys,time
+import sys,time,os
+print('RESIDENT_FIXTURE_CHILD phase=entered pid='+str(os.getpid())+' mode='+sys.argv[1],file=sys.stderr,flush=True)
+import ctypes,json
 lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
 class Timebase(ctypes.Structure): _fields_=[('numer',ctypes.c_uint32),('denom',ctypes.c_uint32)]
 tb=Timebase(); assert lib.mach_timebase_info(ctypes.byref(tb))==0
 lib.mach_continuous_time.restype=ctypes.c_uint64
 now=lambda:lib.mach_continuous_time()*tb.numer//tb.denom//1000000
 mode=sys.argv[1]
-s=json.loads(sys.argv[2]); s['sourceContinuousMs']=now(); print(json.dumps(s),flush=True)
+s=json.loads(sys.argv[2]); s['sourceContinuousMs']=now()
+print('RESIDENT_FIXTURE_CHILD phase=emit pid='+str(os.getpid())+' native_ms='+str(s['sourceContinuousMs']),file=sys.stderr,flush=True)
+print(json.dumps(s),flush=True)
 if mode!='unsolicited': sys.stdin.read()
 if mode=='delayed': time.sleep(3.1)
 f={'protocolVersion':1,'type':'closed','sourceContinuousMs':now(),'outcome':'unknown' if mode=='unknown' else 'confirmed'}

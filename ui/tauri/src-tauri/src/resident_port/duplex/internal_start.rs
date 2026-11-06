@@ -27,6 +27,8 @@ impl Supervisor {
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::null());
+                #[cfg(test)]
+                command.stderr(Stdio::inherit()); // Owned fixture diagnostics only.
                 let mut child = match command.spawn() {
                     Ok(child) => child,
                     Err(_) => {
@@ -34,6 +36,13 @@ impl Supervisor {
                         return Ok(End::NotSpawned);
                     }
                 };
+                #[cfg(test)]
+                eprintln!(
+                    "RESIDENT_FIXTURE_SPAWN child={} shared={:p} now={:?}",
+                    child.id(),
+                    Arc::as_ptr(&worker_shared),
+                    ContinuousClock::new().and_then(|c| c.now_millis())
+                );
                 // Exact Child stays outside all attachment and pump unwinding.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     #[cfg(test)]

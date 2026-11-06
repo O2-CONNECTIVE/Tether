@@ -62,3 +62,7 @@ combined review で、native source の終了が健全な receiver の `Next()` 
 
 CI checkout record は workflow 自体の SHA / ref も別欄へ保持します。[GitHub の変数仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)に従い、source checkout と実行定義の revision を同一視しません。
 Go source archive は arm64 と Intel の各 host 上で別に build し、Intel Rust の cross compile とも区別します。archive builder の文書化された成功は「blocked record を作成した exit 2」であり、一般の exit 0 や入力失敗 exit 1 を成功へ変換しません。CI wrapper は exit 2 と固定 code、source SHA / tree、host architecture、実 archive hash、activation / distribution blocked と未署名の flags を照合してから source 検証だけを成功とします。
+
+
+owned pipe fixture の初回観測失敗は、timeout / clock / tracking fault / startup rejection を同じ製品 code だけで診断しません。test build の有限 read / frame 観測と native timestamp、元 fixture child の phase / stderr を別に記録します。2秒の閾値、通常の並列度、parser、Close / EOF / exact Wait / join の判定は維持します。
+この観測は test-only であり、通常 runtime の出力・認証・回収証明を追加しません。ローカル再現なしや別の head での成功だけでは、元 CI の失敗原因を解消扱いにしません。
