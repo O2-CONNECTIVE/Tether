@@ -1,0 +1,17 @@
+# 修正版fixtureの一回限定runtime検証
+
+固定source7e89dda809b54663f2c394126a51ecf44d121882/treeb0665e9e8a0c16c176e5e74d9755a2d0e2f52cfc、patch27432bytes/SHA2569e3c794850adfb568e8c302e93746eeed7ccdeb54eb9020d993cde1522e8e653を再確認した。
+source-only独立review指摘0、56Python/13Node成功。patchedPowerShell parser/cases/controlsのruntime passは未証明で、今回その検証だけを行う。
+
+新draft/DO NOT MERGE PRはbase diagnostic/pr215-case-only-20261106@57d21df71b3e635e28b7bd0398af61a6ee483d48、head diagnostic/pr217-repair-check-20261106。
+opened-only/attempt1/exacthead/basebranch&SHA/draft/samerepo、一fresh標準windows-2022 job。旧main/diagnosticworkflowを変更・起動しない。
+四stepはcontrolcheckout、fixedsource別checkout、公式固定Python3.13.17setup、one recorderだけ。
+parse/ledger/detail各最大一回、既存3negative＋1positive controlはdetail内で一回。固定preflightの早期停止/60秒/所有child回収と前後sourcebytes/Git照合、既存PSidentity/versionguardを維持する。
+失敗・不明ならそのrecordを保持して終了、retry/別attempt/修正後push/dispatchを行わない。
+
+全case/controls到達の判断は固定sourceのcontrol flowと最終exactmarkerから行う。markerは五caseとcontrol条件の後にのみ存在し、各失敗は元throwで停止する。
+成功してもapp/frontend/Rust/toolchain/driver/app launch/native/supervisorはworkflowに無く実行しない。最短の元profile/session診断への計画を報告して終了する。
+
+公式checkout/setup-pythonの既存SHA、contentsread/credentials非保持/no secretsを保つ。標準publicrunnerとlog/summaryのみの無料範囲を再確認し、artifact/cache/binary転送、新費用/credentials/persistentaccess/security/auth/settings/billing/livehost/GUIを追加しない。
+完全boundedfixedschemaJSON/hash/runtime版だけをcontrolledlog/jobsummaryへ保存。raw path/PID/command/stack/exception/response/arbitraryvalue/typeは出さない。
+元PR217failureと全旧record/PR200originalfailure/blocked/main/Mac/product/fixedsourceを保持。15000ms/profileMatch/ownership/cleanup条件未変更で、fixture成功をnative修正やprofile同等性・通常close/cleanup成功へ読み替えない。

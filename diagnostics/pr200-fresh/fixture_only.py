@@ -11,9 +11,9 @@ import re
 import subprocess
 import sys
 
-SOURCE = 'b6c78ee5dc20a8b3a7ffcf88554cf704f74fba59'
-TREE = '816d583987eb02a24923a6e14925385fc9f88891'
-PATCH = '3eef354dcedbc06dca1f3a52eb0b6bb2412d4cdb5df6bb95e37a1f709cc55051'
+SOURCE = '7e89dda809b54663f2c394126a51ecf44d121882'
+TREE = 'b0665e9e8a0c16c176e5e74d9755a2d0e2f52cfc'
+PATCH = '9e3c794850adfb568e8c302e93746eeed7ccdeb54eb9020d993cde1522e8e653'
 FILES = {'observer': 'observe-profile.ps1', 'locationMapper': 'observer-detail.ps1',
          'ledgerFixture': 'observer-reasons.test.ps1', 'detailFixture': 'observer-detail.test.ps1',
          'parser': 'parse-predicate-sources.ps1', 'auditSourceParsedOnly': 'audit.ps1',

@@ -124,7 +124,7 @@ class FixtureOnlyTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), 'FIXED_HELPER_IMPORT_PASS'); self.assertEqual(result.stderr, '')
 
     def test_static_workflow_has_only_checkout_python_and_one_fixture_recorder(self):
-        text = (ROOT.parents[1] / '.github/workflows/pr215-case-only.yml').read_text()
+        text = (ROOT.parents[1] / '.github/workflows/pr217-repair-check.yml').read_text()
         self.assertEqual(text.count('      - name:'), 4)
         self.assertEqual(text.count('uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0'), 2)
         self.assertEqual(text.count('uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97'), 1)
