@@ -26,6 +26,11 @@ record = load("wry_probe_record")
 ci = load("wry_probe_ci")
 
 
+def closed_cli_output(data):
+    code = b'{"code":"WRY_PROBE_PREPARATION_REJECTED"}'
+    return data in (code + b"\n", code + b"\r\n")
+
+
 def example(stages=None):
     stages = stages if stages is not None else record.STAGES
     rows = [{"seq": n + 1, "stage": s, "elapsedUs": n + 1, "onTraceThread": True}
@@ -213,7 +218,23 @@ class OverlayTests(unittest.TestCase):
                                     capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 1)
             self.assertEqual(result.stderr, b"")
-            self.assertEqual(result.stdout, b'{"code":"WRY_PROBE_PREPARATION_REJECTED"}\n')
+            self.assertTrue(closed_cli_output(result.stdout))
+
+    def test_actual_cli_text_stream_accepts_only_exact_lf_or_crlf(self):
+        # Exercise the actual CLI through documented TextIOWrapper output
+        # translation. This is not evidence of the discarded hosted assertion.
+        wrapper = ("import io,sys,runpy; sys.stdout=io.TextIOWrapper(sys.stdout.buffer,encoding='utf-8',newline=sys.argv[2]); "
+                   "path=sys.argv[1]; sys.argv=[path,'--unknown','PRIVATE_SENTINEL']; runpy.run_path(path,run_name='__main__')")
+        code = b'{"code":"WRY_PROBE_PREPARATION_REJECTED"}'
+        for ending in ("\n", "\r\n"):
+            result = subprocess.run([sys.executable, "-B", "-c", wrapper,
+                str(ROOT / "scripts/prepare_wry_probe.py"), ending], capture_output=True, timeout=10)
+            self.assertEqual((result.returncode, result.stderr), (1, b""))
+            self.assertEqual(result.stdout, code + ending.encode())
+            self.assertTrue(closed_cli_output(result.stdout))
+        for bad in (code, code + b"\r", code + b"\n\n", code + b"\r\n\n", b"\xef\xbb\xbf" + code + b"\n",
+                    code + b" \n", code + b"\nPRIVATE_SENTINEL"):
+            self.assertFalse(closed_cli_output(bad))
 
     def test_real_cross_crate_hook_and_rust_record_reach_strict_reader(self):
         # Real link/record/file seam, not a model of COM or the Windows timeout.
