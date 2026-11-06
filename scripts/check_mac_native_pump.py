@@ -13,7 +13,9 @@ from check_mac_enrollment_lookup import command
 from check_mac_rust_owner import NATIVE, build_swift
 
 CASES = {'rejection': 13, 'partial-rejection': 15, 'intent': 17, 'invalid': 8,
-         'eof': 9, 'half-close': 13, 'half-close-unknown': 9, 'discard': 11}
+         'eof': 9, 'half-close': 13, 'half-close-unknown': 9, 'discard': 11,
+         'worker-eof': 7, 'worker-invalid': 7, 'worker-rejection': 7,
+         'worker-panic': 7, 'worker-unknown': 9}
 CRATE = NATIVE / 'fixtures/pump_source'
 ROOT = NATIVE.parents[3]
 
@@ -69,8 +71,8 @@ def run():
                 passed += validate_report(mode, command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'}))
     print(json.dumps({'fixture': 'native-pump-source', 'passed': passed, 'normalModes': 1, 'nativeModes': len(CASES),
                       'lockedOffline': True, 'existingDependencyPackages': 11, 'hostOnly': True,
-                      'clippyVariants': 2,
-                      'producerLaunches': 0, 'scope': 'prepared native IO and real Pump protocol core; no auth / Wait / joins proof'}))
+                      'clippyVariants': 2, 'unlaunchedWorkerModes': 5,
+                      'producerLaunches': 0, 'scope': 'prepared native IO and shared driver; fixture worker joins only, no auth / Process Wait / active joins proof'}))
 
 
 if __name__ == '__main__':

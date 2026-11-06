@@ -47,3 +47,18 @@ Rust Intel stdは選択した既存toolchainに無く未実行、foreign実行�
 native PumpのDropは借用を終えるだけで、NativePreparationの所有を移したりfdを閉じたりしません。native driverには同じownerの終了・回収手順が別途必要です。
 同じFoundation Processのsealed実行、起動後のchild側端点解放、SIGPIPE / peer喪失 / atomic inheritance、実producerのauthoritative Close / EOF / exact Wait、IO / supervisor / outer joinsは未接続・未実証です。
 実publisher / 承認release / protected policy / 署名・配置とOS enforcementも未確立。通常CLI・認証・権限・persistent accessを有効化せず、#200 blocker / 未統合stack / CI未実行を維持します。
+
+
+## 同じ IO 駆動と未起動 worker の join
+
+Supervisor の `drive_io` は既存ループだけを共通化します。具体 Pump を借用する private な closure を呼び、同じ Shared の fault / unwind、clock、mutex、pending 待ち、実 EOF までの drain を維持します。
+新しい IO trait、launcher、終了成功型は作りません。戻り値は `()` で、loop の return を EOF・Wait・Close・回収完了の証拠として配布しません。
+既存 Child 経路は loop 後に同じ Pump を drop して所有 File を閉じ、元の exact Child を `wait()` する順序を保ちます。
+
+追加の worker fixture は別の Rust thread 内で native owner を生成し、その thread のまま Pump へ借用します。同じ loop で EOF / malformed input / startup rejection / panic / lost close acknowledgement を処理し、借用終了後に元の未起動 owner を retire します。呼出側はその同じ JoinHandle を実 join します。
+退避した handle、`is_finished()`、別 thread の終了を join の代わりにはしません。panic は join の失敗として観測し、元の未起動 IO だけを Drop で閉じます。
+unknown case では全 fd の close 実行と thread join の後も元の native unknown record を保持し、replacement を拒否します。
+
+追加5 case の post-join 条件は37件で、既存96件と合わせて133件を要求します。fixture 内の追加 assert も非0終了へ伝播します。
+この worker は producer を起動しません。実 join の保証はこの fixture の Rust worker だけであり、native producer の IO / supervisor / outer monitor join へ拡張しません。startup rejection の parser + EOF も native Process の exit code 2 / exact Wait を伴いません。
+統合対象 tree を固定して実行する検証は[combined 検証条件](mac-native-combined-verification.md)へ分けます。

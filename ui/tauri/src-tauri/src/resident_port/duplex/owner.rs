@@ -130,6 +130,18 @@ fn drive(
     shared: Arc<Mutex<Shared>>,
     child: &mut Child,
 ) -> ExitStatus {
+    drive_io(|state, clock| pump.step(state, clock), clock, shared);
+    // Full transport loss closes this exact Child's owned IO before its Wait.
+    drop(pump);
+    reap(child)
+}
+// Shared control flow, not an owner/Wait adapter. The closure only borrows the
+// caller's concrete Pump. Returning here never establishes process completion.
+pub(super) fn drive_io(
+    mut step: impl FnMut(&mut Shared, &ContinuousClock) -> Result<bool, ()>,
+    clock: ContinuousClock,
+    shared: Arc<Mutex<Shared>>,
+) {
     struct FaultOnDrop {
         shared: Arc<Mutex<Shared>>,
         armed: bool,
@@ -151,7 +163,7 @@ fn drive(
     loop {
         let outcome = {
             let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
-            let result = pump.step(&mut state, &clock);
+            let result = step(&mut state, &clock);
             if result.is_err() {
                 state.fault();
             }
@@ -163,11 +175,7 @@ fn drive(
         // Do not stop on child exit: stdout must drain through actual EOF.
         thread::sleep(Duration::from_millis(5));
     }
-    // Full transport loss closes owned stdin. The reviewed Go bridge closes once
-    // and await original owners; this is NOT viewer cancellation or OFF proof.
     fault.armed = false;
-    drop(pump);
-    reap(child)
 }
 fn reap(child: &mut Child) -> ExitStatus {
     loop {

@@ -3,6 +3,9 @@ use crate::mac_status::ContinuousClock;
 use crate::native_preparation::{Counts, FixedFixture, NativePreparation, Preparation, State};
 
 pub(crate) fn run(mode: &str) -> u32 {
+    if mode.starts_with("worker-") {
+        return super::worker_checks::run(mode);
+    }
     let Preparation::Owned(mut owner) =
         NativePreparation::fixture(if mode == "half-close-unknown" {
             FixedFixture::LostCloseReceipt

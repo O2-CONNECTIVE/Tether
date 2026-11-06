@@ -20,3 +20,7 @@ mod tracking;
 mod wire;
 #[cfg(all(resident_native_source, resident_launch_fixture))]
 pub(crate) use checks::run;
+
+#[cfg(all(resident_native_source, resident_launch_fixture))]
+#[path = "worker_checks.rs"]
+mod worker_checks;
