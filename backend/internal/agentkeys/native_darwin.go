@@ -91,8 +91,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// This file is compiled for darwin with cgo only and is never executed by the
-// repository tests; they use the fake kernel and the shared posixState mapping.
+// This file is compiled for darwin with cgo only. The agentkeys unit suite uses
+// the fake kernel; the resident input bridge additionally reads only its own
+// synthetic file fixture with these unchanged native protection checks.
 // It only opens read-only, queries and closes. Unverified platform facts are
 // listed in docs/agent-key-loader.md.
 

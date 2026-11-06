@@ -57,14 +57,15 @@ type HTTPReply struct {
 // header and never authenticates: the HTTP owner must authenticate the caller
 // and route it to the session bound to that caller's approved grant.
 type HTTPSession struct {
-	backend *agentwire.Client
-	timeout time.Duration
-	slots   chan struct{}
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	state   int
-	calls   map[string]*call
+	backend  *agentwire.Client
+	resident ResidentBackend
+	timeout  time.Duration
+	slots    chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
+	mu       sync.Mutex
+	state    int
+	calls    map[string]*call
 }
 
 // NewHTTPSession creates one session in the pre-initialize state.
@@ -199,17 +200,24 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 		case !initialized:
 			return failed(id, codeInvalidParams, "initialize requires protocolVersion, capabilities and clientInfo")
 		}
+		text := instructions
+		if s.resident != nil {
+			text = residentInstructions
+		}
 		r := response(id, map[string]any{
 			"protocolVersion": ProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": serverName, "version": serverVersion},
-			"instructions":    instructions,
+			"instructions":    text,
 		})
 		r.Initialized = !r.Error
 		return r
 	case "tools/list":
 		if state != stateReady {
 			return failed(id, codeInvalidRequest, "server not initialized")
+		}
+		if s.resident != nil {
+			return response(id, map[string]any{"tools": residentToolList(s.resident)})
 		}
 		return response(id, map[string]any{"tools": toolList()})
 	case "tools/call":
@@ -224,6 +232,9 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 // toolCall runs one tool on the caller's goroutine with the same parsing,
 // slot bound, in-flight ID refusal, timeout and suppression rules as run.
 func (s *HTTPSession) toolCall(id *requestID, params json.RawMessage) HTTPReply {
+	if s.resident != nil {
+		return s.residentToolCall(id, params)
+	}
 	m, err := agentwire.Fields(params, "name", "arguments", "_meta")
 	var name string
 	if err != nil || !isString(m["name"]) || json.Unmarshal(m["name"], &name) != nil {
@@ -244,6 +255,10 @@ func (s *HTTPSession) toolCall(id *requestID, params json.RawMessage) HTTPReply 
 	if s.backend == nil {
 		return HTTPReply{Kind: HTTPRequiresBinding}
 	}
+	return s.invokeHTTP(id, func(ctx context.Context) map[string]any { return invoke(ctx, s.backend) })
+}
+
+func (s *HTTPSession) invokeHTTP(id *requestID, invoke func(context.Context) map[string]any) HTTPReply {
 	select {
 	case s.slots <- struct{}{}:
 	default:
@@ -269,7 +284,7 @@ func (s *HTTPSession) toolCall(id *requestID, params json.RawMessage) HTTPReply 
 		}()
 		callCtx, stop := context.WithTimeout(ctx, s.timeout)
 		defer stop()
-		result = invoke(callCtx, s.backend)
+		result = invoke(callCtx)
 		return false
 	}()
 	s.mu.Lock()

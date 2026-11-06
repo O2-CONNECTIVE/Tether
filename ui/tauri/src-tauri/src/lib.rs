@@ -4,11 +4,26 @@
 )]
 mod mac_status;
 
+#[cfg(all(target_os = "macos", resident_native_source))]
+#[allow(
+    dead_code,
+    reason = "explicit native source variant, no production binding"
+)]
+#[path = "../../native/resident-launch/rust/owner.rs"]
+mod native_preparation;
+
 #[allow(
     dead_code,
     reason = "resident IO ownership has no trusted launch factory or production IPC binding"
 )]
 mod resident_port;
+
+#[cfg(target_os = "macos")]
+#[allow(
+    dead_code,
+    reason = "outer resident owner awaits trusted launch and GUI binding"
+)]
+mod standby_lifecycle;
 
 #[cfg(any(test, feature = "startup-diagnostics"))]
 #[allow(dead_code, reason = "startup diagnostics are an opt-in test variant")]
@@ -117,6 +132,30 @@ fn commands_with_presentation<R: tauri::Runtime>(
         .invoke_handler(tauri::generate_handler![
             get_shell_status,
             get_status_presentation
+        ])
+}
+
+// Explicit source composition only. Normal commands()/run() never calls this.
+// A future caller must supply a port from the sealed trusted bootstrap.
+#[allow(
+    dead_code,
+    reason = "resident IPC awaits trusted launch and GUI composition"
+)]
+fn commands_with_ports<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+    runtime: ShellRuntime,
+    output: StatusPresentation,
+    port: resident_port::ResidentPort,
+) -> tauri::Builder<R> {
+    builder
+        .manage(runtime)
+        .manage(output)
+        .manage(port)
+        .invoke_handler(tauri::generate_handler![
+            get_shell_status,
+            get_status_presentation,
+            resident_port::get_resident_status,
+            resident_port::request_resident_intent,
         ])
 }
 

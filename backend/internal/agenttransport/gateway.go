@@ -35,11 +35,12 @@ type EnrolledHost struct {
 // Endpoint is the exact public wss URL of this handler (behind the existing
 // named tunnel) and is the resource identity every proof is bound to.
 type HandlerConfig struct {
-	Endpoint  string
-	Hosts     []EnrolledHost
-	Registrar Registrar
-	Budgets   Budgets
-	Clock     func() time.Time // wall clock for dispatch freshness; nil is time.Now
+	Endpoint           string
+	Hosts              []EnrolledHost
+	Registrar          Registrar
+	Budgets            Budgets
+	Clock              func() time.Time    // wall clock for dispatch freshness; nil is time.Now
+	ResidentPrincipals []ResidentPrincipal // opt-in identity-only control; no grant producer
 }
 
 type enrolled struct {
@@ -51,15 +52,17 @@ type enrolled struct {
 // Handler accepts host registrations and hands each verified stream to the
 // Registrar. It does not listen; the operator composition mounts it.
 type Handler struct {
-	endpoint  string
-	path      string
-	hosts     map[string]*enrolled
-	registrar Registrar
-	budgets   Budgets
-	clock     func() time.Time
-	slots     chan struct{}
-	ctx       context.Context
-	cancel    context.CancelFunc
+	endpoint        string
+	path            string
+	hosts           map[string]*enrolled
+	registrar       Registrar
+	residentSigners map[string]ssh.Signer
+	residents       map[string]*residentPeer
+	budgets         Budgets
+	clock           func() time.Time
+	slots           chan struct{}
+	ctx             context.Context
+	cancel          context.CancelFunc
 
 	mu         sync.Mutex
 	closed     bool
@@ -73,7 +76,7 @@ type Handler struct {
 // admission is one admitted request's reservation. tracked is set, under
 // Handler.mu, exactly when the reservation becomes an owned transport, so a
 // panic later in the request cannot return the reservation twice.
-type admission struct{ tracked bool }
+type admission struct{ tracked, pending bool }
 
 // NewHandler validates the fixed configuration. It opens nothing.
 func NewHandler(cfg HandlerConfig) (*Handler, error) {
@@ -105,6 +108,9 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 		}
 		h.hosts[e.Label] = entry
 	}
+	if err := h.configureResidents(cfg.ResidentPrincipals); err != nil {
+		return nil, err
+	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	return h, nil
 }
@@ -112,7 +118,8 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 // ServeHTTP refuses before upgrading anything that is not an exact, credential
 // free registration request: another method, path or query, any Origin (no
 // browser registration), Cookie or Authorization (no ambient credential), or a
-// subprotocol other than exactly Subprotocol. At most MaxPending registrations
+// subprotocol other than exactly Subprotocol (or the separately configured
+// identity-only ResidentSubprotocol). At most MaxPending registrations
 // run at once; the rest get 503 without an upgrade.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h == nil || h.registrar == nil {
@@ -131,8 +138,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
-	a := &admission{}
+	a := &admission{pending: true}
 	defer h.release(a)
+	if r.Header.Get("Sec-WebSocket-Protocol") == ResidentSubprotocol {
+		h.serveResident(w, r, a)
+		return
+	}
 	h.serve(w, r, a)
 }
 
@@ -147,7 +158,7 @@ func (h *Handler) precheck(r *http.Request) int {
 	case len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Cookie")) != 0 ||
 		len(r.Header.Values("Authorization")) != 0 || len(r.Header.Values("Proxy-Authorization")) != 0:
 		return http.StatusForbidden
-	case !slices.Equal(r.Header.Values("Sec-WebSocket-Protocol"), []string{Subprotocol}):
+	case !slices.Equal(r.Header.Values("Sec-WebSocket-Protocol"), []string{Subprotocol}) && !(len(h.residentSigners) > 0 && slices.Equal(r.Header.Values("Sec-WebSocket-Protocol"), []string{ResidentSubprotocol})):
 		return http.StatusBadRequest
 	}
 	return 0
@@ -180,11 +191,27 @@ func (h *Handler) release(a *admission) {
 		h.reserved--
 	}
 	h.inflight--
+	pending := a.pending
+	a.pending = false
 	if h.closed && h.inflight == 0 {
 		h.markIdle()
 	}
 	h.mu.Unlock()
-	<-h.slots
+	if pending {
+		<-h.slots
+	}
+}
+
+// releasePending returns only the completed authentication slot. The live
+// control remains tracked/inflight for bounded ownership and shutdown.
+func (h *Handler) releasePending(a *admission) {
+	h.mu.Lock()
+	pending := a.pending
+	a.pending = false
+	h.mu.Unlock()
+	if pending {
+		<-h.slots
+	}
 }
 
 // markIdle closes idle once. Caller holds h.mu.
@@ -239,51 +266,73 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, a *admission) {
 	if !c.settle() || err != nil {
 		return // without a hijack the library already answered with an HTTP error
 	}
-	label, d, err := h.register(life, ws)
+	label, d, resident, err := h.register(life, ws)
 	if !registration.Stop() || err != nil {
 		return
 	}
 	// Connect owns the stream from here; a refusal closes it, and a late
 	// budget expiry ends it. Either way the same closer is the only owner.
-	err = h.registrar.Connect(label, d, newStream(life, ws, c, h.budgets.Cleanup))
+	stream := newStream(life, ws, c, h.budgets.Cleanup)
+	if resident != nil {
+		if registrar, ok := h.registrar.(interface {
+			ConnectResident(string, agentgateway.Dispatch, agentgateway.ResidentWorkBinding, net.Conn) error
+		}); ok {
+			err = registrar.ConnectResident(label, d, *resident, stream)
+		} else {
+			_ = stream.Close()
+			err = ErrRefused
+		}
+	} else {
+		err = h.registrar.Connect(label, d, stream)
+	}
 	committed = approval.Stop() && err == nil
 }
 
 // register runs the challenge and verifies the proof. The nonce is fresh for
 // this connection, used for exactly one registration message and then cleared.
 // Labels select configuration; the key is always the enrolled one.
-func (h *Handler) register(ctx context.Context, ws *websocket.Conn) (string, agentgateway.Dispatch, error) {
+func (h *Handler) register(ctx context.Context, ws *websocket.Conn) (string, agentgateway.Dispatch, *agentgateway.ResidentWorkBinding, error) {
 	if ws.Subprotocol() != Subprotocol {
-		return "", agentgateway.Dispatch{}, ErrRefused
+		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
 	ws.SetReadLimit(MaxRegistrationMessage)
 	nonce, err := newNonce()
 	if err != nil {
-		return "", agentgateway.Dispatch{}, ErrRefused
+		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
 	defer clear(nonce)
 	if err := ws.Write(ctx, websocket.MessageText, encodeChallenge(nonce)); err != nil {
-		return "", agentgateway.Dispatch{}, ErrRefused
+		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
 	typ, msg, err := ws.Read(ctx)
 	// The library limit is a backstop; the bound is checked here exactly.
 	if err != nil || typ != websocket.MessageText || len(msg) > MaxRegistrationMessage {
-		return "", agentgateway.Dispatch{}, ErrRefused
+		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
 	reg, err := decodeRegister(msg)
 	if err != nil {
-		return "", agentgateway.Dispatch{}, ErrRefused
+		reg, err = decodeWorkRegister(msg)
+	}
+	if err != nil {
+		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
 	host := h.hosts[reg.host]
+	data := transcript(h.endpoint, reg.host, reg.principal, reg.dispatch, nonce)
+	if reg.resident != nil {
+		if !h.workIsCurrent(*reg.resident) || reg.dispatch.Deadline.After(time.UnixMilli(reg.resident.DeadlineMillis)) {
+			return "", agentgateway.Dispatch{}, nil, ErrRefused
+		}
+		data = workTranscript(h.endpoint, reg.host, reg.principal, reg.dispatch, nonce, *reg.resident)
+	}
 	if host == nil || !host.principals[reg.principal] || !bytes.Equal(reg.dispatch.HostKey, host.wire) ||
 		checkDispatch(reg.dispatch, h.clock()) != nil ||
-		verify(host.key, transcript(h.endpoint, reg.host, reg.principal, reg.dispatch, nonce), reg.signature) != nil {
-		return "", agentgateway.Dispatch{}, ErrRefused
+		verify(host.key, data, reg.signature) != nil {
+		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
 	if err := ws.Write(ctx, websocket.MessageText, encodeAccepted()); err != nil {
-		return "", agentgateway.Dispatch{}, ErrRefused
+		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
-	return reg.principal, reg.dispatch, nil
+	return reg.principal, reg.dispatch, reg.resident, nil
 }
 
 // Close refuses new registrations, ends every pending registration and every

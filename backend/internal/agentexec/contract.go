@@ -273,6 +273,9 @@ type Output struct {
 // argv, path, user, SID or token from the request. The only request-derived
 // input is stdin, which it writes to the fixed shell of its profile: the
 // non-administrator guest shell unless it implements ProfiledRuntime.
+// StartShell receives a finite Deadline bounded by the command timeout, grant
+// hard deadline and original Session elapsed cap. This metadata creates no new
+// timer: Session still owns cancellation and canonical revoke-before-cancel.
 // A non-nil process returned with an error remains owned by the caller.
 type GuestRuntime interface {
 	StartShell(ctx context.Context, grant supervisor.Binding, stdin []byte) (GuestProcess, error)

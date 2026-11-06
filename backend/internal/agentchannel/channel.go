@@ -85,6 +85,17 @@ type Binding struct {
 	Profile      agentexec.Profile
 }
 
+// Dispatch is public routing and pinning metadata for one approved channel.
+// It is not an Authority, approval, native-owner receipt or bearer credential.
+// The protected owner supplies it; its authentic delivery is the registration
+// adapter's obligation. Receivers still validate the binding, profile, deadline
+// and host key, and require proof of the enrolled client's private key.
+type Dispatch struct {
+	Binding  Binding
+	Deadline time.Time
+	HostKey  []byte // SSH wire bytes of the recipient's raw Ed25519 host key
+}
+
 func (b Binding) valid() bool {
 	return b.Grant.Generation != 0 && b.Grant.Identity.Valid() && b.KeySetDigest != ([32]byte{}) && boundaryFor(b.Profile) != 0
 }

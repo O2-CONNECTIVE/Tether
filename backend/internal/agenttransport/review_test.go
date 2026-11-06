@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -32,7 +32,7 @@ import (
 // returns nil from Serve (a contract violation Run must not report as
 // success). It is a transport fixture, never an approval.
 type captureOwner struct {
-	d      maclaunch.Dispatch
+	d      agentchannel.Dispatch
 	conns  chan net.Conn
 	hold   bool // Serve waits for its context before returning
 	closes atomic.Int32
@@ -40,10 +40,10 @@ type captureOwner struct {
 
 func newCaptureOwner(host ssh.Signer, launch string, hold bool) *captureOwner {
 	d := fixtureDispatch(host, launch, time.Now().Add(time.Minute))
-	return &captureOwner{d: maclaunch.Dispatch{Binding: d.Binding, Deadline: d.Deadline, HostKey: d.HostKey}, conns: make(chan net.Conn, 1), hold: hold}
+	return &captureOwner{d: agentchannel.Dispatch{Binding: d.Binding, Deadline: d.Deadline, HostKey: d.HostKey}, conns: make(chan net.Conn, 1), hold: hold}
 }
 
-func (o *captureOwner) Dispatch() maclaunch.Dispatch { return o.d }
+func (o *captureOwner) Dispatch() agentchannel.Dispatch { return o.d }
 
 func (o *captureOwner) Serve(ctx context.Context, conn net.Conn) error {
 	o.conns <- conn

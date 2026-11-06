@@ -24,7 +24,6 @@ import (
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor"
@@ -134,7 +133,7 @@ func verticalOwner(t *testing.T, hostKey, client ssh.Signer, rt *verticalRuntime
 		t.Fatal(err)
 	}
 	g := s.Grant()
-	o := &linkOwner{issuer: issuer, session: s, host: h, d: maclaunch.Dispatch{Binding: agentchannel.Binding{Grant: g.Binding, KeySetDigest: g.KeySetDigest, Profile: s.Profile()}, Deadline: g.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}}
+	o := &linkOwner{issuer: issuer, session: s, host: h, d: agentchannel.Dispatch{Binding: agentchannel.Binding{Grant: g.Binding, KeySetDigest: g.KeySetDigest, Profile: s.Profile()}, Deadline: g.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

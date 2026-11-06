@@ -24,7 +24,6 @@ import (
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor/ephemeral"
@@ -558,7 +557,7 @@ type linkOwner struct {
 	issuer  *ephemeral.Issuer
 	session *agentexec.Session
 	host    *agentlink.Host
-	d       maclaunch.Dispatch
+	d       agentchannel.Dispatch
 	serves  atomic.Int32
 }
 
@@ -592,7 +591,7 @@ func newLinkOwner(t *testing.T, hostKey ssh.Signer, lifetime time.Duration, clie
 		t.Fatal(err)
 	}
 	g := session.Grant()
-	o := &linkOwner{issuer: issuer, session: session, host: host, d: maclaunch.Dispatch{
+	o := &linkOwner{issuer: issuer, session: session, host: host, d: agentchannel.Dispatch{
 		Binding:  agentchannel.Binding{Grant: g.Binding, KeySetDigest: g.KeySetDigest, Profile: session.Profile()},
 		Deadline: g.HardDeadline, HostKey: hostKey.PublicKey().Marshal(),
 	}}
@@ -604,7 +603,7 @@ func newLinkOwner(t *testing.T, hostKey ssh.Signer, lifetime time.Duration, clie
 	return o
 }
 
-func (o *linkOwner) Dispatch() maclaunch.Dispatch {
+func (o *linkOwner) Dispatch() agentchannel.Dispatch {
 	d := o.d
 	d.HostKey = append([]byte(nil), d.HostKey...)
 	return d
@@ -628,7 +627,7 @@ func (o *linkOwner) live() bool { return o.issuer.Snapshot().HasAuthority }
 // stubOwner is a scripted owner for cleanup-ownership tests only; it serves
 // nothing and is never presented as a real approval.
 type stubOwner struct {
-	d       maclaunch.Dispatch
+	d       agentchannel.Dispatch
 	mu      sync.Mutex
 	closes  int
 	results []error // successive Close results; nil after they run out
@@ -637,10 +636,10 @@ type stubOwner struct {
 
 func newStubOwner(host ssh.Signer, deadline time.Time, results ...error) *stubOwner {
 	d := fixtureDispatch(host, "launch-stub", deadline)
-	return &stubOwner{d: maclaunch.Dispatch{Binding: d.Binding, Deadline: d.Deadline, HostKey: d.HostKey}, results: results}
+	return &stubOwner{d: agentchannel.Dispatch{Binding: d.Binding, Deadline: d.Deadline, HostKey: d.HostKey}, results: results}
 }
 
-func (s *stubOwner) Dispatch() maclaunch.Dispatch { return s.d }
+func (s *stubOwner) Dispatch() agentchannel.Dispatch { return s.d }
 
 func (s *stubOwner) Serve(_ context.Context, conn net.Conn) error {
 	s.serves.Add(1)

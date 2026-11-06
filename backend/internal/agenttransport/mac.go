@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 )
@@ -20,7 +20,7 @@ import (
 // Serve takes the stream and serves the one approved Session over it; Close
 // revokes and retries only that owner's unconfirmed cleanup.
 type Owner interface {
-	Dispatch() maclaunch.Dispatch
+	Dispatch() agentchannel.Dispatch
 	Serve(ctx context.Context, conn net.Conn) error
 	Close(ctx context.Context) error
 }
@@ -37,6 +37,7 @@ type ClientConfig struct {
 	PrincipalLabel string
 	HostKey        ssh.Signer
 	Budgets        Budgets
+	ResidentIntent *ResidentFixedIntent
 }
 
 // Client registers one approved owner once. It never reconnects, retries
@@ -47,6 +48,7 @@ type Client struct {
 	signer                    ssh.Signer
 	public                    ssh.PublicKey
 	dispatch                  agentgateway.Dispatch
+	resident                  *ResidentFixedIntent
 	owner                     Owner
 	budgets                   Budgets
 	clock                     func() time.Time
@@ -61,9 +63,11 @@ type Client struct {
 	cancel   context.CancelFunc
 	finished chan struct{}
 
-	cleanMu   sync.Mutex
-	link      *closer // the transport, retained until confirmed
-	ownerDone bool    // the owner's Close returned nil
+	cleanMu         sync.Mutex
+	link            *closer // the transport, retained until confirmed
+	ownerDone       bool    // the owner's Close returned nil
+	cleanupObserved bool    // completed original cleanup result, not Run error classification
+	cleanupErr      error
 }
 
 // NewClient validates the configuration against the owner's dispatch. It
@@ -85,9 +89,17 @@ func NewClient(cfg ClientConfig, owner Owner) (*Client, error) {
 	if !bytes.Equal(d.HostKey, public.Marshal()) || checkDispatch(d, time.Now()) != nil {
 		return nil, ErrConfig
 	}
+	var intent *ResidentFixedIntent
+	if cfg.ResidentIntent != nil {
+		i := *cfg.ResidentIntent
+		if i.OriginalContext() == nil || i.OriginalContext().Err() != nil || i.Receiver() == nil || i.Endpoint() != cfg.Endpoint || i.HostLabel() != cfg.HostLabel || i.PrincipalLabel() != cfg.PrincipalLabel || i.HostKeyFingerprint() != ssh.FingerprintSHA256(public) || d.Deadline.After(i.Deadline()) {
+			return nil, ErrConfig
+		}
+		intent = &i
+	}
 	return &Client{
 		endpoint: cfg.Endpoint, host: cfg.HostLabel, principal: cfg.PrincipalLabel, signer: cfg.HostKey, public: public,
-		dispatch: d, owner: owner, budgets: cfg.Budgets, clock: time.Now, transport: nativeTransport, finished: make(chan struct{}),
+		dispatch: d, resident: intent, owner: owner, budgets: cfg.Budgets, clock: time.Now, transport: nativeTransport, finished: make(chan struct{}),
 	}, nil
 }
 
@@ -186,11 +198,19 @@ func (c *Client) register(ctx context.Context, ws *websocket.Conn) error {
 	if err != nil {
 		return err
 	}
-	sig, err := sign(c.signer, c.public, transcript(c.endpoint, c.host, c.principal, c.dispatch, nonce))
+	data := transcript(c.endpoint, c.host, c.principal, c.dispatch, nonce)
+	if c.resident != nil {
+		data = workTranscript(c.endpoint, c.host, c.principal, c.dispatch, nonce, c.resident.workBinding())
+	}
+	sig, err := sign(c.signer, c.public, data)
 	if err != nil {
 		return err
 	}
-	if err := ws.Write(ctx, websocket.MessageText, encodeRegister(c.host, c.principal, c.dispatch, sig)); err != nil {
+	msg = encodeRegister(c.host, c.principal, c.dispatch, sig)
+	if c.resident != nil {
+		msg = encodeWorkRegister(c.host, c.principal, c.dispatch, sig, c.resident.workBinding())
+	}
+	if err := ws.Write(ctx, websocket.MessageText, msg); err != nil {
 		return ErrRefused
 	}
 	typ, msg, err = ws.Read(ctx)
@@ -219,7 +239,34 @@ func (c *Client) retry(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	return errors.Join(errs...)
+	c.cleanupErr = errors.Join(errs...)
+	c.cleanupObserved = true
+	return c.cleanupErr
+}
+
+// CleanupResult observes the last completed cleanup without retrying any owner,
+// transport or process operation. A running Run is not joined evidence, even if
+// an earlier cleanup observation exists. false means unknown/not yet observed.
+// The returned error is the original cleanup result, never inferred from Run.
+func (c *Client) CleanupResult() (error, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	ran := c.ran
+	c.mu.Unlock()
+	if ran {
+		select {
+		case <-c.finished:
+		default:
+			return nil, false
+		}
+	}
+	if !c.cleanMu.TryLock() {
+		return nil, false
+	}
+	defer c.cleanMu.Unlock()
+	return c.cleanupErr, c.cleanupObserved
 }
 
 // Close ends a running attempt, waits within ctx for Run to return and then

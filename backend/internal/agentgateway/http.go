@@ -229,6 +229,15 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	g.mu.Lock()
 	g.expireLocked()
 	rt, full, closed := p.route, p.sessions >= MaxSessionsPerPrincipal, g.closed
+	var resident *residentSession
+	if g.resident != nil {
+		if entry := g.resident.entries[p]; entry != nil {
+			if gen := g.resident.control.ResidentGeneration(entry.enrollment.HostLabel, p.label); gen != "" {
+				resident = &residentSession{gateway: g, principal: p, entry: entry, generation: gen}
+				rt = nil
+			}
+		}
+	}
 	if rt != nil && ended(rt) {
 		rt = nil
 	}
@@ -243,7 +252,9 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	}
 	var mcp *mcpadapter.HTTPSession
 	var err error
-	if rt == nil {
+	if resident != nil {
+		mcp, err = mcpadapter.NewResidentHTTPSession(resident, g.callTimeout, nil)
+	} else if rt == nil {
 		mcp, err = mcpadapter.NewDiscoveryHTTPSession(g.callTimeout)
 	} else {
 		mcp, err = mcpadapter.NewHTTPSession(mcpadapter.HTTPConfig{Backend: rt.client, CallTimeout: g.callTimeout, Slots: rt.slots})
@@ -272,8 +283,13 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	g.mu.Lock()
 	ok := !g.closed && (rt == nil || (p.route == rt && !ended(rt))) && p.sessions < MaxSessionsPerPrincipal && g.sessions[id] == nil
 	if ok {
-		g.sessions[id] = &session{owner: p, route: rt, mcp: mcp, lastUsed: g.clock()}
-		p.sessions++
+		if resident != nil && g.resident.control.ResidentGeneration(resident.entry.enrollment.HostLabel, p.label) != resident.generation {
+			ok = false
+		}
+		if ok {
+			g.sessions[id] = &session{owner: p, route: rt, mcp: mcp, lastUsed: g.clock(), resident: resident}
+			p.sessions++
+		}
 	}
 	g.mu.Unlock()
 	if !ok {

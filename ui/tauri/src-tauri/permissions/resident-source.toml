@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-resident-port"
+description = "Read the same resident observation and submit bounded intents; not a source binding or launch permission."
+commands.allow = ["get_resident_status", "request_resident_intent"]

@@ -138,3 +138,22 @@ GOTOOLCHAIN=local GOPROXY=off GOWORK=off go test -race ./...
 外側通信の終了は、汎用 sshd が別に起動した処理や既実行の変更の取消ではありません。
 両モードの外側権限は同じであり、full でも管理者昇格を認可しません。
 実接続の再有効化には既存の `docs/SECURITY_BACKEND_CONTRACT.md` の全条件と別途の承認が必要です。
+
+## resident workerのsource準備
+
+[`internal/workerowner`](internal/workerowner/README.md)は同じ取得・Run・Closeと元source寿命を保持する内部依存です。
+通常caller・認証・実producerは追加せず、unknown後のowner保持とnative回収・退出guardは具体的callerの責任として残ります。
+
+既存channel/Host/Approved/Clientの[正規transport owner前提](../docs/mac-canonical-transport-owner.md)は、共通metadataと部分取得・cleanup観測を提供します。
+通常resident callerや認証を追加せず、実native回収・配置信頼は未実証です。
+
+[fixed intentの引継ぎ](../docs/mac-fixed-intent-handoff.md)は既存Session／wire内で正規namespaceと有限runtime期限を保ちます。
+元timer・取消・単回ownerを維持し、通常resident／認証や実producerは未接続です。
+
+[resident transport / protected policy閉包](../docs/mac-resident-transport-policy.md)は相互proof・opaque receiver・同世代receiptとstrict source/workerの準備sourceです。
+通常cmdやresident bindingは追加せず、Standby/producer・実GUI・配布と起動の信頼は未実証です。
+
+
+[Standby / owned pipe の準備source](../docs/mac-resident-producer-composition.md) を internal/residentmac と internal/residentpipe に置きます。
+既存の固定protected factory、opaque receiver、同じcommon owner / transportと元Closeを組成します。run loopは非公開で、新しいcmd / 通常CLI / IPC / 認証・権限は有効化しません。
+idle / memory / 自己所有pipeのsource回帰と、sealed producer entrypoint・trusted policy選定・配布信頼・実機の未実証を分けます。

@@ -8,7 +8,10 @@
 //
 // It issues no grant, token, key or certificate, forwards no OAuth token,
 // reads no proxy setting, cookie or self-asserted header, and never retries,
-// reconnects or resumes. Endpoints are configuration, never command input.
+// reconnects or resumes on the legacy grant path. The distinct resident control
+// subprotocol authenticates enrolled identities without a grant; only that
+// authority-free connection can reconnect. Endpoints are configuration, never
+// command input.
 package agenttransport
 
 import (
@@ -274,6 +277,7 @@ type registration struct {
 	host, principal string
 	dispatch        agentgateway.Dispatch
 	signature       []byte
+	resident        *agentgateway.ResidentWorkBinding
 }
 
 func encodeRegister(host, principal string, d agentgateway.Dispatch, sig []byte) []byte {
