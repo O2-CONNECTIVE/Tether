@@ -8,7 +8,7 @@ Question: at a real matching session-create timeout's **terminal** snapshot, has
 
 - Ordinary debug/custom-protocol product: `93b099a2c4b0eb396033bc13e303312041ae8fb4`, tree `55c29583aa75bb79efe889efc01f0bd94acdceb5`.
 - Reviewed diagnostic source: `6a0f75a2f595a14853185d415a6c2d5f8fc7416b`, tree `f59d689a3bae5bfd1d1ee1c92c4a6e77cb90d38f`; source patch SHA256 `2f51ecb3772ea4615bb48d71dd961a7b2e2b25c5ca8bb040a1173e88ca26a4f0`.
-- Safe base for the import-closure repair observation: `diagnostic/pr231-connection-once-20261106` at `2aabff397747b3b58185a26c84a9b928f7e499c0`. Its prior PR232 observation stopped in Python preflight with zero native trials and remains immutable.
+- Safe base for the generated-output contract observation: `diagnostic/pr232-import-closure-once-20261106` at `51ba01638ebd378e9262871ab7c2a548661efd7a`. Its prior PR233 observation stopped after Cargo exit0 at identity validation, with zero native trials; the inner rejection site was not retained and remains unknown.
 - One opened event, exact diagnostic head branch, same repository, draft, base ref/SHA and attempt1. Checkout is pinned to that event's head SHA; final reviewed control SHA/tree are verified before the sole publication/opening. There is no dispatch, synchronize, push trigger, matrix or retry.
 - One standard public `windows-2022` runner, contents:read, no secrets/settings/credential/billing changes. Public standard compute is free; no artifact upload, cache save or new storage is requested.
 - Product build command at most once, native/supervisor invocation at most once. Native preflight failure means zero native. An interrupted invocation remains unknown; it is never retried.
