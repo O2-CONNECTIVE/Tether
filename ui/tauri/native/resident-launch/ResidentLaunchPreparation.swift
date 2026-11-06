@@ -27,14 +27,28 @@ private struct ApprovedRelease: Sendable {
     }
 }
 
+// Exit observation only: no EOF, IO/supervisor joins or cleanup permission.
+struct ObservedProcessExit: Equatable {
+    enum Reason { case exit, signal }
+    let reason: Reason
+    let status: Int32
+}
+private enum ProcessCompletionPhase {
+    case unlaunched, running, waited(ObservedProcessExit), unknown
+}
+
 // Partial native owner preparation only. Not linked into normal Tauri startup.
-// No executableURL, argv, launch/run, PID, signal, Wait or readiness API exists.
+// No production executableURL, argv, launch/run, PID, signal or readiness API.
 // This object is not Sendable: later FFI must retain it on its original worker.
 final class ResidentLaunchPreparation {
     private let task: Process
     private let io = OwnedPreparationIO()
+    private var completion: ProcessCompletionPhase = .unlaunched
     #if RESIDENT_LAUNCH_FIXTURE
     private let expectedStructure: Data
+    private let isCompletionFixture: Bool
+    private var completionWaits: UInt32 = 0
+    private var completionInput: Pipe?
     #endif
 
     static func supports(_ version: OperatingSystemVersion) -> Bool {
@@ -71,7 +85,39 @@ final class ResidentLaunchPreparation {
         task = process
         #if RESIDENT_LAUNCH_FIXTURE
         expectedStructure = try Self.structure(requirement)
+        isCompletionFixture = false
         #endif
+    }
+
+    // Never infer exit from !isRunning before actual run succeeded. The only
+    // current run call is the fixed test-only self-child below, not a producer.
+    func processExit() -> ObservedProcessExit? {
+        if case let .waited(result) = completion { return result }
+        guard case .running = completion, !task.isRunning else { return nil }
+        guard task.terminationHandler == nil else { completion = .unknown; return nil }
+        task.waitUntilExit() // This exact original Process, never PID reconstruction.
+        let reason: ObservedProcessExit.Reason
+        switch task.terminationReason {
+        case .exit: reason = .exit
+        case .uncaughtSignal: reason = .signal
+        @unknown default: completion = .unknown; return nil
+        }
+        let result = ObservedProcessExit(reason: reason, status: task.terminationStatus)
+        completion = .waited(result)
+        #if RESIDENT_LAUNCH_FIXTURE
+        completionWaits += 1
+        #endif
+        return result
+    }
+
+    deinit {
+        switch completion {
+        case .unlaunched, .waited: break
+        case .running, .unknown:
+            // No exit/cleanup proof: retain this same native owner on drop.
+            // Actual joins and active IO release belong to the later bridge.
+            while true { Thread.sleep(forTimeInterval: 1) }
+        }
     }
 
     // Slot adopts this same owner before IO acquisition can fail.
@@ -80,6 +126,39 @@ final class ResidentLaunchPreparation {
     func bytes(_ operation: PreparedByteOperation) -> PreparedByteResult { io.perform(operation) }
 
     #if RESIDENT_LAUNCH_FIXTURE
+    enum CompletionFixtureMode: String { case exitZero = "exit-zero", exitTwo = "exit-two", signal, held }
+    private init(completionFixture: Void) {
+        task = Process() // Separate untrusted test actor; no requirement override.
+        expectedStructure = Data()
+        isCompletionFixture = true
+    }
+    static func completionFixture() -> ResidentLaunchPreparation {
+        ResidentLaunchPreparation(completionFixture: ())
+    }
+    func completionFixtureIdentity() -> ObjectIdentifier { ObjectIdentifier(task) }
+    func completionFixtureWaits() -> UInt32 { completionWaits }
+    func runCompletionFixture(_ mode: CompletionFixtureMode) throws {
+        guard isCompletionFixture, case .unlaunched = completion else { throw PreparationFailure.invalidRelease }
+        task.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        task.arguments = ["completion-child", mode.rawValue]
+        task.environment = [:]
+        if mode == .held {
+            let input = Pipe()
+            completionInput = input
+            task.standardInput = input
+        } else { task.standardInput = FileHandle.nullDevice }
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        completion = .unknown // Failed launch must not produce an unlaunched success.
+        try task.run()
+        completion = .running
+    }
+    func releaseCompletionFixture() throws -> Bool {
+        guard let input = completionInput else { return false }
+        try input.fileHandleForWriting.close()
+        completionInput = nil
+        return true
+    }
     func fixtureCounts() -> (open: UInt32, closed: UInt32) { (io.open, io.closed) }
     func peer(_ action: UInt32) -> Bool { io.peer(task, action: action) }
     func sendPeer(_ pointer: UnsafePointer<UInt8>?, count: UInt32) -> UInt32 { io.sendPeer(pointer, count: count) }

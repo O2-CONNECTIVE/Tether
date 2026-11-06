@@ -28,7 +28,9 @@
 
 ## Native supervisor の次の閉包
 
-現在の Foundation owner は未起動準備だけを提供し、Process の executable / arguments / run / Wait API を公開しません。production publisher は未設定で拒否します。既存 Supervisor は std Child の実 Wait を要求するため、両者を安全に接続する native End の生成元はまだありません。
+[同じ Foundation Process の終了観測](mac-foundation-process-completion.md)は、固定 self-child の exact Wait / reason / status を確認する source leaf です。C ABI / Rust End / active IO / supervisor・outer joins と退出許可には未接続で、以下の製品条件を満たしたことにはしません。
+
+Foundation owner の製品入口は未起動準備のままで、Process の executable / arguments / run / Wait を公開しません。Swift 内部の終了観測は固定 self-child だけで試験し、production の running 遷移や native End は生成しません。production publisher は未設定で拒否します。既存 Supervisor が要求する std Child の実 Wait とは別に、同じ native owner の IO / 終了 / joins を接続する必要があります。
 PID から別 Child / Process を作る、path / hash を再確認する、raw EOF や未起動 retire を `Reaped` とする方法は採りません。
 
 次の閉包には、同じ Foundation Process の sealed launch とその exact completion、起動後 child 側端点の解放、親 IO の half-close / EOF / close-once、SIGPIPE・peer 喪失・inheritance、元 worker の終了と supervisor / outer monitor の実 join を一続きで扱う必要があります。
