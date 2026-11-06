@@ -112,17 +112,29 @@ final class ResidentLaunchPreparation {
 
     deinit {
         switch completion {
-        case .unlaunched, .waited: break
-        case .running, .unknown:
-            // No exit/cleanup proof: retain this same native owner on drop.
-            // Actual joins and active IO release belong to the later bridge.
+        case .unlaunched, .waited:
+            if !io.needsRetention { return }
+        case .running, .unknown: break
+        }
+        // Wait alone cannot release active IO or an uncertain close receipt.
+        withExtendedLifetime((task, io)) {
             while true { Thread.sleep(forTimeInterval: 1) }
         }
     }
 
     // Slot adopts this same owner before IO acquisition can fail.
     func prepareIO(partial: Bool) throws { try io.configure(task, partial: partial) }
-    func retireIO() -> Bool { io.retire(task) }
+    func retireIO() -> Bool {
+        switch completion {
+        case .unlaunched: return io.retire(task)
+        case .waited: return io.retireActive(task)
+        case .running, .unknown: return false
+        }
+    }
+    func transferOwnedIO() -> Bool {
+        guard case .running = completion else { return false }
+        return io.didLaunch(task)
+    }
     func bytes(_ operation: PreparedByteOperation) -> PreparedByteResult { io.perform(operation) }
 
     #if RESIDENT_LAUNCH_FIXTURE
@@ -153,6 +165,32 @@ final class ResidentLaunchPreparation {
         try task.run()
         completion = .running
     }
+    enum OwnedIOFixtureMode: String { case echo, early, lost, missing }
+    func runOwnedIOFixture(_ mode: OwnedIOFixtureMode) throws -> Bool {
+        guard isCompletionFixture, case .unlaunched = completion else { throw PreparationFailure.invalidRelease }
+        let description: String
+        do {
+            try io.configure(task, partial: false)
+            description = try io.fixtureDescription()
+        }
+        catch {
+            if !autoreleasepool(invoking: { io.retire(task) }) { completion = .unknown }
+            throw error
+        }
+        task.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        task.arguments = ["active-child", (mode == .early || mode == .missing) ? "early" : "echo", description]
+        if mode == .lost { io.loseCloseAcknowledgement = true }
+        task.environment = [:]
+        task.standardError = FileHandle.nullDevice
+        completion = .unknown
+        try task.run()
+        completion = .running
+        return transferOwnedIO()
+    }
+    func fixtureOwnedDescriptors() -> [Int32] { io.fixtureDescriptors() }
+    func fixtureOwnedBindings() -> Bool { io.fixtureBindings(task) }
+    func fixtureOwnedNoSIGPIPE() -> Bool { io.fixtureNoSIGPIPE() }
+    func fixtureOwnedUnconfirmed() -> Bool { io.needsRetention }
     func releaseCompletionFixture() throws -> Bool {
         guard let input = completionInput else { return false }
         try input.fileHandleForWriting.close()
