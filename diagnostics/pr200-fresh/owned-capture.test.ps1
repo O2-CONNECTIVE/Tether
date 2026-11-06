@@ -90,7 +90,7 @@ try {
     foreach ($case in @('borrow-ok','borrow-query-throw','borrow-addref-fail','borrow-release-fail')) {
         $script:borrowAdds = 0; $script:borrowReleases = 0; $script:originalDisposes = 0
         $fake = [pscustomobject]@{}
-        $fake | Add-Member ScriptMethod DangerousAddRef { param($added) $script:borrowAdds += 1; if ($case -ceq 'borrow-addref-fail') { throw 'SYNTHETIC_PIN' }; $added.Value = $true }
+        $fake | Add-Member ScriptMethod DangerousAddRef { param([ref]$added) $script:borrowAdds += 1; if ($case -ceq 'borrow-addref-fail') { throw 'SYNTHETIC_PIN' }; $added.Value = $true }
         $fake | Add-Member ScriptMethod DangerousGetHandle { return [IntPtr]::new(1) }
         $fake | Add-Member ScriptMethod DangerousRelease { $script:borrowReleases += 1; if ($case -ceq 'borrow-release-fail') { throw 'SYNTHETIC_RELEASE' } }
         $fake | Add-Member ScriptMethod Dispose { $script:originalDisposes += 1 }
