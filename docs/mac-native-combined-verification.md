@@ -58,3 +58,7 @@ combined review で、native source の終了が健全な receiver の `Next()` 
 
 `check_mac_standby_consume.py` は Go compiler overlay だけで具体的な protected factory / memory connector / Standby を結びます。`testdata` の bridge は通常 Go source に存在せず、認証 marker・receiver・grant を偽造しません。既存の public fixed-seed fixture と実 protected reader の自己所有文書だけを使い、実 policy / 鍵 / socket / producer / native Session は使いません。
 `testing/synctest` で実 Next が健全な control 上で待機した点を固定し、source 終了後、OFF を送る前に元 lease の Finish を要求します。normal / race の各20回で同じ判定と元 Standby / handler / memory streams の終了を確認し、不完全・skip・失敗は非0終了です。診断だけの receiver 取消 probe は回帰 fixture に残しません。
+
+
+CI checkout record は workflow 自体の SHA / ref も別欄へ保持します。[GitHub の変数仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)に従い、source checkout と実行定義の revision を同一視しません。
+Go source archive は arm64 と Intel の各 host 上で別に build し、Intel Rust の cross compile とも区別します。archive builder の文書化された成功は「blocked record を作成した exit 2」であり、一般の exit 0 や入力失敗 exit 1 を成功へ変換しません。CI wrapper は exit 2 と固定 code、source SHA / tree、host architecture、実 archive hash、activation / distribution blocked と未署名の flags を照合してから source 検証だけを成功とします。

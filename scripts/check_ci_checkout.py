@@ -33,6 +33,10 @@ def run():
     event_sha = os.environ['GITHUB_SHA']
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
     expected = expected_head(event, name, event_sha)
+    workflow_sha = sha(os.environ['GITHUB_WORKFLOW_SHA'])
+    workflow_ref = os.environ['GITHUB_WORKFLOW_REF']
+    if not workflow_ref or len(workflow_ref) > 1024 or any(c in workflow_ref for c in '\r\n'):
+        raise ValueError('invalid workflow revision')
     base = sha(event['pull_request']['base']['sha']) if name == 'pull_request' else None
     result = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD', 'HEAD^{tree}'],
                             check=True, text=True, capture_output=True)
@@ -40,7 +44,7 @@ def run():
     if actual != expected:
         raise ValueError('checkout is not the exact event source head')
     evidence = {'checkoutSha': actual, 'checkoutTree': tree, 'expectedSourceHead': expected,
-                'event': name, 'baseSha': base, 'eventSha': event_sha, 'syntheticEventDiffers': event_sha != actual}
+                'event': name, 'workflowSha': workflow_sha, 'workflowRef': workflow_ref, 'baseSha': base, 'eventSha': event_sha, 'syntheticEventDiffers': event_sha != actual}
     output = json.dumps(evidence, sort_keys=True)
     print(output)
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):

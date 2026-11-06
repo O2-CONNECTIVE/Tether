@@ -22,7 +22,9 @@ class ExactCheckoutTests(unittest.TestCase):
             payload.write_text(json.dumps(event))
             env = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'TMPDIR')}
             env.update(GITHUB_EVENT_NAME=name, GITHUB_EVENT_PATH=str(payload),
-                       GITHUB_SHA=event_sha, GITHUB_STEP_SUMMARY=str(summary))
+                       GITHUB_SHA=event_sha, GITHUB_STEP_SUMMARY=str(summary),
+                       GITHUB_WORKFLOW_SHA='b' * 40,
+                       GITHUB_WORKFLOW_REF='owner/repo/.github/workflows/source.yml@refs/heads/test')
             result = subprocess.run([sys.executable, '-B', str(SCRIPT)], env=env,
                                     text=True, capture_output=True, cwd=root)
             return result, summary.read_text() if summary.exists() else ''
@@ -35,6 +37,8 @@ class ExactCheckoutTests(unittest.TestCase):
         self.assertEqual((report['checkoutSha'], report['checkoutTree']), (head, tree))
         self.assertEqual(report['eventSha'], 'a' * 40)
         self.assertTrue(report['syntheticEventDiffers'])
+        self.assertEqual(report['workflowSha'], 'b' * 40)
+        self.assertIn('.github/workflows/source.yml@', report['workflowRef'])
         self.assertIn(head, summary)
         self.assertIn(tree, summary)
 
