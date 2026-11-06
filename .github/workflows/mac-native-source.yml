@@ -77,6 +77,7 @@ jobs:
           python scripts/check_mac_preparation_ffi.py | tee "$RUNNER_TEMP/native-source-evidence/ffi.json"
           python scripts/check_mac_rust_owner.py | tee "$RUNNER_TEMP/native-source-evidence/owner.json"
           python scripts/check_mac_native_pump.py | tee "$RUNNER_TEMP/native-source-evidence/pump.json"
+          python scripts/check_mac_active_pump.py | tee "$RUNNER_TEMP/native-source-evidence/active-pump.json"
       - name: Compile and link Intel images without execution
         run: python scripts/check_mac_native_cross.py | tee "$RUNNER_TEMP/native-source-evidence/intel.json"
       - name: Replay synthetic enrollment lookup and build untrusted source archives

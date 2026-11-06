@@ -13,11 +13,21 @@ fn require_duplex<T: std::io::Read + std::io::Write>() {}
 fn main() {
     require_duplex::<native_preparation::PreparedIo<'static>>();
     let arguments: Vec<_> = std::env::args().collect();
+    #[cfg(all(resident_native_source, resident_launch_fixture))]
+    if arguments.get(1).map(String::as_str) == Some("active-child") {
+        resident_port::duplex::run_active_child(&arguments[1..]);
+        return;
+    }
     assert_eq!(arguments.len(), 2);
     assert!(matches!(
         native_preparation::NativePreparation::prepare(),
         native_preparation::Preparation::Refused
     ));
+    #[cfg(all(resident_native_source, resident_launch_fixture))]
+    if arguments[1].starts_with("active-") {
+        resident_port::duplex::run_active(&arguments[1]);
+        return;
+    }
     #[cfg(all(resident_native_source, resident_launch_fixture))]
     let passed = resident_port::duplex::run(&arguments[1]);
     #[cfg(not(all(resident_native_source, resident_launch_fixture)))]

@@ -60,3 +60,5 @@ SSH途中実装の既知の公開WIP保存先は `wip/ssh-owned-shell-20261031` 
 - [旧構成図](architecture.md) / [旧SSH・Windows安全要件](security.md) / [旧脅威モデル](threat-model.md)。
 - [SSH backend基盤](../backend/README.md) / [旧通信契約](communication-contract.md) / [Windows評価手順](windows-evaluation-runbook.md)。
 - [Windows LocalService helper ADR](adr/0004-localservice-auth-helper.md) / [旧Tauri評価版](tauri-evaluation.md)。
+
+- [active native owner と Pump](mac-native-active-pump.md): 元 owner の実 IO を既存 shared driver へ接続し、wire / EOF / Wait / close / IO worker join を別々に検査。通常起動と native Supervisor の全 joins は未接続です。
