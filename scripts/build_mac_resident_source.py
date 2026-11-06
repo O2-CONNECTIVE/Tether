@@ -126,7 +126,7 @@ def snapshot(revision, destination):
 def environment(cache, arch):
     # No downloads, toolchain acquisition, user GOFLAGS, replacement workspace,
     # cgo flag injection, normal cache changes, or runtime configuration.
-    allowed = ('PATH', 'HOME', 'TMPDIR', 'GOMODCACHE')
+    allowed = ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'GOMODCACHE')
     env = {name: os.environ[name] for name in allowed if name in os.environ}
     env.update(GOENV='off', GOTOOLCHAIN='local', GOWORK='off', GOPROXY='off',
                GOSUMDB='off', GOFLAGS='', GOOS='darwin', GOARCH=arch,

@@ -21,6 +21,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Require and record exact source checkout
+        working-directory: ${{ github.workspace }}
+        run: python scripts/check_ci_checkout.py
       - name: Test ownership and close rejection contract
         run: ./ui/tauri/native-smoke/process-contract.test.ps1
       - name: Read existing WebView2 and driver versions

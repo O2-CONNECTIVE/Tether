@@ -90,7 +90,7 @@ def run():
     arch = {'arm64': 'arm64', 'x86_64': 'x86_64'}.get(platform.machine())
     if arch is None:
         raise ValueError('unsupported architecture')
-    env = {key: value for key, value in os.environ.items() if key in ('PATH', 'HOME', 'TMPDIR')}
+    env = {key: value for key, value in os.environ.items() if key in ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR')}
     rust = shutil.which('rustc', path=env.get('PATH'))
     swift = command(['/usr/bin/xcrun', '--find', 'swiftc'], env).strip()
     sdk = command(['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'], env).strip()

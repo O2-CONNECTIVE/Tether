@@ -1,0 +1,92 @@
+name: Mac native preparation source
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-source:
+    name: Native source, owned fixtures and Intel compile only
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOENV: 'off'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out exact candidate without retained credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.17'
+      - name: Require and record exact source checkout
+        working-directory: ${{ github.workspace }}
+        run: python scripts/check_ci_checkout.py
+      - name: Require reviewed disposable Mac toolchain
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 26.5"
+          xcrun swift --version
+          xcrun --sdk macosx --show-sdk-version
+      - name: Set up fixed Go for source-only fixtures
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Select fixed Rust and explicit Intel compile target on disposable runner
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
+          rustup target add --toolchain 1.99.1 x86_64-apple-darwin
+          dirname "$(rustup which --toolchain 1.99.1 rustc)" >> "$GITHUB_PATH"
+      - name: Prepare existing public dependencies
+        run: |
+          python scripts/go_ci.py prepare
+          cargo fetch --locked --manifest-path ui/tauri/native/resident-launch/fixtures/pump_source/Cargo.toml
+      - name: Run source helper regressions
+        run: |
+          python -m unittest discover -s scripts/tests -p 'test_ci_checkout.py' -v
+          python -m unittest discover -s scripts/tests -p 'test_mac_*.py' -v
+      - name: Check inert requirement, C ABI and same-owner Rust fixtures
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-source-evidence"
+          python scripts/check_mac_launch_requirement.py | tee "$RUNNER_TEMP/native-source-evidence/requirement.json"
+          python scripts/check_mac_preparation_ffi.py | tee "$RUNNER_TEMP/native-source-evidence/ffi.json"
+          python scripts/check_mac_rust_owner.py | tee "$RUNNER_TEMP/native-source-evidence/owner.json"
+          python scripts/check_mac_native_pump.py | tee "$RUNNER_TEMP/native-source-evidence/pump.json"
+      - name: Compile and link Intel images without execution
+        run: python scripts/check_mac_native_cross.py | tee "$RUNNER_TEMP/native-source-evidence/intel.json"
+      - name: Replay synthetic enrollment lookup and build untrusted source archives
+        run: |
+          python scripts/check_mac_standby_consume.py | tee "$RUNNER_TEMP/native-source-evidence/consume.json"
+          python scripts/check_mac_enrollment_lookup.py | tee "$RUNNER_TEMP/native-source-evidence/enrollment.json"
+          python scripts/build_mac_resident_source.py --output "$RUNNER_TEMP/native-source-library"
+          cp "$RUNNER_TEMP/native-source-library/BUILD_RECORD.json" "$RUNNER_TEMP/native-source-evidence/build-record.json"
+      - name: Preserve source-only reports, never binary archives
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: native-source-evidence
+          path: ${{ runner.temp }}/native-source-evidence/*.json
+          if-no-files-found: warn
+          retention-days: 3

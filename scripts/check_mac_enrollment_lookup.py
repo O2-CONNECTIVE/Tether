@@ -92,7 +92,7 @@ def run():
     if len(sys.argv) != 1 or sys.platform != 'darwin':
         raise ValueError('unsupported fixture invocation')
     env = {key: value for key, value in os.environ.items()
-           if key in ('PATH', 'HOME', 'TMPDIR', 'GOMODCACHE')}
+           if key in ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'GOMODCACHE')}
     env.update(GOTOOLCHAIN='local', GOENV='off', GOWORK='off', GOPROXY='off',
                GOSUMDB='off', GOFLAGS='', CGO_ENABLED='1')
     arch = {'arm64': 'arm64', 'x86_64': 'amd64'}.get(platform.machine())

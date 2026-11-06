@@ -36,3 +36,25 @@ authoritative Close、実 EOF、exact Wait、IO worker join、supervisor と out
 
 sealed release には承認 publisher / exact release と保護配置・artifact 対応、protected policy 選択、verify-to-exec の同一 image 保証が別途必要です。未署名 artifact や任意 path / argv / digest / trust override で代用しません。
 これらの実物を使う検証と GUI は、必要な承認・環境・操作範囲が揃ってから実施します。source fixture の完了は、その許可や実証を追加しません。
+
+
+## 同じ head を実行する CI 入口
+
+`mac-native-source.yml` は通常 startup へ接続せず、既存の native source checker 群、合成 enrollment replay、source library build、Intel compile/link を実行します。実 producer、実 policy、鍵、署名・配置・OS trust は使いません。
+既存製品 workflow のコマンド・timeout・判定を維持し、checkout だけを event の exact head に固定します。`check_ci_checkout.py` は実 `HEAD` / tree と期待 head を照合し、PR base と event SHA を別に記録します。event SHA が synthetic merge ref でも、それを実行した head と読み替えません。
+これは branch protection の設定や他 PR の変更を追加しません。base 前進時の freshness は統合担当が別に確認します。
+
+Intel checker は既存 Rust 1.99.1 の `x86_64-apple-darwin` std が無い場合に失敗し、自動 install や skip はしません。disposable CI 側が明示的に target を準備します。同じ source の Swift dylib、Rust owner と fixture executable、Pump crate を normal / source の両構成で Intel compile/link し、`lipo` で出力 architecture を確認します。
+9件の所有・借用・test API の compile refusal は元の診断 code / message を維持します。foreign executable は一度も実行せず、Intel runtime・OS enforcement・Process Wait の証拠にはしません。
+
+native CI の JSON reports は source-only の有限 fixture と build record だけを保存し、library / executable / policy / key は upload しません。既存 source checker の全 compiler / fixture は同じ所有子の終端まで待ち、一時出力を解放します。
+各 job の成功と実行件数はその exact head の CI 終端で判断します。この CI 定義自体や過去 PR のローカル成功を、未実行候補の green と扱いません。以前の個別資料に残る「未統合」「CI 未実行」「#200 blocker」は各 source 準備時の記録であり、新しい候補の現在値は exact head / merge SHA の記録へ照合します。
+
+
+## source 終了時の同じ consume / lease
+
+combined review で、native source の終了が健全な receiver の `Next()` へ伝わらず、元の lease の `Finish` が OFF / control traffic まで進まない経路を確認しました。source 閉鎖と policy digest drift の両方が、実 memory 相互認証の後に同じ症状を再現します。通常 startup / IPC は未接続なので、実 GUI の障害再現とは扱いません。
+修正は native revoke 後の source context 取消を元 receiver へ伝え、intake / send / reply でも同じ source を監視します。取消 callback 自体を join してから、同じ WaitSource の結果、同じ lease の Finish を既存順序で確認します。receiver の取消を native collection の証拠にはしません。
+
+`check_mac_standby_consume.py` は Go compiler overlay だけで具体的な protected factory / memory connector / Standby を結びます。`testdata` の bridge は通常 Go source に存在せず、認証 marker・receiver・grant を偽造しません。既存の public fixed-seed fixture と実 protected reader の自己所有文書だけを使い、実 policy / 鍵 / socket / producer / native Session は使いません。
+`testing/synctest` で実 Next が健全な control 上で待機した点を固定し、source 終了後、OFF を送る前に元 lease の Finish を要求します。normal / race の各20回で同じ判定と元 Standby / handler / memory streams の終了を確認し、不完全・skip・失敗は非0終了です。診断だけの receiver 取消 probe は回帰 fixture に残しません。

@@ -35,7 +35,7 @@ fixtureはregistration=disconnectedであり、実producer/auth/GUIの実証で�
 ## trusted launcherをまだ作らない理由
 
 公開repoのTauri bundleはactive=falseで、resident producerのbuild/同梱/信頼した配置元の対応がありません。
-公開Goにはprivate producerが必要とするresidentpipe/residentmac/residentworkとresident policy compositionの閉包が未整備です。
+この IPC 準備時点では Go source 閉包は未整備でした。後続の [公開 producer 組成](../../docs/mac-resident-producer-composition.md)が residentpipe / residentmac / residentwork と policy の source を準備しますが、実配布・配置・署名の信頼確立は別条件です。
 既存Mac agent評価archiveは未署名で、source/binary対応やpublisher identityを保証しません。
 Windows connected-package planも整合時にblockedを返す準備宣言で、Mac launcherの信頼根ではありません。
 

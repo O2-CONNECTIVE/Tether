@@ -44,7 +44,7 @@ def run():
     if arch is None:
         raise ValueError('unsupported native Pump architecture')
     validate_dependencies()
-    env = {key: value for key, value in os.environ.items() if key in ('PATH', 'HOME', 'TMPDIR', 'CARGO_HOME')}
+    env = {key: value for key, value in os.environ.items() if key in ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'CARGO_HOME')}
     cargo = shutil.which('cargo', path=env.get('PATH'))
     swift = command(['/usr/bin/xcrun', '--find', 'swiftc'], env).strip()
     sdk = command(['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'], env).strip()
