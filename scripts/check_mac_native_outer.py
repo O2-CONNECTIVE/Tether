@@ -1,16 +1,10 @@
 """Join the concrete native outer monitor; UNKNOWN never permits Quit."""
 import json
-import os
-from pathlib import Path
-import platform
 import re
-import shutil
 import sys
-import tempfile
 
 from check_mac_enrollment_lookup import command
-from check_mac_native_pump import CRATE, validate_dependencies
-from check_mac_rust_owner import build_swift
+from check_mac_native_source_variants import source_variants, validate_dependencies
 
 CASES = {'outer-prepared': 13, 'outer-confirmed': 20, 'outer-unknown': 20,
          'outer-missing': 20, 'outer-malformed': 20, 'outer-invalid': 16,
@@ -31,38 +25,11 @@ def validate_report(mode, output):
 def run():
     if len(sys.argv) != 1 or sys.platform != 'darwin':
         raise ValueError('unsupported native outer monitor invocation')
-    arch = {'arm64': 'arm64', 'x86_64': 'x86_64'}.get(platform.machine())
-    if arch is None:
-        raise ValueError('unsupported native Pump architecture')
-    validate_dependencies()
-    env = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'CARGO_HOME')}
-    cargo = shutil.which('cargo', path=env.get('PATH'))
-    swift = command(['/usr/bin/xcrun', '--find', 'swiftc'], env).strip()
-    sdk = command(['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'], env).strip()
-    if cargo is None or not Path(swift).is_file() or not Path(sdk).is_dir():
-        raise ValueError('existing native compiler unavailable')
-    env.update(MACOSX_DEPLOYMENT_TARGET='11.0', SDKROOT=sdk)
     passed = 0
-    with tempfile.TemporaryDirectory(prefix='native-outer-') as temporary:
-        root = Path(temporary)
-        for fixture in (False, True):
-            directory = root / ('fixture' if fixture else 'normal')
-            directory.mkdir()
-            build_swift(swift, sdk, arch, fixture, directory, root / 'swift-cache', env)
-            variant = dict(env, CARGO_TARGET_DIR=str(directory / 'target'))
-            flags = ['-Dwarnings', '-L', 'native=' + str(directory), '-l', 'dylib=ResidentPreparation',
-                     '-C', 'link-arg=-Wl,-rpath,' + str(directory)]
-            flags += ['--cfg', 'resident_native_source']
-            if fixture:
-                flags += ['--cfg', 'resident_launch_fixture']
-            variant['CARGO_ENCODED_RUSTFLAGS'] = '\x1f'.join(flags)
-            manifest = ['--manifest-path', str(CRATE / 'Cargo.toml')]
-            command([cargo, 'build', '--locked', '--offline', '--jobs', '2'] + manifest, variant)
-            command([cargo, 'clippy', '--locked', '--offline', '--jobs', '2'] + manifest + ['--', '-Dwarnings'], variant)
-            executable = directory / 'target/debug/native-pump-source-fixture'
-            for mode in CASES if fixture else ('outer-normal', 'outer-normal-prejoined'):
-                output = command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
-                passed += validate_report(mode, output)
+    for variant in source_variants('native-outer-'):
+        for mode in CASES if variant.fixture else ('outer-normal', 'outer-normal-prejoined'):
+            output = command([str(variant.executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
+            passed += validate_report(mode, output)
     print(json.dumps({'fixture': 'native-outer-monitor-source', 'passed': passed,
                       'normalModes': 2, 'fixtureModes': 14, 'activeModes': 13,
                       'fixtureChildrenStarted': 13, 'fixtureChildrenWaited': 13,

@@ -12,6 +12,8 @@ pub(crate) mod native_session;
 #[path = "session_checks.rs"]
 pub(crate) mod session_checks;
 
+#[cfg(resident_native_source)]
 #[path = "../../../../../src-tauri/src/resident_port/port.rs"]
 mod port;
+#[cfg(resident_native_source)]
 pub(crate) use port::ResidentPort;
