@@ -13,6 +13,8 @@ import profile_contract
 import report
 import evidence_schema
 import powershell_preflight
+import owned_schema
+import owned_overlay
 
 
 def profile_safe(value):
@@ -143,7 +145,11 @@ def publish(root, index):
                   'profile-capability.json': capability_safe,
                   'powershell-preflight.json': preflight_safe,
                   'profile-capability-shape.json': evidence_schema.capability_shape_safe,
-                  'observer-failure-sites.json': evidence_schema.observer_sites_safe}
+                  'observer-failure-sites.json': evidence_schema.observer_sites_safe,
+                  'owned-collection.json': owned_schema.capture_safe,
+                  'owned-overlay-identity.json': owned_overlay.manifest_safe,
+                  'owned-capture-verdict.json': owned_schema.verdict_safe,
+                  'owned-hook-preflight.json': owned_schema.preflight_safe}
     validators.update({'observation/' + name: report.safe for name in report.FILES})
     for name, validator in validators.items():
         file = root / 'safe' / name
@@ -172,7 +178,7 @@ def publish(root, index):
     return 0
 
 
-def trial(source, control, root, index):
+def trial(source, control, root, index, *, supervisor_path=None, harness_path=None):
     report.need(sys.platform == 'win32' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
     report.need(index == 1)
     report.need(powershell_preflight.current_passed(report.read(root / 'safe/powershell-preflight.json')))
@@ -215,13 +221,13 @@ def trial(source, control, root, index):
         # Only the supervisor child inherits this observer preload; requests and code remain fixed.
         env['NODE_OPTIONS'] = '--import=' + (helper / 'capture-capability.mjs').as_uri()
         commands = [
-            ('supervisor', 180, ['pwsh', '-NoLogo', '-NoProfile', '-File', str(native / 'supervise.ps1'),
+            ('supervisor', 180, ['pwsh', '-NoLogo', '-NoProfile', '-File', str(supervisor_path or native / 'supervise.ps1'),
              '-ToolsDirectory', str(tools), '-OutputDirectory', str(output), '-ApplicationPath', str(root / report.EXE)]),
             ('inspector', 60, ['pwsh', '-NoLogo', '-NoProfile', '-File', str(native / 'inspect-driver-trace.ps1'),
              '-ToolsDirectory', str(tools), '-OutputDirectory', str(output)]),
             ('audit', 30, ['pwsh', '-NoLogo', '-NoProfile', '-File', str(helper / 'audit.ps1'),
              '-ApplicationPath', str(root / report.EXE), '-ToolsDirectory', str(tools),
-             '-HarnessDirectory', str(native), '-OutputPath', str(output / 'cleanup-audit.json')])]
+             '-HarnessDirectory', str(harness_path or native), '-OutputPath', str(output / 'cleanup-audit.json')])]
         exits = []
         for label, timeout, args in commands:
             try:

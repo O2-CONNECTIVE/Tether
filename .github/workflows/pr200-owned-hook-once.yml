@@ -1,0 +1,196 @@
+name: DO NOT MERGE - PR200 one instrumented owned-collection observation
+on:
+  pull_request:
+    branches: ['diagnostic/pr220-poll-fixture-once-20261106']
+    types: [opened]
+    paths: ['diagnostics/pr200-fresh/**', '.github/workflows/pr200-owned-hook-once.yml']
+permissions:
+  contents: read
+concurrency:
+  group: pr200-owned-hook-once-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  diagnostic-one:
+    # One job, one native call, no matrix, dispatch, automatic expansion or rerun.
+    if: >-
+      github.run_attempt == 1 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diagnostic/pr200-owned-hook-once-20261106' &&
+      github.event.pull_request.base.ref == 'diagnostic/pr220-poll-fixture-once-20261106' &&
+      github.event.pull_request.base.sha == 'a728caca65ed6e865495e197272c55d1ca6e27e5' &&
+      github.event.pull_request.draft == true
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source
+    env:
+      PYTHONUTF8: '1'
+      EXPECTED_CONTROL: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out exact diagnostic control head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          persist-credentials: false
+      - name: Check out exact fixed PR200 source separately
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da
+          path: source
+          persist-credentials: false
+      - name: Check out runtime-validated diagnostic source separately
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: 613f4ff550cd65334b00b262a0beebbc3e069fad
+          path: diagnostic
+          persist-credentials: false
+      - name: Verify standard hosted Windows and exact control
+        env:
+          EXPECTED_CONTROL: ${{ github.event.pull_request.head.sha }}
+          TRIAL: '1'
+        run: |
+          if ($env:TRIAL -cnotmatch '^1$') { throw 'TRIAL_CAP_REJECTED' }
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows' -or $env:RUNNER_ARCH -cne 'X64') { throw 'HOSTED_WINDOWS_REQUIRED' }
+          if ((git -C ../control rev-parse HEAD).Trim() -cne $env:EXPECTED_CONTROL) { throw 'CONTROL_HEAD_MISMATCH' }
+          if ($env:GITHUB_BASE_REF -cne 'diagnostic/pr220-poll-fixture-once-20261106') { throw 'DIAGNOSTIC_BASE_MISMATCH' }
+          if (git -C ../control status --porcelain --untracked-files=no) { throw 'CONTROL_DIRTY' }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.17'
+          architecture: x64
+      - name: Verify exact diagnostic source and all native helpers before preflight or build
+        env:
+          EXPECTED_CONTROL: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/owned_control.py verify --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Record fixed source and test archive boundary
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($sha -cne 'c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da' -or $tree -cne 'e278496a55b4accc6caafa7a7a99538e5c8ceeca') { throw 'FIXED_SOURCE_OR_TREE_MISMATCH' }
+          if (git status --porcelain --untracked-files=no) { throw 'FIXED_SOURCE_DIRTY' }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP/pr200-owned-hook-once/safe" -ErrorAction Stop | Out-Null
+          python -B ../control/diagnostics/pr200-fresh/phase2.py identity --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'SOURCE_SHA_INVALID' }
+          "EVALUATION_SOURCE_SHA=$sha" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$env:RUNNER_TEMP/pr200-owned-hook-once/target" >> $env:GITHUB_ENV
+          python -B -m unittest discover -s scripts/tests -p 'test_tauri_evaluation_*.py' -v
+          exit $LASTEXITCODE
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Validate diagnostic source and profile contracts without native launch
+        run: |
+          python -B -m unittest discover -s ../control/diagnostics/pr200-fresh -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test ../control/diagnostics/pr200-fresh/capture-capability.test.mjs ../control/diagnostics/pr200-fresh/path-validation.test.mjs
+          exit $LASTEXITCODE
+      - name: Prepare explicit opt-in harness overlay and not-reached evidence
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/owned_control.py prepare --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Parse changed PowerShell and execute both fixtures before build or native
+        timeout-minutes: 5
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/phase2.py preflight --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Parse instrumented overlay and execute owned-hook synthetic fixtures once
+        timeout-minutes: 5
+        run: |
+          $resolved = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
+          $env:OWNED_PS_IDENTITY_MATCH = if ([String]::Equals($resolved, (Join-Path $PSHOME 'pwsh.exe'), [StringComparison]::OrdinalIgnoreCase)) { 'true' } else { 'false' }
+          $env:OWNED_PS_VERSION = $PSVersionTable.PSVersion.ToString()
+          python -B ../control/diagnostics/pr200-fresh/owned_control.py preflight --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Build locked frontend with runtime notices
+        working-directory: source/ui/tauri
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/notices.mjs --check
+          exit $LASTEXITCODE
+      - name: Select fixed official Rust in disposable CI
+        run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
+      - name: Read locked Cargo metadata before compiling
+        working-directory: source/ui/tauri
+        run: |
+          cargo +1.99.1 metadata --locked --format-version 1 --features custom-protocol --filter-platform x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml > "$env:RUNNER_TEMP/pr200-owned-hook-once/cargo-metadata.json"
+          exit $LASTEXITCODE
+      - name: Collect complete dependency license texts before compiling
+        run: |
+          $sysroot = (rustc +1.99.1 --print sysroot).Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem -LiteralPath "$sysroot/share/doc/rust" -File | Select-Object -ExpandProperty Name
+          python -B scripts/collect_tauri_licenses.py --metadata "$env:RUNNER_TEMP/pr200-owned-hook-once/cargo-metadata.json" --frontend-notice ui/tauri/dist/THIRD_PARTY_NOTICES.txt --rust-docs "$sysroot/share/doc/rust" --output "$env:RUNNER_TEMP/pr200-owned-hook-once/evaluation-licenses"
+          exit $LASTEXITCODE
+      - name: Build locked release executable
+        working-directory: source/ui/tauri
+        run: cargo +1.99.1 build --release --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol
+      - name: Create source-bound evaluation archive
+        run: |
+          $exe = "$env:CARGO_TARGET_DIR/release/rescue-host-shell.exe"
+          if ((Get-AuthenticodeSignature $exe).Status -ne 'NotSigned') { throw 'UNEXPECTED_SIGNATURE_STATE' }
+          python -B scripts/package_tauri_evaluation.py --exe $exe --licenses "$env:RUNNER_TEMP/pr200-owned-hook-once/evaluation-licenses" --source-sha $env:EVALUATION_SOURCE_SHA --output "$env:RUNNER_TEMP/pr200-owned-hook-once/evaluation-package"
+          exit $LASTEXITCODE
+      - name: Extract the exact distribution ZIP and check every file hash
+        run: |
+          $zip = "$env:RUNNER_TEMP/pr200-owned-hook-once/evaluation-package/RescueHostTauriUnwiredEvaluation-x64.zip"
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $exeHash = (Get-FileHash "$env:CARGO_TARGET_DIR/release/rescue-host-shell.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          python -B scripts/verify_tauri_evaluation.py --archive $zip --source $env:EVALUATION_SOURCE_SHA --archive-sha256 $zipHash --exe-sha256 $exeHash > "$env:RUNNER_TEMP/pr200-owned-hook-once/evaluation-package/verification.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP/pr200-owned-hook-once/evaluation-unpacked"
+          $root = "$env:RUNNER_TEMP/pr200-owned-hook-once/evaluation-unpacked/RescueHostTauriUnwiredEvaluation"
+          $manifest = Get-Content "$root/MANIFEST.json" -Raw | ConvertFrom-Json
+          if ($manifest.sourceCommit -ne $env:EVALUATION_SOURCE_SHA -or $manifest.integration -ne 'not_connected' -or $manifest.canStart -or $manifest.canStop -or -not $manifest.productionGateClosed) { throw 'PACKAGE_BOUNDARY_MISMATCH' }
+          foreach ($file in $manifest.files.PSObject.Properties) {
+            if ((Get-FileHash (Join-Path $root $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) { throw 'PACKAGE_FILE_HASH_MISMATCH' }
+          }
+      - name: Preserve verified build identity before tool preparation
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/phase2.py identity --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Read existing CI WebView2 without updating it
+        run: ./ui/tauri/native-smoke/inventory.ps1 -OutputPath "$env:RUNNER_TEMP/pr200-owned-hook-once/inventory.json"
+      - name: Prepare existing pinned native test tools in runner temp
+        timeout-minutes: 6
+        run: ./ui/tauri/native-smoke/setup.ps1 -ToolsDirectory "$env:RUNNER_TEMP/pr200-owned-hook-once/tools" -InventoryPath "$env:RUNNER_TEMP/pr200-owned-hook-once/inventory.json"
+      - name: Record verified ordinary build and tool identities
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/phase2.py tools --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Exactly one instrumented supervisor trial with unchanged original request and gates
+        id: observation
+        timeout-minutes: 6
+        env:
+          TRIAL: '1'
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/owned_control.py trial --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Preserve partial specimen identity even on failure
+        if: always()
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/phase2.py identity --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Verify diagnostic source stability after the bounded observation
+        if: always()
+        env:
+          EXPECTED_CONTROL: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/owned_control.py verify --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once"
+          exit $LASTEXITCODE
+      - name: Publish complete bounded sanitized JSON to summary and controlled log only
+        if: always()
+        env:
+          TRIAL: '1'
+        run: |
+          python -B ../control/diagnostics/pr200-fresh/phase2.py publish --source . --control ../control --root "$env:RUNNER_TEMP/pr200-owned-hook-once" --trial $env:TRIAL
+          exit $LASTEXITCODE

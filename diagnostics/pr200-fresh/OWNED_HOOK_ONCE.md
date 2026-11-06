@@ -1,0 +1,37 @@
+# Same-owned-collection opt-in診断hookと一回限定観測
+
+元ordinary product c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da/treee278496a55b4accc6caafa7a7a99538e5c8ceecaを一回lockedbuildする。製品checkout/source/native helperは編集しない。base diagnostic/pr220-poll-fixture-once-20261106@a728caca65ed6e865495e197272c55d1ca6e27e5、newhead diagnostic/pr200-owned-hook-once-20261106。draft/DO NOT MERGE/opened-only/exactbranch/baseSHA/samerepo/attempt1、一fresh標準windows-2022 job、nativecap1。旧/main/Macbranch/check/protectionは変更・起動しない。
+
+## 正確なinstrumentation差分
+
+owned_overlay.pyは固定native-smoke23filesをrunner tempへbytecopyし、owned-capture.ps1とowned-native.csだけを追加する。supervise.ps1へ(1)opt-in初期化（session/driver開始前）、(2)元children/childHandles取得直後でnormal-close前のchildscope呼出し、の2blockを注入する。両block除去で元supervisorbytesへ戻ることを検証する。setupとtraceinspectorは元sourceから実行し、auditだけactualoverlayrun.tsを監視する。全25overlayfile、元/overlay supervisor、hook/type、native-subtree、control/product/contractのidentityを保存・前後照合する。
+
+これはinstrumented observationであり、runtimeinstrumentationがunchangedとは呼ばない。productEXEはordinary/custom-protocol、原request/response/error/AbortSignal/15000ms/native/profileMatch/capability/stickyobserver/ownership/normalclose/cleanup条件は不変。phase2.py追加はsupervisor/auditpathの明示keyword引数と別sidecarのvalidatorだけで、projectionが固定診断source613f4ffの元helperに一致する。newmappingを旧trialへ代入しない。
+
+## authority、slot、borrow、privacy
+
+Get-OwnedAppが選んだ元ALL-childrenの順序と元handle Slotを渡す。captureはslot-onlyskeletonをmetadata読取りより先に作り、count/32cap/handle不足を先に拒否。malformedmetadata、duplicatePID/generation/reference、shuffled/duplicate/missingSlotをunknown/failureにし、console等を落としてcompleteにしない。sourceauthorityは元Get-OwnedAppだけで、currentdescendantsはchange-detectionにのみ使いadoptしない。
+
+元が既にopenしたchildProcess.SafeHandleだけをDangerousAddRef/releaseのpairedscopeで借りる。reopen/Get-Process/Dispose/rightsgrantなし。appのlazySafeHandleは借りない。元が既に読み取ったProcess.StartTime cache（[.NET10 getter](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Diagnostics.Process/src/System/Diagnostics/Process.cs#L199-L208)）と元CIMmicrosecond契約の一致を保ち、同じborrowedhandleのkernelPID/fullcreation/imageをread-only照合する。childProcess.Refreshは呼ばない。元ownershipをsubmicrosecond精度へ遡及して強化したとは扱わない。
+
+zero-time WaitForSingleObjectでlive/exited/unavailableを分ける。verified-but-exitedはidentityBoundとlivenessを分け、afterexit/rights/release不確実はcompletefalse。必要read/SYNCHRONIZE権が無ければunknownで、より強いhandleを開かない。privatePID/creation/path/argvはmemoryのみ。argvは元authorizedrowからhook内で一回読む（既存closefactsの後続読取りは不変）。CommandLineToArgvW/LocalFreeでparseし、missing/duplicate/split/quotedambiguity/invalidpathは閉じる。
+
+公開はsource/specimenhash、元all-childslot/parentSlot/role、closedstates、nullableidentitybool、root/exact-runtime-EBWebView-child/outside/unknown、directory/status/timingだけ。rawsidecar/PID/time/path/command/stack/exception/identifierhash/任意keysは出さない。pretrialplaceholderはhook-not-reached。元session/ownershipが先に失敗すればretryせずその状態を保持する。capture/保存/release失敗は元normalclose/finally/failureを上書きしない。
+
+## Directoryと時間の限界
+
+C#helperはREAD_ATTRIBUTES/share-read-write-delete/OPEN_REPARSE_POINT/BACKUP_SEMANTICSでroot/actualのlexical祖先をboundedにopenし、reparseattr/normalizedfinalname/volume+fileidentityの前後整合を確認する。alias/reparse/変更/欠測を閉じ、全newdirectoryhandlesをfinallyでcloseする。close失敗があっても残りを全attemptし、dispose不確実はcompletefalse。
+
+保証は**per-row handle-boundary consistency、non-atomic**。各rowで別handle集合を使うので、全rowで一つのdirectorygenerationや全capture区間のnamespace固定は証明しない。同時rename→復元等の非観測変化を否定しない。必要なstrongerpolicyは別threatmodel/設計決定を要する。
+
+追加preclosebudgetは**2000ms cooperative/measured**。各probe間とset読取り後・finalstate間で確認し、時間読取り不明/overrunはsticky。CIMには1秒operationtimeoutを指定するが、同期OS/file callの強制取消や硬いwallclock上限は保証しない。超過/不明なら残りprobeを始めずcompletefalse、実elapsed（60000ms超はclampedflag）を保存する。型compileはpreclose外、JSON保存時間も外側hooktimerで監査する。新session/readinessretryは無い。
+
+## Regression、preflightと停止
+
+owned-capture.test.ps1は実capturefunctionにpureOSadaptersを差し、元slot/identity/再利用/verified-exited/duringexit/missing/duplicates/32omission/argv/root-child-outside/reparse-alias-partial/dispose/release/time/newset/errorの57casesを検証する。Read-OwnedHandleの実pin/releasewrapperはfakeSafeHandle/nativequeryseamでbalancedborrow/nooriginalDisposeを検証。生成された実hookASTも抽出し、capturethrow/保存throwが元close継続と既存failureを保つことを検証する。C#compile/layout/純粋closehelperとsyntheticargv memoryAPIも検証するが、realprocess/directory観測ではない。
+
+MacにPSruntime無し。localsource/schema/projection/negativecontrolsは実行できるが、新PS/C#runtimeはCIpreflightで初めて検証する。旧strictparse/ledger/detailと、新overlayparse/57-casefixtureを各最大一回実行し、いずれか失敗ならbuild/driver/nativeへ進まない。partialcheckpointを保存しwrapper不明をnot-runへ偽装しない。fixedfailureCase/unknown/missing/conflicting/truncated/timeoutをbounded保存する。
+
+新capture.completeはsame元集合に対する診断証拠条件であり、childを旧exactrootとして承認しない。owned-capture-verdictはoldContinueとANDするだけで、旧trial.json/stopReason/failureを変更しない。旧gateが赤なら新mappingが揃っても赤、PR200blocked/inconclusiveを維持する。
+
+finalsource/tree/pins/privacy/cleanup/permissions/cost/triggerの独立review後だけ公開。一runner/一trial/ordinarybuild一回、freshownedprofile、EXE/archive/driver/source/overlay個別hash、完全sanitizedJSON/hashesをcontrolledlog/summaryだけへ保存。artifact/cache/EXE/ZIP/encodedbinarytransfer、新secret/credential/security/ACL/auth/settings/billing/persistentaccess/費用、larger/selfhosted/livehost/localGUIなし。publicstandardrunnerとlogsummary無料範囲を再確認する。preflight失敗/uncertainty/一観測後は停止し、rerun/dispatch/cap拡張/結果後sourcepush/merge/ready/approval/protection変更なし。
