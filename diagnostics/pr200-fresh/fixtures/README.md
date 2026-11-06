@@ -23,3 +23,7 @@ path-validationのcorpus、observer-detailのstack/guard/getter例は全て合�
 `pr213-preflight-record.json` はrun42103056121/job127510606994/attempt1の実保持記録で、2files/canonical1551bytes/SHA256 `d219204d88fc45cfcb2053a60051ebcd582770dfb7aceaf9c8c9d8f2ffc0d152`。
 parse/ledger成功、detail fixture exit1、native0を保持する。具体的assertionは未保持で補完しない。
 新assertion fixtureのmarker/stdout/stderrは全て合成入力であり、実PowerShell failureや失われた原ログの再構成ではない。
+
+`pr215-fixture-record.json` はrun42142925606/job127647402497/attempt1の実保持recordで、2files/canonical1987bytes/hash `a55b722cef63328204f4685d1982d01b1c6973191086746936c544bff67d6c19`。
+既知METADATA_SHORT_CIRCUIT_CHANGEDを保持するが、case/comparison/actualDetailは未保持で補完しない。
+新しいcase/comparisonのstdio組は全て合成で、実際の失敗caseの再構成ではない。

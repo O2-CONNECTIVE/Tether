@@ -1,5 +1,6 @@
 """Bounded, sequential PowerShell source/fixture preflight; no native calls."""
 import os
+import re
 import subprocess
 import sys
 
@@ -34,52 +35,76 @@ ASSERTION_CODES = {
     'DETAIL_DEDUP_FAILED', 'DETAIL_REDACTION_FAILED', 'DETAIL_BOUND_FAILED',
     'METADATA_GUARD_SEAM_MISSING', 'METADATA_SHORT_CIRCUIT_CHANGED', 'METADATA_VERDICT_CHANGED',
     'METADATA_ERROR_CHANGED', 'METADATA_ERROR_IDENTITY_CHANGED'}
+METADATA_CASES = {'creation-false', 'creation-exception', 'empty-command', 'getter-exception', 'valid-command'}
+METADATA_DETAILS = {'not-observed', 'unclassified-detail', 'metadata-creation-check-exception', 'metadata-creation-guard', 'metadata-command-line-read-exception', 'metadata-command-line-guard'}
+METADATA_COMPARISONS = {'old-calls', 'new-calls', 'old-reads', 'new-reads', 'new-detail'}
 ASSERTION_PREFIX = 'OBSERVER_DETAIL_ASSERTION_FAILED code='
 ASSERTION_STATUSES = {'known', 'missing', 'unknown', 'conflicting', 'truncated', 'not-observed', 'not-applicable'}
 
 
-def assertion_safe(value):
-    report.need(isinstance(value, dict) and set(value) == {'status', 'code'})
+def assertion_safe(value, refined=False):
+    fields = {'status', 'code'} | ({'case', 'comparison', 'actualDetail'} if refined else set())
+    report.need(isinstance(value, dict) and set(value) == fields)
     report.need(isinstance(value['status'], str) and value['status'] in ASSERTION_STATUSES)
     report.need(value['code'] is None or isinstance(value['code'], str) and value['code'] in ASSERTION_CODES)
     report.need((value['status'] == 'known') == (value['code'] is not None))
+    if refined:
+        if value['status'] == 'known' and value['code'] == 'METADATA_SHORT_CIRCUIT_CHANGED':
+            report.need(isinstance(value['case'], str) and value['case'] in METADATA_CASES)
+            report.need(isinstance(value['comparison'], str) and value['comparison'] in METADATA_COMPARISONS)
+            if value['comparison'] == 'new-detail':
+                report.need(isinstance(value['actualDetail'], str) and value['actualDetail'] in METADATA_DETAILS)
+            else:
+                report.need(value['actualDetail'] is None)
+        else:
+            report.need(value['case'] is None and value['comparison'] is None and value['actualDetail'] is None)
     return value
+
+
+def assertion_result(status, code=None, case=None, comparison=None, actual_detail=None):
+    return assertion_safe({'status': status, 'code': code, 'case': case, 'comparison': comparison, 'actualDetail': actual_detail}, True)
 
 
 def assertion_output(raw):
     """Decode only this fixture's fixed marker; never return any input substring."""
-    result = {'status': 'unknown', 'code': None}
+    result = assertion_result('unknown')
     if len(raw) > 4096:
-        return {'status': 'truncated', 'code': None}
+        return assertion_result('truncated')
     try:
         lines = raw.decode('utf-8-sig').splitlines()
     except UnicodeError:
         return result
     if not lines or all(not line for line in lines):
-        return {'status': 'missing', 'code': None}
+        return assertion_result('missing')
     markers = [line for line in lines if line.startswith(ASSERTION_PREFIX)]
     if len(markers) > 1 or markers and MARKERS[2] in lines:
-        return {'status': 'conflicting', 'code': None}
+        return assertion_result('conflicting')
     if len(lines) == 1 and len(markers) == 1:
         code = markers[0][len(ASSERTION_PREFIX):]
-        if code in ASSERTION_CODES:
-            return {'status': 'known', 'code': code}
+        if code in ASSERTION_CODES and code != 'METADATA_SHORT_CIRCUIT_CHANGED':
+            return assertion_result('known', code)
+        match = re.fullmatch(r'METADATA_SHORT_CIRCUIT_CHANGED case=([a-z-]+) comparison=([a-z-]+) actualDetail=([a-z-]+)', code)
+        if match and match[1] in METADATA_CASES and match[2] in METADATA_COMPARISONS:
+            if match[2] == 'new-detail' and match[3] in METADATA_DETAILS:
+                return assertion_result('known', 'METADATA_SHORT_CIRCUIT_CHANGED', match[1], match[2], match[3])
+            if match[2] != 'new-detail' and match[3] == 'not-evaluated':
+                return assertion_result('known', 'METADATA_SHORT_CIRCUIT_CHANGED', match[1], match[2])
     return result
 
 
 def detail_assertion(private, stage):
     if stage['passed']:
-        return {'status': 'not-applicable', 'code': None}
+        return assertion_result('not-applicable')
     if stage['code'] != 'fixture-rejected':
-        return {'status': 'not-observed', 'code': None}
+        return assertion_result('not-observed')
     try:
         with (private / 'stdout.log').open('rb') as stream:
             value = assertion_output(stream.read(4097))
     except Exception:
-        return {'status': 'not-observed', 'code': None}
+        return assertion_result('not-observed')
     if value['status'] == 'known' and stage['exitCode'] != 1:
-        return {'status': 'conflicting', 'code': None}
-    return assertion_safe(value)
+        return assertion_result('conflicting')
+    return assertion_safe(value, True)
 
 
 def stage_safe(value):
@@ -101,9 +126,9 @@ def stage_safe(value):
 def preflight_safe(value):
     if isinstance(value, dict) and value.get('schema') == 1:
         return legacy_safe(value)  # Retained history only; cannot authorize a new trial.
-    report.need(isinstance(value, dict) and type(value.get('schema')) is int and value['schema'] in {2, 3})
+    report.need(isinstance(value, dict) and type(value.get('schema')) is int and value['schema'] in {2, 3, 4})
     fields = {'schema', 'kind', 'parseFilesExpected', 'parseFilesVerified', 'fixturesExpected', 'fixturesVerified', 'passed', 'stages'}
-    report.need(set(value) == (fields | {'detailAssertion'} if value['schema'] == 3 else fields))
+    report.need(set(value) == (fields | {'detailAssertion'} if value['schema'] in {3, 4} else fields))
     report.need(value['kind'] == 'predicate-powershell-preflight')
     report.need(type(value['parseFilesExpected']) is int and value['parseFilesExpected'] == 5)
     report.need(type(value['parseFilesVerified']) is int and value['parseFilesVerified'] in {0, 5})
@@ -118,8 +143,8 @@ def preflight_safe(value):
         report.need(all(stages[key]['code'] == 'not-run' for key in ('ledger', 'detail')))
     if not stages['ledger']['passed']:
         report.need(stages['detail']['code'] == 'not-run')
-    if value['schema'] == 3:
-        assertion = assertion_safe(value['detailAssertion'])
+    if value['schema'] in {3, 4}:
+        assertion = assertion_safe(value['detailAssertion'], value['schema'] == 4)
         detail = stages['detail']
         if detail['passed']:
             report.need(assertion['status'] == 'not-applicable')
@@ -132,7 +157,7 @@ def preflight_safe(value):
 
 
 def current_passed(value):
-    return preflight_safe(value)['schema'] == 3 and value['passed']
+    return preflight_safe(value)['schema'] == 4 and value['passed']
 
 
 def run_stage(script, marker, private):
@@ -156,8 +181,8 @@ def preflight(control, root):
     report.need(sys.platform == 'win32' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
     private = root / 'powershell-predicate-preflight'
     private.mkdir(exist_ok=False)
-    result = {'schema': 3, 'kind': 'predicate-powershell-preflight', 'parseFilesExpected': 5, 'parseFilesVerified': 0,
-        'detailAssertion': {'status': 'not-observed', 'code': None},
+    result = {'schema': 4, 'kind': 'predicate-powershell-preflight', 'parseFilesExpected': 5, 'parseFilesVerified': 0,
+        'detailAssertion': assertion_result('not-observed'),
         'fixturesExpected': 2, 'fixturesVerified': 0, 'passed': False, 'stages': {key: {
             'runtimeExecuted': False, 'exitCode': None, 'passed': False, 'code': 'not-run'} for key in STAGES}}
     for key, script, marker in zip(STAGES, SCRIPTS, MARKERS):

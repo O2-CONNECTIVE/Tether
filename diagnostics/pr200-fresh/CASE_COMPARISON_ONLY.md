@@ -1,0 +1,42 @@
+# PR215 複合assertionの一問だけを識別する
+
+Base:a4bb3992e4a92114408f0be79a57907650ae39d0/tree4893e44bd283ce0e1b441cb2f2e6a7c62f38080d。
+実PR215はsource43f56b87574f57cc87c1d0347b609499d896c222でparse/ledger成功、detailのMETADATA_SHORT_CIRCUIT_CHANGEDが失敗した。
+実2-file record1987bytes/hash `a55b722cef63328204f4685d1982d01b1c6973191086746936c544bff67d6c19` はそのままfixture化し、case/比較/値を補完しない。
+
+## source比較で分かる範囲
+
+beforeはcreation checkが拒否又は例外ならCommandLineを読まず、通過した場合だけ読取りを行う。afterも二つのifで同じ順とPROFILE_IDENTITY_UNKNOWNのthrowを保つ。
+抽出範囲は次のidentity-key assignmentより前で終わるため、そのlabelを期待しないことは意図どおり。
+creation-false、creation-exception、empty-command、valid-commandの四caseに静的な期待の不整合は見つからない。
+getter-exceptionでは、fixtureがmember readの例外伝播とread-exception labelを期待する一方、読取りがfalseyとして返るならafter guardはcommand-line-guard labelに進む。これは条件付きのsource解釈であり、実PowerShellの観測ではない。
+PR215のcodeだけでは、このcaseか、どの比較かを確定できない。ローカルPowerShellも無く、Python analogueでruntime原因を証明しない。
+
+現identity assertionはcreation-errorだけを条件としている。getter-errorの例外identityを試験済みと扱わず、今回そのcoverageを広げない。
+
+## 最小の識別と保持
+
+既存五caseの先頭五要素と順番は不変で、第六要素に五つの固定case IDだけを加える。
+元五比較を同じ順番で評価し、各比較の直前に非empty固定labelを代入して最初の真となった比較を識別する。追加label側はtrueのため、元の比較は同じ位置で一回だけ評価され、outer -orの短絡順を保つ。
+最後のnew.detail比較に到達した場合だけ、その元読取りを代入式で一度捕捉する。前の比較で止まった場合はnew.detailを追加で読まない。
+評価規則の根拠はMicrosoftのlogical operators/Booleans/grouping assignment文書（https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_logical_operators?view=powershell-7.6 、https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_booleans?view=powershell-7.6）。代入式が値を返す条件も確認した（https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/avoid-assigning-variables-in-expressions?view=powershell-7.6）。mutable valueのpropertyをこの式で変更せず、固定label/読取り値を捕捉する用途だけに限定する。これらの文書確認はlocal runtime検証の代わりではない。
+
+元の比較、expected値、if verdict、throw、case順、guard/error動作は変えない。新sourceからlabel/捕捉/書込みだけを除くとPR213原fixture hash0deeb8e28cb31a3ba6e46ce20940aba09e8f9e3cffd90b5be88dbb2455f51a1fへ一致する。
+
+出力するのはknown assertion、case、first comparisonと、new-detail失敗時のalready allowlisted actual detail labelだけ。
+caseはcreation-false/creation-exception/empty-command/getter-exception/valid-command、比較はold-calls/new-calls/old-reads/new-reads/new-detail。
+actualDetailはcaptured値がstringかつ五つの固定label内のときだけそのlabel、それ以外はunclassified-detail。前の比較で止まればnot-evaluated markerを出しJSONではnull。任意値/type/counter/exceptionは出力しない。
+この追加labelは、getter仮説の「期待labelと実guard labelの差」を識別するために限り、汎用loggingへ広げない。
+
+schema4だけが新continuationの候補で、旧1/2/3はhistory読取り用。missing/unknown/conflicting/truncated、不完全なcase/comparison/actualDetail、非allowlistはfail-closed。既知失敗は常に失敗のまま。
+request/response/error/AbortSignal、15000ms/profileMatch/ownership/cleanup/native条件、product/fixed PR200 source、Mac laneは未変更。workflowはこのsource段階で編集していない。
+
+## feedback loopと残る判断
+
+実collectorへ合成stdoutを与え、旧parserがnew case/comparisonを保持できないredを確認してからgreenにした。実recordのunknownを埋めず、25case/comparison組とactualDetail whitelist、未知/欠測/競合/上限を検査する。
+これは証拠経路のfixtureで、実PowerShell failureの原因再現ではない。ローカルPSparser/runtimeは未実行。
+元recorderのunit fixtureは歴史的43f/schema3用に分け、新schema4を旧実行の検証へ読み替えない。
+
+現record/sourceではactual case/比較を確定できないため、その一点を得るruntime観測が必要。実行を行う場合はこの固定review済みsourceを別checkoutする新fixture-only workflowを組み、combinedcontrolを独立reviewする。
+fresh標準Windows一つ、parse/ledger/detail各最大一回、元fail-closed順、app/frontend/Rust/toolchain/driver/native0、artifact/cache/binary転送0。追加attemptや結果後source pushは行わない。
+元timeout根因やPR200clearanceには進まず、この一問の結果で止める。

@@ -28,7 +28,7 @@ class DetailAssertionEvidenceTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertEqual(len(calls), 3)
             self.assertFalse(value['passed'])
-            self.assertEqual(value.get('detailAssertion'), {'status': 'known', 'code': 'DETAIL_BOUND_FAILED'})
+            self.assertEqual(value.get('detailAssertion'), {'status': 'known', 'code': 'DETAIL_BOUND_FAILED', 'case': None, 'comparison': None, 'actualDetail': None})
 
     def test_synthetic_unknown_missing_conflicting_and_truncated_output_stays_red(self):
         marker = b'OBSERVER_DETAIL_ASSERTION_FAILED code=DETAIL_BOUND_FAILED'
@@ -46,13 +46,13 @@ class DetailAssertionEvidenceTests(unittest.TestCase):
                     b'PRIVATE_STDERR_OBSERVER_DETAIL_ASSERTION_FAILED code=DETAIL_BOUND_FAILED', 1)
                 self.assertEqual(result, 1); self.assertEqual(len(calls), 3)
                 self.assertFalse(preflight.current_passed(value))
-                self.assertEqual(value['detailAssertion'], {'status': expected, 'code': None})
+                self.assertEqual(value['detailAssertion'], {'status': expected, 'code': None, 'case': None, 'comparison': None, 'actualDetail': None})
                 self.assertNotIn('PRIVATE_', json.dumps(value))
                 self.assertEqual(value['fixturesVerified'], 1)
         with tempfile.TemporaryDirectory() as folder:
             result, value, _ = harness.execute_mock(Path(folder), 2, marker, b'', 0)
             self.assertEqual(result, 1)
-            self.assertEqual(value['detailAssertion'], {'status': 'conflicting', 'code': None})
+            self.assertEqual(value['detailAssertion'], {'status': 'conflicting', 'code': None, 'case': None, 'comparison': None, 'actualDetail': None})
 
     def test_synthetic_known_assertion_reaches_complete_controlled_publication_without_raw_logs(self):
         harness = harness_module.OncePreflightTests()
@@ -69,23 +69,23 @@ class DetailAssertionEvidenceTests(unittest.TestCase):
             self.assertEqual(record['files']['powershell-preflight.json'], value)
             self.assertEqual(len(record['files']), 2)
             self.assertNotIn('PRIVATE_', output.getvalue()); self.assertNotIn(str(root), output.getvalue())
-            self.assertEqual(value['detailAssertion'], {'status': 'known', 'code': 'DETAIL_BOUND_FAILED'})
+            self.assertEqual(value['detailAssertion'], {'status': 'known', 'code': 'DETAIL_BOUND_FAILED', 'case': None, 'comparison': None, 'actualDetail': None})
 
     def test_synthetic_all_known_assertions_are_closed_and_never_turn_failure_green(self):
         harness = harness_module.OncePreflightTests()
         for code in preflight.ASSERTION_CODES:
             with tempfile.TemporaryDirectory() as folder:
                 result, value, _ = harness.execute_mock(Path(folder), 2,
-                    ('OBSERVER_DETAIL_ASSERTION_FAILED code=' + code + '\n').encode(), b'PRIVATE_ERROR', 1)
+                    ('OBSERVER_DETAIL_ASSERTION_FAILED code=' + code + (' case=getter-exception comparison=new-detail actualDetail=metadata-command-line-guard' if code == 'METADATA_SHORT_CIRCUIT_CHANGED' else '') + '\n').encode(), b'PRIVATE_ERROR', 1)
                 self.assertEqual(result, 1)
-                self.assertEqual(value['detailAssertion'], {'status': 'known', 'code': code})
+                self.assertEqual(value['detailAssertion'], {'status': 'known', 'code': code, 'case': 'getter-exception' if code == 'METADATA_SHORT_CIRCUIT_CHANGED' else None, 'comparison': 'new-detail' if code == 'METADATA_SHORT_CIRCUIT_CHANGED' else None, 'actualDetail': 'metadata-command-line-guard' if code == 'METADATA_SHORT_CIRCUIT_CHANGED' else None})
                 self.assertFalse(preflight.current_passed(value))
 
     def test_synthetic_missing_unknown_or_conflicting_classification_cannot_authorize_pass(self):
         for change in [None, {'status': 'known', 'code': 'PRIVATE_VALUE'},
             {'status': 'missing', 'code': None}, {'status': 'unknown', 'code': None},
-            {'status': 'conflicting', 'code': None}, {'status': 'truncated', 'code': None},
-            {'status': 'known', 'code': 'DETAIL_BOUND_FAILED'},
+            {'status': 'conflicting', 'code': None, 'case': None, 'comparison': None, 'actualDetail': None}, {'status': 'truncated', 'code': None},
+            {'status': 'known', 'code': 'DETAIL_BOUND_FAILED', 'case': None, 'comparison': None, 'actualDetail': None},
             {'status': 'not-applicable', 'code': None, 'path': 'PRIVATE_PATH'}]:
             value = synthetic_preflight()
             if change is None: del value['detailAssertion']
@@ -117,6 +117,15 @@ class DetailAssertionEvidenceTests(unittest.TestCase):
         # exact old normalized source must remain, including all assertion logic.
         root = Path(__file__).resolve().parent
         text = (root / 'observer-detail.test.ps1').read_text()
+        begin = text.index("try {\n        $metadataActualDetailCode = 'not-evaluated'")
+        finish = text.index("} catch { };", begin) + len("} catch { };")
+        text = text[:begin] + "try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_SHORT_CIRCUIT_CHANGED') } catch { };" + text[finish:]
+        text = text.replace('($metadataActualDetail = $new.detail)', '$new.detail')
+        for label in preflight.METADATA_CASES:
+            text = text.replace(", '" + label + "')", ")")
+        for label, term in [('old-calls', '$old.calls -ne 1'), ('new-calls', '$new.calls -ne 1'),
+            ('old-reads', '$old.reads -ne $case[4]'), ('new-reads', '$new.reads -ne $case[4]'), ('new-detail', '$new.detail -cne $case[3]')]:
+            text = text.replace("(($metadataComparison = '" + label + "') -and (" + term + "))", term)
         pattern = r"try \{ \[Console\]::Out\.WriteLine\('OBSERVER_DETAIL_ASSERTION_FAILED code=([A-Z_]+)'\) \} catch \{ \}; "
         markers = re.findall(pattern, text)
         self.assertEqual(len(markers), 14)

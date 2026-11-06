@@ -15,9 +15,17 @@ from unittest.mock import patch
 
 import fixture_only as recorder
 import powershell_preflight
-from test_phase2 import synthetic_preflight
+from test_phase2 import synthetic_preflight as current_preflight
 
 ROOT = Path(__file__).resolve().parent
+
+
+def synthetic_preflight():
+    # This older recorder is pinned to the historical43f schema3 source.
+    value = current_preflight()
+    value['schema'] = 3
+    del value['detailAssertion']['case']; del value['detailAssertion']['comparison']; del value['detailAssertion']['actualDetail']
+    return value
 
 
 def identity():

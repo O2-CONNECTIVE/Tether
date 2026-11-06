@@ -68,15 +68,24 @@ function Invoke-SyntheticGuard($Block, $Creation, $Command, $CommandError) {
 }
 $script:sentinel = [Exception]::new('SYNTHETIC_ERROR_NOT_PUBLISHED')
 foreach ($case in @(
-    @('false', 'value', $true, 'metadata-creation-guard', 0),
-    @('error', 'value', $true, 'metadata-creation-check-exception', 0),
-    @('true', '', $false, 'metadata-command-line-guard', 1),
-    @('true', 'value', $true, 'metadata-command-line-read-exception', 1),
-    @('true', 'value', $false, 'metadata-command-line-read-exception', 1)
+    @('false', 'value', $true, 'metadata-creation-guard', 0, 'creation-false'),
+    @('error', 'value', $true, 'metadata-creation-check-exception', 0, 'creation-exception'),
+    @('true', '', $false, 'metadata-command-line-guard', 1, 'empty-command'),
+    @('true', 'value', $true, 'metadata-command-line-read-exception', 1, 'getter-exception'),
+    @('true', 'value', $false, 'metadata-command-line-read-exception', 1, 'valid-command')
 )) {
     $old = Invoke-SyntheticGuard $before $case[0] $case[1] $case[2]
     $new = Invoke-SyntheticGuard $after $case[0] $case[1] $case[2]
-    if ($old.calls -ne 1 -or $new.calls -ne 1 -or $old.reads -ne $case[4] -or $new.reads -ne $case[4] -or $new.detail -cne $case[3]) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_SHORT_CIRCUIT_CHANGED') } catch { }; throw 'METADATA_SHORT_CIRCUIT_CHANGED' }
+    if ((($metadataComparison = 'old-calls') -and ($old.calls -ne 1)) -or (($metadataComparison = 'new-calls') -and ($new.calls -ne 1)) -or (($metadataComparison = 'old-reads') -and ($old.reads -ne $case[4])) -or (($metadataComparison = 'new-reads') -and ($new.reads -ne $case[4])) -or (($metadataComparison = 'new-detail') -and (($metadataActualDetail = $new.detail) -cne $case[3]))) { try {
+        $metadataActualDetailCode = 'not-evaluated'
+        if ($metadataComparison -ceq 'new-detail') {
+            $metadataActualDetailCode = 'unclassified-detail'
+            if ($metadataActualDetail -is [string] -and $metadataActualDetail -cin @('not-observed', 'metadata-creation-check-exception', 'metadata-creation-guard', 'metadata-command-line-read-exception', 'metadata-command-line-guard')) {
+                $metadataActualDetailCode = $metadataActualDetail
+            }
+        }
+        [Console]::Out.WriteLine(('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_SHORT_CIRCUIT_CHANGED case={0} comparison={1} actualDetail={2}' -f $case[5], $metadataComparison, $metadataActualDetailCode))
+    } catch { }; throw 'METADATA_SHORT_CIRCUIT_CHANGED' }
     if (($null -eq $old.caught) -ne ($null -eq $new.caught)) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_VERDICT_CHANGED') } catch { }; throw 'METADATA_VERDICT_CHANGED' }
     if ($null -ne $old.caught -and $old.caught.Exception.Message -cne $new.caught.Exception.Message) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_ERROR_CHANGED') } catch { }; throw 'METADATA_ERROR_CHANGED' }
     # Getter exceptions may be wrapped by PowerShell; the original inner cause
