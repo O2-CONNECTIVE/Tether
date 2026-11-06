@@ -14,7 +14,7 @@ from check_mac_rust_owner import build_swift
 
 CASES = {'active-confirmed': 16, 'active-unknown': 16, 'active-missing': 16,
          'active-malformed': 16, 'active-invalid': 13, 'active-rejected': 13,
-         'active-signal': 13, 'active-lost-receipt': 13, 'active-panic': 11}
+         'active-signal': 13, 'active-lost-receipt': 13, 'active-panic': 12}
 
 
 def validate_report(mode, output):

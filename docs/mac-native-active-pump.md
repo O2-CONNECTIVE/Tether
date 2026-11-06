@@ -25,7 +25,7 @@ native record は既存通り Unknown と禁止置換を保持します。IO com
 
 最初の consumer の未実装 `drive_active_io` compile red → 同じ child の wire / EOF / Wait / IO 回収 / join green を対応づけます。他の negative は追加回帰です。
 
-9 modes は confirmed Close、unknown Close、Close 欠落、Close 後の不正 frame、起動時の不正 frame、startup rejection + exit2、自己 SIGTERM15、close receipt 喪失、worker の実 unwind です。9 original children を元 worker で Wait し、36 physical endpoints を一度ずつ閉じ、9 actual IO worker joins と Unknown 保持 / replacement 拒否を確認します。normal の拒否1条件と active127条件を strict report で検査します。既存 prepared Pump133条件は別 checker に保持します。
+9 modes は confirmed Close、unknown Close、Close 欠落、Close 後の不正 frame、起動時の不正 frame、startup rejection + exit2、自己 SIGTERM15、close receipt 喪失、worker の実 unwind です。9 original children を元 worker で Wait し、36 physical endpoints を一度ずつ閉じ、9 actual IO worker joins と Unknown 保持 / replacement 拒否を確認します。normal の拒否1条件と active128条件を strict report で検査します。既存 prepared Pump133条件は別 checker に保持します。
 
 ```sh
 python3 scripts/check_mac_active_pump.py

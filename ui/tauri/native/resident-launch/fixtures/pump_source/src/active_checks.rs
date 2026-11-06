@@ -55,25 +55,30 @@ pub(crate) fn run(mode: &str) {
         let mut original = match preparation {
             Preparation::Owned(owner) => owner,
             Preparation::Unknown(mut owner) => {
-                assert!(Pump::take_active(&mut owner).is_err());
-                assert!(Pump::drive_active_io(
-                    &mut owner,
-                    ContinuousClock::new().unwrap(),
-                    worker_shared
-                )
-                .is_err());
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    assert!(Pump::take_active(&mut owner).is_err());
+                    assert!(Pump::drive_active_io(
+                        &mut owner,
+                        ContinuousClock::new().unwrap(),
+                        worker_shared
+                    )
+                    .is_err());
+                }));
                 drop(owner); // Original active Drop, never prelaunch retire.
                 let exit = wait(NativePreparation::fixture_collect_retained_active);
+                if let Err(payload) = outcome {
+                    std::panic::resume_unwind(payload);
+                }
                 return (exit, State::Unknown);
             }
             Preparation::Refused => panic!("active owner refused"),
         };
-        // No active result may borrow the prelaunch Pump or retire its owner.
-        assert!(Pump::take_prepared(&mut original).is_err());
-        assert_eq!(original.retire(), State::Active);
-        assert_eq!(original.retire_active_io(), State::Active); // Wait not observed.
-        let clock = ContinuousClock::new().unwrap();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Guard assertions must also pass through original-owner cleanup.
+            assert!(Pump::take_prepared(&mut original).is_err());
+            assert_eq!(original.retire(), State::Active);
+            assert_eq!(original.retire_active_io(), State::Active); // No observed Wait.
+            let clock = ContinuousClock::new().unwrap();
             if panic_case {
                 let mut pump = Pump::take_active(&mut original).unwrap();
                 super::owner::drive_io(
@@ -137,6 +142,11 @@ pub(crate) fn run(mode: &str) {
         passed += 1;
     };
     check(result.is_err() == panic_case);
+    if panic_case {
+        check(result.as_ref().err().is_some_and(|payload| {
+            payload.downcast_ref::<&str>() == Some(&"fixed active IO unwind")
+        }));
+    }
     if let Some(id) = id {
         check(ready);
         check(receipt.is_some_and(|value| {
