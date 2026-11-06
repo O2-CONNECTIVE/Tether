@@ -1,0 +1,55 @@
+name: DO NOT MERGE - PR220 one pure poll-fixture observation
+on:
+  pull_request:
+    branches: ['diagnostic/pr200-profile-once-20261106']
+    types: [opened]
+    paths: ['diagnostics/pr200-fresh/**', '.github/workflows/pr220-poll-fixture-once.yml']
+permissions:
+  contents: read
+concurrency:
+  group: pr220-poll-fixture-once-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  fixture-only:
+    if: >-
+      github.run_attempt == 1 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diagnostic/pr220-poll-fixture-once-20261106' &&
+      github.event.pull_request.base.ref == 'diagnostic/pr200-profile-once-20261106' &&
+      github.event.pull_request.base.sha == 'e9498fdf4dee714e472ea11118eb477853b3efe5' &&
+      github.event.pull_request.draft == true
+    runs-on: windows-2022
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - name: Check out reviewed control head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          persist-credentials: false
+      - name: Check out exact reviewed fixture source separately
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: 613f4ff550cd65334b00b262a0beebbc3e069fad
+          path: fixture-source
+          persist-credentials: false
+      - name: Select pinned recorder Python only
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13.17'
+          architecture: x64
+      - name: Record versions and execute one parser then one pure poll fixture
+        timeout-minutes: 6
+        env:
+          EXPECTED_CONTROL: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $resolved = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
+          $env:RECORDER_PS_PATH_MATCH = if ([String]::Equals($resolved, (Join-Path $PSHOME 'pwsh.exe'), [StringComparison]::OrdinalIgnoreCase)) { 'true' } else { 'false' }
+          $env:RECORDER_POWERSHELL_VERSION = $PSVersionTable.PSVersion.ToString()
+          python -B control/diagnostics/pr200-fresh/poll_fixture_only.py --source fixture-source --control control --root "$env:RUNNER_TEMP/pr220-poll-fixture-once"
+          exit $LASTEXITCODE
