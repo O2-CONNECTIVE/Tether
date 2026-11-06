@@ -207,7 +207,9 @@ class DeliveryTests(unittest.TestCase):
         self.assertNotEqual(absent.returncode, 0)
         for relative in ("scripts/prepare_wry_probe.py", "scripts/prepare_wry_delivery.py", "tools/wry-delivery/protocol.rs"):
             path = helper / relative; path.parent.mkdir(parents=True, exist_ok=True)
-            data = (ROOT / relative).read_bytes()
+            data = ci.git(ROOT, "show", "HEAD:" + relative)
+            self.assertNotIn(b"\r", data)
+            self.assertIn((ROOT / relative).read_bytes(), (data, data.replace(b"\n", b"\r\n")))
             path.write_bytes(data.replace(b"\n", b"\r\n") if crlf else data)
         shutil.copyfile(self.archive, tools / "wry.crate")
         shutil.copyfile(self.com_archive, tools / "completion.crate")
