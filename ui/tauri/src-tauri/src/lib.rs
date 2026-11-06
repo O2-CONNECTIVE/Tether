@@ -6,7 +6,7 @@ mod mac_status;
 
 #[allow(
     dead_code,
-    reason = "resident wire Close evidence is not attached to process ownership or IPC"
+    reason = "resident IO ownership has no trusted launch factory or production IPC binding"
 )]
 mod resident_port;
 

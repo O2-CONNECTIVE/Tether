@@ -22,3 +22,15 @@ pub(super) fn rejection() -> Value {
 pub(super) fn event(value: &Value) -> Event {
     Event::parse(&serde_json::to_vec(value).unwrap()).unwrap()
 }
+
+pub(super) fn status_line(revision: u64, source: u64, transition: Value) -> String {
+    let mut frame = status(source);
+    frame["snapshot"]["revision"] = json!(revision);
+    frame["snapshot"]["transition"] = transition;
+    frame.to_string()
+}
+pub(super) fn intent_request(id: u64, revision: u64) -> crate::resident_port::model::IntentRequest {
+    serde_json::from_value(json!({"protocolVersion":1,"requestId":id,
+        "expectedRevision":revision,"intent":"on"}))
+    .unwrap()
+}

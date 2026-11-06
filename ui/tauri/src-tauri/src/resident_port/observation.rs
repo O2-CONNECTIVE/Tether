@@ -63,6 +63,18 @@ pub(crate) struct Observation {
     pub(super) transition: Option<Transition>,
 }
 impl Observation {
+    pub(super) fn unresolved(&self) -> Option<(u64, Intent)> {
+        self.transition
+            .as_ref()
+            .filter(|t| {
+                matches!(
+                    t.outcome,
+                    TransitionOutcome::Pending | TransitionOutcome::Unknown
+                )
+            })
+            .map(|t| (t.request_id, t.intent))
+    }
+
     pub(super) fn valid(&self) -> bool {
         self.revision > 0
             && self.revision <= SAFE_INTEGER
