@@ -1,0 +1,16 @@
+# 修正fixture sourceを用いる一回限定native観測
+
+診断専用・DO NOT MERGE。base diagnostic/pr217-repair-check-20261106@ae7b20c73331aea7e27bb3fb0586aa1d72db13ce、新head diagnostic/pr200-profile-once-20261106。opened-only/exactbranch/baseSHA/samerepo/draft/attempt1、一fresh標準windows-2022 job、native cap1。旧workflow/main/Mac/product/失敗記録を変更しない。
+
+製品source c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da/treee278496a55b4accc6caafa7a7a99538e5c8ceeca、ordinary release/custom-protocolだけ。一回locked build/package/全hash検証。診断source7e89dda809b54663f2c394126a51ecf44d121882/treeb0665e9e8a0c16c176e5e74d9755a2d0e2f52cfcを別checkoutし、controlの14runtimehelperのGitblob/actualLF-or-CRLFを前後照合する。guard追加だけで固定診断helper本体は変更しない。
+PR219run42150518230/attempt1でparser5/5・ledger/detail・五case+3negative/1positivecontrols成功したsourceを使うが、新runnerでも各一回のstrictpreflightを行い、失敗ならbuild/nativeへ進まない。
+
+既知redはPR211のcandidate-invalid-path、observer8failure/lineage-query+webview-metadataとstrictprofileMatchfalse。元PR200sessiontimeoutとは別の証拠不足。今回の識別予測は、(1)返却値が既存validatorの具体predicateで拒否されるならその単一closedenumが現れる、(2)observerのguardまたは固定processes.ps1例外位置ならspecificdetailenumが現れる、(3)source/stack不一致や分類不能ならunknown/unclassifiedで閉じる、の順。raw値や例外causeを推定・再構成しない。
+
+supervisor/request/response/error/AbortSignal/15000msは変更せず、freshownedprofile/log/tracefinish/outputを一回だけ生成し、normalcloseとownedcleanupを分ける。profileMatchfalse、欠測、observer未完了、cleanup不明、timeout/他failureで赤を保持。EBWebViewchildをrootとして許容せず、独立snapshotの件数から同一setを推測しない。新buildは原失敗EXEのreplayではなく別specimenで、EXE/archive/driverの個別SHA256を保存する。
+
+旧predicate-once workflowのlockedNode24.22.1/Python3.13.17/Rust1.99.1、cargo/custom-protocol、package/driverprovenancehash/署名/pinned131.0.2903.86setup条件を維持。公式actions固定SHA、contentsread/credentials非保持/no secrets。標準publicrunner/logsummaryだけの無料範囲を公式billing文書で再確認し、artifact/cache/executable/encodedbinary転送、新費用、credential/persistentaccess/security/auth/settings/billing/livehost/GUIを追加しない。
+
+完全boundedfixed-schema JSON/hashを既存phase2 publisherのcontrolledlog/jobsummaryだけへ保存。rawpaths/PIDs/commandlines/stacks/response/exception/任意keysは記録へ加えない。sourceidentity guardは固定pass/rejectmarkerだけ。未知・欠測はfailclosed。build/tool failureでも安全なpartialidentityとpreflightを保ち、nativeを代替実行しない。job/retry/matrix/dispatch/別attempt/結果後sourcepush/追加nativeを行わない。
+
+最終head/tree全体の独立review後だけ公開し、一観測後は実enum・session時刻・profile/normalclose/cleanupを独立監査して終了する。成功sessionや清掃は元timeout根因・profile同等性・PR200blocker解除を意味しない。元run42037151371/attempt1、PR208/209/211/213/215/217/219記録は不変。
