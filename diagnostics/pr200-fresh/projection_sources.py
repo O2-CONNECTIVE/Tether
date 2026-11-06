@@ -36,3 +36,24 @@ def fixed_blob(kind):
     if actual not in (original, original.replace(b'\n', b'\r\n')):
         raise ValueError('FIXED_PROJECTION_SOURCE_REJECTED')
     return original
+
+
+def control_blob(root):
+    """Validate exact working representation, then project the pinned Git bytes."""
+    import re
+    expected = os.environ.get('EXPECTED_CONTROL', '')
+    if not re.fullmatch('[0-9a-f]{40}', expected) or not root.is_absolute():
+        raise ValueError('FIXED_PROJECTION_SOURCE_REJECTED')
+    root = root.resolve(strict=True)
+    tree = git(root, 'rev-parse', expected + '^{tree}')
+    if (Path(git(root, 'rev-parse', '--show-toplevel').decode().strip()).resolve() != root
+            or git(root, 'rev-parse', 'HEAD').decode().strip() != expected
+            or git(root, 'rev-parse', 'HEAD^{tree}') != tree
+            or git(root, 'status', '--porcelain', '--untracked-files=all').strip()):
+        raise ValueError('FIXED_PROJECTION_SOURCE_REJECTED')
+    relative = 'diagnostics/pr200-fresh/phase2.py'
+    original = git(root, 'show', expected + ':' + relative)
+    actual = (root / relative).read_bytes()
+    if b'\r' in original or actual not in (original, original.replace(b'\n', b'\r\n')):
+        raise ValueError('FIXED_PROJECTION_SOURCE_REJECTED')
+    return original

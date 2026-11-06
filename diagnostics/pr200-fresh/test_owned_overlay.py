@@ -4,7 +4,7 @@ import unittest
 import owned_overlay as overlay
 import owned_control
 import owned_schema as schema
-from projection_sources import fixed_blob
+from projection_sources import fixed_blob, control_blob
 
 ROOT=Path(__file__).resolve().parent
 
@@ -28,7 +28,7 @@ class OwnedOverlayTests(unittest.TestCase):
         with self.assertRaises(ValueError):overlay.overlay_bytes(original+overlay.HOOK_SEAM.encode())
 
     def test_old_trial_request_inspector_and_acceptance_project_exactly(self):
-        current=(ROOT/'phase2.py').read_bytes()
+        current=control_blob(ROOT.parents[1])
         expected=fixed_blob('contract')
         self.assertEqual(owned_control.phase2_projection(current),expected)
         self.assertIn("str(native / 'inspect-driver-trace.ps1')",current.decode())
