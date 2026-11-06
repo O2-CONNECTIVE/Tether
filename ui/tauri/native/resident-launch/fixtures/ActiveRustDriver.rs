@@ -248,6 +248,8 @@ mod exercised {
             P::Owned(owner) => owner,
             _ => panic!("prelaunch"),
         };
+        owner.request_active_close();
+        c.check(owner.state() == S::OwnedUnlaunched);
         c.check(owner.poll_exit() == E::Unavailable);
         c.check(owner.retire_active_io() == S::OwnedUnlaunched);
         c.check(owner.fixture_reject_prelaunch_active_calls());

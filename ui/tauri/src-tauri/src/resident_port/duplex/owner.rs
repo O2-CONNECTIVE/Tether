@@ -242,3 +242,7 @@ mod guard_tests;
 mod launcher;
 #[path = "owner_proof.rs"]
 mod proof;
+
+#[cfg(resident_native_source)]
+#[path = "native_supervisor.rs"]
+pub(in crate::resident_port::duplex) mod native;

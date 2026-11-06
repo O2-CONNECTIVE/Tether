@@ -12,7 +12,7 @@ from check_mac_enrollment_lookup import command, completed
 from check_mac_rust_owner import NATIVE, build_swift, validate_rejection
 
 CASES = {'echo': 32, 'epipe': 32, 'missing': 29, 'lost': 28, 'exit-two': 31,
-         'signal': 31, 'drop': 9, 'unwind': 10, 'thread-exit': 9, 'guards': 9, 'decoder': 15}
+         'signal': 31, 'drop': 9, 'unwind': 10, 'thread-exit': 9, 'guards': 10, 'decoder': 15}
 NO_CHILD = {'normal', 'guards', 'decoder'}
 
 
@@ -40,7 +40,8 @@ def active_variant(rust, directory, fixture, env, target=None, execute=True):
     if execute:
         for mode in CASES if fixture else ('normal',):
             passed += validate_report(mode, command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'}))
-    negatives = [('BorrowActiveRetire', 'E0499', 'more than once'), ('BorrowActivePoll', 'E0499', 'more than once')]
+    negatives = [('BorrowActiveRetire', 'E0499', 'more than once'), ('BorrowActivePoll', 'E0499', 'more than once'),
+                 ('BorrowActiveClose', 'E0499', 'more than once')]
     if not fixture:
         negatives += [('NoNormalActiveFixture', 'E0599', 'fixture_active')]
     for name, code, message in negatives:

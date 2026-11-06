@@ -62,3 +62,5 @@ SSH途中実装の既知の公開WIP保存先は `wip/ssh-owned-shell-20261031` 
 - [Windows LocalService helper ADR](adr/0004-localservice-auth-helper.md) / [旧Tauri評価版](tauri-evaluation.md)。
 
 - [active native owner と Pump](mac-native-active-pump.md): 元 owner の実 IO を既存 shared driver へ接続し、wire / EOF / Wait / close / IO worker join を別々に検査。通常起動と native Supervisor の全 joins は未接続です。
+
+- [同じ native IO worker の supervisor](mac-native-io-supervisor.md): 元 owner の Wait / IO 回収と実 join の component を接続。通常起動・outer joins・Quit 許可は未接続です。

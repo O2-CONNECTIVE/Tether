@@ -43,3 +43,5 @@ fixture 専用 constructor は bare owner が新しく compile した自分自�
 新しい型を `pub use` だけで再 export すると、active 接続をまだ使わない既存 private module の埋め込みで unused-import error になります。公開 type alias により同じ型・API を保ち、警告抑制は追加しません。実際の owner source を埋め込む metadata-only fixture を追加し、2021 /2024 edition × normal /fixture の4構成で red → green を確認します。既存 app の明示 native cfg と Pump build / clippy も別に検査します。
 
 [active Pump 接続](mac-native-active-pump.md)では、同じ元 owner の IO を既存 shared driver へ接続します。これは native Supervisor の全終了証拠とは別で、通常起動は未接続です。
+
+[後続の IO supervision](mac-native-io-supervisor.md) は、元 guard を保持した close request と既存 Pump / 同じ worker の実 join までを接続します。追加の未起動 no-op 回帰により現行240条件、借用 close 拒否を含む compile refusal7。全回収の許可は別です。

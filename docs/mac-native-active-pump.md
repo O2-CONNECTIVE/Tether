@@ -36,3 +36,5 @@ locked / offline の既存11 dependency packages を使い、normal / fixture �
 failure / unwind の固定 child は出力を匿名 pipe 容量未満に制限し、元 worker が生きている間に元 guard / retained record を使って half-close / Wait / cleanup します。Wait polling と join には hard upper bound を主張しません。pending TLS exit 後の全回収や unbounded producer の drain をこの fixture から保証しません。ここが未証明なので、本物の native Supervisor を有効化しません。
 
 signed launch、verify-to-exec、atomic descriptor inheritance、実 producer の終了と active 全 joins、実 GUI は未実証です。a4 / a5 と task-7 は無変更で解除連絡待ちです。旧 Windows session timeout の根因解消とも扱いません。
+
+[同じ IO worker の supervisor](mac-native-io-supervisor.md) は、この active Pump を元 worker に保持し、元 Wait / IO state / 実 join の component を結びます。全 joins / Quit の許可や通常起動は接続しません。
