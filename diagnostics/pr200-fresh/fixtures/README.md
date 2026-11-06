@@ -19,3 +19,7 @@ canonical28488bytes / SHA256 `e922423db73c2743e04a5a0ebc32b095b62392f4019d3a4346
 当時のnative12063ms成功、profileMatch=false、candidate-invalid-path、observer8件/2siteを保持する。
 拒否predicateと具体的guard/exception statementは未保持で、新schemaの値を補完しない。
 path-validationのcorpus、observer-detailのstack/guard/getter例は全て合成であり、破棄済みruntime値の再構成ではない。
+
+`pr213-preflight-record.json` はrun42103056121/job127510606994/attempt1の実保持記録で、2files/canonical1551bytes/SHA256 `d219204d88fc45cfcb2053a60051ebcd582770dfb7aceaf9c8c9d8f2ffc0d152`。
+parse/ledger成功、detail fixture exit1、native0を保持する。具体的assertionは未保持で補完しない。
+新assertion fixtureのmarker/stdout/stderrは全て合成入力であり、実PowerShell failureや失われた原ログの再構成ではない。

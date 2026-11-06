@@ -13,25 +13,25 @@ foreach ($case in @(
     @('Require-Live', 7, 'Get-OwnedApp', 114, 'lineage-edge-live-check-site')
 )) {
     $stack = "at $($case[0]), ${source}: line $($case[1])`nat $($case[2]), ${source}: line $($case[3])"
-    if ((Resolve-LineageFailure $stack $source $true) -cne $case[4]) { throw 'SYNTHETIC_LOCATION_FAILED' }
-    if ((Resolve-LineageFailure $stack $source $false) -cne 'unclassified-detail') { throw 'UNTRUSTED_SOURCE_ACCEPTED' }
+    if ((Resolve-LineageFailure $stack $source $true) -cne $case[4]) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=SYNTHETIC_LOCATION_FAILED') } catch { }; throw 'SYNTHETIC_LOCATION_FAILED' }
+    if ((Resolve-LineageFailure $stack $source $false) -cne 'unclassified-detail') { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=UNTRUSTED_SOURCE_ACCEPTED') } catch { }; throw 'UNTRUSTED_SOURCE_ACCEPTED' }
 }
 foreach ($stack in @('PRIVATE_EXCEPTION', "at Get-OwnedApp, ${source}: line 999", "at Get-OwnedApp, OTHER_SOURCE: line 118", ('x' * 16385))) {
-    if ((Resolve-LineageFailure $stack $source $true) -cne 'unclassified-detail') { throw 'UNKNOWN_LOCATION_ACCEPTED' }
+    if ((Resolve-LineageFailure $stack $source $true) -cne 'unclassified-detail') { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=UNKNOWN_LOCATION_ACCEPTED') } catch { }; throw 'UNKNOWN_LOCATION_ACCEPTED' }
 }
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'observe-profile.ps1'), [ref]$tokens, [ref]$errors)
-if ($errors.Count -ne 0) { throw 'OBSERVER_SOURCE_SYNTAX_FAILED' }
+if ($errors.Count -ne 0) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=OBSERVER_SOURCE_SYNTAX_FAILED') } catch { }; throw 'OBSERVER_SOURCE_SYNTAX_FAILED' }
 $functions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('New-ObserverFailures', 'Add-ObserverFailure') }, $true))
-if ($functions.Count -ne 2) { throw 'LEDGER_SEAM_MISSING' }
+if ($functions.Count -ne 2) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=LEDGER_SEAM_MISSING') } catch { }; throw 'LEDGER_SEAM_MISSING' }
 foreach ($definition in $functions) { . ([scriptblock]::Create($definition.Extent.Text)) }
 $ledger = New-ObserverFailures
-if (@(Add-ObserverFailure $ledger 'webview-metadata' 'metadata-creation-guard').Count -ne 0) { throw 'DETAIL_UNEXPECTED_OUTPUT' }
+if (@(Add-ObserverFailure $ledger 'webview-metadata' 'metadata-creation-guard').Count -ne 0) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=DETAIL_UNEXPECTED_OUTPUT') } catch { }; throw 'DETAIL_UNEXPECTED_OUTPUT' }
 Add-ObserverFailure $ledger 'webview-metadata' 'metadata-creation-guard'
 Add-ObserverFailure $ledger 'webview-metadata' 'metadata-command-line-guard'
-if ($ledger.failureCount -ne 3 -or $ledger.details.Count -ne 2) { throw 'DETAIL_DEDUP_FAILED' }
+if ($ledger.failureCount -ne 3 -or $ledger.details.Count -ne 2) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=DETAIL_DEDUP_FAILED') } catch { }; throw 'DETAIL_DEDUP_FAILED' }
 Add-ObserverFailure $ledger 'lineage-query' 'PRIVATE_EXCEPTION'
-if ($ledger.details[-1].code -cne 'unclassified-detail' -or ($ledger | ConvertTo-Json -Depth 5).Contains('PRIVATE')) { throw 'DETAIL_REDACTION_FAILED' }
+if ($ledger.details[-1].code -cne 'unclassified-detail' -or ($ledger | ConvertTo-Json -Depth 5).Contains('PRIVATE')) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=DETAIL_REDACTION_FAILED') } catch { }; throw 'DETAIL_REDACTION_FAILED' }
 $ledger = New-ObserverFailures
 foreach ($code in @('lineage-parent-row-guard-site', 'lineage-parent-creation-guard-site', 'lineage-child-row-guard-site',
     'lineage-child-creation-guard-site', 'lineage-child-order-guard-site', 'lineage-driver-live-check-site',
@@ -39,13 +39,13 @@ foreach ($code in @('lineage-parent-row-guard-site', 'lineage-parent-creation-gu
     'lineage-app-selection-site', 'lineage-app-count-check-site', 'lineage-app-descendants-call-site',
     'lineage-webview-selection-site', 'lineage-webview-count-check-site', 'lineage-root-selection-site',
     'lineage-root-count-check-site', 'lineage-root-creation-check-site')) { Add-ObserverFailure $ledger 'lineage-query' $code }
-if ($ledger.details.Count -ne 16 -or -not $ledger.truncated -or $ledger.failureCount -ne 17) { throw 'DETAIL_BOUND_FAILED' }
+if ($ledger.details.Count -ne 16 -or -not $ledger.truncated -or $ledger.failureCount -ne 17) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=DETAIL_BOUND_FAILED') } catch { }; throw 'DETAIL_BOUND_FAILED' }
 # Execute the actual metadata guard text against synthetic getters. This tests
 # short-circuit/read/error behavior without loading processes.ps1 or any OS API.
 $text = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'observe-profile.ps1'))
 $start = $text.IndexOf("                    `$detail = 'metadata-creation-check-exception'", [StringComparison]::Ordinal)
 $end = $text.IndexOf("                    `$detail = 'metadata-identity-key-exception'", [StringComparison]::Ordinal)
-if ($start -lt 0 -or $end -le $start) { throw 'METADATA_GUARD_SEAM_MISSING' }
+if ($start -lt 0 -or $end -le $start) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_GUARD_SEAM_MISSING') } catch { }; throw 'METADATA_GUARD_SEAM_MISSING' }
 $after = [scriptblock]::Create($text.Substring($start, $end - $start))
 $before = { if (-not (Test-LineageCreation $view) -or -not $view.CommandLine) { throw 'PROFILE_IDENTITY_UNKNOWN' } }
 function Test-LineageCreation($Entry) {
@@ -76,11 +76,11 @@ foreach ($case in @(
 )) {
     $old = Invoke-SyntheticGuard $before $case[0] $case[1] $case[2]
     $new = Invoke-SyntheticGuard $after $case[0] $case[1] $case[2]
-    if ($old.calls -ne 1 -or $new.calls -ne 1 -or $old.reads -ne $case[4] -or $new.reads -ne $case[4] -or $new.detail -cne $case[3]) { throw 'METADATA_SHORT_CIRCUIT_CHANGED' }
-    if (($null -eq $old.caught) -ne ($null -eq $new.caught)) { throw 'METADATA_VERDICT_CHANGED' }
-    if ($null -ne $old.caught -and $old.caught.Exception.Message -cne $new.caught.Exception.Message) { throw 'METADATA_ERROR_CHANGED' }
+    if ($old.calls -ne 1 -or $new.calls -ne 1 -or $old.reads -ne $case[4] -or $new.reads -ne $case[4] -or $new.detail -cne $case[3]) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_SHORT_CIRCUIT_CHANGED') } catch { }; throw 'METADATA_SHORT_CIRCUIT_CHANGED' }
+    if (($null -eq $old.caught) -ne ($null -eq $new.caught)) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_VERDICT_CHANGED') } catch { }; throw 'METADATA_VERDICT_CHANGED' }
+    if ($null -ne $old.caught -and $old.caught.Exception.Message -cne $new.caught.Exception.Message) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_ERROR_CHANGED') } catch { }; throw 'METADATA_ERROR_CHANGED' }
     # Getter exceptions may be wrapped by PowerShell; the original inner cause
     # must retain reference identity, never replaced by classification machinery.
-    if ($case[0] -eq 'error' -and (-not [object]::ReferenceEquals($old.caught.Exception, $script:sentinel) -or -not [object]::ReferenceEquals($new.caught.Exception, $script:sentinel))) { throw 'METADATA_ERROR_IDENTITY_CHANGED' }
+    if ($case[0] -eq 'error' -and (-not [object]::ReferenceEquals($old.caught.Exception, $script:sentinel) -or -not [object]::ReferenceEquals($new.caught.Exception, $script:sentinel))) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_ERROR_IDENTITY_CHANGED') } catch { }; throw 'METADATA_ERROR_IDENTITY_CHANGED' }
 }
 Write-Output 'OBSERVER_DETAIL_SYNTHETIC_PASS'

@@ -1,0 +1,69 @@
+{
+  "diagnosticOnly": true,
+  "fileSha256": {
+    "build-identity.json": "05a1e32c52b24144ad7b19c3ca6571c450ef8cf2e1705e9ec7ce309d291f47cc",
+    "powershell-preflight.json": "b24461210a9f47b72a2d4885f55ebf09c9ffe99b55e0647b106d087094804cae"
+  },
+  "files": {
+    "build-identity.json": {
+      "controlCommit": "5503d59a0b71c65c00b31d155a6e7c0f3582bc64",
+      "diagnosticOnly": true,
+      "distribution": false,
+      "features": [
+        "custom-protocol"
+      ],
+      "hashes": {
+        "archiveSha256": null,
+        "builtExeSha256": null,
+        "cargoLockSha256": "a924d445cb316283917e05aa5bc66d111345204ae3230fd357b7b708b8f9debd",
+        "exeSha256": null,
+        "packageLockSha256": "b280be6406c53d2f6294c5330931827afc41f2429d19cbd1bf1ccd2bd4fe027c",
+        "supervisorSha256": "bbd8ec8cd17fcc31b31eb70698889b2cdc7c64bfb35bd21c3c33e479bd197d62",
+        "toolPinsSha256": "7465ef1be0bc482d05d5a3bc51f8ee4bfd49116221855cc0ade3787052de3ac3"
+      },
+      "originalFailure": {
+        "attempt": 1,
+        "job": 127278142941,
+        "run": 42037151371
+      },
+      "profile": "release",
+      "requestDeadlineMs": 15000,
+      "schema": 1,
+      "sourceCommit": "c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da",
+      "sourceTree": "e278496a55b4accc6caafa7a7a99538e5c8ceeca",
+      "specimen": "new-build-not-original-binary",
+      "trialCap": 1
+    },
+    "powershell-preflight.json": {
+      "fixturesExpected": 2,
+      "fixturesVerified": 1,
+      "kind": "predicate-powershell-preflight",
+      "parseFilesExpected": 5,
+      "parseFilesVerified": 5,
+      "passed": false,
+      "schema": 2,
+      "stages": {
+        "detail": {
+          "code": "fixture-rejected",
+          "exitCode": 1,
+          "passed": false,
+          "runtimeExecuted": true
+        },
+        "ledger": {
+          "code": "pass",
+          "exitCode": 0,
+          "passed": true,
+          "runtimeExecuted": true
+        },
+        "parse": {
+          "code": "pass",
+          "exitCode": 0,
+          "passed": true,
+          "runtimeExecuted": true
+        }
+      }
+    }
+  },
+  "schema": 1,
+  "trial": 1
+}

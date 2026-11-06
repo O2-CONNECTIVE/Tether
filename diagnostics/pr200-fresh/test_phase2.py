@@ -33,8 +33,9 @@ def synthetic_classification():
 
 
 def synthetic_preflight():
-    return {'schema': 2, 'kind': 'predicate-powershell-preflight', 'parseFilesExpected': 5,
+    return {'schema': 3, 'kind': 'predicate-powershell-preflight', 'parseFilesExpected': 5,
             'parseFilesVerified': 5, 'fixturesExpected': 2, 'fixturesVerified': 2, 'passed': True,
+            'detailAssertion': {'status': 'not-applicable', 'code': None},
             'stages': {key: {'runtimeExecuted': True, 'exitCode': 0, 'passed': True, 'code': 'pass'}
                        for key in ('parse', 'ledger', 'detail')}}
 
