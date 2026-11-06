@@ -62,3 +62,5 @@ unknown case では全 fd の close 実行と thread join の後も元の native
 追加5 case の post-join 条件は37件で、既存96件と合わせて133件を要求します。fixture 内の追加 assert も非0終了へ伝播します。
 この worker は producer を起動しません。実 join の保証はこの fixture の Rust worker だけであり、native producer の IO / supervisor / outer monitor join へ拡張しません。startup rejection の parser + EOF も native Process の exit code 2 / exact Wait を伴いません。
 統合対象 tree を固定して実行する検証は[combined 検証条件](mac-native-combined-verification.md)へ分けます。
+
+[active owner の後続接続](mac-native-active-pump.md)は元 TLS worker の active guard を既存 shared IO loop で借用します。上記の prepared fixture と別に、固定 self-child の Wait と実 IO worker join を検証し、全 joins / Quit 許可にはしません。

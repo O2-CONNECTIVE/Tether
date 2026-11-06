@@ -1,8 +1,30 @@
 //! Concrete prepared native IO, compiled only in an explicit source variant.
 use super::*;
 use crate::native_preparation::{NativePreparation, PreparedIo, State};
+use std::sync::{Arc, Mutex};
 
 impl<'owner> Pump<PreparedIo<'owner>> {
+    pub(in crate::resident_port::duplex) fn take_active(
+        owner: &'owner mut NativePreparation,
+    ) -> Result<Self, ()> {
+        if owner.state() != State::Active {
+            return Err(());
+        }
+        Ok(Self::with_io(owner.io()))
+    }
+
+    /// Borrows the original thread-confined owner through the shared IO loop.
+    /// Returning proves neither EOF, original Process Wait, receipts nor joins.
+    pub(in crate::resident_port::duplex) fn drive_active_io(
+        owner: &'owner mut NativePreparation,
+        clock: ContinuousClock,
+        shared: Arc<Mutex<Shared>>,
+    ) -> Result<(), ()> {
+        let mut pump = Self::take_active(owner)?;
+        super::super::owner::drive_io(|state, clock| pump.step(state, clock), clock, shared);
+        Ok(())
+    }
+
     pub(in crate::resident_port::duplex) fn take_prepared(
         owner: &'owner mut NativePreparation,
     ) -> Result<Self, ()> {
