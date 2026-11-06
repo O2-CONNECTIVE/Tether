@@ -1,4 +1,7 @@
 fn main() {
+    // Recognize, never enable, the isolated native Pump source variant.
+    println!("cargo:rustc-check-cfg=cfg(resident_native_source)");
+    println!("cargo:rustc-check-cfg=cfg(resident_launch_fixture)");
     let attributes =
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "get_shell_status",

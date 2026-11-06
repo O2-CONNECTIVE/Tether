@@ -16,7 +16,7 @@ CASES = {'lifetime': 12, 'drop': 6, 'io': 7, 'unknown': 9,
          'byte-stream': 23, 'byte-unknown': 9, 'byte-reject': 7}
 NORMAL_EXPORTS = {'_rh_resident_preparation_' + name for name in ('create', 'state', 'retire', 'read', 'write', 'half_close')}
 FIXTURE_EXPORTS = {'_rh_fixture_preparation_' + name for name in
-                   ('create', 'probe', 'exchange', 'close_count', 'open_count', 'exhaust', 'retire_calls', 'peer')}
+                   ('create', 'probe', 'exchange', 'close_count', 'open_count', 'exhaust', 'retire_calls', 'peer', 'send', 'receive')}
 
 
 def validate_report(mode, output):
@@ -69,6 +69,21 @@ def rust_variant(rust, directory, fixture, env):
     return passed
 
 
+def build_swift(swift, sdk, target_arch, fixture, directory, cache, env):
+    sources = [str(NATIVE / name) for name in ('ResidentLaunchPreparation.swift', 'OwnedPreparationIO.swift', 'ResidentPreparationABI.swift', 'PreparedByteIO.swift')]
+    library = directory / 'libResidentPreparation.dylib'
+    base = [swift, '-swift-version', '6', '-warnings-as-errors', '-sdk', sdk,
+            '-target', target_arch + '-apple-macosx11.0', '-parse-as-library',
+            '-module-cache-path', str(cache), '-import-objc-header', str(NATIVE / 'ResidentPreparation.h')]
+    if fixture:
+        base += ['-D', 'RESIDENT_LAUNCH_FIXTURE', '-Xcc', '-DRESIDENT_LAUNCH_FIXTURE']
+    command(base + ['-emit-library', '-module-name', 'ResidentPreparation'] + sources +
+            ['-Xlinker', '-weak_framework', '-Xlinker', 'LightweightCodeRequirements',
+             '-Xlinker', '-install_name', '-Xlinker', '@rpath/libResidentPreparation.dylib', '-o', str(library)], env)
+    validate_exports(command(['/usr/bin/nm', '-gUj', str(library)], env), fixture)
+    validate_weak_link(command(['/usr/bin/otool', '-l', str(library)], env))
+
+
 def run():
     if len(sys.argv) != 1 or sys.platform != 'darwin':
         raise ValueError('unsupported fixture invocation')
@@ -86,23 +101,11 @@ def run():
     with tempfile.TemporaryDirectory(prefix='resident-rust-owner-') as temporary:
         root = Path(temporary)
         passed = 0
-        sources = [str(NATIVE / name) for name in ('ResidentLaunchPreparation.swift', 'OwnedPreparationIO.swift', 'ResidentPreparationABI.swift', 'PreparedByteIO.swift')]
         for target_arch in (arch, 'x86_64' if arch == 'arm64' else 'arm64'):
             for fixture in (False, True):
                 directory = root / (target_arch + ('-fixture' if fixture else '-normal'))
                 directory.mkdir()
-                library = directory / 'libResidentPreparation.dylib'
-                base = [swift, '-swift-version', '6', '-warnings-as-errors', '-sdk', sdk,
-                        '-target', target_arch + '-apple-macosx11.0', '-parse-as-library',
-                        '-module-cache-path', str(root / ('cache-' + target_arch)),
-                        '-import-objc-header', str(NATIVE / 'ResidentPreparation.h')]
-                if fixture:
-                    base += ['-D', 'RESIDENT_LAUNCH_FIXTURE', '-Xcc', '-DRESIDENT_LAUNCH_FIXTURE']
-                command(base + ['-emit-library', '-module-name', 'ResidentPreparation'] + sources +
-                        ['-Xlinker', '-weak_framework', '-Xlinker', 'LightweightCodeRequirements',
-                         '-Xlinker', '-install_name', '-Xlinker', '@rpath/libResidentPreparation.dylib', '-o', str(library)], env)
-                validate_exports(command(['/usr/bin/nm', '-gUj', str(library)], env), fixture)
-                validate_weak_link(command(['/usr/bin/otool', '-l', str(library)], env))
+                build_swift(swift, sdk, target_arch, fixture, directory, root / ('cache-' + target_arch), env)
                 if target_arch == arch:
                     passed += rust_variant(rust, directory, fixture, env)
     print(json.dumps({'fixture': 'resident-rust-owner', 'passed': passed, 'compileRefusals': 9,

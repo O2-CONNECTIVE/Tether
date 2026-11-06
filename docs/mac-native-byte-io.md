@@ -38,13 +38,13 @@ Rust → 実 C ABI → 同じ owned端点の byte、pending、raw EOF、half-clo
 close receipt fault は実 close 後の合成確認喪失です。実 kernel read/write errno 全種の注入や、起動後の SIGPIPE・peer 喪失を実証したものではありません。
 新 checker は前段53条件を維持して92条件を要求します。両構成の Send / Sync、借用中 retire / drop、通常 fixture API 不在の9 compile-fail は、所定の code と理由を確認します。
 前段 source では `io` 自体が無い E0599 となるため、これを正しい借用拒否として合格にしません。実装後は E0499 / E0505 を要求します。
-通常 native6 export / fixture14 export を区別し、欠落・混入・weak link の不正を拒否します。既存 C 74条件を維持し、peer反復の16条件を追加して90条件、requirement35条件も維持します。
+#224 時点の通常native6 / fixture14 exportに対し、[後続Pump fixture](mac-native-pump.md)ではfixture peer送受信だけを追加し、通常6 / fixture16 exportを厳密に区別します。既存 C 74条件を維持し、peer反復の16条件を追加した90条件、requirement35条件も維持します。
 新しい fixture helper の close後再呼出しは、初回に自分の新しい pipe の flag を変更する negative を検出しました。必要な元端点の attempted 状態を fcntl 前に確認する最小修正で、閉じた番号の再利用へ触れません。既存 process の fd 検索や操作は使いません。
 Swift の両 architecture・両構成、Rust host の両構成を compile します。Rust Intel std は既存 toolchain に無く未実行、foreign 実行・旧 OS load も未確認です。toolchain 導入や製品 minimum OS 変更はしません。
 
 ## 後続との境界
 
-既存 `resident_port/duplex/Pump` は File の Read / Write と control half-close を使います。この adapter はその IO 契約の前提を減らしますが、Pump 本体や supervisor にはまだ登録しません。
+既存 `resident_port/duplex/Pump` は Read / Write と control half-close を使います。後続の[source-only Pump接続](mac-native-pump.md)で同じframing coreへ結びますが、通常startup / native supervisorには登録しません。
 sealed 実行、同じ Foundation Process の終了結果と exact Wait、起動後の child側端点解放、SIGPIPE / peer喪失と atomic inheritance、authoritative Close、IO / supervisor / outer joins の所有証拠を閉じる必要があります。
 `std::process::Child` の別 owner で native Wait を代用せず、未起動 owner を active owner に変更しません。
 実 publisher / 承認 release / protected policy / 署名・配置 / OS enforcement は未確立です。未設定なら fail closed、通常起動は未接続。#200 blocker / 未統合 stack / CI 未実行は継続します。

@@ -142,6 +142,18 @@ private final class PreparationSlot: @unchecked Sendable {
         guard stateLocked(handle) == .ownedUnlaunched, let owner = record?.owner else { return 0 }
         return owner.peer(action) ? 1 : 0
     }
+    func sendPeer(_ handle: UInt64, pointer: UnsafePointer<UInt8>?, count: UInt32) -> UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard stateLocked(handle) == .ownedUnlaunched, let owner = record?.owner else { return 0 }
+        return owner.sendPeer(pointer, count: count)
+    }
+    func receivePeer(_ handle: UInt64, pointer: UnsafeMutablePointer<UInt8>?, count: UInt32) -> UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard stateLocked(handle) == .ownedUnlaunched, let owner = record?.owner else { return 0 }
+        return owner.receivePeer(pointer, count: count)
+    }
     func probe(_ handle: UInt64, exchange: Bool) -> UInt32 {
         lock.lock()
         defer { lock.unlock() }
@@ -201,6 +213,12 @@ private let preparationSlot = PreparationSlot()
 #if RESIDENT_LAUNCH_FIXTURE
 @c @implementation public func rh_fixture_preparation_peer(_ handle: UInt64, _ action: UInt32) -> UInt32 {
     autoreleasepool { preparationSlot.peer(handle, action: action) }
+}
+@c @implementation public func rh_fixture_preparation_send(_ handle: UInt64, _ bytes: UnsafePointer<UInt8>?, _ count: UInt32) -> UInt32 {
+    autoreleasepool { preparationSlot.sendPeer(handle, pointer: bytes, count: count) }
+}
+@c @implementation public func rh_fixture_preparation_receive(_ handle: UInt64, _ bytes: UnsafeMutablePointer<UInt8>?, _ count: UInt32) -> UInt32 {
+    autoreleasepool { preparationSlot.receivePeer(handle, pointer: bytes, count: count) }
 }
 @c @implementation public func rh_fixture_preparation_create(_ mode: UInt32) -> UInt64 {
     autoreleasepool { preparationSlot.create(fixtureMode: mode) }

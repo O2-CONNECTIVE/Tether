@@ -15,6 +15,18 @@ final class OwnedPreparationIO {
     private var retired = false
     private var complete = false
     #if RESIDENT_LAUNCH_FIXTURE
+    func sendPeer(_ pointer: UnsafePointer<UInt8>?, count: UInt32) -> UInt32 {
+        guard let pointer, (1...4096).contains(count), ends.count == 4, !retired,
+              preparePeerEnd(3) else { return 0 }
+        let written = Darwin.write(ends[3].fd, pointer, Int(count))
+        return written > 0 ? UInt32(written) : 0
+    }
+    func receivePeer(_ pointer: UnsafeMutablePointer<UInt8>?, count: UInt32) -> UInt32 {
+        guard let pointer, (1...4096).contains(count), ends.count == 4, !retired,
+              preparePeerEnd(0) else { return 0 }
+        let received = Darwin.read(ends[0].fd, pointer, Int(count))
+        return received > 0 ? UInt32(received) : 0
+    }
     private(set) var closed: UInt32 = 0
     private(set) var open: UInt32 = 0
     var loseCloseAcknowledgement = false

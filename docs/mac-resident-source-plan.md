@@ -121,3 +121,8 @@ sealed 実行、atomic inheritance 境界、active owner の IO transfer / 全�
 [具体的 byte adapter](mac-native-byte-io.md)は fd 所有を Swift に残し、Rust の mutable borrow から bounded Read / Write / half-close を呼びます。
 pending / raw EOF / half-close / unknown と元 owner の回収を区別し、既存 Pump が使う IO 契約の前提を閉じます。Pump / supervisor / 通常起動への登録は行いません。
 sealed 実行・起動後の端点解放と SIGPIPE / inheritance・exact Wait / 全 joins の証拠を後続に残します。
+
+## 既存 Pump への source 接続
+
+[具体的 Pump 接続](mac-native-pump.md)は同じframing / Shared / wire処理をChildIoと借用PreparedIoで共用し、新しいgeneric IO traitを作りません。
+native経路は明示的source cfgだけで、通常build / startup / IPCへは未接続。supervisorのexact Child / Wait / joinsの判定は変更せず、native EOFを親解放証明にしません。

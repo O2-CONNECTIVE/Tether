@@ -82,6 +82,8 @@ final class ResidentLaunchPreparation {
     #if RESIDENT_LAUNCH_FIXTURE
     func fixtureCounts() -> (open: UInt32, closed: UInt32) { (io.open, io.closed) }
     func peer(_ action: UInt32) -> Bool { io.peer(task, action: action) }
+    func sendPeer(_ pointer: UnsafePointer<UInt8>?, count: UInt32) -> UInt32 { io.sendPeer(pointer, count: count) }
+    func receivePeer(_ pointer: UnsafeMutablePointer<UInt8>?, count: UInt32) -> UInt32 { io.receivePeer(pointer, count: count) }
     func loseCloseAcknowledgement() { io.loseCloseAcknowledgement = true }
     func exchange() -> Bool { io.exchange(task) }
     func ioIntact() -> Bool { io.intact(task) }

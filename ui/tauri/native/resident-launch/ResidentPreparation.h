@@ -38,5 +38,7 @@ uint32_t rh_fixture_preparation_open_count(void);
 uint32_t rh_fixture_preparation_exhaust(void);
 uint32_t rh_fixture_preparation_retire_calls(void);
 uint32_t rh_fixture_preparation_peer(uint64_t handle, uint32_t action);
+uint32_t rh_fixture_preparation_send(uint64_t handle, const uint8_t * _Nullable bytes, uint32_t count);
+uint32_t rh_fixture_preparation_receive(uint64_t handle, uint8_t * _Nullable bytes, uint32_t count);
 #endif
 #endif

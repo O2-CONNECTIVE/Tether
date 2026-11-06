@@ -4,6 +4,14 @@
 )]
 mod mac_status;
 
+#[cfg(all(target_os = "macos", resident_native_source))]
+#[allow(
+    dead_code,
+    reason = "explicit native source variant, no production binding"
+)]
+#[path = "../../native/resident-launch/rust/owner.rs"]
+mod native_preparation;
+
 #[allow(
     dead_code,
     reason = "resident IO ownership has no trusted launch factory or production IPC binding"

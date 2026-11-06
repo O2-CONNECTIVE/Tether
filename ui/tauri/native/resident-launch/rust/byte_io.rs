@@ -19,6 +19,18 @@ impl NativePreparation {
 }
 
 impl PreparedIo<'_> {
+    #[cfg(resident_launch_fixture)]
+    pub fn fixture_send(&mut self, bytes: &[u8]) -> usize {
+        self.owner.fixture_send(bytes)
+    }
+    #[cfg(resident_launch_fixture)]
+    pub fn fixture_receive(&mut self, bytes: &mut [u8]) -> usize {
+        self.owner.fixture_receive(bytes)
+    }
+    #[cfg(resident_launch_fixture)]
+    pub fn fixture_peer(&mut self, action: u32) -> bool {
+        self.owner.fixture_peer(action)
+    }
     fn available(&self) -> io::Result<()> {
         if self.owner.state == State::OwnedUnlaunched {
             Ok(())

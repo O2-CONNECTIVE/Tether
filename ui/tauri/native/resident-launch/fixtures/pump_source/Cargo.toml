@@ -1,0 +1,13 @@
+[package]
+name = "native-pump-source-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ["cfg(resident_native_source)", "cfg(resident_launch_fixture)"] }

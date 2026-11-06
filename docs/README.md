@@ -45,6 +45,7 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 - [未起動 owner の FFI と匿名 IO](mac-prelaunch-ffi-io.md): 元 thread と同じ Process の保持、匿名 pipe の close-once、unknown 保持の C fixture。実 producer の Wait / joins は後続です。
 - [未起動 native owner の Rust 接続](mac-native-rust-owner.md): 実 C ABI と同じ owner を元 thread に保持し、retire / Drop と unknown を合成 library で検証。通常アプリは未接続です。
 - [同じ native owner の byte IO](mac-native-byte-io.md): fd 所有を移さず、借用 Read / Write と control half-close を接続。raw EOF と起動後の回収証拠を区別します。
+- [同じ native owner と Pump](mac-native-pump.md): 既存framing処理へ具体的な借用IOを接続するsource fixture。通常startup / native supervisorの終了証拠は未接続です。
 - [Go license inventory](go-license-inventory.md)、[配布条件](distribution.md)。旧配布条件の合格を新しいMac packageへ転用しない。
 - [検証状態](tether-pilot-status.md)のpackage節に、license閉包・署名・notarization・受領者起動の残件を集約。
 - [旧Python開発手順](development.md)はPython部分の検証用。Go/Swiftの全試験を包含しない。

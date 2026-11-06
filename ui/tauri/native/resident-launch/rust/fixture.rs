@@ -9,6 +9,8 @@ unsafe extern "C" {
     fn rh_fixture_preparation_open_count() -> u32;
     fn rh_fixture_preparation_retire_calls() -> u32;
     fn rh_fixture_preparation_peer(handle: u64, action: u32) -> u32;
+    fn rh_fixture_preparation_send(handle: u64, bytes: *const u8, count: u32) -> u32;
+    fn rh_fixture_preparation_receive(handle: u64, bytes: *mut u8, count: u32) -> u32;
 }
 
 pub enum FixedFixture {
@@ -26,6 +28,29 @@ pub struct Counts {
 }
 
 impl NativePreparation {
+    pub fn fixture_receive(&mut self, bytes: &mut [u8]) -> usize {
+        if bytes.is_empty() || bytes.len() > 4096 {
+            return 0;
+        }
+        // SAFETY: fixture-only live writable slice on the same owned pipe.
+        unsafe {
+            rh_fixture_preparation_receive(
+                self.handle.get(),
+                bytes.as_mut_ptr(),
+                bytes.len() as u32,
+            ) as usize
+        }
+    }
+    pub fn fixture_send(&mut self, bytes: &[u8]) -> usize {
+        if bytes.is_empty() || bytes.len() > 4096 {
+            return 0;
+        }
+        // SAFETY: fixture-only live slice, bounded count, same owned native pipe.
+        unsafe {
+            rh_fixture_preparation_send(self.handle.get(), bytes.as_ptr(), bytes.len() as u32)
+                as usize
+        }
+    }
     pub fn fixture_peer(&mut self, action: u32) -> bool {
         // SAFETY: test-only fixed peer actions, no fd/path or live producer.
         unsafe { rh_fixture_preparation_peer(self.handle.get(), action) == 1 }

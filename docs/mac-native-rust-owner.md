@@ -27,7 +27,7 @@ thread 自体が残ったまま guard を忘れる場合は、native slot / IO �
 
 Swift の `@c @implementation` は C header と signature を compiler で照合しますが、internal visibility のままでは今回の dylib に C symbol を export しませんでした。
 初回の実 Rust link が3 symbol未解決で失敗し、nm は正しい名を non-external と表示しました。ABI function の public visibility を明示する最小修正で link を成立させています。
-#222 時点では通常3つの preparation export を検査しました。[後続の byte IO](mac-native-byte-io.md)を含む現在の source は通常6 / fixture14 export を要求し、欠落・混入を拒否します。
+#222 時点では通常3つの preparation export を検査しました。[後続の byte IO](mac-native-byte-io.md)は通常6 / fixture14、[Pump source fixture](mac-native-pump.md)を含む現在の source は通常6 / fixture16 export を要求し、欠落・混入を拒否します。
 [Swift C export](https://www.swift.org/blog/swift-6.3-released/)
 
 これは配布用の signed library / release identity / install ではありません。各 binary は自己所有の一時 fixture で、信頼済み配置や起動許可に使いません。
