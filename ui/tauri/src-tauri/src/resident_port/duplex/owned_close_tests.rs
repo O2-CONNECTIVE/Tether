@@ -1,4 +1,4 @@
-//! Real pipe fixtures use only system Python + native clock, no host/backend.
+//! Real pipe fixtures execute the selected Python image + native clock, no host/backend.
 use super::{
     closure::Closure,
     owner::{End, Supervisor},
@@ -14,6 +14,7 @@ use std::{
 const SCRIPT: &str = r#"
 import sys,time,os
 print('RESIDENT_FIXTURE_CHILD phase=entered pid='+str(os.getpid())+' mode='+sys.argv[1],file=sys.stderr,flush=True)
+assert os.path.realpath(sys.executable)==os.path.realpath(sys.argv[3]), "fixture must execute the selected Python image directly"
 import ctypes,json
 lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
 class Timebase(ctypes.Structure): _fields_=[('numer',ctypes.c_uint32),('denom',ctypes.c_uint32)]
@@ -36,9 +37,13 @@ if mode=='hold': time.sleep(0.2)
 sys.exit(1 if mode=='exit-error' else 0)
 "#;
 pub(super) fn command(mode: &str) -> Command {
-    let mut command = Command::new("/usr/bin/python3");
+    // Resolve the developer-tool shim before the lifecycle begins. This does
+    // not run or warm Python; every actual child still has the same deadline.
+    let image = super::fixture_python::image();
+    let mut command = Command::new(&image);
     command
         .args(["-I", "-S", "-c", SCRIPT, mode, &status(1, 0, json!(null))])
+        .arg(&image)
         .env_clear();
     command
 }
