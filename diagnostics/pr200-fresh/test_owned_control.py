@@ -13,7 +13,7 @@ from test_owned_schema import complete
 
 
 def preflight_pass():
-    v=control.empty_preflight();v.update(passed=True,casesCompleted=57,failureCase='not-applicable',runtimeVersions={'python':'3.13.17','powershell':'7.6.9'})
+    v=control.empty_preflight();v.update(passed=True,casesCompleted=58,failureCase='not-applicable',runtimeVersions={'python':'3.13.17','powershell':'7.6.9'})
     v['stages']={k:{'runtimeExecuted':True,'exitCode':0,'passed':True,'code':'pass'} for k in v['stages']}
     return v
 
@@ -35,6 +35,7 @@ class OwnedControlTests(unittest.TestCase):
                     capture=complete()
                     if malformed:capture['path']='PRIVATE'
                     report.write(root/'single-trial/output/owned-collection.json',capture)
+                    (root/'single-trial/supervisor.log').write_bytes(b'OWNED_CAPTURE_PERSIST_OK\n')
                     return 1
                 with patch.object(control,'verify_source_control'),patch.object(control.overlay,'manifest_safe',return_value={}),patch.object(control.overlay,'verify'),patch.object(control.phase2,'trial',side_effect=trial):
                     self.assertEqual(control.trial(Path('source'),Path('control'),root),1)
@@ -44,6 +45,38 @@ class OwnedControlTests(unittest.TestCase):
                 self.assertFalse(result['scopePassed']);self.assertTrue(result['originalFailurePreserved'])
                 self.assertEqual(result['captureComplete'],not malformed)
                 self.assertNotIn('PRIVATE',(root/'safe/owned-collection.json').read_text())
+
+    def test_capture_is_salvaged_after_old_wrapper_raises_without_retry(self):
+        with tempfile.TemporaryDirectory() as f:
+            root=Path(f);report.write(root/'safe/owned-hook-preflight.json',preflight_pass());report.write(root/'safe/owned-overlay-identity.json',{})
+            calls=[]
+            def trial(*args,**kwargs):
+                calls.append(1);report.write(root/'single-trial/output/owned-collection.json',complete())
+                (root/'single-trial/supervisor.log').write_bytes(b'OWNED_CAPTURE_PERSIST_OK\n')
+                raise OSError('PRIVATE_WRAPPER')
+            with patch.object(control,'verify_source_control'),patch.object(control.overlay,'manifest_safe',return_value={}),patch.object(control.overlay,'verify'),patch.object(control.phase2,'trial',side_effect=trial):
+                self.assertEqual(control.trial(Path('source'),Path('control'),root),1)
+            self.assertEqual(len(calls),1);self.assertTrue(schema.capture_safe(report.read(root/'safe/owned-collection.json'))['complete'])
+            v=schema.verdict_safe(report.read(root/'safe/owned-capture-verdict.json'));self.assertFalse(v['scopePassed']);self.assertFalse(v['wrapperCompleted']);self.assertIsNone(v['oldContinue'])
+
+    def test_no_complete_capture_passes_without_one_positive_persistence_marker(self):
+        for raw,expected in [(b'',False),(b'OWNED_CAPTURE_PERSIST_OK\n',True),(b'OWNED_CAPTURE_PERSIST_OK\nOWNED_CAPTURE_PERSIST_UNKNOWN\n',False),(b'OWNED_CAPTURE_PERSIST_OK\n'*2,False),(b'x'*(1024*1024+1),False)]:
+            with tempfile.TemporaryDirectory() as f:
+                path=Path(f)/'log';path.write_bytes(raw);self.assertEqual(control.persistence_verified(path),expected)
+
+    def test_present_complete_payload_without_confirmed_persistence_never_passes(self):
+        for marker in (b'',b'OWNED_CAPTURE_PERSIST_UNKNOWN\n'):
+            with tempfile.TemporaryDirectory() as f:
+                root=Path(f);report.write(root/'safe/owned-hook-preflight.json',preflight_pass());report.write(root/'safe/owned-overlay-identity.json',{})
+                old={'trial':1,'continue':True,'pr200Blocked':True,'interpretation':'inconclusive','stopReason':'single-observation-complete-inconclusive','classificationComplete':True}
+                def trial(*args,**kwargs):
+                    report.write(root/'safe/trial.json',old);report.write(root/'single-trial/output/owned-collection.json',complete())
+                    (root/'single-trial/supervisor.log').write_bytes(marker);return 0
+                with patch.object(control,'verify_source_control'),patch.object(control.overlay,'manifest_safe',return_value={}),patch.object(control.overlay,'verify'),patch.object(control.phase2,'trial',side_effect=trial):
+                    self.assertEqual(control.trial(Path('source'),Path('control'),root),1)
+                capture=schema.capture_safe(report.read(root/'safe/owned-collection.json'));self.assertFalse(capture['complete'])
+                result=schema.verdict_safe(report.read(root/'safe/owned-capture-verdict.json'));self.assertFalse(result['scopePassed']);self.assertFalse(result['persistenceVerified']);self.assertTrue(result['oldContinue'])
+                self.assertEqual(report.read(root/'safe/trial.json'),old)
 
     def test_preflight_each_failure_stops_and_checkpoints_without_retry(self):
         for failure in ('parse','fixture'):

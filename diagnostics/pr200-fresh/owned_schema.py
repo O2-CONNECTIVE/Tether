@@ -1,7 +1,7 @@
 """Closed diagnostic-only schemas; no acceptance/profile policy replacement."""
 import re
 
-CODES={'hook-not-reached','ok','invalid-set','duplicate-identity','slot-mismatch','path-invalid','overrun','hook-failed','unavailable','identity-mismatch','creation-unknown','creation-mismatch','handle-release-uncertain','exited-before','exited-during','argv-missing','argv-ambiguous','argv-unavailable','profile-outside','directory-unavailable','directory-reparse','directory-alias','directory-changed','directory-limit','directory-dispose-uncertain','set-changed','set-unknown','capture-unavailable'}
+CODES={'hook-not-reached','ok','invalid-set','duplicate-identity','slot-mismatch','path-invalid','overrun','hook-failed','unavailable','identity-mismatch','creation-unknown','creation-mismatch','handle-release-uncertain','exited-before','exited-during','argv-missing','argv-ambiguous','argv-unavailable','profile-outside','directory-unavailable','directory-reparse','directory-alias','directory-changed','directory-limit','directory-dispose-uncertain','set-changed','set-unknown','capture-unavailable','persistence-uncertain'}
 STATES={'not-observed','live','exited','identity-mismatch','unavailable','creation-unknown','creation-mismatch','handle-release-uncertain'}
 DIRECTORIES={'not-observed','not-applicable','ok','directory-unavailable','directory-reparse','directory-alias','directory-changed','directory-limit','directory-dispose-uncertain'}
 
@@ -41,18 +41,18 @@ def placeholder():
 
 
 def verdict_safe(v):
-    need(isinstance(v,dict) and set(v)=={'schema','instrumented','captureComplete','oldContinue','scopePassed','originalFailurePreserved','pr200Blocked','status'})
+    need(isinstance(v,dict) and set(v)=={'schema','instrumented','captureComplete','oldContinue','scopePassed','originalFailurePreserved','pr200Blocked','status','persistenceVerified','wrapperCompleted','overlayStable'})
     need(type(v['schema']) is int and v['schema']==1 and v['instrumented'] is True and v['originalFailurePreserved'] is True and v['pr200Blocked'] is True)
-    need(all(type(v[k]) is bool for k in ('captureComplete','scopePassed')) and (v['oldContinue'] is None or type(v['oldContinue']) is bool))
-    need(v['scopePassed'] is (v['captureComplete'] and v['oldContinue'] is True))
-    need(v['status'] in {'observed','not-reached','capture-unavailable','overlay-drift','preflight-failed'})
+    need(all(type(v[k]) is bool for k in ('captureComplete','scopePassed','persistenceVerified','wrapperCompleted','overlayStable')) and (v['oldContinue'] is None or type(v['oldContinue']) is bool))
+    need(v['scopePassed'] is (v['captureComplete'] and v['oldContinue'] is True and v['persistenceVerified'] and v['wrapperCompleted'] and v['overlayStable']))
+    need(v['status'] in {'observed','not-reached','capture-unavailable','overlay-drift','preflight-failed','persistence-uncertain','wrapper-uncertain'})
     return v
 
 
 def preflight_safe(v):
     need(isinstance(v,dict) and set(v)=={'schema','kind','stages','passed','casesExpected','casesCompleted','failureCase','runtimeVersions'})
     need(type(v['schema']) is int and v['schema']==1 and v['kind']=='owned-hook-preflight' and type(v['passed']) is bool)
-    need(type(v['casesExpected']) is int and v['casesExpected']==57 and type(v['casesCompleted']) is int and v['casesCompleted'] in {0,57})
+    need(type(v['casesExpected']) is int and v['casesExpected']==58 and type(v['casesCompleted']) is int and v['casesCompleted'] in {0,58})
     need(isinstance(v['stages'],dict) and set(v['stages'])=={'parse','fixture'})
     for stage in v['stages'].values():
         need(isinstance(stage,dict) and set(stage)=={'runtimeExecuted','exitCode','passed','code'} and type(stage['passed']) is bool)
@@ -67,11 +67,11 @@ def preflight_safe(v):
         need(stage['code']!='fixture-rejected' or stage['runtimeExecuted'] is True and type(stage['exitCode']) is int)
     need(v['stages']['parse']['passed'] or v['stages']['fixture']['code']=='not-run')
     need(v['passed'] is all(s['passed'] for s in v['stages'].values()))
-    need(v['casesCompleted']==(57 if v['stages']['fixture']['passed'] else 0))
+    need(v['casesCompleted']==(58 if v['stages']['fixture']['passed'] else 0))
     need(isinstance(v['runtimeVersions'],dict) and set(v['runtimeVersions'])=={'python','powershell'})
     for item in v['runtimeVersions'].values():need(item is None or isinstance(item,str) and re.fullmatch(r'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(\.[0-9]{1,5})?',item))
     need(not v['passed'] or v['runtimeVersions']['python']=='3.13.17' and v['runtimeVersions']['powershell'] is not None)
-    known='load root child all-child-slots outside nested-child sibling null-argv empty-argv duplicate-argv split-argv quoted-suffix invalid-path shuffled-slots duplicate-slots missing-handle duplicate-identity duplicate-handle row-limit pid-reuse creation-mismatch creation-unknown exited-before exited-during rights-unknown release-uncertain reparse alias directory-changed directory-partial directory-dispose new-child set-unknown overrun partial throw-contained close-all close-failure close-throw argv-native native-layout missing-child-name missing-child-parent null-child missing-entry-slot missing-entry-identity null-entry time-unknown-sticky set-overrun final-overrun borrow-ok borrow-query-throw borrow-addref-fail borrow-release-fail no-webview hook-throw-preserves-close hook-save-failure-preserves-close hook-success-isolated'.split()
+    known='load root child all-child-slots outside nested-child sibling null-argv empty-argv duplicate-argv split-argv quoted-suffix invalid-path shuffled-slots duplicate-slots missing-handle duplicate-identity duplicate-handle row-limit pid-reuse creation-mismatch creation-unknown exited-before exited-during rights-unknown release-uncertain reparse alias directory-changed directory-partial directory-dispose new-child set-unknown overrun partial throw-contained close-all close-failure close-throw argv-native native-layout missing-child-name missing-child-parent null-child missing-entry-slot missing-entry-identity null-entry time-unknown-sticky set-overrun final-overrun borrow-ok borrow-query-throw borrow-addref-fail borrow-release-fail no-webview hook-throw-preserves-close hook-save-failure-preserves-close hook-success-isolated hook-overrun-memory-only'.split()
     need(v['failureCase'] in set(known)|{'not-observed','unknown','missing','conflicting','truncated','not-applicable','unclassified-case'})
     need(not v['passed'] or v['failureCase']=='not-applicable')
     return v

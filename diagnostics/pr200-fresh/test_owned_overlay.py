@@ -14,14 +14,17 @@ class OwnedOverlayTests(unittest.TestCase):
         original=subprocess.check_output(['git','show',overlay.PRODUCT+':ui/tauri/native-smoke/supervise.ps1'],cwd=ROOT)
         for data in (original,original.replace(b'\n',b'\r\n')):
             changed=overlay.overlay_bytes(data);text=changed.decode().replace('\r\n','\n')
-            projected=text.replace(overlay.PRELUDE,'').replace(overlay.HOOK,'')
+            projected=text.replace(overlay.PRELUDE,'').replace(overlay.WRAP_START,'').replace(overlay.HOOK,'').replace(overlay.PERSIST,'')
             self.assertEqual(projected,original.decode())
             self.assertEqual(text.count('# BEGIN_OWNED_CAPTURE_HOOK'),1)
             self.assertLess(text.index(overlay.HOOK),text.index("$phase = 'normal-close'"))
             self.assertIn('} $children $app $childHandles $env:NATIVE_PROFILE $OutputDirectory',overlay.HOOK)
-            self.assertIn('} catch { }',overlay.HOOK)
+            self.assertIn('catch { $ownedCaptureState = $null }',overlay.HOOK)
             self.assertNotIn('$report',overlay.HOOK)
             self.assertNotIn('.Dispose',overlay.HOOK)
+            self.assertNotIn('Set-Content',overlay.HOOK)
+            self.assertGreater(text.index(overlay.PERSIST),text.index('try { Complete-NativeCleanup'))
+            self.assertIn('} finally {',overlay.PERSIST)
         with self.assertRaises(ValueError):overlay.overlay_bytes(original+overlay.HOOK_SEAM.encode())
 
     def test_old_trial_request_inspector_and_acceptance_project_exactly(self):
@@ -35,8 +38,8 @@ class OwnedOverlayTests(unittest.TestCase):
         text=(ROOT/'owned-capture.test.ps1').read_text()
         line=next(x for x in text.splitlines() if x.startswith('$knownCases'))
         cases=re.findall("'([^']+)'",line)
-        self.assertEqual(len(cases),58);self.assertEqual(len(cases),len(set(cases)))
-        self.assertIn('OWNED_CAPTURE_FIXTURE_PASS cases=57',text)
+        self.assertEqual(len(cases),59);self.assertEqual(len(cases),len(set(cases)))
+        self.assertIn('OWNED_CAPTURE_FIXTURE_PASS cases=58',text)
         for name in ('missing-child-name','missing-entry-slot','time-unknown-sticky','set-overrun','borrow-query-throw','borrow-release-fail','hook-save-failure-preserves-close'):
             self.assertIn(name,cases)
 

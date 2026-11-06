@@ -155,3 +155,15 @@ function Invoke-OwnedCollectionCapture($Children, $App, $Handles, [string]$Expec
     finally { $null = Update-OwnedTime $data $Operations $timer }
     return $data
 }
+
+function Save-OwnedCaptureRecord($Record, [string]$OutputDirectory) {
+    $json = $Record | ConvertTo-Json -Depth 6
+    $pending = Join-Path $OutputDirectory 'owned-collection.pending.json'
+    $target = Join-Path $OutputDirectory 'owned-collection.json'
+    [IO.File]::WriteAllText($pending, $json, [Text.UTF8Encoding]::new($false))
+    [IO.File]::Move($pending, $target, $true)
+}
+function Write-OwnedPersistStatus([string]$Status) {
+    if ($Status -ceq 'ok') { [Console]::Out.WriteLine('OWNED_CAPTURE_PERSIST_OK') }
+    else { [Console]::Out.WriteLine('OWNED_CAPTURE_PERSIST_UNKNOWN') }
+}

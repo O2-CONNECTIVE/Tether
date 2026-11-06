@@ -65,7 +65,7 @@ def fixture_failure(raw):
 
 
 def empty_preflight():
-    return {'schema':1,'kind':'owned-hook-preflight','stages':{key:{'runtimeExecuted':False,'exitCode':None,'passed':False,'code':'not-run'} for key in ('parse','fixture')},'passed':False,'casesExpected':57,'casesCompleted':0,'failureCase':'not-observed','runtimeVersions':{'python':None,'powershell':None}}
+    return {'schema':1,'kind':'owned-hook-preflight','stages':{key:{'runtimeExecuted':False,'exitCode':None,'passed':False,'code':'not-run'} for key in ('parse','fixture')},'passed':False,'casesExpected':58,'casesCompleted':0,'failureCase':'not-observed','runtimeVersions':{'python':None,'powershell':None}}
 
 
 def preflight(source,control,root):
@@ -79,13 +79,13 @@ def preflight(source,control,root):
         value['runtimeVersions']={'python':'.'.join(map(str,sys.version_info[:3])),'powershell':os.environ.get('OWNED_PS_VERSION')}
         checkpoint(target,schema.preflight_safe(value))
         schema.need(value['runtimeVersions']['python']=='3.13.17' and value['runtimeVersions']['powershell'] is not None and os.environ.get('OWNED_PS_IDENTITY_MATCH')=='true')
-        for key,name,marker in (('parse','parse-owned-sources.ps1','OWNED_CAPTURE_PARSE_PASS files=3'),('fixture','owned-capture.test.ps1','OWNED_CAPTURE_FIXTURE_PASS cases=57')):
+        for key,name,marker in (('parse','parse-owned-sources.ps1','OWNED_CAPTURE_PARSE_PASS files=3'),('fixture','owned-capture.test.ps1','OWNED_CAPTURE_FIXTURE_PASS cases=58')):
             folder=private/key;folder.mkdir(exist_ok=False)
             value['stages'][key]={'runtimeExecuted':None,'exitCode':None,'passed':False,'code':'wrapper-uncertain'};checkpoint(target,schema.preflight_safe(value))
             value['stages'][key]=powershell_preflight.run_stage(control/'diagnostics/pr200-fresh'/name,marker,folder)
             if key=='fixture':
                 stage=value['stages'][key]
-                if stage['passed']:value.update(casesCompleted=57,failureCase='not-applicable')
+                if stage['passed']:value.update(casesCompleted=58,failureCase='not-applicable')
                 elif stage['code']=='fixture-rejected':
                     try:
                         with (folder/'stdout.log').open('rb') as stream:value['failureCase']=fixture_failure(stream.read(4097))
@@ -104,9 +104,18 @@ def prepare(source,control,root):
     manifest=overlay.prepare(source,control,root)
     report.write(root/'safe/owned-overlay-identity.json',manifest)
     report.write(root/'safe/owned-collection.json',schema.placeholder())
-    report.write(root/'safe/owned-capture-verdict.json',{'schema':1,'instrumented':True,'captureComplete':False,'oldContinue':None,'scopePassed':False,'originalFailurePreserved':True,'pr200Blocked':True,'status':'not-reached'})
+    report.write(root/'safe/owned-capture-verdict.json',{'schema':1,'instrumented':True,'captureComplete':False,'oldContinue':None,'scopePassed':False,'originalFailurePreserved':True,'pr200Blocked':True,'status':'not-reached','persistenceVerified':False,'wrapperCompleted':False,'overlayStable':True})
     print('OWNED_INSTRUMENTED_OVERLAY_PREPARED')
     return 0
+
+
+def persistence_verified(log):
+    try:
+        with log.open('rb') as stream:raw=stream.read(1024*1024+1)
+        if len(raw)>1024*1024:return False
+        lines=raw.removeprefix(b'\xef\xbb\xbf').splitlines()
+        return lines.count(b'OWNED_CAPTURE_PERSIST_OK')==1 and b'OWNED_CAPTURE_PERSIST_UNKNOWN' not in lines
+    except Exception:return False
 
 
 def trial(source,control,root):
@@ -114,25 +123,41 @@ def trial(source,control,root):
     schema.need(schema.preflight_safe(report.read(root/'safe/owned-hook-preflight.json'))['passed'])
     manifest=overlay.manifest_safe(report.read(root/'safe/owned-overlay-identity.json'));overlay.verify(source,control,root,manifest)
     previous=os.environ.get('RESCUE_OWNED_CAPTURE');os.environ['RESCUE_OWNED_CAPTURE']='1'
+    code=1;wrapper_completed=False
     try:
         code=phase2.trial(source,control,root,1,supervisor_path=root/'owned-harness/supervise.ps1',harness_path=root/'owned-harness')
+        wrapper_completed=True
+    except Exception:
+        pass # Preserve the original reports and salvage capture; never re-enter trial.
     finally:
         if previous is None:os.environ.pop('RESCUE_OWNED_CAPTURE',None)
         else:os.environ['RESCUE_OWNED_CAPTURE']=previous
-    old=phase2.trial_safe(report.read(root/'safe/trial.json'));capture=schema.placeholder();status='not-reached'
-    file=root/'single-trial/output/owned-collection.json'
-    if file.exists():
-        try:capture=schema.capture_safe(report.read(file));status='observed'
-        except Exception:capture['code']='capture-unavailable';status='capture-unavailable'
-    else:
-        native=report.read(root/'safe/observation/native-result.json') if (root/'safe/observation/native-result.json').exists() else {}
-        if native.get('failurePhase') not in {'environment','webview-and-ipc','ownership-confirmation'}:
-            capture['code']='capture-unavailable';status='capture-unavailable'
-    try:overlay.verify(source,control,root,manifest)
-    except Exception:capture['complete']=False;status='overlay-drift'
-    report.write(root/'safe/owned-collection.json',schema.capture_safe(capture))
-    passed=capture['complete'] and old['continue']
-    report.write(root/'safe/owned-capture-verdict.json',schema.verdict_safe({'schema':1,'instrumented':True,'captureComplete':capture['complete'],'oldContinue':old['continue'],'scopePassed':passed,'originalFailurePreserved':True,'pr200Blocked':True,'status':status}))
+        old_continue=None
+        try:old_continue=phase2.trial_safe(report.read(root/'safe/trial.json'))['continue']
+        except Exception:pass
+        capture=schema.placeholder();status='not-reached';persisted=False
+        file=root/'single-trial/output/owned-collection.json'
+        if file.exists():
+            try:
+                capture=schema.capture_safe(report.read(file));status='observed'
+                persisted=persistence_verified(root/'single-trial/supervisor.log')
+                if not persisted:
+                    capture['complete']=False;status='persistence-uncertain'
+                    if capture['code']=='ok':capture['code']='persistence-uncertain'
+            except Exception:capture=schema.placeholder();capture['code']='capture-unavailable';status='capture-unavailable'
+        else:
+            native={}
+            try:native=report.read(root/'safe/observation/native-result.json')
+            except Exception:pass
+            if native.get('failurePhase') not in {'environment','webview-and-ipc','ownership-confirmation'}:
+                capture['code']='capture-unavailable';status='capture-unavailable'
+        stable=True
+        try:overlay.verify(source,control,root,manifest)
+        except Exception:capture['complete']=False;stable=False;status='overlay-drift'
+        if not wrapper_completed:status='wrapper-uncertain'
+        report.write(root/'safe/owned-collection.json',schema.capture_safe(capture))
+        passed=capture['complete'] and old_continue is True and persisted and wrapper_completed and stable
+        report.write(root/'safe/owned-capture-verdict.json',schema.verdict_safe({'schema':1,'instrumented':True,'captureComplete':capture['complete'],'oldContinue':old_continue,'scopePassed':passed,'originalFailurePreserved':True,'pr200Blocked':True,'status':status,'persistenceVerified':persisted,'wrapperCompleted':wrapper_completed,'overlayStable':stable}))
     print('OWNED_INSTRUMENTED_TRIAL_COMPLETE' if passed else 'OWNED_INSTRUMENTED_TRIAL_STOPPED')
     return 0 if code==0 and passed else 1
 

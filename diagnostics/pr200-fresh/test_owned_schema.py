@@ -13,7 +13,7 @@ class OwnedSchemaTests(unittest.TestCase):
     def test_exact_child_is_evidence_not_old_gate_clearance(self):
         self.assertTrue(schema.capture_safe(complete())['complete'])
         self.assertFalse(schema.placeholder()['complete'])
-        v={'schema':1,'instrumented':True,'captureComplete':True,'oldContinue':False,'scopePassed':False,'originalFailurePreserved':True,'pr200Blocked':True,'status':'observed'}
+        v={'schema':1,'instrumented':True,'captureComplete':True,'oldContinue':False,'scopePassed':False,'originalFailurePreserved':True,'pr200Blocked':True,'status':'observed','persistenceVerified':True,'wrapperCompleted':True,'overlayStable':True}
         self.assertFalse(schema.verdict_safe(v)['scopePassed'])
 
     def test_unknown_fields_raw_values_or_relaxed_completeness_reject(self):

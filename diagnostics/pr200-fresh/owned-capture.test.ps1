@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $case = 'load'
-$knownCases = @('load','root','child','all-child-slots','outside','nested-child','sibling','null-argv','empty-argv','duplicate-argv','split-argv','quoted-suffix','invalid-path','shuffled-slots','duplicate-slots','missing-handle','duplicate-identity','duplicate-handle','row-limit','pid-reuse','creation-mismatch','creation-unknown','exited-before','exited-during','rights-unknown','release-uncertain','reparse','alias','directory-changed','directory-partial','directory-dispose','new-child','set-unknown','overrun','partial','throw-contained','close-all','close-failure','close-throw','argv-native','native-layout','missing-child-name','missing-child-parent','null-child','missing-entry-slot','missing-entry-identity','null-entry','time-unknown-sticky','set-overrun','final-overrun','borrow-ok','borrow-query-throw','borrow-addref-fail','borrow-release-fail','no-webview','hook-throw-preserves-close','hook-save-failure-preserves-close','hook-success-isolated')
+$knownCases = @('load','root','child','all-child-slots','outside','nested-child','sibling','null-argv','empty-argv','duplicate-argv','split-argv','quoted-suffix','invalid-path','shuffled-slots','duplicate-slots','missing-handle','duplicate-identity','duplicate-handle','row-limit','pid-reuse','creation-mismatch','creation-unknown','exited-before','exited-during','rights-unknown','release-uncertain','reparse','alias','directory-changed','directory-partial','directory-dispose','new-child','set-unknown','overrun','partial','throw-contained','close-all','close-failure','close-throw','argv-native','native-layout','missing-child-name','missing-child-parent','null-child','missing-entry-slot','missing-entry-identity','null-entry','time-unknown-sticky','set-overrun','final-overrun','borrow-ok','borrow-query-throw','borrow-addref-fail','borrow-release-fail','no-webview','hook-throw-preserves-close','hook-save-failure-preserves-close','hook-success-isolated','hook-overrun-memory-only')
 function Fail-OwnedFixture {
     $safe = if ($case -cin $knownCases) { $case } else { 'unclassified-case' }
     [Console]::Out.WriteLine('OWNED_CAPTURE_FIXTURE_FAILED case=' + $safe); exit 1
@@ -62,7 +62,7 @@ try {
         $record = Invoke-OwnedCollectionCapture $children $app $handles 'C:\synthetic\profile' $ops
         return @{ record = $record; reads = $script:reads; states = $script:states; handles = $handles }
     }
-    foreach ($case in $knownCases | Where-Object { $_ -notin @('load','close-all','close-failure','close-throw','argv-native','native-layout','borrow-ok','borrow-query-throw','borrow-addref-fail','borrow-release-fail','hook-throw-preserves-close','hook-save-failure-preserves-close','hook-success-isolated') }) {
+    foreach ($case in $knownCases | Where-Object { $_ -notin @('load','close-all','close-failure','close-throw','argv-native','native-layout','borrow-ok','borrow-query-throw','borrow-addref-fail','borrow-release-fail','hook-throw-preserves-close','hook-save-failure-preserves-close','hook-success-isolated','hook-overrun-memory-only') }) {
         $out = Synthetic-Owned $case; $record = $out.record
         $accepted = $case -cin @('root','child','all-child-slots')
         if ($record.complete -ne $accepted -or $record.originalGatesChanged -or $record.atomicNamespace) { Fail-OwnedFixture }
@@ -115,19 +115,33 @@ try {
     $nodes = @($overlayAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.Contains('param($OwnedChildren, $OwnedApp, $OwnedHandles, $OwnedRoot, $OwnedOutput)') }, $true))
     if ($nodes.Count -ne 1) { Fail-OwnedFixture }
     $hook = [scriptblock]::Create($nodes[0].Extent.Text)
-    function Invoke-OwnedCollectionCapture { if ($case -ceq 'hook-throw-preserves-close') { throw 'SYNTHETIC_HOOK' }; return (New-OwnedCaptureRecord 0) }
-    function Set-Content { param($LiteralPath, $Encoding) process { $script:saves += 1; if ($case -ceq 'hook-save-failure-preserves-close') { throw 'SYNTHETIC_SAVE' } } }
+    $persistNodes = @($overlayAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and $n.Finally.Extent.Text.Contains('Save-OwnedCaptureRecord $ownedCaptureState $OutputDirectory') }, $true))
+    if ($persistNodes.Count -ne 1) { Fail-OwnedFixture }
+    $persistText = $persistNodes[0].Finally.Extent.Text
+    $persist = [scriptblock]::Create($persistText.Substring(1, $persistText.Length - 2))
+    function Invoke-OwnedCollectionCapture {
+        if ($case -ceq 'hook-throw-preserves-close') { throw 'SYNTHETIC_HOOK' }
+        $value = New-OwnedCaptureRecord 0
+        if ($case -ceq 'hook-overrun-memory-only') { $value.complete = $true; $value.overrun = $true; $value.code = 'overrun' }
+        return $value
+    }
+    function Save-OwnedCaptureRecord { param($record,$directory) $script:saves += 1; if ($case -ceq 'hook-save-failure-preserves-close') { throw 'SYNTHETIC_SAVE' } }
+    function Write-OwnedPersistStatus { param($status) $script:persistStatus = $status }
     $previousOptIn = $env:RESCUE_OWNED_CAPTURE
     try {
         $env:RESCUE_OWNED_CAPTURE = '1'
-        foreach ($case in @('hook-throw-preserves-close','hook-save-failure-preserves-close','hook-success-isolated')) {
+        foreach ($case in @('hook-throw-preserves-close','hook-save-failure-preserves-close','hook-success-isolated','hook-overrun-memory-only')) {
             $children = @(); $app = $null; $childHandles = @(); $OutputDirectory = 'SYNTHETIC_OUTPUT'; $env:NATIVE_PROFILE = 'SYNTHETIC_PROFILE'
-            $report = @{ failureCode = 'ORIGINAL_FAILURE'; continue = $false }; $script:saves = 0; $closeContinued = 0
+            $report = @{ failureCode = 'ORIGINAL_FAILURE'; continue = $false }; $script:saves = 0; $script:persistStatus = 'not-observed'; $closeContinued = 0; $cleanupContinued = 0
+            $ownedCaptureState = $null
             . $hook
-            $closeContinued += 1
-            if ($closeContinued -ne 1 -or $report.failureCode -cne 'ORIGINAL_FAILURE' -or $report.continue -or $children.Count -ne 0 -or $childHandles.Count -ne 0) { Fail-OwnedFixture }
-            if ($case -ceq 'hook-success-isolated' -and $script:saves -ne 1) { Fail-OwnedFixture }
+            if ($script:saves -ne 0) { Fail-OwnedFixture }
+            if ($case -ceq 'hook-overrun-memory-only' -and ($ownedCaptureState.complete -or -not $ownedCaptureState.overrun)) { Fail-OwnedFixture }
+            $closeContinued += 1; $cleanupContinued += 1
+            . $persist
+            if ($closeContinued -ne 1 -or $cleanupContinued -ne 1 -or $report.failureCode -cne 'ORIGINAL_FAILURE' -or $report.continue -or $children.Count -ne 0 -or $childHandles.Count -ne 0) { Fail-OwnedFixture }
+            if ($script:saves -ne 1 -or $script:persistStatus -cne $(if ($case -ceq 'hook-save-failure-preserves-close') { 'uncertain' } else { 'ok' })) { Fail-OwnedFixture }
         }
     } finally { $env:RESCUE_OWNED_CAPTURE = $previousOptIn }
-    [Console]::Out.WriteLine('OWNED_CAPTURE_FIXTURE_PASS cases=57')
+    [Console]::Out.WriteLine('OWNED_CAPTURE_FIXTURE_PASS cases=58')
 } catch { Fail-OwnedFixture }

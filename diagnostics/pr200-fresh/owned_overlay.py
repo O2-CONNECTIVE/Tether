@@ -11,34 +11,46 @@ TREE='e278496a55b4accc6caafa7a7a99538e5c8ceeca'
 NATIVE_FILES=tuple('app-startup-contract.test.ps1 app-startup-files.ts app-startup-observation.ps1 app-startup-stages.ts assert-unwired.ts close-observation.ps1 inspect-app-startup.ts inspect-driver-trace.ps1 inventory.ps1 keyboard.ts lineage-baseline.test.ps1 observation.ts process-contract.test.ps1 processes.ps1 refresh-observer.ts run.ts session-observation.ts setup.ps1 startup-logs.ts startup-observation.ps1 supervise.ps1 tools.json webdriver.ts'.split())
 HOOK_FILES=('owned-capture.ps1','owned-native.cs')
 PRELUDE='''# BEGIN_OWNED_CAPTURE_INIT
+$ownedCaptureState = $null
 if ($env:RESCUE_OWNED_CAPTURE -ceq '1') {
     . "$PSScriptRoot/owned-capture.ps1"
     Initialize-OwnedNative
 }
 # END_OWNED_CAPTURE_INIT
 '''
+WRAP_START='''# BEGIN_OWNED_CAPTURE_OUTER
+try {
+# END_OWNED_CAPTURE_OUTER
+'''
 HOOK='''# BEGIN_OWNED_CAPTURE_HOOK
     if ($env:RESCUE_OWNED_CAPTURE -ceq '1') {
-        & {
-            param($OwnedChildren, $OwnedApp, $OwnedHandles, $OwnedRoot, $OwnedOutput)
-            $ownedTimer = [Diagnostics.Stopwatch]::StartNew()
-            try {
-                $ownedRecord = Invoke-OwnedCollectionCapture $OwnedChildren $OwnedApp $OwnedHandles $OwnedRoot
+        try {
+            $ownedCaptureState = & {
+                param($OwnedChildren, $OwnedApp, $OwnedHandles, $OwnedRoot, $OwnedOutput)
+                $ownedTimer = [Diagnostics.Stopwatch]::StartNew()
+                try { $ownedRecord = Invoke-OwnedCollectionCapture $OwnedChildren $OwnedApp $OwnedHandles $OwnedRoot }
+                catch { $ownedRecord = New-OwnedCaptureRecord; $ownedRecord.code = 'hook-failed' }
+                $ownedTimer.Stop()
                 $ownedRecord.elapsedMs = [int][Math]::Min(60000, $ownedTimer.ElapsedMilliseconds)
                 $ownedRecord.elapsedClamped = $ownedTimer.ElapsedMilliseconds -gt 60000
+                if ($ownedRecord.overrun) { $ownedRecord.complete = $false }
                 if ($ownedTimer.ElapsedMilliseconds -gt 2000) { $ownedRecord.overrun = $true; $ownedRecord.complete = $false; if ($ownedRecord.code -ceq 'ok') { $ownedRecord.code = 'overrun' } }
-                $ownedRecord | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OwnedOutput 'owned-collection.json') -Encoding utf8
-                if ($ownedTimer.ElapsedMilliseconds -gt 2000 -and -not $ownedRecord.overrun) {
-                    $ownedRecord.overrun = $true; $ownedRecord.complete = $false; if ($ownedRecord.code -ceq 'ok') { $ownedRecord.code = 'overrun' }
-                    $ownedRecord.elapsedMs = [int][Math]::Min(60000, $ownedTimer.ElapsedMilliseconds)
-                    $ownedRecord.elapsedClamped = $ownedTimer.ElapsedMilliseconds -gt 60000
-                    $ownedRecord | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OwnedOutput 'owned-collection.json') -Encoding utf8
-                }
-            } catch { }
-        } $children $app $childHandles $env:NATIVE_PROFILE $OutputDirectory
+                return $ownedRecord
+            } $children $app $childHandles $env:NATIVE_PROFILE $OutputDirectory
+        } catch { $ownedCaptureState = $null }
     }
 # END_OWNED_CAPTURE_HOOK
 '''
+PERSIST='''# BEGIN_OWNED_CAPTURE_PERSIST
+} finally {
+    if ($env:RESCUE_OWNED_CAPTURE -ceq '1' -and $null -ne $ownedCaptureState) {
+        try { Save-OwnedCaptureRecord $ownedCaptureState $OutputDirectory; Write-OwnedPersistStatus 'ok' }
+        catch { try { Write-OwnedPersistStatus 'uncertain' } catch { } }
+    }
+}
+# END_OWNED_CAPTURE_PERSIST
+'''
+EXIT_SEAM="if ($report.cleanupFailures -gt 0 -or $report.nativeTestsRun -ne 1 -or $report.nativeTestsPassed -ne 1 -or -not $report.normalCloseVerified) { exit 1 }\n"
 INIT_SEAM='$diagnosticBudget = [Diagnostics.Stopwatch]::new()\n'
 HOOK_SEAM='    $childHandles = @(Open-ChildObservationHandles $children)\n'
 
@@ -51,9 +63,9 @@ def git(root,*args):return subprocess.run(['git','-C',str(root),*args],check=Tru
 
 def overlay_bytes(original):
     text=original.decode('utf-8');crlf='\r\n' in text;text=text.replace('\r\n','\n')
-    schema.need(text.count(INIT_SEAM)==text.count(HOOK_SEAM)==1 and 'BEGIN_OWNED_CAPTURE' not in text)
-    changed=text.replace(INIT_SEAM,INIT_SEAM+PRELUDE).replace(HOOK_SEAM,HOOK_SEAM+HOOK)
-    schema.need(changed.replace(PRELUDE,'').replace(HOOK,'')==text)
+    schema.need(text.count(INIT_SEAM)==text.count(HOOK_SEAM)==text.count(EXIT_SEAM)==1 and 'BEGIN_OWNED_CAPTURE' not in text)
+    changed=text.replace(INIT_SEAM,INIT_SEAM+PRELUDE+WRAP_START).replace(HOOK_SEAM,HOOK_SEAM+HOOK).replace(EXIT_SEAM,PERSIST+EXIT_SEAM)
+    schema.need(changed.replace(PRELUDE,'').replace(WRAP_START,'').replace(HOOK,'').replace(PERSIST,'')==text)
     return changed.replace('\n','\r\n').encode() if crlf else changed.encode()
 
 
