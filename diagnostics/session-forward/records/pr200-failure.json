@@ -1,0 +1,153 @@
+{
+  "driver-stage-report.json": {
+    "check": "native-driver-stage",
+    "code": "TRACE_COMPLETE",
+    "connectionEnd": "incomplete",
+    "diagnostic": "complete",
+    "events": [
+      {
+        "connection": 1,
+        "elapsedUs": 68369,
+        "error": "none",
+        "request": 0,
+        "seq": 1,
+        "stage": "connection-open",
+        "state": "idle",
+        "type": "event"
+      },
+      {
+        "connection": 1,
+        "elapsedUs": 639190,
+        "error": "none",
+        "request": 0,
+        "seq": 2,
+        "stage": "connection-end",
+        "state": "idle",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 995644,
+        "error": "none",
+        "request": 0,
+        "seq": 3,
+        "stage": "connection-open",
+        "state": "idle",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 1001160,
+        "error": "none",
+        "request": 1,
+        "seq": 4,
+        "stage": "session-received",
+        "state": "received",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 1001249,
+        "error": "none",
+        "request": 1,
+        "seq": 5,
+        "stage": "forward-start",
+        "state": "forward-pending",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 15977179,
+        "error": "none",
+        "request": 1,
+        "seq": 6,
+        "stage": "request-dropped",
+        "state": "dropped",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 15977206,
+        "error": "incomplete",
+        "request": 1,
+        "seq": 7,
+        "stage": "connection-end",
+        "state": "dropped",
+        "type": "event"
+      },
+      {
+        "connection": 3,
+        "elapsedUs": 15980577,
+        "error": "none",
+        "request": 0,
+        "seq": 8,
+        "stage": "connection-open",
+        "state": "idle",
+        "type": "event"
+      },
+      {
+        "connection": 3,
+        "elapsedUs": 15981417,
+        "error": "none",
+        "request": 0,
+        "seq": 9,
+        "stage": "connection-end",
+        "state": "idle",
+        "type": "event"
+      }
+    ],
+    "observedStages": [
+      "connection-end",
+      "connection-open",
+      "forward-start",
+      "request-dropped",
+      "session-received"
+    ],
+    "requestStage": "dropped-before-headers",
+    "summary": {
+      "attempted": 9,
+      "dropped": 0,
+      "enqueued": 9,
+      "lastSequence": 9,
+      "pendingRequests": 0,
+      "sealed": true,
+      "type": "summary",
+      "written": 9
+    }
+  },
+  "native-observation.json": {
+    "documentObservations": 0,
+    "documentStates": [],
+    "droppedRequests": 0,
+    "elapsedMs": 15024,
+    "errorCode": "NATIVE_DRIVER_TIMEOUT",
+    "lastRequest": {
+      "elapsedMs": 15017,
+      "operation": "create-session",
+      "outcome": "timeout"
+    },
+    "originClass": "unobserved",
+    "phase": "session-create",
+    "phases": [
+      {
+        "elapsedMs": 1,
+        "phase": "session-create"
+      }
+    ],
+    "requests": [
+      {
+        "elapsedMs": 0,
+        "operation": "create-session",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 15017,
+        "operation": "create-session",
+        "outcome": "timeout"
+      }
+    ],
+    "schema": 1,
+    "status": "failed",
+    "titleClass": "unobserved"
+  }
+}

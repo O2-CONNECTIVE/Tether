@@ -1,0 +1,867 @@
+{
+  "driver-stage-report.json": {
+    "check": "native-driver-stage",
+    "code": "TRACE_COMPLETE",
+    "connectionEnd": "clean",
+    "diagnostic": "complete",
+    "events": [
+      {
+        "connection": 1,
+        "elapsedUs": 465901,
+        "error": "none",
+        "request": 0,
+        "seq": 1,
+        "stage": "connection-open",
+        "state": "idle",
+        "type": "event"
+      },
+      {
+        "connection": 1,
+        "elapsedUs": 480250,
+        "error": "none",
+        "request": 0,
+        "seq": 2,
+        "stage": "connection-end",
+        "state": "idle",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 832737,
+        "error": "none",
+        "request": 0,
+        "seq": 3,
+        "stage": "connection-open",
+        "state": "idle",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 838234,
+        "error": "none",
+        "request": 1,
+        "seq": 4,
+        "stage": "session-received",
+        "state": "received",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 838324,
+        "error": "none",
+        "request": 1,
+        "seq": 5,
+        "stage": "forward-start",
+        "state": "forward-pending",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 7318871,
+        "error": "none",
+        "request": 1,
+        "seq": 6,
+        "stage": "native-headers",
+        "state": "headers-returned",
+        "type": "event"
+      },
+      {
+        "connection": 3,
+        "elapsedUs": 8090703,
+        "error": "none",
+        "request": 0,
+        "seq": 7,
+        "stage": "connection-open",
+        "state": "idle",
+        "type": "event"
+      },
+      {
+        "connection": 2,
+        "elapsedUs": 8705659,
+        "error": "none",
+        "request": 1,
+        "seq": 8,
+        "stage": "connection-end",
+        "state": "headers-returned",
+        "type": "event"
+      },
+      {
+        "connection": 3,
+        "elapsedUs": 8705749,
+        "error": "none",
+        "request": 0,
+        "seq": 9,
+        "stage": "connection-end",
+        "state": "idle",
+        "type": "event"
+      }
+    ],
+    "observedStages": [
+      "connection-end",
+      "connection-open",
+      "forward-start",
+      "native-headers",
+      "session-received"
+    ],
+    "requestStage": "native-headers",
+    "summary": {
+      "attempted": 9,
+      "dropped": 0,
+      "enqueued": 9,
+      "lastSequence": 9,
+      "pendingRequests": 0,
+      "sealed": true,
+      "type": "summary",
+      "written": 9
+    }
+  },
+  "native-observation.json": {
+    "documentObservations": 1,
+    "documentStates": [
+      "bundled-ready"
+    ],
+    "droppedRequests": 0,
+    "elapsedMs": 7914,
+    "errorCode": "",
+    "lastRequest": {
+      "elapsedMs": 64,
+      "operation": "screenshot",
+      "outcome": "ok",
+      "status": 200
+    },
+    "originClass": "bundled",
+    "phase": "complete",
+    "phases": [
+      {
+        "elapsedMs": 1,
+        "phase": "session-create"
+      },
+      {
+        "elapsedMs": 6540,
+        "phase": "origin-check"
+      },
+      {
+        "elapsedMs": 7299,
+        "phase": "readiness"
+      },
+      {
+        "elapsedMs": 7317,
+        "phase": "main-screenshot"
+      },
+      {
+        "elapsedMs": 7384,
+        "phase": "unwired-contract"
+      },
+      {
+        "elapsedMs": 7553,
+        "phase": "keyboard"
+      },
+      {
+        "elapsedMs": 7839,
+        "phase": "diagnostics-screenshot"
+      },
+      {
+        "elapsedMs": 7908,
+        "phase": "result-write"
+      }
+    ],
+    "requests": [
+      {
+        "elapsedMs": 0,
+        "operation": "create-session",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6536,
+        "operation": "create-session",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 756,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 17,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "screenshot",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 67,
+        "operation": "screenshot",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-async",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 9,
+        "operation": "execute-async",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "find-element",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 10,
+        "operation": "find-element",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "click-element",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 135,
+        "operation": "click-element",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 7,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 7,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 4,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 4,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 9,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 7,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 4,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 4,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 4,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 4,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 4,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 4,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 7,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "keys",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "keys",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 6,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "execute-sync",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 5,
+        "operation": "execute-sync",
+        "outcome": "ok",
+        "status": 200
+      },
+      {
+        "elapsedMs": 0,
+        "operation": "screenshot",
+        "outcome": "started"
+      },
+      {
+        "elapsedMs": 64,
+        "operation": "screenshot",
+        "outcome": "ok",
+        "status": 200
+      }
+    ],
+    "schema": 1,
+    "status": "webview-passed-awaiting-close",
+    "titleClass": "unwired"
+  }
+}

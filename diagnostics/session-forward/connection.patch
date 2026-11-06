@@ -1,0 +1,56 @@
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -109 +109,4 @@
+-  let forwarded = forward_to_native_driver(new_req, args)?;
++  let mut forwarded = forward_to_native_driver(new_req, args)?;
++  if let Some(trace) = trace.as_mut().filter(|trace| trace.capture_enabled()) {
++    trace.capture(hyper_util::client::legacy::connect::capture_connection(&mut forwarded));
++  }
+--- a/src/diagnostic.rs
++++ b/src/diagnostic.rs
+@@ -95,0 +96 @@
++    connection_assigned: Option<bool>,
+@@ -128,0 +130,3 @@
++        self.event_assigned(connection, request, stage, state, error, None);
++    }
++    fn event_assigned(&self, connection: u64, request: u64, stage: Stage, state: u8, error: Kind, connection_assigned: Option<bool>) {
+@@ -144,0 +149 @@
++                    connection_assigned,
+@@ -167 +172 @@
+-            "{\"type\":\"header\",\"schema\":1,\"variant\":\"tauri-driver-2.1.0-stage-1\"}\n",
++            "{\"type\":\"header\",\"schema\":1,\"variant\":\"tauri-driver-2.1.0-connection-probe-1\"}\n",
+@@ -171,2 +176,2 @@
+-            let line = format!("{{\"type\":\"event\",\"seq\":{},\"connection\":{},\"request\":{},\"stage\":\"{}\",\"state\":\"{}\",\"elapsedUs\":{},\"error\":\"{}\"}}\n",
+-                event.seq, event.connection, event.request, event.stage.name(), state_name(event.state), event.elapsed, event.error.name());
++            let line = format!("{{\"type\":\"event\",\"seq\":{},\"connection\":{},\"request\":{},\"stage\":\"{}\",\"state\":\"{}\",\"elapsedUs\":{},\"error\":\"{}\",\"connectionAssigned\":{}}}\n",
++                event.seq, event.connection, event.request, event.stage.name(), state_name(event.state), event.elapsed, event.error.name(), event.connection_assigned.map(|v| if v { "true" } else { "false" }).unwrap_or("null"));
+@@ -236,0 +242 @@
++            capture: None,
+@@ -246,0 +253 @@
++    capture: Option<hyper_util::client::legacy::connect::CaptureConnection>,
+@@ -248,0 +256,15 @@
++    pub fn capture_enabled(&self) -> bool {
++        self.connection.recorder.is_some()
++    }
++    pub fn capture(&mut self, capture: hyper_util::client::legacy::connect::CaptureConnection) {
++        self.capture = Some(capture);
++    }
++    fn emit_terminal(&self, stage: Stage) {
++        let assigned = self.capture.as_ref().map(|capture| {
++            let metadata = capture.connection_metadata();
++            metadata.is_some()
++        });
++        if let Some(recorder) = &self.connection.recorder {
++            recorder.event_assigned(self.connection.slot, self.slot, stage, self.connection.state.load(SeqCst), Kind::None, assigned);
++        }
++    }
+@@ -256 +278 @@
+-        self.connection.emit(self.slot, Stage::Headers, Kind::None);
++        self.emit_terminal(Stage::Headers);
+@@ -261,2 +283 @@
+-        self.connection
+-            .emit(self.slot, Stage::NativeError, Kind::None);
++        self.emit_terminal(Stage::NativeError);
+@@ -269 +290 @@
+-            self.connection.emit(self.slot, Stage::Dropped, Kind::None);
++            self.emit_terminal(Stage::Dropped);
