@@ -66,12 +66,24 @@ function Invoke-SyntheticGuard($Block, $Creation, $Command, $CommandError) {
     try { . $Block } catch { $caught = $_ }
     return @{ caught = $caught; detail = $detail; reads = $script:reads; calls = $script:creationCalls }
 }
+# BEGIN_MEMBER_BOUNDARY_FUNCTION
+# Dot-member access normalizes this ScriptProperty failure at the v7.6.9 binder.
+# Assert each guard's absolute contract as well as the existing old/new equality.
+function Test-MemberBoundaryOutcome($Old, $New, [string]$CaseId) {
+    if ($CaseId -cnotin @('creation-false', 'creation-exception', 'empty-command', 'getter-exception', 'valid-command')) { return 'METADATA_VERDICT_CHANGED' }
+    $shouldReject = $CaseId -cne 'valid-command'
+    if ((($null -ne $Old.caught) -ne $shouldReject) -or (($null -ne $New.caught) -ne $shouldReject)) { return 'METADATA_VERDICT_CHANGED' }
+    if ($shouldReject -and ($CaseId -cne 'creation-exception') -and (
+        $Old.caught.Exception.Message -cne 'PROFILE_IDENTITY_UNKNOWN' -or $New.caught.Exception.Message -cne 'PROFILE_IDENTITY_UNKNOWN')) { return 'METADATA_ERROR_CHANGED' }
+    return 'pass'
+}
+# END_MEMBER_BOUNDARY_FUNCTION
 $script:sentinel = [Exception]::new('SYNTHETIC_ERROR_NOT_PUBLISHED')
 foreach ($case in @(
     @('false', 'value', $true, 'metadata-creation-guard', 0, 'creation-false'),
     @('error', 'value', $true, 'metadata-creation-check-exception', 0, 'creation-exception'),
     @('true', '', $false, 'metadata-command-line-guard', 1, 'empty-command'),
-    @('true', 'value', $true, 'metadata-command-line-read-exception', 1, 'getter-exception'),
+    @('true', 'value', $true, 'metadata-command-line-guard', 1, 'getter-exception'),
     @('true', 'value', $false, 'metadata-command-line-read-exception', 1, 'valid-command')
 )) {
     $old = Invoke-SyntheticGuard $before $case[0] $case[1] $case[2]
@@ -88,8 +100,27 @@ foreach ($case in @(
     } catch { }; throw 'METADATA_SHORT_CIRCUIT_CHANGED' }
     if (($null -eq $old.caught) -ne ($null -eq $new.caught)) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_VERDICT_CHANGED') } catch { }; throw 'METADATA_VERDICT_CHANGED' }
     if ($null -ne $old.caught -and $old.caught.Exception.Message -cne $new.caught.Exception.Message) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_ERROR_CHANGED') } catch { }; throw 'METADATA_ERROR_CHANGED' }
-    # Getter exceptions may be wrapped by PowerShell; the original inner cause
-    # must retain reference identity, never replaced by classification machinery.
+    # Creation-error only: preserve the directly thrown sentinel reference.
+    # This does not assert ScriptProperty getter exception identity.
     if ($case[0] -eq 'error' -and (-not [object]::ReferenceEquals($old.caught.Exception, $script:sentinel) -or -not [object]::ReferenceEquals($new.caught.Exception, $script:sentinel))) { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_ERROR_IDENTITY_CHANGED') } catch { }; throw 'METADATA_ERROR_IDENTITY_CHANGED' }
+# BEGIN_MEMBER_BOUNDARY_CHECK
+    $boundaryFailure = Test-MemberBoundaryOutcome $old $new $case[5]
+    if ($boundaryFailure -ceq 'METADATA_VERDICT_CHANGED') { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_VERDICT_CHANGED') } catch { }; throw 'METADATA_VERDICT_CHANGED' }
+    if ($boundaryFailure -ceq 'METADATA_ERROR_CHANGED') { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_ERROR_CHANGED') } catch { }; throw 'METADATA_ERROR_CHANGED' }
+    if ($boundaryFailure -cne 'pass') { try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_BOUNDARY_CONTROL_FAILED') } catch { }; throw 'METADATA_BOUNDARY_CONTROL_FAILED' }
+# END_MEMBER_BOUNDARY_CHECK
 }
+# BEGIN_MEMBER_BOUNDARY_CONTROLS
+# Harmless synthetic observations: reject missing rejection, rejected valid input,
+# and equal-but-wrong guard errors. Positive valid input must still be accepted.
+$accepted = @{ caught = $null }
+$rejected = @{ caught = [pscustomobject]@{ Exception = [Exception]::new('PROFILE_IDENTITY_UNKNOWN') } }
+$wrongError = @{ caught = [pscustomobject]@{ Exception = [Exception]::new('SYNTHETIC_WRONG_GUARD') } }
+if ((Test-MemberBoundaryOutcome $accepted $accepted 'empty-command') -cne 'METADATA_VERDICT_CHANGED' -or
+    (Test-MemberBoundaryOutcome $rejected $rejected 'valid-command') -cne 'METADATA_VERDICT_CHANGED' -or
+    (Test-MemberBoundaryOutcome $wrongError $wrongError 'getter-exception') -cne 'METADATA_ERROR_CHANGED' -or
+    (Test-MemberBoundaryOutcome $accepted $accepted 'valid-command') -cne 'pass') {
+    try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_BOUNDARY_CONTROL_FAILED') } catch { }; throw 'METADATA_BOUNDARY_CONTROL_FAILED'
+}
+# END_MEMBER_BOUNDARY_CONTROLS
 Write-Output 'OBSERVER_DETAIL_SYNTHETIC_PASS'

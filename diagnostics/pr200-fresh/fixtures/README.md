@@ -27,3 +27,6 @@ parse/ledger成功、detail fixture exit1、native0を保持する。具体的as
 `pr215-fixture-record.json` はrun42142925606/job127647402497/attempt1の実保持recordで、2files/canonical1987bytes/hash `a55b722cef63328204f4685d1982d01b1c6973191086746936c544bff67d6c19`。
 既知METADATA_SHORT_CIRCUIT_CHANGEDを保持するが、case/comparison/actualDetailは未保持で補完しない。
 新しいcase/comparisonのstdio組は全て合成で、実際の失敗caseの再構成ではない。
+
+`pr217-fixture-record.json` はrun42145881832/job127657117467/attempt1の実保持recordで、2files/canonical2084bytes/hash `e91afcf1b623f91c78cbe1adeb689bc31894b7318e5e80c915cadd9c519de6b4`。
+getter-exception/new-detail/actual metadata-command-line-guardとfailureをそのまま保持する。fixture repairのpatched passを補完しない。

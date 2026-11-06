@@ -112,11 +112,12 @@ class DetailAssertionEvidenceTests(unittest.TestCase):
         self.assertEqual(value['stages']['detail']['exitCode'], 1)
         self.assertFalse(value['passed']); self.assertEqual(record, original)
 
-    def test_static_actual_assertion_sites_preserve_every_original_condition_and_throw(self):
+    def test_static_base_logic_is_preserved_outside_grounded_member_boundary_repair(self):
         # No PowerShell interpreter involved. Remove only the new literal writes;
         # exact old normalized source must remain, including all assertion logic.
         root = Path(__file__).resolve().parent
-        text = (root / 'observer-detail.test.ps1').read_text()
+        from test_member_boundary_repair import without_boundary_repair
+        text = without_boundary_repair((root / 'observer-detail.test.ps1').read_text())
         begin = text.index("try {\n        $metadataActualDetailCode = 'not-evaluated'")
         finish = text.index("} catch { };", begin) + len("} catch { };")
         text = text[:begin] + "try { [Console]::Out.WriteLine('OBSERVER_DETAIL_ASSERTION_FAILED code=METADATA_SHORT_CIRCUIT_CHANGED') } catch { };" + text[finish:]
@@ -129,7 +130,7 @@ class DetailAssertionEvidenceTests(unittest.TestCase):
         pattern = r"try \{ \[Console\]::Out\.WriteLine\('OBSERVER_DETAIL_ASSERTION_FAILED code=([A-Z_]+)'\) \} catch \{ \}; "
         markers = re.findall(pattern, text)
         self.assertEqual(len(markers), 14)
-        self.assertEqual(set(markers), preflight.ASSERTION_CODES)
+        self.assertEqual(set(markers), preflight.ASSERTION_CODES - {'METADATA_BOUNDARY_CONTROL_FAILED'})
         projected = re.sub(pattern, '', text)
         self.assertEqual(hashlib.sha256(projected.encode()).hexdigest(), '0deeb8e28cb31a3ba6e46ce20940aba09e8f9e3cffd90b5be88dbb2455f51a1f')
         for code in markers:

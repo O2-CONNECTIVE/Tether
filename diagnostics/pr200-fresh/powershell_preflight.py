@@ -34,7 +34,7 @@ ASSERTION_CODES = {
     'OBSERVER_SOURCE_SYNTAX_FAILED', 'LEDGER_SEAM_MISSING', 'DETAIL_UNEXPECTED_OUTPUT',
     'DETAIL_DEDUP_FAILED', 'DETAIL_REDACTION_FAILED', 'DETAIL_BOUND_FAILED',
     'METADATA_GUARD_SEAM_MISSING', 'METADATA_SHORT_CIRCUIT_CHANGED', 'METADATA_VERDICT_CHANGED',
-    'METADATA_ERROR_CHANGED', 'METADATA_ERROR_IDENTITY_CHANGED'}
+    'METADATA_ERROR_CHANGED', 'METADATA_ERROR_IDENTITY_CHANGED', 'METADATA_BOUNDARY_CONTROL_FAILED'}
 METADATA_CASES = {'creation-false', 'creation-exception', 'empty-command', 'getter-exception', 'valid-command'}
 METADATA_DETAILS = {'not-observed', 'unclassified-detail', 'metadata-creation-check-exception', 'metadata-creation-guard', 'metadata-command-line-read-exception', 'metadata-command-line-guard'}
 METADATA_COMPARISONS = {'old-calls', 'new-calls', 'old-reads', 'new-reads', 'new-detail'}

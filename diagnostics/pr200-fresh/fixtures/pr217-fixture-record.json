@@ -1,0 +1,72 @@
+{
+  "fileSha256": {
+    "identity.json": "3a38bba1acdcb4618c18912fcea1b2c99b5307e76d667caeb23e480bcaefc3f5",
+    "powershell-preflight.json": "37f2fa4ed6cbcd5817f88d7f525b008364ea323fe3cbfeddf1100ca45e338f17"
+  },
+  "files": {
+    "identity.json": {
+      "controlCommit": "57d21df71b3e635e28b7bd0398af61a6ee483d48",
+      "controlTree": "195acfc0a9404195707bbe12ea88e0ff8be58ac3",
+      "fixtureSourceCommit": "b6c78ee5dc20a8b3a7ffcf88554cf704f74fba59",
+      "fixtureSourceTree": "816d583987eb02a24923a6e14925385fc9f88891",
+      "powershellVersion": "7.6.9",
+      "pythonVersion": "3.13.17",
+      "reviewedPatchSha256": "3eef354dcedbc06dca1f3a52eb0b6bb2412d4cdb5df6bb95e37a1f709cc55051",
+      "runnerLabel": "windows-2022",
+      "schema": 1,
+      "sourceFileSha256": {
+        "auditSourceParsedOnly": "bd652765c0d80b08559768e8a573092a3c50ff516e632fd3aea76807e2f712e7",
+        "detailFixture": "fac22b24792b4b7495461bf55133bab9398d097bdd32e264b1ad982e3fbad063",
+        "ledgerFixture": "ab013052d403d80b065a14fc33dde02d84ff4836a3c79f1f9b6d03e2dbab0b30",
+        "locationMapper": "89aaef4030173fd1a3284cbb493053fb9ed6174a5c4b641663dfa07af8e06e0a",
+        "observer": "1b5401803b0441ede4b1282155affb31ecc939a7182d6407186b63560a10b455",
+        "parser": "0bc0c83ed256904edaf0c10574e938b74eb6fdd14669b9f0ef336db2c64bca1a",
+        "preflightRecorder": "d1477b321fd5334b90cf8d5a893a04746670999e72172957fc7b0f64f4789730",
+        "schemaHelpers": "6420d494b4e14393edf0db91b478943261f4c85b4391dcdbb46610bc30f6a202"
+      },
+      "sourceStableAfter": true,
+      "sourceVerified": true
+    },
+    "powershell-preflight.json": {
+      "detailAssertion": {
+        "actualDetail": "metadata-command-line-guard",
+        "case": "getter-exception",
+        "code": "METADATA_SHORT_CIRCUIT_CHANGED",
+        "comparison": "new-detail",
+        "status": "known"
+      },
+      "fixturesExpected": 2,
+      "fixturesVerified": 1,
+      "kind": "predicate-powershell-preflight",
+      "parseFilesExpected": 5,
+      "parseFilesVerified": 5,
+      "passed": false,
+      "schema": 4,
+      "stages": {
+        "detail": {
+          "code": "fixture-rejected",
+          "exitCode": 1,
+          "passed": false,
+          "runtimeExecuted": true
+        },
+        "ledger": {
+          "code": "pass",
+          "exitCode": 0,
+          "passed": true,
+          "runtimeExecuted": true
+        },
+        "parse": {
+          "code": "pass",
+          "exitCode": 0,
+          "passed": true,
+          "runtimeExecuted": true
+        }
+      }
+    }
+  },
+  "fixtureOnly": true,
+  "observationCap": 1,
+  "outcome": "fixture-failed",
+  "pr200Blocked": true,
+  "schema": 1
+}

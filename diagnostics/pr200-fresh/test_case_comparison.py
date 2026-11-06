@@ -90,8 +90,9 @@ class CaseComparisonTests(unittest.TestCase):
         pairs = re.findall(r"\(\(\$metadataComparison = '([^']+)'\) -and \(([^\n]+?)\)\)", text)
         self.assertEqual(pairs, [('old-calls', '$old.calls -ne 1'), ('new-calls', '$new.calls -ne 1'),
             ('old-reads', '$old.reads -ne $case[4]'), ('new-reads', '$new.reads -ne $case[4]'), ('new-detail', '($metadataActualDetail = $new.detail) -cne $case[3]')])
+        table = text.split("$script:sentinel = [Exception]::new('SYNTHETIC_ERROR_NOT_PUBLISHED')", 1)[1].split(')) {', 1)[0]
         for case in preflight.METADATA_CASES:
-            self.assertEqual(text.count(", '" + case + "')"), 1)
+            self.assertEqual(table.count(", '" + case + "')"), 1)
         self.assertIn("case={0} comparison={1} actualDetail={2}' -f $case[5], $metadataComparison, $metadataActualDetailCode", text)
         self.assertEqual(text.count('$new.detail'), 1)
         whitelist = text.split('$metadataActualDetail -cin @(', 1)[1].split(')', 1)[0]
