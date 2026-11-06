@@ -30,3 +30,5 @@ parse/ledger成功、detail fixture exit1、native0を保持する。具体的as
 
 `pr217-fixture-record.json` はrun42145881832/job127657117467/attempt1の実保持recordで、2files/canonical2084bytes/hash `e91afcf1b623f91c78cbe1adeb689bc31894b7318e5e80c915cadd9c519de6b4`。
 getter-exception/new-detail/actual metadata-command-line-guardとfailureをそのまま保持する。fixture repairのpatched passを補完しない。
+
+PR220 retained record: `pr220-trial1-record.json`, 15 files / canonical28316bytes / SHA256544150f45a78f72559a02d9ccec6b5b8014fdfcf38a64d22bdf9c80cca81797d. Real sanitized evidence, unchanged. New profile contract synthetic fixtures do not reconstruct its discarded candidate or poll order.

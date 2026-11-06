@@ -1,0 +1,1535 @@
+{
+  "diagnosticOnly": true,
+  "fileSha256": {
+    "build-identity.json": "4ebf9bb422bc8c753122473da4207f07403460186a9bfb6cf8e634a8be391ae2",
+    "launch-build-identity.json": "4ebf9bb422bc8c753122473da4207f07403460186a9bfb6cf8e634a8be391ae2",
+    "observation/cleanup-audit.json": "27fa05f9f6ad02fd94d6ae67b80093313078acdf6a5e899f5180395fcc2cb717",
+    "observation/driver-provenance.json": "7f24e5782c35658e9f31d11826c54086a4b95b51b2196871bff6c033f664e6a7",
+    "observation/driver-stage-report.json": "9696d84ed30cdc5e40440e4f17e3c050ad0a901c7548e300137d7de786cce970",
+    "observation/native-observation.json": "39002036069393c26468aa04e4fa2f9d0701e5bc9714696babcefc810a1f8551",
+    "observation/native-result.json": "b6fbaad4f729a8fd3f65f69accf75149766372d1a653e115a660a4046bf14d84",
+    "observation/session-startup-timing.json": "5d976905db63c4fe04a9e72052d2bff5bd599f78b427882a1b4d3af08d65d719",
+    "observation/webview-result.json": "920a8e3499dd0c5eb8a33acbaf63ff586a0c1acd35ae8f3943a030c7c59cf8e5",
+    "observer-failure-sites.json": "8dccfebb079baf0822c0337c034e23e7245f49266c4be6f35cfb1ab1e76bde78",
+    "powershell-preflight.json": "d2f9aec8be8a5809573caa1f8d4c678d84c3c912b9366084a46d818601e78e18",
+    "profile-capability-shape.json": "ecbaa980c2e08e5ea1175e5e3cc539c16cdf0882ebadd73262aac9384558e548",
+    "profile-capability.json": "127ff3f79f707363b44f9d9cf59a9f112551c0ee7644dc53709ee15e4641bfec",
+    "profile-observation.json": "a517858e5a827711d26ffb047a2379318dd073410f025dbd963a8ad1ac873933",
+    "trial.json": "91c26277e301c57f8b6e5947f0dd635faaa4fdea073f9e387ffc766c51ebbee1"
+  },
+  "files": {
+    "build-identity.json": {
+      "controlCommit": "e9498fdf4dee714e472ea11118eb477853b3efe5",
+      "diagnosticOnly": true,
+      "distribution": false,
+      "driverProvenance": {
+        "binarySha256": "ccce42f9ec3cda7915efaf02a95036848a9f67227c2f42ae6dff2724b764e78b",
+        "cargoLockSha256": "94bf7caee3f76ca1d558e2636a846f12738db64264abe6dd7fa930548d3f03e1",
+        "diagnosticCodeSha256": {
+          "diagnostic.rs": "495dc2a0a469a3a981d316571b91a6a1e775850058f7fee6c467a2929e2a6f54",
+          "diagnostic_tests.rs": "2807c3dfd7773ee1dbda590ca0c458c7d1e26f60af5f6f9d5fb2583415dbe86e"
+        },
+        "patchSha256": "df8dd46174fc2b8aa4df4aed0c382713d7a3cadb5accda5f62aef74a960b5b9e",
+        "postimage": {
+          "src/diagnostic.rs": "495dc2a0a469a3a981d316571b91a6a1e775850058f7fee6c467a2929e2a6f54",
+          "src/diagnostic_tests.rs": "2807c3dfd7773ee1dbda590ca0c458c7d1e26f60af5f6f9d5fb2583415dbe86e",
+          "src/main.rs": "52886855d6378cb4d7dcbffa035dd2228d51e4611c12c291e6157cd66ffaed07",
+          "src/server.rs": "41d6efd571709fe1789d0673fc0d10b3f064877ad8606904611ba0c3eac8850b"
+        },
+        "postimageManifestSha256": "9aa32c62f4f93dd8cef07b4103e7373a227ae1077ee4d016d72b1d29f50bd8c5",
+        "preimage": {
+          "src/diagnostic.rs": null,
+          "src/diagnostic_tests.rs": null,
+          "src/main.rs": "8701442faf382f7c04d27d5c885a93e63e49f9850cbbaef9efa56728d01bf574",
+          "src/server.rs": "4670240b353c3430ecf5c5a6192e9107952ec5bd4eea97ee24bfb2564746fdfa"
+        },
+        "upstreamFileCount": 13,
+        "upstreamSha256": "2f2e29bd6900fb718dfdc06f2e7a371d6087c085daaf83709847ef3e6b0c1953",
+        "variant": "tauri-driver-2.1.0-stage-1"
+      },
+      "edgeDriverSha256": "c34a6b22814a18599f2a67bef922ba879ae44158f216d4d2df797d293f545665",
+      "features": [
+        "custom-protocol"
+      ],
+      "hashes": {
+        "archiveSha256": "7698141cd8c298581d88d407653390d7ec4c193c47a88979c122552f5752a3d5",
+        "builtExeSha256": "30a61337e886922f57235d4eecccbc11dfcd3cbfb37a5a9aaa0201f732b87b12",
+        "cargoLockSha256": "a924d445cb316283917e05aa5bc66d111345204ae3230fd357b7b708b8f9debd",
+        "exeSha256": "30a61337e886922f57235d4eecccbc11dfcd3cbfb37a5a9aaa0201f732b87b12",
+        "packageLockSha256": "b280be6406c53d2f6294c5330931827afc41f2429d19cbd1bf1ccd2bd4fe027c",
+        "supervisorSha256": "bbd8ec8cd17fcc31b31eb70698889b2cdc7c64bfb35bd21c3c33e479bd197d62",
+        "toolPinsSha256": "7465ef1be0bc482d05d5a3bc51f8ee4bfd49116221855cc0ade3787052de3ac3"
+      },
+      "inventory": {
+        "edgeDriverSha256": "0fad22d7563b4730069afdd3aeeb5413679c17bcd265d8f6882e408447fa5de6",
+        "edgeDriverVersion": "Microsoft Edge WebDriver 156.0.4314.58 (7806b68d20d1c1273d5b07b4f4de18e8f5852581)",
+        "kind": "read-only-native-environment-inventory",
+        "nativeTestsRun": 0,
+        "runnerImage": "20261101.353.1",
+        "runtimeVersions": [
+          "131.0.2903.86"
+        ]
+      },
+      "observedToolVersions": {
+        "node": "v24.22.1",
+        "python": "Python 3.13.17",
+        "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+      },
+      "originalFailure": {
+        "attempt": 1,
+        "job": 127278142941,
+        "run": 42037151371
+      },
+      "profile": "release",
+      "requestDeadlineMs": 15000,
+      "schema": 1,
+      "sourceCommit": "c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da",
+      "sourceTree": "e278496a55b4accc6caafa7a7a99538e5c8ceeca",
+      "specimen": "new-build-not-original-binary",
+      "trialCap": 1
+    },
+    "launch-build-identity.json": {
+      "controlCommit": "e9498fdf4dee714e472ea11118eb477853b3efe5",
+      "diagnosticOnly": true,
+      "distribution": false,
+      "driverProvenance": {
+        "binarySha256": "ccce42f9ec3cda7915efaf02a95036848a9f67227c2f42ae6dff2724b764e78b",
+        "cargoLockSha256": "94bf7caee3f76ca1d558e2636a846f12738db64264abe6dd7fa930548d3f03e1",
+        "diagnosticCodeSha256": {
+          "diagnostic.rs": "495dc2a0a469a3a981d316571b91a6a1e775850058f7fee6c467a2929e2a6f54",
+          "diagnostic_tests.rs": "2807c3dfd7773ee1dbda590ca0c458c7d1e26f60af5f6f9d5fb2583415dbe86e"
+        },
+        "patchSha256": "df8dd46174fc2b8aa4df4aed0c382713d7a3cadb5accda5f62aef74a960b5b9e",
+        "postimage": {
+          "src/diagnostic.rs": "495dc2a0a469a3a981d316571b91a6a1e775850058f7fee6c467a2929e2a6f54",
+          "src/diagnostic_tests.rs": "2807c3dfd7773ee1dbda590ca0c458c7d1e26f60af5f6f9d5fb2583415dbe86e",
+          "src/main.rs": "52886855d6378cb4d7dcbffa035dd2228d51e4611c12c291e6157cd66ffaed07",
+          "src/server.rs": "41d6efd571709fe1789d0673fc0d10b3f064877ad8606904611ba0c3eac8850b"
+        },
+        "postimageManifestSha256": "9aa32c62f4f93dd8cef07b4103e7373a227ae1077ee4d016d72b1d29f50bd8c5",
+        "preimage": {
+          "src/diagnostic.rs": null,
+          "src/diagnostic_tests.rs": null,
+          "src/main.rs": "8701442faf382f7c04d27d5c885a93e63e49f9850cbbaef9efa56728d01bf574",
+          "src/server.rs": "4670240b353c3430ecf5c5a6192e9107952ec5bd4eea97ee24bfb2564746fdfa"
+        },
+        "upstreamFileCount": 13,
+        "upstreamSha256": "2f2e29bd6900fb718dfdc06f2e7a371d6087c085daaf83709847ef3e6b0c1953",
+        "variant": "tauri-driver-2.1.0-stage-1"
+      },
+      "edgeDriverSha256": "c34a6b22814a18599f2a67bef922ba879ae44158f216d4d2df797d293f545665",
+      "features": [
+        "custom-protocol"
+      ],
+      "hashes": {
+        "archiveSha256": "7698141cd8c298581d88d407653390d7ec4c193c47a88979c122552f5752a3d5",
+        "builtExeSha256": "30a61337e886922f57235d4eecccbc11dfcd3cbfb37a5a9aaa0201f732b87b12",
+        "cargoLockSha256": "a924d445cb316283917e05aa5bc66d111345204ae3230fd357b7b708b8f9debd",
+        "exeSha256": "30a61337e886922f57235d4eecccbc11dfcd3cbfb37a5a9aaa0201f732b87b12",
+        "packageLockSha256": "b280be6406c53d2f6294c5330931827afc41f2429d19cbd1bf1ccd2bd4fe027c",
+        "supervisorSha256": "bbd8ec8cd17fcc31b31eb70698889b2cdc7c64bfb35bd21c3c33e479bd197d62",
+        "toolPinsSha256": "7465ef1be0bc482d05d5a3bc51f8ee4bfd49116221855cc0ade3787052de3ac3"
+      },
+      "inventory": {
+        "edgeDriverSha256": "0fad22d7563b4730069afdd3aeeb5413679c17bcd265d8f6882e408447fa5de6",
+        "edgeDriverVersion": "Microsoft Edge WebDriver 156.0.4314.58 (7806b68d20d1c1273d5b07b4f4de18e8f5852581)",
+        "kind": "read-only-native-environment-inventory",
+        "nativeTestsRun": 0,
+        "runnerImage": "20261101.353.1",
+        "runtimeVersions": [
+          "131.0.2903.86"
+        ]
+      },
+      "observedToolVersions": {
+        "node": "v24.22.1",
+        "python": "Python 3.13.17",
+        "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+      },
+      "originalFailure": {
+        "attempt": 1,
+        "job": 127278142941,
+        "run": 42037151371
+      },
+      "profile": "release",
+      "requestDeadlineMs": 15000,
+      "schema": 1,
+      "sourceCommit": "c6c5ae5342fcde6b1bf77eff744ad48ddce5b8da",
+      "sourceTree": "e278496a55b4accc6caafa7a7a99538e5c8ceeca",
+      "specimen": "new-build-not-original-binary",
+      "trialCap": 1
+    },
+    "observation/cleanup-audit.json": {
+      "appRemaining": 0,
+      "driversRemaining": 0,
+      "harnessNodesRemaining": 0,
+      "listenersRemaining": 0,
+      "profileProcessesRemaining": 0,
+      "queryComplete": true
+    },
+    "observation/driver-provenance.json": {
+      "binarySha256": "ccce42f9ec3cda7915efaf02a95036848a9f67227c2f42ae6dff2724b764e78b",
+      "cargoLockSha256": "94bf7caee3f76ca1d558e2636a846f12738db64264abe6dd7fa930548d3f03e1",
+      "diagnosticCodeSha256": {
+        "diagnostic.rs": "495dc2a0a469a3a981d316571b91a6a1e775850058f7fee6c467a2929e2a6f54",
+        "diagnostic_tests.rs": "2807c3dfd7773ee1dbda590ca0c458c7d1e26f60af5f6f9d5fb2583415dbe86e"
+      },
+      "patchSha256": "df8dd46174fc2b8aa4df4aed0c382713d7a3cadb5accda5f62aef74a960b5b9e",
+      "postimage": {
+        "src/diagnostic.rs": "495dc2a0a469a3a981d316571b91a6a1e775850058f7fee6c467a2929e2a6f54",
+        "src/diagnostic_tests.rs": "2807c3dfd7773ee1dbda590ca0c458c7d1e26f60af5f6f9d5fb2583415dbe86e",
+        "src/main.rs": "52886855d6378cb4d7dcbffa035dd2228d51e4611c12c291e6157cd66ffaed07",
+        "src/server.rs": "41d6efd571709fe1789d0673fc0d10b3f064877ad8606904611ba0c3eac8850b"
+      },
+      "postimageManifestSha256": "9aa32c62f4f93dd8cef07b4103e7373a227ae1077ee4d016d72b1d29f50bd8c5",
+      "preimage": {
+        "src/diagnostic.rs": null,
+        "src/diagnostic_tests.rs": null,
+        "src/main.rs": "8701442faf382f7c04d27d5c885a93e63e49f9850cbbaef9efa56728d01bf574",
+        "src/server.rs": "4670240b353c3430ecf5c5a6192e9107952ec5bd4eea97ee24bfb2564746fdfa"
+      },
+      "upstreamFileCount": 13,
+      "upstreamSha256": "2f2e29bd6900fb718dfdc06f2e7a371d6087c085daaf83709847ef3e6b0c1953",
+      "variant": "tauri-driver-2.1.0-stage-1"
+    },
+    "observation/driver-stage-report.json": {
+      "check": "native-driver-stage",
+      "code": "TRACE_COMPLETE",
+      "connectionEnd": "clean",
+      "diagnostic": "complete",
+      "events": [
+        {
+          "connection": 1,
+          "elapsedUs": 2880,
+          "error": "none",
+          "request": 0,
+          "seq": 1,
+          "stage": "connection-open",
+          "state": "idle",
+          "type": "event"
+        },
+        {
+          "connection": 1,
+          "elapsedUs": 538663,
+          "error": "none",
+          "request": 0,
+          "seq": 2,
+          "stage": "connection-end",
+          "state": "idle",
+          "type": "event"
+        },
+        {
+          "connection": 2,
+          "elapsedUs": 829533,
+          "error": "none",
+          "request": 0,
+          "seq": 3,
+          "stage": "connection-open",
+          "state": "idle",
+          "type": "event"
+        },
+        {
+          "connection": 2,
+          "elapsedUs": 833659,
+          "error": "none",
+          "request": 1,
+          "seq": 4,
+          "stage": "session-received",
+          "state": "received",
+          "type": "event"
+        },
+        {
+          "connection": 2,
+          "elapsedUs": 833741,
+          "error": "none",
+          "request": 1,
+          "seq": 5,
+          "stage": "forward-start",
+          "state": "forward-pending",
+          "type": "event"
+        },
+        {
+          "connection": 2,
+          "elapsedUs": 6146966,
+          "error": "none",
+          "request": 1,
+          "seq": 6,
+          "stage": "native-headers",
+          "state": "headers-returned",
+          "type": "event"
+        },
+        {
+          "connection": 3,
+          "elapsedUs": 6808776,
+          "error": "none",
+          "request": 0,
+          "seq": 7,
+          "stage": "connection-open",
+          "state": "idle",
+          "type": "event"
+        },
+        {
+          "connection": 2,
+          "elapsedUs": 7388897,
+          "error": "none",
+          "request": 1,
+          "seq": 8,
+          "stage": "connection-end",
+          "state": "headers-returned",
+          "type": "event"
+        },
+        {
+          "connection": 3,
+          "elapsedUs": 7388954,
+          "error": "none",
+          "request": 0,
+          "seq": 9,
+          "stage": "connection-end",
+          "state": "idle",
+          "type": "event"
+        }
+      ],
+      "observedStages": [
+        "connection-end",
+        "connection-open",
+        "forward-start",
+        "native-headers",
+        "session-received"
+      ],
+      "requestStage": "native-headers",
+      "summary": {
+        "attempted": 9,
+        "dropped": 0,
+        "enqueued": 9,
+        "lastSequence": 9,
+        "pendingRequests": 0,
+        "sealed": true,
+        "type": "summary",
+        "written": 9
+      }
+    },
+    "observation/native-observation.json": {
+      "documentObservations": 1,
+      "documentStates": [
+        "bundled-ready"
+      ],
+      "droppedRequests": 0,
+      "elapsedMs": 6569,
+      "errorCode": "",
+      "lastRequest": {
+        "elapsedMs": 66,
+        "operation": "screenshot",
+        "outcome": "ok",
+        "status": 200
+      },
+      "originClass": "bundled",
+      "phase": "complete",
+      "phases": [
+        {
+          "elapsedMs": 1,
+          "phase": "session-create"
+        },
+        {
+          "elapsedMs": 5338,
+          "phase": "origin-check"
+        },
+        {
+          "elapsedMs": 5988,
+          "phase": "readiness"
+        },
+        {
+          "elapsedMs": 5995,
+          "phase": "main-screenshot"
+        },
+        {
+          "elapsedMs": 6073,
+          "phase": "unwired-contract"
+        },
+        {
+          "elapsedMs": 6237,
+          "phase": "keyboard"
+        },
+        {
+          "elapsedMs": 6492,
+          "phase": "diagnostics-screenshot"
+        },
+        {
+          "elapsedMs": 6563,
+          "phase": "result-write"
+        }
+      ],
+      "requests": [
+        {
+          "elapsedMs": 0,
+          "operation": "create-session",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5334,
+          "operation": "create-session",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 649,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "screenshot",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 77,
+          "operation": "screenshot",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-async",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 9,
+          "operation": "execute-async",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "find-element",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 12,
+          "operation": "find-element",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "click-element",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 128,
+          "operation": "click-element",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 3,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 8,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 3,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 3,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 6,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 3,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 9,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "keys",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "keys",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 4,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "execute-sync",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 5,
+          "operation": "execute-sync",
+          "outcome": "ok",
+          "status": 200
+        },
+        {
+          "elapsedMs": 0,
+          "operation": "screenshot",
+          "outcome": "started"
+        },
+        {
+          "elapsedMs": 66,
+          "operation": "screenshot",
+          "outcome": "ok",
+          "status": 200
+        }
+      ],
+      "schema": 1,
+      "status": "webview-passed-awaiting-close",
+      "titleClass": "unwired"
+    },
+    "observation/native-result.json": {
+      "afterDriverCleanupFacts": {
+        "observed": 7,
+        "omittedRows": 0,
+        "remainingSnapshot": 0,
+        "rows": [
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 122.103,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 0,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 1,
+            "snapshotState": "absent",
+            "webviewType": "no-type-flag"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 166.927,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 2,
+            "snapshotState": "absent",
+            "webviewType": "crashpad-handler"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 126.333,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": null,
+            "role": "console-host",
+            "slot": 3,
+            "snapshotState": "absent",
+            "webviewType": "unavailable"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 62.596,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 4,
+            "snapshotState": "absent",
+            "webviewType": "gpu-process"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 19.836,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 5,
+            "snapshotState": "absent",
+            "webviewType": "utility"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 62.8,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 6,
+            "snapshotState": "absent",
+            "webviewType": "utility"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": -73.358,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 7,
+            "snapshotState": "absent",
+            "webviewType": "renderer"
+          }
+        ]
+      },
+      "appCloseObservedBeforeCleanup": true,
+      "appExitCode": 0,
+      "appWaitElapsedMs": 83,
+      "beforeSessionFacts": {
+        "appCandidates": 0,
+        "correlatedApps": 0,
+        "correlatedWebviews": null,
+        "driverIdentity": "same-identity",
+        "edgeIdentity": "same-identity",
+        "lineageCorrelation": "consistent",
+        "listeners": [
+          {
+            "family": "ipv6",
+            "loopback": true,
+            "ownerMatchesRecordedPid": true,
+            "port": 4445
+          },
+          {
+            "family": "ipv4",
+            "loopback": true,
+            "ownerMatchesRecordedPid": true,
+            "port": 4445
+          },
+          {
+            "family": "ipv4",
+            "loopback": true,
+            "ownerMatchesRecordedPid": true,
+            "port": 4444
+          }
+        ],
+        "omittedListeners": 0
+      },
+      "browserVersion": "131.0.2903.86",
+      "childCloseFacts": {
+        "observed": 7,
+        "omittedRows": 0,
+        "remainingSnapshot": 0,
+        "rows": [
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 122.103,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 0,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 1,
+            "snapshotState": "absent",
+            "webviewType": "no-type-flag"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 166.927,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 2,
+            "snapshotState": "absent",
+            "webviewType": "crashpad-handler"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 126.333,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": null,
+            "role": "console-host",
+            "slot": 3,
+            "snapshotState": "absent",
+            "webviewType": "unavailable"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 62.596,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 4,
+            "snapshotState": "absent",
+            "webviewType": "gpu-process"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 19.836,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 5,
+            "snapshotState": "absent",
+            "webviewType": "utility"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": 62.8,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 6,
+            "snapshotState": "absent",
+            "webviewType": "utility"
+          },
+          {
+            "cimCreationMatch": false,
+            "creationKnown": true,
+            "exitRelativeMs": -73.358,
+            "handleIdentityVerified": true,
+            "handleState": "exited",
+            "parentOrder": "consistent",
+            "parentSlot": 1,
+            "profileMatch": false,
+            "role": "webview",
+            "slot": 7,
+            "snapshotState": "absent",
+            "webviewType": "renderer"
+          }
+        ]
+      },
+      "childHandleDisposeFailures": 0,
+      "childHandleOwner": "harness-read-only-before-app-close",
+      "childSnapshotCount": 2,
+      "childSnapshotEndMs": 393,
+      "childSnapshotMaxMs": 40,
+      "childSnapshotStartMs": 372,
+      "childWaitElapsedMs": 462,
+      "cleanupCodes": [],
+      "cleanupFailures": 0,
+      "cleanupStarted": true,
+      "closeObservedBeforeCleanup": true,
+      "driverExitObservedAfterCleanup": true,
+      "driverStableThroughClose": true,
+      "driverStageFileObserved": true,
+      "failurePhase": null,
+      "initialLineageFacts": [],
+      "kind": "windows-webview2-native-smoke",
+      "listenerFacts": [
+        {
+          "family": "InterNetworkV6",
+          "loopback": true,
+          "owned": true,
+          "port": 4445
+        },
+        {
+          "family": "InterNetwork",
+          "loopback": true,
+          "owned": true,
+          "port": 4445
+        },
+        {
+          "family": "InterNetwork",
+          "loopback": true,
+          "owned": true,
+          "port": 4444
+        }
+      ],
+      "nativeTestsPassed": 1,
+      "nativeTestsRun": 1,
+      "normalCloseVerified": true,
+      "webviewChildrenObserved": 6
+    },
+    "observation/session-startup-timing.json": {
+      "outcome": "success",
+      "purpose": "diagnostic-hints-only",
+      "samples": [],
+      "schema": 1,
+      "settledMs": 5335
+    },
+    "observation/webview-result.json": {
+      "actualRustIpc": true,
+      "browserVersion": "131.0.2903.86",
+      "checks": 3,
+      "keyboard": {
+        "checks": 22,
+        "cycles": 3,
+        "refreshes": 3
+      },
+      "nativeTestsStarted": 1,
+      "phase": "webview-observed-awaiting-normal-close"
+    },
+    "observer-failure-sites.json": {
+      "details": [
+        {
+          "code": "lineage-webview-count-check-site",
+          "site": "lineage-query"
+        },
+        {
+          "code": "metadata-command-line-guard",
+          "site": "webview-metadata"
+        }
+      ],
+      "failureCount": 6,
+      "saturated": false,
+      "schema": 2,
+      "sites": [
+        "lineage-query",
+        "webview-metadata"
+      ],
+      "truncated": false
+    },
+    "powershell-preflight.json": {
+      "detailAssertion": {
+        "actualDetail": null,
+        "case": null,
+        "code": null,
+        "comparison": null,
+        "status": "not-applicable"
+      },
+      "fixturesExpected": 2,
+      "fixturesVerified": 2,
+      "kind": "predicate-powershell-preflight",
+      "parseFilesExpected": 5,
+      "parseFilesVerified": 5,
+      "passed": true,
+      "schema": 4,
+      "stages": {
+        "detail": {
+          "code": "pass",
+          "exitCode": 0,
+          "passed": true,
+          "runtimeExecuted": true
+        },
+        "ledger": {
+          "code": "pass",
+          "exitCode": 0,
+          "passed": true,
+          "runtimeExecuted": true
+        },
+        "parse": {
+          "code": "pass",
+          "exitCode": 0,
+          "passed": true,
+          "runtimeExecuted": true
+        }
+      }
+    },
+    "profile-capability-shape.json": {
+      "candidateClass": "candidate-invalid-path",
+      "capabilitiesShape": "object",
+      "envelopeShape": "object",
+      "failureSites": [],
+      "flatShape": "missing",
+      "nestedContainerShape": "object",
+      "nestedShape": "string",
+      "pathPredicate": "drive-prefix",
+      "requests": 1,
+      "schema": 2,
+      "settlements": 1,
+      "valueShape": "object"
+    },
+    "profile-capability.json": {
+      "capabilityMapping": "unavailable",
+      "capabilityMatchesRequested": false,
+      "capabilityObserved": false,
+      "captureFailed": false,
+      "requestedAbsentBeforeRequest": true,
+      "requestedMatchesEnvironment": true,
+      "requests": 1,
+      "schema": 1,
+      "settlements": 1
+    },
+    "profile-observation.json": {
+      "allObservedWebviewsCovered": false,
+      "lineageConfirmed": true,
+      "omittedRows": 0,
+      "parentOwned": true,
+      "parentReparseFree": true,
+      "prelaunchAbsent": true,
+      "queryComplete": false,
+      "rows": [
+        {
+          "actualCanonicalPathMatches": true,
+          "actualDirectoryExists": true,
+          "actualPathReparseFree": true,
+          "identityVerified": true,
+          "mapping": "requested-child-ebwebview",
+          "requestedDirectoryCreated": true,
+          "requestedPathReparseFree": true
+        },
+        {
+          "actualCanonicalPathMatches": true,
+          "actualDirectoryExists": true,
+          "actualPathReparseFree": true,
+          "identityVerified": true,
+          "mapping": "requested-child-ebwebview",
+          "requestedDirectoryCreated": true,
+          "requestedPathReparseFree": true
+        },
+        {
+          "actualCanonicalPathMatches": true,
+          "actualDirectoryExists": true,
+          "actualPathReparseFree": true,
+          "identityVerified": true,
+          "mapping": "requested-child-ebwebview",
+          "requestedDirectoryCreated": true,
+          "requestedPathReparseFree": true
+        },
+        {
+          "actualCanonicalPathMatches": true,
+          "actualDirectoryExists": true,
+          "actualPathReparseFree": true,
+          "identityVerified": true,
+          "mapping": "requested-child-ebwebview",
+          "requestedDirectoryCreated": true,
+          "requestedPathReparseFree": true
+        },
+        {
+          "actualCanonicalPathMatches": true,
+          "actualDirectoryExists": true,
+          "actualPathReparseFree": true,
+          "identityVerified": true,
+          "mapping": "requested-child-ebwebview",
+          "requestedDirectoryCreated": true,
+          "requestedPathReparseFree": true
+        },
+        {
+          "actualCanonicalPathMatches": true,
+          "actualDirectoryExists": true,
+          "actualPathReparseFree": true,
+          "identityVerified": true,
+          "mapping": "requested-child-ebwebview",
+          "requestedDirectoryCreated": true,
+          "requestedPathReparseFree": true
+        }
+      ],
+      "schema": 1
+    },
+    "trial.json": {
+      "auditExit": 0,
+      "classificationComplete": true,
+      "cleanupConfirmed": true,
+      "commandFailed": false,
+      "continue": false,
+      "evidenceComplete": true,
+      "inspectorExit": 0,
+      "interpretation": "inconclusive",
+      "matchingTimeout": false,
+      "normalCloseVerified": true,
+      "observerExit": 1,
+      "pr200Blocked": true,
+      "profileVerified": false,
+      "rejectedEvidenceFiles": [],
+      "sessionElapsedMs": 5334,
+      "sessionTimeoutSymptom": false,
+      "stopReason": "evidence-observer-or-byte-integrity-failure",
+      "supervisorExit": 0,
+      "trial": 1
+    }
+  },
+  "schema": 1,
+  "trial": 1
+}
