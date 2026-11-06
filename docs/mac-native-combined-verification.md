@@ -33,7 +33,7 @@
 Foundation owner の製品入口は未起動準備のままで、Process の executable / arguments / run / Wait を公開しません。Swift 内部の終了観測は固定 self-child だけで試験し、production の running 遷移や native End は生成しません。production publisher は未設定で拒否します。既存 Supervisor が要求する std Child の実 Wait とは別に、同じ native owner の IO / 終了 / joins を接続する必要があります。
 PID から別 Child / Process を作る、path / hash を再確認する、raw EOF や未起動 retire を `Reaped` とする方法は採りません。
 
-次の閉包には、同じ Foundation Process の sealed launch とその exact completion、起動後 child 側端点の解放、親 IO の half-close / EOF / close-once、SIGPIPE・peer 喪失・inheritance、元 worker の終了と supervisor / outer monitor の実 join を一続きで扱う必要があります。
+[後続の active IO source leaf](mac-foundation-active-io.md)は固定 child で同じ Process の端点移管、親 IO / half-close / EOF、EPIPE と close-once を確認します。製品の次の閉包には、sealed launch とその exact completion、atomic inheritance、同じ native owner の C ABI / Rust 接続、元 worker の終了と supervisor / outer monitor の実 join が必要です。
 authoritative Close、実 EOF、exact Wait、IO worker join、supervisor と outer monitor join は別々の条件として保持し、一つの receipt へ楽観的に統合しません。unknown / 不明な回収は元 owner を保持し、別 owner の成功で置換しません。
 
 sealed release には承認 publisher / exact release と保護配置・artifact 対応、protected policy 選択、verify-to-exec の同一 image 保証が別途必要です。未署名 artifact や任意 path / argv / digest / trust override で代用しません。

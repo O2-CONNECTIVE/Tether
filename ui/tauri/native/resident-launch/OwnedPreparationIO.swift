@@ -14,7 +14,31 @@ final class OwnedPreparationIO {
     private weak var outputWrapper: FileHandle?
     private var retired = false
     private var complete = false
+    private var active = false
+    private var fault = false
+    private var sawEOF = false
+    private var boundTask: ObjectIdentifier?
+    var needsRetention: Bool { active && !complete }
     #if RESIDENT_LAUNCH_FIXTURE
+    func fixtureDescription() throws -> String {
+        guard ends.count == 4, !active, !retired, ends.allSatisfy({ !$0.attempted }),
+              ends.allSatisfy({ fcntl($0.fd, F_GETFD) & FD_CLOEXEC != 0 }),
+              fcntl(ends[1].fd, F_GETNOSIGPIPE) == 1 else { throw PreparationFailure.ioPreparation }
+        return try ends.map { end in
+            var value = stat()
+            guard end.fd >= 3, fstat(end.fd, &value) == 0, value.st_ino != 0 else { throw PreparationFailure.ioPreparation }
+            return "\(end.fd):\(value.st_dev):\(value.st_ino)"
+        }.joined(separator: ",")
+    }
+    func fixtureDescriptors() -> [Int32] { ends.map { $0.fd } }
+    func fixtureBindings(_ task: Process) -> Bool {
+        inputWrapper != nil && outputWrapper != nil
+            && (task.standardInput as? FileHandle) === inputWrapper
+            && (task.standardOutput as? FileHandle) === outputWrapper
+    }
+    func fixtureNoSIGPIPE() -> Bool {
+        ends.count == 4 && !ends[1].attempted && fcntl(ends[1].fd, F_GETNOSIGPIPE) == 1
+    }
     func sendPeer(_ pointer: UnsafePointer<UInt8>?, count: UInt32) -> UInt32 {
         guard let pointer, (1...4096).contains(count), ends.count == 4, !retired,
               preparePeerEnd(3) else { return 0 }
@@ -46,6 +70,9 @@ final class OwnedPreparationIO {
         // Parent write/read only. There is no read/write operation in normal ABI.
         try nonblocking(ends[1].fd)
         try nonblocking(ends[2].fd)
+        guard fcntl(ends[1].fd, F_SETNOSIGPIPE, 1) != -1,
+              fcntl(ends[1].fd, F_GETNOSIGPIPE) == 1 else { throw PreparationFailure.ioPreparation }
+        boundTask = ObjectIdentifier(task)
         let input = FileHandle(fileDescriptor: ends[0].fd, closeOnDealloc: false)
         let output = FileHandle(fileDescriptor: ends[3].fd, closeOnDealloc: false)
         inputWrapper = input
@@ -71,6 +98,7 @@ final class OwnedPreparationIO {
     }
 
     func retire(_ task: Process) -> Bool {
+        guard !active else { return false }
         guard !retired else { return complete }
         retired = true
         task.standardInput = nil
@@ -83,18 +111,61 @@ final class OwnedPreparationIO {
         return complete
     }
 
+    // Called only by the same owner after its actual Process.run succeeded.
+    // FileHandle inputs are not auto-closed by Process, unlike Pipe inputs.
+    func didLaunch(_ task: Process) -> Bool {
+        guard !active, !retired, ends.count == 4, boundTask == ObjectIdentifier(task) else { return false }
+        active = true
+        closeChild(0, wrapper: inputWrapper)
+        closeChild(3, wrapper: outputWrapper)
+        return !fault && ends[0].confirmed && ends[3].confirmed
+    }
+
+    // Same-Process Wait is enforced by the containing native owner. Never
+    // mutate a launched Process's standardInput or standardOutput properties.
+    func retireActive(_ task: Process) -> Bool {
+        guard active, boundTask == ObjectIdentifier(task) else { return false }
+        if retired { return complete }
+        retired = true
+        closeOnce(1)
+        closeOnce(2)
+        complete = ends.allSatisfy { $0.confirmed } && sawEOF && !fault
+        return complete
+    }
+
+    private func closeChild(_ index: Int, wrapper: FileHandle?) {
+        guard !ends[index].attempted else { return }
+        ends[index].attempted = true
+        guard let wrapper, wrapper.fileDescriptor == ends[index].fd else {
+            recordClose(index, success: false, error: nil)
+            return
+        }
+        do {
+            try wrapper.close() // Updates the original wrapper; no raw fd close behind it.
+            recordClose(index, success: true, error: nil)
+        } catch {
+            recordClose(index, success: false, error: Int32(clamping: (error as NSError).code))
+        }
+    }
+
     private func closeOnce(_ index: Int) {
         guard !ends[index].attempted else { return }
         ends[index].attempted = true // Never retry an uncertain integer.
         let result = Darwin.close(ends[index].fd)
-        ends[index].closeError = result == 0 ? nil : errno
-        ends[index].confirmed = result == 0
+        recordClose(index, success: result == 0, error: result == 0 ? nil : errno)
+    }
+
+    private func recordClose(_ index: Int, success: Bool, error: Int32?) {
+        ends[index].closeError = error
+        ends[index].confirmed = success
+        if active && !success { fault = true }
         #if RESIDENT_LAUNCH_FIXTURE
         closed += 1
-        if result == 0 { open -= 1 }
+        if success { open -= 1 }
         if loseCloseAcknowledgement {
             loseCloseAcknowledgement = false
             ends[index].confirmed = false // Real close succeeded; lost receipt only.
+            if active { fault = true }
         }
         #endif
     }
@@ -105,13 +176,14 @@ final class OwnedPreparationIO {
         case let .read(pointer, limit):
             guard let pointer, (1...4096).contains(limit), !ends[2].attempted else { return .init(tag: .rejected) }
             let count = Darwin.read(ends[2].fd, pointer, Int(limit))
-            if count == 0 { return .init(tag: .eof) } // Raw pipe EOF only.
+            if count == 0 { sawEOF = true; return .init(tag: .eof) } // Raw pipe EOF only.
             return byteResult(count)
         case let .write(pointer, limit):
             guard let pointer, (1...4096).contains(limit) else { return .init(tag: .rejected) }
             if ends[1].attempted { return .init(tag: ends[1].confirmed ? .halfClosed : .unknown) }
             let count = Darwin.write(ends[1].fd, pointer, Int(limit))
-            return count == 0 ? .init(tag: .unknown) : byteResult(count)
+            if count == 0 { if active { fault = true }; return .init(tag: .unknown) }
+            return byteResult(count)
         case .halfClose:
             closeOnce(1) // Parent control writer, never its child FileHandle.
             return .init(tag: ends[1].confirmed ? .halfClosed : .unknown)
@@ -121,7 +193,9 @@ final class OwnedPreparationIO {
     private func byteResult(_ count: Int) -> PreparedByteResult {
         if count > 0 { return .init(tag: .bytes, count: UInt32(count)) }
         let error = errno
-        return .init(tag: [EAGAIN, EINTR].contains(error) ? .pending : .unknown)
+        if [EAGAIN, EINTR].contains(error) { return .init(tag: .pending) }
+        if active { fault = true }
+        return .init(tag: .unknown)
     }
 
     #if RESIDENT_LAUNCH_FIXTURE
