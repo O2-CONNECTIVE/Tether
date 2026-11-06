@@ -66,3 +66,5 @@ SSH途中実装の既知の公開WIP保存先は `wip/ssh-owned-shell-20261031` 
 - [同じ native IO worker の supervisor](mac-native-io-supervisor.md): 元 owner の Wait / IO 回収と実 join の component を接続。通常起動・outer joins・Quit 許可は未接続です。
 
 - [同じ native owner の outer monitor](mac-native-outer-monitor.md): 実 IO join に続く monitor の実 join を接続。Unknown と Quit 拒否、通常未接続を維持します。
+
+- [同じ native owner と typed port の寿命](mac-native-session.md): #240 依存の source-only 組成、通常起動は未接続。

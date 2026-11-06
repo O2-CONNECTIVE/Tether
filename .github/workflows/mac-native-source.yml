@@ -80,6 +80,7 @@ jobs:
           python scripts/check_mac_active_pump.py | tee "$RUNNER_TEMP/native-source-evidence/active-pump.json"
           python scripts/check_mac_native_supervisor.py | tee "$RUNNER_TEMP/native-source-evidence/supervisor.json"
           python scripts/check_mac_native_outer.py | tee "$RUNNER_TEMP/native-source-evidence/outer.json"
+          python scripts/check_mac_native_session.py | tee "$RUNNER_TEMP/native-source-evidence/session.json"
       - name: Compile and link Intel images without execution
         run: python scripts/check_mac_native_cross.py | tee "$RUNNER_TEMP/native-source-evidence/intel.json"
       - name: Replay synthetic enrollment lookup and build untrusted source archives

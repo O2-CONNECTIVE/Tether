@@ -27,6 +27,11 @@ fn main() {
         native_preparation::Preparation::Refused
     ));
     #[cfg(resident_native_source)]
+    if arguments[1].starts_with("session-") {
+        resident_port::session_checks::run(&arguments[1]);
+        return;
+    }
+    #[cfg(resident_native_source)]
     if arguments[1].starts_with("outer-") {
         resident_port::duplex::run_outer(&arguments[1]);
         return;
@@ -52,4 +57,12 @@ fn main() {
         "NATIVE_PUMP_FIXTURE mode={} passed={passed} failed=0 launched=0",
         arguments[1]
     );
+}
+
+#[cfg(resident_session_borrow_refusal)]
+fn view_cannot_outlive_original_session() {
+    let session = resident_port::native_session::NativeSession::prepare().unwrap();
+    let view = session.port();
+    drop(session);
+    std::hint::black_box(view.current());
 }
