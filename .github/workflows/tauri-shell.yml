@@ -30,7 +30,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Require and record exact source checkout
+        working-directory: ${{ github.workspace }}
+        run: python scripts/check_ci_checkout.py
       - name: Set up Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -60,6 +64,7 @@ jobs:
           cargo +1.99.1 test --locked --offline --manifest-path src-tauri/Cargo.toml --features custom-protocol --lib
           cargo +1.99.1 clippy --locked --offline --manifest-path src-tauri/Cargo.toml --features custom-protocol --all-targets -- -D warnings
           cargo +1.99.1 build --locked --offline --manifest-path src-tauri/Cargo.toml --features custom-protocol
+          cargo +1.99.1 rustc --locked --offline --manifest-path src-tauri/Cargo.toml --lib -- --cfg resident_native_source -Dwarnings
       - name: Save Mac compilation cache
         if: success() && steps.mac-rust-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -78,7 +83,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Require and record exact source checkout
+        working-directory: ${{ github.workspace }}
+        run: python scripts/check_ci_checkout.py
       - name: Set up Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:

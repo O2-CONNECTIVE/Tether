@@ -3,8 +3,13 @@ use super::super::model::{Disposition, IntentRequest, Receipt};
 use super::super::observation::Observation;
 use super::{closure::Closure, tracking::Tracking, wire};
 use std::sync::mpsc::{self, Receiver, SyncSender};
+#[cfg(test)]
+#[path = "fixture_trace.rs"]
+mod fixture_trace;
 #[derive(Default)]
 pub(super) struct Shared {
+    #[cfg(test)]
+    pub(super) fixture_trace: fixture_trace::FixtureTrace,
     pub(super) tracking: Tracking,
     pub(super) startup: super::startup::Startup,
     pub(super) closure: Closure,

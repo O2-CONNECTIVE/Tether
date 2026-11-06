@@ -12,14 +12,18 @@ use std::{
     time::{Duration, Instant},
 };
 const SCRIPT: &str = r#"
-import ctypes,json,sys,time
+import sys,time,os
+print('RESIDENT_FIXTURE_CHILD phase=entered pid='+str(os.getpid())+' mode='+sys.argv[1],file=sys.stderr,flush=True)
+import ctypes,json
 lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
 class Timebase(ctypes.Structure): _fields_=[('numer',ctypes.c_uint32),('denom',ctypes.c_uint32)]
 tb=Timebase(); assert lib.mach_timebase_info(ctypes.byref(tb))==0
 lib.mach_continuous_time.restype=ctypes.c_uint64
 now=lambda:lib.mach_continuous_time()*tb.numer//tb.denom//1000000
 mode=sys.argv[1]
-s=json.loads(sys.argv[2]); s['sourceContinuousMs']=now(); print(json.dumps(s),flush=True)
+s=json.loads(sys.argv[2]); s['sourceContinuousMs']=now()
+print('RESIDENT_FIXTURE_CHILD phase=emit pid='+str(os.getpid())+' native_ms='+str(s['sourceContinuousMs']),file=sys.stderr,flush=True)
+print(json.dumps(s),flush=True)
 if mode!='unsolicited': sys.stdin.read()
 if mode=='delayed': time.sleep(3.1)
 f={'protocolVersion':1,'type':'closed','sourceContinuousMs':now(),'outcome':'unknown' if mode=='unknown' else 'confirmed'}
@@ -34,7 +38,7 @@ sys.exit(1 if mode=='exit-error' else 0)
 pub(super) fn command(mode: &str) -> Command {
     let mut command = Command::new("/usr/bin/python3");
     command
-        .args(["-c", SCRIPT, mode, &status(1, 0, json!(null))])
+        .args(["-I", "-S", "-c", SCRIPT, mode, &status(1, 0, json!(null))])
         .env_clear();
     command
 }
@@ -92,6 +96,22 @@ fn unknown_duplicate_following_frame_missing_truncated_and_exit_error_never_conf
         assert!(!owner.cleanup_confirmed(), "confirmed {mode}");
     }
 }
+#[test]
+fn no_output_child_still_hits_readiness_deadline_and_reap_is_not_cleanup() {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "IFS= read -r line; exit 0"])
+        .env_clear();
+    let (mut owner, source) = Supervisor::fixture(command).unwrap();
+    let source = source.unwrap();
+    assert!(source
+        .first_with_timeout(Duration::from_millis(20))
+        .is_err());
+    join(&mut owner);
+    assert!(source.current().is_none());
+    assert!(!owner.cleanup_confirmed());
+}
+
 #[test]
 fn unsolicited_terminal_is_not_a_close_proof() {
     let (mut owner, source) = launch("unsolicited");

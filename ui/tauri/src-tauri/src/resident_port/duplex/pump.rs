@@ -1,31 +1,25 @@
 //! Bounded nonblocking IO on the exact child's dedicated handles.
 use super::{exchange::Shared, wire};
 use crate::mac_status::ContinuousClock;
-use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
 use std::process::Child;
-pub(super) struct Pump {
-    input: File,
-    output: Option<File>,
+#[path = "child_io.rs"]
+mod child_io;
+use child_io::ChildIo;
+#[cfg(resident_native_source)]
+#[path = "native_pump.rs"]
+mod native;
+
+pub(super) struct Pump<I = ChildIo> {
+    io: I,
+    control_closed: bool,
     line: Vec<u8>,
     line_started: Option<u64>,
     discard: bool,
 }
-impl Pump {
+impl Pump<ChildIo> {
     pub(super) fn take(child: &mut Child) -> Result<Self, ()> {
-        // Same exact Child, not supplied File/fd. FIFO is NOT authentication.
-        let input = File::from(OwnedFd::from(child.stdout.take().ok_or(())?));
-        let output = File::from(OwnedFd::from(child.stdin.take().ok_or(())?));
-        configure(&input, 0)?;
-        configure(&output, 1)?;
-        Ok(Self {
-            input,
-            output: Some(output),
-            line: Vec::with_capacity(wire::MAX_LINE),
-            line_started: None,
-            discard: false,
-        })
+        Ok(Self::with_io(ChildIo::take(child)?))
     }
     pub(super) fn step(
         &mut self,
@@ -33,10 +27,30 @@ impl Pump {
         clock: &ContinuousClock,
     ) -> Result<bool, ()> {
         let now = clock.now_millis().ok_or(())?;
-        if shared.closure.requested() && self.output.is_some() {
-            drop(self.output.take()); // Deliberate half-close, exactly once.
+        if shared.closure.requested() && !self.control_closed {
+            self.io.half_close();
+            self.control_closed = true;
             shared.closure.half_closed();
         }
+        self.step_io(shared, clock, now)
+    }
+}
+impl<I: Read + Write> Pump<I> {
+    fn with_io(io: I) -> Self {
+        Self {
+            io,
+            control_closed: false,
+            line: Vec::with_capacity(wire::MAX_LINE),
+            line_started: None,
+            discard: false,
+        }
+    }
+    fn step_io(
+        &mut self,
+        shared: &mut Shared,
+        clock: &ContinuousClock,
+        now: u64,
+    ) -> Result<bool, ()> {
         if self.discard {
             return self.read_discard(shared);
         }
@@ -69,14 +83,16 @@ impl Pump {
             return Err(());
         }
         if let Some(bytes) = &shared.output {
-            let result = self.output.as_mut().ok_or(())?.write(bytes);
+            let result = self.io.write(bytes);
             shared.written(result)?;
         }
         let mut bytes = [0; 1024];
-        let read = self.input.read(&mut bytes);
+        let read = self.io.read(&mut bytes);
         // Producer can timestamp/write between our earlier sample and read.
         // Compare captured bytes against actual time sampled AFTER the read.
         let now = clock.now_millis().ok_or(())?;
+        #[cfg(test)]
+        shared.fixture_trace.read(&read, now);
         shared.sample(now)?;
         self.check_partial(now)?;
         if !shared.closure.requested()
@@ -119,7 +135,12 @@ impl Pump {
         self.check_partial(now)?;
         for byte in bytes {
             if *byte == b'\n' {
-                let event = wire::Event::parse(&self.line)?;
+                let event = wire::Event::parse(&self.line).inspect_err(|_| {
+                    #[cfg(test)]
+                    shared.fixture_trace.parse_failed();
+                })?;
+                #[cfg(test)]
+                shared.fixture_trace.frame(&event);
                 self.line.clear();
                 self.line_started = None;
                 if shared.startup.event(&event, now)? {
@@ -148,7 +169,7 @@ impl Pump {
     }
     fn read_discard(&mut self, shared: &mut Shared) -> Result<bool, ()> {
         let mut bytes = [0; 1024];
-        match self.input.read(&mut bytes) {
+        match self.io.read(&mut bytes) {
             Ok(0) => {
                 shared.ended();
                 Ok(true)
@@ -160,31 +181,6 @@ impl Pump {
             Err(_) => Err(()),
         }
     }
-}
-fn configure(file: &File, access: i32) -> Result<(), ()> {
-    use std::os::unix::fs::FileTypeExt;
-    if !file.metadata().map_err(|_| ())?.file_type().is_fifo() {
-        return Err(());
-    }
-    let fd = file.as_raw_fd();
-    // macOS SDK: GETFD1/SETFD2/GETFL3/SETFL4, CLOEXEC1/ACCMODE3/NONBLOCK4.
-    unsafe extern "C" {
-        fn fcntl(fd: i32, command: i32, ...) -> i32;
-    }
-    // SAFETY: owned live descriptors and SDK's required variadic integer types.
-    unsafe {
-        let flags = fcntl(fd, 3);
-        let descriptor = fcntl(fd, 1);
-        if flags < 0
-            || descriptor < 0
-            || flags & 3 != access
-            || fcntl(fd, 2, descriptor | 1) < 0
-            || fcntl(fd, 4, flags | 4) < 0
-        {
-            return Err(());
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

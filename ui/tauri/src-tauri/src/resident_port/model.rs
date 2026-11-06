@@ -46,12 +46,68 @@ pub(crate) struct Receipt {
     pub(super) disposition: Disposition,
 }
 impl Receipt {
+    pub(super) fn unavailable(request: IntentRequest) -> Self {
+        Self::new(request, Disposition::Unavailable)
+    }
     pub(super) fn new(request: IntentRequest, disposition: Disposition) -> Self {
         Self {
             protocol_version: 1,
             request_id: request.request_id,
             intent: request.intent,
             disposition,
+        }
+    }
+}
+#[derive(Clone, Serialize)]
+#[serde(tag = "source", rename_all = "kebab-case")]
+enum Source {
+    Unsupported,
+    ResidentOwner {
+        #[serde(flatten)]
+        output: Output,
+    },
+}
+#[derive(Clone, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+enum Output {
+    SourceUnavailable,
+    // Fixture shape tests do not supply authentication or a native factory.
+    #[cfg(any(test, target_os = "macos"))]
+    SourceObservation {
+        #[serde(flatten)]
+        observation: super::observation::Observation,
+    },
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Status {
+    protocol_version: u8,
+    #[serde(flatten)]
+    source: Source,
+}
+impl Status {
+    pub(super) fn unbound() -> Self {
+        Self {
+            protocol_version: 1,
+            source: if cfg!(target_os = "macos") {
+                Source::ResidentOwner {
+                    output: Output::SourceUnavailable,
+                }
+            } else {
+                Source::Unsupported
+            },
+        }
+    }
+    #[cfg(target_os = "macos")]
+    pub(super) fn bound(source: &super::duplex::owner::BoundDuplex) -> Self {
+        match source.current() {
+            Some(observation) => Self {
+                protocol_version: 1,
+                source: Source::ResidentOwner {
+                    output: Output::SourceObservation { observation },
+                },
+            },
+            None => Self::unbound(),
         }
     }
 }

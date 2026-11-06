@@ -1,5 +1,6 @@
 // Package maclaunch is the recipient-side, one-shot current-user approval
-// owner. Only its local controlling terminal may approve: MCP, relay frames,
+// owner for the interactive path. Only its local controlling terminal may approve
+// that path: MCP, relay frames,
 // stdin, environment variables and saved approval booleans are not inputs.
 // It does not enroll keys, dial, listen, install or start a command on approval.
 package maclaunch
@@ -20,6 +21,7 @@ import (
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor"
@@ -87,7 +89,7 @@ func prepare(cfg Config, runtime agentexec.ProfiledRuntime) (*Pending, error) {
 	var fixed *agentexec.FixedStartConstraint
 	if cfg.FixedStart != nil {
 		copied := *cfg.FixedStart
-		if copied.Validate() != nil {
+		if copied.Validate() != nil || !agentwire.ValidRequestID(copied.RequestID) {
 			return nil, ErrConfig
 		}
 		fixed = &copied
@@ -148,7 +150,8 @@ func (p *Pending) take() error {
 // stream. There is no noninteractive yes flag. The local user must type the
 // fresh proposal phrase after seeing the fixed details. The owned tty must
 // support bounded polling; cancellation and expiry refuse, never approve.
-// No Authority exists while waiting for input.
+// No Authority exists while waiting for input. A non-nil owner returned with an
+// error retains partial acquisition for cleanup only; it cannot Serve or Dispatch.
 func (p *Pending) ApproveLocal(ctx context.Context) (*Approved, error) {
 	if err := p.take(); err != nil {
 		return nil, err
@@ -238,6 +241,16 @@ func (p *Pending) confirm(ctx context.Context, tty io.ReadWriter) (approved *App
 	if strings.TrimSuffix(strings.TrimSuffix(string(line), "\n"), "\r") != p.phrase {
 		return nil, ErrDenied
 	}
+	return p.completeApproved(ctx)
+}
+
+// completeApproved constructs the owner after verification. Only the local
+// interactive path calls it in this slice; a future resident caller must first
+// prove its protected policy scope. It accepts no approval bool.
+func (p *Pending) completeApproved(ctx context.Context) (approved *Approved, err error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, ErrDenied
+	}
 	// Fix the already displayed host public key independently of a mutable
 	// caller signer. Every signature is checked against it by agentchannel.
 	fixed := &pinnedSigner{signer: p.hostKey, public: p.hostPublic}
@@ -249,17 +262,21 @@ func (p *Pending) confirm(ctx context.Context, tty io.ReadWriter) (approved *App
 	if err != nil {
 		return nil, err
 	}
+	approved = &Approved{issuer: p.issuer, session: session}
 	host, err := agentlink.NewHost(agentlink.HostConfig{Session: session, AllowedKeys: p.keys, HostKey: fixed, Budgets: p.budgets})
 	if err != nil {
 		cleanup, cancel := context.WithTimeout(context.Background(), p.cleanup)
 		defer cancel()
-		return nil, errors.Join(err, session.Close(cleanup))
+		approved.failed = true
+		return approved, errors.Join(err, approved.Close(cleanup))
 	}
+	approved.host = host
 	g := session.Grant()
 	if ctx.Err() != nil {
 		cleanup, cancel := context.WithTimeout(context.Background(), p.cleanup)
 		defer cancel()
-		return nil, errors.Join(ErrDenied, host.Close(cleanup))
+		approved.failed = true
+		return approved, errors.Join(ErrDenied, approved.Close(cleanup))
 	}
 	// Keep the caller's lifetime, not the temporary prompt deadline context.
 	// Prompt return must not revoke a successfully approved session.
@@ -270,7 +287,7 @@ func (p *Pending) confirm(ctx context.Context, tty io.ReadWriter) (approved *App
 		case <-session.Done():
 		}
 	}()
-	return &Approved{issuer: p.issuer, session: session, host: host, dispatch: Dispatch{Binding: agentchannel.Binding{Grant: g.Binding, KeySetDigest: g.KeySetDigest, Profile: session.Profile()}, Deadline: g.HardDeadline, HostKey: append([]byte(nil), p.hostPublic.Marshal()...)}}, nil
+	return approved, nil
 }
 
 type pinnedSigner struct {
@@ -290,34 +307,36 @@ func (p *pinnedSigner) Sign(random io.Reader, data []byte) (*ssh.Signature, erro
 // Dispatch is public routing/pinning metadata, NOT a bearer grant or approval.
 // The client still needs the private key corresponding to an approved key.
 // Its authentic delivery to that client is the dispatch transport's obligation.
-type Dispatch struct {
-	Binding  agentchannel.Binding
-	Deadline time.Time
-	HostKey  []byte
-}
+type Dispatch = agentchannel.Dispatch
 
 // Approved owns precisely this issuer, Session and Host. It does not export a
 // way to mint additional grants or replace the runtime, keys or authority.
 type Approved struct {
-	issuer   *ephemeral.Issuer
-	session  *agentexec.Session
-	host     *agentlink.Host
-	dispatch Dispatch
+	// failed is fixed before publication; partial owners are cleanup-only.
+	failed          bool
+	closeMu         sync.Mutex
+	resultMu        sync.Mutex
+	cleanupErr      error
+	cleanupObserved bool
+	issuer          *ephemeral.Issuer
+	session         *agentexec.Session
+	host            *agentlink.Host
 }
 
 func (a *Approved) Dispatch() Dispatch {
-	if a == nil {
+	if a == nil || a.failed {
 		return Dispatch{}
 	}
-	d := a.dispatch
-	d.HostKey = append([]byte(nil), d.HostKey...)
-	return d
+	if a.host == nil {
+		return Dispatch{}
+	}
+	return a.host.ChannelDispatch()
 }
 
 // Serve transfers the already supplied opaque connection to the same Host.
 // No dial, listener, automatic retry or reconnect is performed.
 func (a *Approved) Serve(ctx context.Context, conn net.Conn) error {
-	if a == nil || a.host == nil {
+	if a == nil || a.failed || a.host == nil {
 		return ErrConfig
 	}
 	err := a.host.Serve(ctx, conn)
@@ -327,13 +346,44 @@ func (a *Approved) Serve(ctx context.Context, conn net.Conn) error {
 	return err
 }
 
-// Close revokes before waiting for bounded command cleanup. Calling it again
-// only retries this owner's unconfirmed cleanup, never a replacement owner.
+// Close revokes before waiting for bounded command cleanup. A failed partial
+// acquisition returns its completed cleanup result without retrying. Successful
+// owners retain explicit same-owner cleanup retry behavior, never replacement.
 func (a *Approved) Close(ctx context.Context) error {
-	if a == nil {
+	if a == nil || a.issuer == nil {
 		return ErrConfig
 	}
-	return errors.Join(a.issuer.Close(), a.host.Close(ctx))
+	if a.failed {
+		a.closeMu.Lock()
+		defer a.closeMu.Unlock()
+		if err, observed := a.CleanupResult(); observed {
+			return err
+		}
+	}
+	closed := a.issuer.Close()
+	switch {
+	case a.host != nil:
+		closed = errors.Join(closed, a.host.Close(ctx))
+	case a.session != nil:
+		closed = errors.Join(closed, a.session.Close(ctx))
+	default:
+		closed = errors.Join(closed, ErrConfig)
+	}
+	a.resultMu.Lock()
+	a.cleanupErr, a.cleanupObserved = closed, true
+	a.resultMu.Unlock()
+	return closed
+}
+
+// CleanupResult observes the last completed explicit cleanup without revoking,
+// waiting for cleanup, or retrying it. observed=false is not cleanup success.
+func (a *Approved) CleanupResult() (err error, observed bool) {
+	if a == nil {
+		return nil, false
+	}
+	a.resultMu.Lock()
+	defer a.resultMu.Unlock()
+	return a.cleanupErr, a.cleanupObserved
 }
 
 // RevokeTerminalUnknown seals only the local issuer. It never retries command
@@ -347,7 +397,7 @@ func (a *Approved) RevokeTerminalUnknown() error {
 
 // LocalSummary exposes only local display state, never an authority or key.
 func (a *Approved) LocalSummary() (agentexec.LocalSummary, bool, bool) {
-	if a == nil || a.session == nil || a.host == nil {
+	if a == nil || a.failed || a.session == nil || a.host == nil {
 		return agentexec.LocalSummary{}, false, false
 	}
 	v, ok := a.session.LocalSummary()

@@ -34,6 +34,18 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 ## 開発・配布
 
 - [Go CI](go-ci.md)、[viewer build/checks](../ui/mac-status/README.md)、[配置規約](repository-layout.md)。
+- [Mac resident sourceの段階計画](mac-resident-source-plan.md): 純粋transcript・worker ownerの公開準備と、未接続のproducer/policy閉包・build/package/配置信頼の残件。
+- [正規transport ownerのsource閉包](mac-canonical-transport-owner.md): 共通Dispatch・部分取得保持と、各componentのcleanup観測／未接続範囲。
+- [fixed intentのwire／runtime引継ぎ](mac-fixed-intent-handoff.md): 正規namespace、固定内容、元の有限期限とtimer所有の維持。
+- [resident transport と protected policy](mac-resident-transport-policy.md): 相互proof・opaque receiver・同世代receiptと、strict source/workerの未接続閉包。
+- [Standby と owned pipe の source 組成](mac-resident-producer-composition.md): 同じ owner の終了と codec / mapper / owned IO を結び、sealed entrypoint と実機の未達を分けます。
+- [resident library の build record](mac-resident-library-build.md): 固定 source・lock・recipeとcompile-only archiveを結び、起動・配布はblockedのまま記録します。
+- [native enrollment 選択と起動信頼](mac-resident-trusted-preparation.md): OS account 由来の固定 policy 選択を内部準備し、署名・配置・launch-time enforcement の残る条件を分けます。
+- [typed launch requirement の準備](mac-launch-requirement-preparation.md): 未起動 Foundation owner と型付き条件の source fixture。実 publisher 未設定、通常起動・実 enforcement は未接続です。
+- [未起動 owner の FFI と匿名 IO](mac-prelaunch-ffi-io.md): 元 thread と同じ Process の保持、匿名 pipe の close-once、unknown 保持の C fixture。実 producer の Wait / joins は後続です。
+- [未起動 native owner の Rust 接続](mac-native-rust-owner.md): 実 C ABI と同じ owner を元 thread に保持し、retire / Drop と unknown を合成 library で検証。通常アプリは未接続です。
+- [同じ native owner の byte IO](mac-native-byte-io.md): fd 所有を移さず、借用 Read / Write と control half-close を接続。raw EOF と起動後の回収証拠を区別します。
+- [同じ native owner と Pump](mac-native-pump.md): 既存framing処理へ具体的な借用IOを接続するsource fixture。通常startup / native supervisorの終了証拠は未接続です。
 - [Go license inventory](go-license-inventory.md)、[配布条件](distribution.md)。旧配布条件の合格を新しいMac packageへ転用しない。
 - [検証状態](tether-pilot-status.md)のpackage節に、license閉包・署名・notarization・受領者起動の残件を集約。
 - [旧Python開発手順](development.md)はPython部分の検証用。Go/Swiftの全試験を包含しない。

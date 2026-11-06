@@ -41,6 +41,16 @@ type Server struct {
 	used bool
 }
 
+// Dispatch returns the public metadata frozen from this Server's canonical
+// Session and pinned host key. It never observes/renews authority, authenticates
+// a peer or transfers ownership. Metadata remains historical after revocation.
+func (s *Server) Dispatch() Dispatch {
+	if s == nil || s.session == nil || s.host == nil {
+		return Dispatch{}
+	}
+	return Dispatch{Binding: s.binding, Deadline: s.deadline, HostKey: append([]byte(nil), s.host.public.Marshal()...)}
+}
+
 // NewServer validates every input before it takes the Session's single
 // transport claim, so a refused configuration leaves the Session unclaimed. A
 // second Server for the same Session is refused: one channel per grant.

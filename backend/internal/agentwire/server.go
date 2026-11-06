@@ -70,12 +70,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if _, err := rand.Read(raw[:]); err != nil {
 		return nil, ErrUnconfigured
 	}
-	if err := s.Claim(); err != nil {
+	prefix := hex.EncodeToString(raw[:]) + "."
+	if err := s.ClaimWithRequestPrefix(prefix); err != nil {
 		return nil, errors.Join(ErrUnconfigured, err)
 	}
 	return &Server{
 		session: s, binding: binding, mode: s.Mode(), profile: s.Profile(), liveness: cfg.Liveness,
-		prefix: hex.EncodeToString(raw[:]) + ".", owned: map[string]struct{}{},
+		prefix: prefix, owned: map[string]struct{}{},
 	}, nil
 }
 
