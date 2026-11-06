@@ -357,7 +357,15 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 	requests := make(chan *workerowner.Request)
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- c.waitSource(source.Context(), requests) }()
-	for c.ctx.Err() == nil && lease.Context().Err() == nil {
+	// Native revocation precedes source cancellation. Propagate that end to the
+	// SAME receiver so its synchronous Next can unblock without OFF or traffic.
+	// Receiver cancellation is not collection: retain/join the waiter below.
+	readStopped := make(chan struct{})
+	stopRead := context.AfterFunc(source.Context(), func() {
+		defer close(readStopped)
+		lease.Receiver().Close()
+	})
+	for c.ctx.Err() == nil && lease.Context().Err() == nil && source.Context().Err() == nil {
 		i, e := lease.Next()
 		if e != nil {
 			break
@@ -380,6 +388,7 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 			sent = true
 		case <-c.ctx.Done():
 		case <-lease.Context().Done():
+		case <-source.Context().Done():
 		}
 		if !sent {
 			break
@@ -399,12 +408,17 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 			}
 		case <-c.ctx.Done():
 		case <-lease.Context().Done():
+		case <-source.Context().Done():
 		}
 		if err != nil {
 			break
 		}
 	}
 	source.Close()
+	if stopRead() {
+		close(readStopped)
+	}
+	<-readStopped // Joined original cancellation callback, not cleanup proof.
 	close(requests)
 	cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 	defer stop()
