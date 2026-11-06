@@ -1,0 +1,22 @@
+# PR215 case/comparison の一回限定観測
+
+固定source:b6c78ee5dc20a8b3a7ffcf88554cf704f74fba59/tree816d583987eb02a24923a6e14925385fc9f88891。
+PR215 control a4bb3992e4a92114408f0be79a57907650ae39d0 からのpatch39084bytes/SHA2563eef354dcedbc06dca1f3a52eb0b6bb2412d4cdb5df6bb95e37a1f709cc55051を照合した。
+sourceの独立reviewは指摘0。52Python/13Node/actionlint/diff成功、PSruntimeはMacで未実行。source/保持記録ではcaseを確定できないため、その一点のruntime識別を行う。
+
+新draft/DO NOT MERGE PRはbase diagnostic/pr213-fixture-only-20261106@a4bb3992e4a92114408f0be79a57907650ae39d0、head diagnostic/pr215-case-only-20261106。
+opened-only/attempt1/exacthead/exactbasebranch&SHA/draft/samerepo、一fresh標準windows-2022 job、fixturechain最大一回。
+旧diagnostic/mainworkflowを編集・起動せず、controlcheckout・exactsourcecheckout・Python3.13.17setup・one recorderの四stepだけを使う。
+既存PowerShellの同一性/versionguard、前後sourcebytes/Gitidentity検証、固定preflightのparse→ledger→detail順、各60秒と所有childのtimeoutkill/waitを維持する。早期失敗なら後続を強制実行しない。
+
+今回の一問は「五caseのどれで、五比較のどの最初の項目が不一致か。new-detailなら既知allowlist内の実labelは何か」。
+元比較/期待値/順序/short-circuit/throwを保つ。actualDetailは元の最後の読取りで一回だけ捕捉し、先に止まれば追加で読まない。任意counter/type/value/exceptionは保持しない。
+新schema4を必要とし、case/comparison/actualDetailの欠測/未知/競合/上限超は閉じる。旧schema記録を補完しない。getterexceptionidentityのcoverageは今回増やさず、creation-errorのみの既存範囲として報告する。
+
+app/frontend build、Rust/toolchain、driver準備、app launch、native/supervisorは存在せず、fixture成功後にも進まない。
+新観測/追加attempt/rerun/dispatch/結果後sourcepushは行わず、この一回の結果で停止する。
+完全fixedschema identity/preflight JSONとhashだけをboundedcontrolledlog/jobsummaryへ保存する。rawpaths/PID/commandline/stack/exception/response/arbitrarykeysを出さず、artifact/cache/binary転送なし。
+公式checkout/setupPython固定SHA、contentsread、credentials非保持、repo/user secretsなし。標準publicrunnerとlogsummaryの範囲だけを確認し、新費用/security/auth/settings/billing/credentials/persistentaccess/livehostを追加しない。
+
+元PR200run42037151371/attempt1とblocker、main/Mac/product/fixedsource、PR208/209/211/213/215 evidenceを保持する。
+このfixtureの差を元native timeout根因、profile同等性、通常close/cleanup成功へ読み替えない。15000ms/profileMatch/所有cleanup条件は未編集。

@@ -11,9 +11,9 @@ import re
 import subprocess
 import sys
 
-SOURCE = '43f56b87574f57cc87c1d0347b609499d896c222'
-TREE = 'e78c82786c440f76414ab55939efb5fa7efbbe50'
-PATCH = 'f692839091fec12a079041213edcc1ad9e6de0b7dc3f23557c26a31d0ca7a5c5'
+SOURCE = 'b6c78ee5dc20a8b3a7ffcf88554cf704f74fba59'
+TREE = '816d583987eb02a24923a6e14925385fc9f88891'
+PATCH = '3eef354dcedbc06dca1f3a52eb0b6bb2412d4cdb5df6bb95e37a1f709cc55051'
 FILES = {'observer': 'observe-profile.ps1', 'locationMapper': 'observer-detail.ps1',
          'ledgerFixture': 'observer-reasons.test.ps1', 'detailFixture': 'observer-detail.test.ps1',
          'parser': 'parse-predicate-sources.ps1', 'auditSourceParsedOnly': 'audit.ps1',
@@ -86,7 +86,7 @@ def publish(identity, preflight, outcome, validator):
     if preflight is not None:
         need(validator is not None)
         files['powershell-preflight.json'] = validator(preflight)
-        need(preflight['schema'] == 3)
+        need(preflight['schema'] == 4)
     if outcome in {'fixture-passed', 'fixture-failed'}:
         need(preflight is not None and identity['sourceVerified'] and identity['sourceStableAfter'] is True)
         need(identity['controlCommit'] is not None and identity['controlTree'] is not None)
@@ -135,7 +135,7 @@ def observe(source, control, root):
         with contextlib.redirect_stdout(io.StringIO()):
             code = module.preflight(source, root)  # Exactly once; it preserves fail-closed stage order.
         data = module.preflight_safe(json.loads((root / 'safe/powershell-preflight.json').read_text(encoding='utf-8')))
-        need(data['schema'] == 3 and code in {0, 1} and data['passed'] is (code == 0))
+        need(data['schema'] == 4 and code in {0, 1} and data['passed'] is (code == 0))
         identity['sourceStableAfter'] = source_hashes(source) == identity['sourceFileSha256']
         need(identity['sourceStableAfter'])
         outcome = 'fixture-passed' if code == 0 else 'fixture-failed'
