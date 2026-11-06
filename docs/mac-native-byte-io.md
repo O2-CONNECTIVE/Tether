@@ -47,4 +47,4 @@ Swift の両 architecture・両構成、Rust host の両構成を compile しま
 既存 `resident_port/duplex/Pump` は File の Read / Write と control half-close を使います。この adapter はその IO 契約の前提を減らしますが、Pump 本体や supervisor にはまだ登録しません。
 sealed 実行、同じ Foundation Process の終了結果と exact Wait、起動後の child側端点解放、SIGPIPE / peer喪失と atomic inheritance、authoritative Close、IO / supervisor / outer joins の所有証拠を閉じる必要があります。
 `std::process::Child` の別 owner で native Wait を代用せず、未起動 owner を active owner に変更しません。
-実 publisher / 承認 release / protected policy / 署名・配置 / OS enforcement は未確立です。未設定なら fail closed、通常起動は未接続。#200 blocker / 未統合 stack / CI 未実行と、a4 / task-7 の凍結・ロック解除待ちは継続します。
+実 publisher / 承認 release / protected policy / 署名・配置 / OS enforcement は未確立です。未設定なら fail closed、通常起動は未接続。#200 blocker / 未統合 stack / CI 未実行は継続します。
