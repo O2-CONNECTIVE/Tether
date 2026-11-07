@@ -207,23 +207,24 @@ func fixtureKeys(t *testing.T) []ssh.PublicKey {
 }
 
 type harness struct {
-	t         *testing.T
-	clock     *testClock
-	issuer    *ephemeral.Issuer
-	authority *supervisor.Authority
-	runtime   *fakeRuntime
-	session   *agentexec.Session
-	gate      *gateConn
-	client    *agentwire.Client
-	stopWire  context.CancelFunc
-	served    chan error
-	in        *io.PipeWriter
-	lines     chan []byte
-	done      chan error
-	doneOnce  sync.Once
-	doneErr   error
-	next      int
-	lastLen   int // bytes of the last stdout line received
+	t             *testing.T
+	clock         *testClock
+	issuer        *ephemeral.Issuer
+	authority     *supervisor.Authority
+	runtime       *fakeRuntime
+	session       *agentexec.Session
+	gate          *gateConn
+	client        *agentwire.Client
+	stopWire      context.CancelFunc
+	served        chan error
+	in            *io.PipeWriter
+	lines         chan []byte
+	done          chan error
+	doneOnce      sync.Once
+	doneErr       error
+	next          int
+	lastLen       int // bytes of the last stdout line received
+	outputSchemas map[string]map[string]any
 }
 
 func newHarness(t *testing.T, opt options) *harness {
@@ -435,6 +436,18 @@ func errorCode(t *testing.T, resp map[string]any) float64 {
 // structured content.
 func (h *harness) tool(name string, args any) (map[string]any, bool) {
 	h.t.Helper()
+	if h.outputSchemas == nil {
+		h.outputSchemas = map[string]map[string]any{}
+		catalog := h.request("tools/list", nil)["result"].(map[string]any)["tools"].([]any)
+		for _, entry := range catalog {
+			tool := entry.(map[string]any)
+			schema, ok := tool["outputSchema"].(map[string]any)
+			if !ok {
+				h.t.Fatalf("%s lacks outputSchema", tool["name"])
+			}
+			h.outputSchemas[tool["name"].(string)] = schema
+		}
+	}
 	resp := h.request("tools/call", map[string]any{"name": name, "arguments": args})
 	result, ok := resp["result"].(map[string]any)
 	if !ok {
@@ -446,6 +459,9 @@ func (h *harness) tool(name string, args any) (map[string]any, bool) {
 	text := content[0].(map[string]any)
 	if text["type"] != "text" || json.Unmarshal([]byte(text["text"].(string)), &mirrored) != nil || !reflect.DeepEqual(mirrored, structured) {
 		h.t.Fatalf("%s: text content does not mirror structuredContent: %v", name, result)
+	}
+	if err := checkOutputShape(h.outputSchemas[name], structured); err != nil {
+		h.t.Fatalf("%s outputSchema: %v", name, err)
 	}
 	return structured, result["isError"].(bool)
 }

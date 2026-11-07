@@ -59,6 +59,10 @@ MCP client（stdio）
 - Binding、epoch、host、path、token、mode、profile、issuer、期限、SYSTEM・argvの指定はありません。指定すると`-32602`です。
 - 回収の再試行（`Session.Cleanup`）と`Close`は保護owner専用で、5つ目のtoolにはしていません。
 - 結果は`structuredContent`と、その同じJSONを入れたtext contentで返します。
+- 4本とも`outputSchema`を公開します。start/status/cancelは既存status、outputは既存chunk/cursor形状で、それぞれ既存の`error`/`message`形状との`oneOf`です。statusの`exit.known=false`にはcodeがなく、trueではint32のcodeが必須です。未知fieldは拒否する形状で、`terminal`と`cleanup`、`complete`と出力欠落を統合しません。
+- schemaは既存の返却形状の説明であり、認可や回収保証を追加しません。出力counterの型は現行uint64を反映し、要求cursorの2^53−1上限を返却値へ誤って適用しません。byte上限、UTF-8/base64の実内容、状態遷移は既存codec/runtimeの責務であり、JSON Schemaの形状検査だけでは証明しません。
+
+2026-11-07に固定版[tools仕様](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#output-schema)のoutputSchemaとstructuredContentの契約を再確認しました。既存textの併記を維持し、実clientのschema解釈は別検証です。[#188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) / [#32](https://github.com/O2-CONNECTIVE/rescue-host/issues/32)の新catalog、host選択、context発行、共通application APIの設計採用を意味しません。静的discoveryにも同じ4本だけを返し、unbound sessionへ実行権限を後付けしません。
 
 ### profileと保証の表示
 
