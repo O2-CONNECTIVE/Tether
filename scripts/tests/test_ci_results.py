@@ -165,6 +165,18 @@ class CIResultTests(unittest.TestCase):
             self.assertEqual(result.stdout, '')
             self.assertEqual(result.stderr.strip(), 'CI_RESULTS_INVALID')
 
+    def test_invalid_arguments_do_not_echo_input(self):
+        for arguments in [['--event', 'SYNTHETIC_SECRET'], ['--SYNTHETIC_SECRET'], []]:
+            result = subprocess.run([sys.executable, '-B', str(SCRIPT)] + arguments,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stdout, '')
+            self.assertEqual(result.stderr.strip(), 'CI_RESULTS_INVALID')
+        result = subprocess.run([sys.executable, '-B', str(SCRIPT), '--help'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--snapshot', result.stdout)
+
     def test_empty_policy_invalid_sha_and_inconsistent_status_fail_closed(self):
         for policy in [{'schema_version': 1, 'workflows': {}}, {'schema_version': 1, 'workflows': {WORKFLOW: []}}]:
             self.assertEqual(self.invoke(policy=policy)[0].returncode, 2)

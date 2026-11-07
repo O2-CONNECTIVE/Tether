@@ -131,8 +131,13 @@ def read_json(path):
     return json.loads(Path(path).read_text(encoding='utf-8'), object_pairs_hook=unique_object)
 
 
+class SafeParser(argparse.ArgumentParser):
+    def error(self, message):
+        self.exit(2, "CI_RESULTS_INVALID\n")
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = SafeParser(description=__doc__)
     parser.add_argument('--snapshot', required=True)
     parser.add_argument('--policy', required=True)
     parser.add_argument('--sha', required=True)
