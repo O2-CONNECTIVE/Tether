@@ -57,13 +57,19 @@ func (s summaryOwner) LocalSummary() (agentexec.LocalSummary, bool, bool) {
 	return s.v, s.connected, s.ok
 }
 func TestStatusFrameOnlySafeAggregate(t *testing.T) {
-	sink := &memoryStatusSink{}
-	f := newTestStatusFeed(sink)
-	f.attach(summaryOwner{agentexec.LocalSummary{Deadline: time.Now().Add(time.Minute), Running: 1, Cleanup: agentexec.CleanupPending}, true, true})
+	owner := summaryOwner{agentexec.LocalSummary{Deadline: time.Now().Add(time.Minute), Running: 1, Cleanup: agentexec.CleanupPending}, true, true}
+	// This assertion tests aggregation, not writer scheduling. A running writer
+	// may legitimately own mu, in which case snapshot must return unavailable.
+	f := &statusFeed{frame: statusFrame{Version: 1}}
+	f.attach(owner)
 	v, ok := f.snapshot(1, 1234)
 	if !ok || v.Phase != "connected" || v.Running != 1 || v.Remaining == nil || *v.Remaining <= 0 {
 		t.Fatal(v)
 	}
+	// Keep the production writer/encoder and terminal secrecy checks below.
+	sink := &memoryStatusSink{}
+	f = newTestStatusFeed(sink)
+	f.attach(owner)
 	f.unknown()
 	f.update("closed", "confirmed", true)
 	f.end()
