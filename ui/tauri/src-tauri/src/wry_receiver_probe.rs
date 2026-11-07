@@ -1,14 +1,23 @@
 //! Finite receiver-poll observations, never a continuous sender-liveness claim.
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering::SeqCst};
 #[derive(Default)]
 pub(super) struct Summary {
     counts: [[AtomicU8; 3]; 3],
     busy: AtomicBool,
+    in_flight: AtomicUsize,
     sealed: AtomicBool,
     loss: AtomicBool,
 }
+struct Flight<'a>(&'a AtomicUsize);
+impl Drop for Flight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, SeqCst);
+    }
+}
 impl Summary {
     pub(super) fn observe(&self, bucket: usize, state: u8) {
+        self.in_flight.fetch_add(1, SeqCst);
+        let _flight = Flight(&self.in_flight);
         if self.sealed.load(SeqCst) {
             return;
         }
@@ -34,10 +43,11 @@ impl Summary {
         &self,
         registered: bool,
         requested: bool,
-        ambiguous: [bool; 2],
+        ambiguous: impl FnOnce() -> [bool; 2],
     ) -> String {
         self.sealed.store(true, SeqCst);
-        let busy = self.busy.load(SeqCst);
+        let busy = self.in_flight.load(SeqCst) != 0;
+        let ambiguous = ambiguous();
         if busy {
             self.loss.store(true, SeqCst);
         }
@@ -66,19 +76,20 @@ mod tests {
         for _ in 0..10 {
             p.observe(0, 1);
         }
-        let s = p.snapshot(true, true, [false; 2]);
+        let s = p.snapshot(true, true, || [false; 2]);
         assert!(s.contains("\"emptyCapped\":2"));
         assert!(s.contains("\"disconnectedCapped\":0"));
         p.observe(0, 2);
-        assert_eq!(s, p.snapshot(true, true, [false; 2]));
+        assert_eq!(s, p.snapshot(true, true, || [false; 2]));
     }
     #[test]
     fn loss_partial_unknown() {
         let p = Summary::default();
         p.observe(2, 1);
         p.busy.store(true, SeqCst);
+        p.in_flight.store(1, SeqCst);
         p.observe(0, 2);
-        let s = p.snapshot(false, false, [true; 2]);
+        let s = p.snapshot(false, false, || [true; 2]);
         assert!(s.contains("\"lossDetected\":true"));
         assert!(s.contains("\"sealed\":false"));
         assert_eq!(s.matches("\"relation\":\"unknown\"").count(), 3);

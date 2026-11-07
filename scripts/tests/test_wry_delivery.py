@@ -339,9 +339,9 @@ class DeliveryTests(unittest.TestCase):
             driver += [dict(type="event", seq=i+1, connection=1, request=int(i!=0), stage=s, state=states[i], error="none", elapsedUs=i+1) for i,s in enumerate(stages)]
             driver += [dict(type="summary", lastSequence=5, attempted=5, enqueued=5, written=5, dropped=0, sealed=True, pendingRequests=0)]
             (temp / "tools/driver-stage.jsonl").write_text("\n".join(json.dumps(r,separators=(",", ":")) for r in driver)+"\n")
-            def publish():
+            def publish(receiver=False):
                 r = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/wry_probe_ci.py"), "publish", "--root", str(ROOT), "--temp", str(temp)],
-                    env={**os.environ,"CONTROL_HEAD":"a"*40,"WRY_DELIVERY_ENABLED":"1"}, capture_output=True, timeout=15)
+                    env={**os.environ,"CONTROL_HEAD":"a"*40,"WRY_DELIVERY_ENABLED":"1","WRY_RECEIVER_ENABLED":"1" if receiver else ""}, capture_output=True, timeout=15)
                 self.assertEqual(r.stderr,b""); self.assertNotIn(b"PRIVATE_SENTINEL",r.stdout)
                 lines=r.stdout.decode().splitlines(); self.assertEqual((lines[0],lines[-1]),("WRY_DIAGNOSTIC_RECORD_BEGIN","WRY_DIAGNOSTIC_RECORD_END"))
                 body=json.loads(lines[1]);self.assertEqual(hashlib.sha256(lines[1].encode()).hexdigest(),lines[2].split("=")[1])
@@ -349,6 +349,14 @@ class DeliveryTests(unittest.TestCase):
                 return r.returncode,body
             code,body=publish();self.assertEqual(code,0);self.assertTrue(body["deliveryClassificationComplete"])
             self.assertEqual(len(body["files"]),11)
+            # Explicit new mode leaves historical 11-file record unchanged above.
+            self.assertEqual(publish(True)[0],1)
+            receiver=dict(schema=1,variant="wry-receiver-polls-1",purpose="diagnostic-hints-only",registered=True,sealed=True,lossDetected=False,
+                buckets=[dict(bucket=b,relation="unknown",readyCapped=0,emptyCapped=0,disconnectedCapped=0) for b in ("environment","controller","unbound")])
+            write("tools/app-startup/wry-receiver-polls.json",receiver)
+            code,body=publish(True);self.assertEqual(code,0);self.assertEqual(len(body["files"]),12)
+            receiver["private"]="PRIVATE_SENTINEL";write("tools/app-startup/wry-receiver-polls.json",receiver)
+            code,body=publish(True);self.assertEqual(code,1);self.assertEqual(body["files"]["receiver"]["data"],{"state":"unavailable-or-rejected"})
             bad=copy.deepcopy(phase);bad["samples"][0]["phase"]="unknown";write("tools/app-startup/wry-sdk-delivery.json",bad)
             code,body=publish();self.assertEqual(code,1);self.assertFalse(body["deliveryClassificationComplete"])
             self.assertEqual(body["files"]["native"]["data"]["nativeTestsPassed"],1)

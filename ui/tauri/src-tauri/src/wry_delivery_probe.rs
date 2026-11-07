@@ -335,11 +335,14 @@ impl Probe {
         sample.ready.store(true, SeqCst);
     }
     pub(super) fn receiver_snapshot(&self, registered: bool, requested: bool) -> String {
-        self.receiver.snapshot(
-            registered,
-            requested,
-            std::array::from_fn(|i| self.scopes[i].ambiguous.load(SeqCst)),
-        )
+        self.receiver.snapshot(registered, requested, || {
+            // Existing delivery snapshot must seal first. A live/in-flight old
+            // writer makes association unknown, not an invented atomic join.
+            let stable = !self.enabled.load(SeqCst)
+                && self.in_flight.load(SeqCst) == 0
+                && !self.loss.load(SeqCst);
+            std::array::from_fn(|i| !stable || self.scopes[i].ambiguous.load(SeqCst))
+        })
     }
     pub(super) fn snapshot(&self, registered: bool, requested: bool) -> String {
         if self.enabled.swap(false, SeqCst) {

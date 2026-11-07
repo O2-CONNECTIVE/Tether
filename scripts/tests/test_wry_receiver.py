@@ -35,6 +35,7 @@ fn main() {
  let ready=case=="ready" || case=="buffered-drop";
  assert_eq!(value,if ready { Ok(7) } else { Err(Error::TaskCanceled) });
  assert_eq!(ENTRIES.with(Cell::get),if ready {0} else {1});
+ let _ = p.snapshot(true,true);
  print!("{}",p.receiver_snapshot(true,true));
 }
 '''
@@ -49,6 +50,12 @@ fn main() {
                 self.assertEqual(v['buckets'][1]['relation'],'unknown')
                 bad=json.loads(run.stdout);bad['buckets'][2]['relation']='original-wait'
                 with self.assertRaises(ValueError):record.validate(bad)
+            path=d/'record.json';path.write_bytes(run.stdout)
+            for collection in (None, [], 1, {}, {'appStartupFileClosed':False}):
+                with self.assertRaises(ValueError):record.read_record(path,collection)
+            for bad_text in ('['*2000+']'*2000,'{"private":"PRIVATE_SENTINEL"}',run.stdout.decode()+"\n"):
+                path.write_text(bad_text)
+                with self.assertRaises(ValueError):record.read_record(path,{'appStartupFileClosed':True})
             # Closed-shape/privacy and missing is never live negative controls.
             for mutate in (lambda v: v.update(private='sentinel'),
                            lambda v: v['buckets'][1].update(relation='original-wait'),

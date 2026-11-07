@@ -20,8 +20,11 @@ def validate(v):
 
 def read_record(path, collection):
     s=path.lstat()
-    if (collection.get('appStartupFileClosed') is not True or not stat.S_ISREG(s.st_mode)
+    if (type(collection) is not dict or collection.get('appStartupFileClosed') is not True or not stat.S_ISREG(s.st_mode)
         or s.st_nlink != 1 or getattr(s,'st_file_attributes',0)&1024 or s.st_size>2048): raise ValueError('RECEIVER_COLLECTION_REJECTED')
-    text=path.read_bytes().decode('utf-8'); v=json.loads(text)
+    try:
+        text=path.read_bytes().decode('utf-8'); v=json.loads(text)
+    except (UnicodeError, RecursionError):
+        raise ValueError('RECEIVER_COLLECTION_REJECTED') from None
     if len(text)>2048 or json.dumps(v,separators=(',',':')) != text: raise ValueError('RECEIVER_COLLECTION_REJECTED')
     return validate(v)

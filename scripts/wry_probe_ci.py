@@ -357,6 +357,8 @@ def main():
     try:
         delivery = os.environ.get("WRY_DELIVERY_ENABLED", "")
         if delivery not in ("", "1"): raise ValueError("DELIVERY_MODE_REJECTED")
+        receiver = os.environ.get("WRY_RECEIVER_ENABLED", "")
+        if receiver not in ("", "1") or (receiver == "1" and delivery != "1"): raise ValueError("RECEIVER_MODE_REJECTED")
         delivery = delivery == "1"
         parser = Parser(add_help=False)
         parser.add_argument("mode", choices=("step", "identity", "permissions", "publish"))
