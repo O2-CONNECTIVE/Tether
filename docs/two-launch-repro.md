@@ -1,4 +1,16 @@
-# 一度の準備で二回まで起動する限定診断
+# 旧失敗ソースを一回だけ確認する限定診断
+
+現在の入口は PR251 の旧失敗ソース回復です。以下の二回起動設計は過去段階の記録として残します。
+
+- ソースは `008073aa952959f2a4937e31fe10de6609c1627a`、tree は `4dcfba754be4a150a28d1dfb770c2ea65e3fcaa4`。PR248 の元の準備・全 native assertions・15000ms・driver・build・cleanup・12 節 publisher を使います。
+- 元ソースに実在する 31 試験を一度実行し、開始・成功・skip・失敗の閉じた資格 receipt を native 前に公開します。41 条件の pump 資格や 13 節目を生成しません。
+- fresh VM 一 job、一回だけです。成功・失敗・不明のいずれでも追加起動しません。前回の二回起動 controller と readiness snapshot は呼びません。
+- before は `8e5d95c1a09cd84523c6dc2bc4b9f7481d7643f3`。空でない after が新 head と一致する PR251 synchronize / attempt 1 / draft / 同一公開 repository / 固定 head・base だけを許可します。35 分上限、手動 dispatch・rerun・artifact・cache・secret なしです。
+- これは永続的な exactly-once ledger ではありません。before head への reset / replay は禁止します。新 head の独立レビューと公開前の全 event run 照合が必要です。
+- 資格・12 段階・source / harness / specimen の再照合が失敗したら起動前に停止します。元の always 条件による報告と最終 identity、失敗時の有限 publication を維持します。
+- 旧ソースでの red 回復だけが目的です。green は再現できなかったという結果であり、observer effect、再現率、原因、修正は示しません。新 runtime 観測や変更はありません。
+
+## 過去段階: 一度の準備で二回まで起動する設計
 
 この変更は Phase 1 の検証ループ整備であり、起動タイムアウトの原因特定や修正ではありません。
 元のソースは `cee2e9baa22200c929f015199aac68626925a486`、tree は `ce3c61a0e56b2bec1fdc2a5990813dff17afb4ec` に固定します。
