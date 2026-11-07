@@ -221,6 +221,7 @@ jobs:
           # These are fixed source-code enums, never arbitrary assertion text.
           stages = {
               'authenticated',
+              'cancel-await-output',
               'cancel-generation',
               'cancel-initialize',
               'cancel-poll',
@@ -275,9 +276,23 @@ jobs:
               'mcp-request',
               'mcp-response-io',
               'mcp-tls',
+              'mcp-tool-admission-uncertain',
+              'mcp-tool-busy-refused',
+              'mcp-tool-control-ended',
+              'mcp-tool-error-other',
+              'mcp-tool-error-unspecified',
+              'mcp-tool-generation-mismatch',
               'mcp-tool-name',
+              'mcp-tool-native-cleanup-unknown',
+              'mcp-tool-not-found',
+              'mcp-tool-output-limit',
+              'mcp-tool-registration-unobserved',
               'mcp-tool-response',
               'mcp-tool-result',
+              'mcp-tool-result-flag',
+              'mcp-tool-result-shape',
+              'mcp-tool-result-uncertain',
+              'mcp-tool-start-uncertain',
               'natural-expectation',
               'outcome-persist',
               'output-base64',
@@ -319,6 +334,18 @@ jobs:
               'work-registration-unobserved',
               'work-start-uncertain',
           }
+          # Last-tool snapshots are diagnostic enums, never fresh cleanup proof.
+          result_fields = {
+              'tool_operation': {'unavailable', 'start', 'status', 'cancel'},
+              'result_error': {'unavailable', 'none', 'admission_refused_or_uncertain', 'start_uncertain', 'registration_unobserved', 'result_unobserved_or_uncertain', 'output_limit', 'not_found', 'control_ended', 'request_generation_mismatch', 'busy_or_refused'},
+              'result_phase': {'unavailable', 'pending', 'running', 'finished', 'unknown'},
+              'command_phase': {'unavailable', 'starting', 'running', 'exited', 'canceled', 'failed', 'start_unknown'},
+              'result_stop': {'unavailable', 'none', 'canceled', 'command_timeout', 'revoked', 'hard_deadline', 'transport_lost', 'runtime_fault'},
+              'command_cleanup': {'unavailable', 'pending', 'confirmed', 'unknown', 'not_required'},
+              'owner_cleanup': {'unavailable', 'pending', 'confirmed', 'unknown'},
+              'gateway_cleanup': {'unavailable', 'pending', 'confirmed', 'unknown'},
+          }
+          public.update({field: 'unavailable' for field in result_fields})
           outcome_path = pathlib.Path(os.environ['CI_PRODUCER_RESULT'])
           result = read_marker(outcome_path)
           stage, code = result.get('stage'), result.get('failure_code')
@@ -327,6 +354,10 @@ jobs:
                   and isinstance(stage, str) and isinstance(code, str)
                   and stage in stages and code in failure_codes):
               public.update(stage=stage, failure_code=code)
+              for field, allowed in result_fields.items():
+                  candidate = result.get(field)
+                  if isinstance(candidate, str) and candidate in allowed:
+                      public[field] = candidate
           joined = read_marker(outcome_path.with_suffix('.supervisor.json'))
           exit_code = joined.get('original_test_exit')
           if ((joined.get('outcome'), joined.get('cleanup')) in

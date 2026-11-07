@@ -71,4 +71,56 @@ func TestCIProducerObservationValidation(t *testing.T) {
 		t.Fatal("missing failure classification not explicit")
 	}
 
+	// Same rejection boundary, now distinguishing fixed application error enums.
+	for _, tc := range []struct {
+		errorValue any
+		cleanup    string
+		want       string
+	}{
+		{"admission_refused_or_uncertain", "pending", "mcp-tool-admission-uncertain"},
+		{"result_unobserved_or_uncertain", "unknown", "mcp-tool-native-cleanup-unknown"},
+		{"result_unobserved_or_uncertain", "confirmed", "mcp-tool-result-uncertain"},
+		{"not_found", "", "mcp-tool-not-found"},
+		{"arbitrary raw value must never be disclosed", "", "mcp-tool-error-other"},
+	} {
+		result := map[string]any{"isError": true, "structuredContent": map[string]any{"error": tc.errorValue, "command_cleanup": tc.cleanup}}
+		if code := ciToolResultFailure(result); code != tc.want {
+			t.Fatal("fixed application diagnostic mismatch")
+		}
+	}
+	if ciToolResultFailure(map[string]any{"isError": true, "structuredContent": map[string]any{}}) != "mcp-tool-error-unspecified" {
+		t.Fatal("unspecified error accepted")
+	}
+	if ciToolResultFailure(map[string]any{"isError": false, "structuredContent": map[string]any{}}) != "" {
+		t.Fatal("prior successful shape rejected")
+	}
+	if ciToolResultFailure(map[string]any{"isError": false}) != "mcp-tool-result-shape" {
+		t.Fatal("missing content accepted")
+	}
+	if ciToolResultFailure(map[string]any{"isError": "false", "structuredContent": map[string]any{}}) != "mcp-tool-result-flag" {
+		t.Fatal("invalid flag accepted")
+	}
+
+	d = &ciDiagnostic{}
+	d.beginTool("rescue_fixed_status")
+	d.observeTool(map[string]any{"isError": true, "structuredContent": map[string]any{"error": "result_unobserved_or_uncertain", "phase": "running", "command_phase": "canceled", "stop": "canceled", "command_cleanup": "unknown", "owner_cleanup": "pending", "gateway_cleanup": "pending"}})
+	safe := map[string]any{}
+	d.annotate(safe)
+	if safe["tool_operation"] != "status" || safe["result_error"] != "result_unobserved_or_uncertain" || safe["command_cleanup"] != "unknown" {
+		t.Fatal("fixed result state lost")
+	}
+	d.beginTool("rescue_fixed_cancel")
+	safe = map[string]any{}
+	d.annotate(safe)
+	if safe["tool_operation"] != "cancel" || safe["result_error"] != "unavailable" || safe["command_cleanup"] != "unavailable" {
+		t.Fatal("old tool observation reused")
+	}
+	d.observeTool(map[string]any{"structuredContent": map[string]any{"error": "RAW_PRIVATE_SENTINEL", "phase": "RAW_PRIVATE_SENTINEL", "stop": []string{"RAW_PRIVATE_SENTINEL"}, "command_cleanup": "RAW_PRIVATE_SENTINEL"}})
+	safe = map[string]any{}
+	d.annotate(safe)
+	encoded, _ := json.Marshal(safe)
+	if bytes.Contains(encoded, []byte("RAW_PRIVATE_SENTINEL")) || safe["result_error"] != "unavailable" {
+		t.Fatal("unlisted tool value escaped diagnostic allowlist")
+	}
+
 }
