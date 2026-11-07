@@ -45,3 +45,13 @@ source/vendor/EXE/archive/driverの実hashと完全な固定schema記録のみ�
 guard成功・重複runなし・最終control独立review後に、別のopened-only／attempt1 controlで新たなfresh runner一つ・native最大1だけを認める。元#246はrerunしない。source fetchの修正も実SDK配送やtimeout根因を証明しない。
 
 fetch gateのsubprocessは空の一時HOME／USERPROFILEを使い、netrc・askpassの環境overrideも除く。Git設定とcredential helperだけでなくlibcurlの暗黙のhost認証入力を除外し、匿名public readの記録と一致させる。fixtureは合成netrcと継承環境を渡し、実fetchを呼ぶ境界で隔離を検査する。実個人の認証情報は読み取らない。
+
+## 元の一回のreceiver pollを区別する追加観測
+
+feedback-loop改善段階。元timeoutを高速・決定的にredへするloopは未達であり、本変更は修正ではない。元の`rx.try_recv()`一回が返すResultをidentity adapterへ渡し、同じResultをそのまま元`if let Ok`へ返す。Ready / Empty / Disconnectedの三分類だけを記録する。Disconnectedでも元どおりGetMessageへ進む。二回目のreceive、peek、wake、timer、retry、sender/receiverの追加所有はない。
+
+既存token・元wait・thread照合がすべて証明できたenvironment/controllerだけを対応づける。nested／unbound／wrong-token／other-threadはunknown集計にする。unknown bucketは単一receiverやscriptを識別しない。2 scopes＋unknown ×3分類の固定atomic counterのみを持ち、0=未観測、1=一回、2=二回以上で飽和する。回数飽和はlossや他状態の証明ではない。concurrent writerを待たずlossへ倒し、seal途中のwriter、registration欠測、scope ambiguity、未完了のcollectionは元wait対応の確定に使わない。既存のLastError保存・復元の内側で記録する。
+
+既存collectorが元file closeより前に別の有限record `wry-receiver-polls.json` を保存する。旧delivery schema／意味／元native verdictは変更しない。別storageのsealは別時点であり、SDK phase recordとのatomic snapshotではない。時間順や最後の状態を記録せず、observed Emptyからsenderがその後も生存したとは推定しない。GetMessage内へ入った後のsender-dropは次の元pollまで未観測であり、欠測はliveを意味しない。callback guard-dropはsender-drop証明でもない。
+
+local fixtureは実std::mpsc、実patched pump、実recorderを使い、Win32だけを有限に代替する。Windows API／SDK未実行、元timeout未再現。新publication modeは`WRY_RECEIVER_ENABLED=1`で明示し、旧fixtureでは外す。公開前は最終source/control独立review、sourceをancestorに含むcontrol、空の匿名shallow source fetch、重複確認が必要。child-pwsh launch、元15000ms、profile、cleanup、identity gate、旧受入未達を保持する。

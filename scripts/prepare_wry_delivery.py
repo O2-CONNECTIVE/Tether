@@ -11,8 +11,8 @@ import prepare_wry_probe as base
 COM_SHA = "3f89fca7a704cee10dcb3654c1dbb8941d1783132f1917358af75bec37a7d7e6"
 COM_ORIGINAL = "de9ec5585a990725576de47557f93529cddbdf267ab3847835689e2a01c854fe"
 WRY_POST = "150fa0120f6a461875915d86675eb61dac596c992ec639a9e3424be36f1363b9"
-COM_POST = "9400b693db7828522ba815da59f756e71c712401fb1653a0b3158da4fa348093"
-PROTOCOL_SHA = "3a9e18e103728f7455da23cd774373ec7bfe705d3dfd5c563cb37d90221ac61f"
+COM_POST = "40930342fb4fbae77a89d3242ea52cdb3c2f7cdf7b1476acd03d29949d7b47c0"
+PROTOCOL_SHA = "695e6147f3c27b117dc01278b410059cdc5d555d376d1ffba8bee0069ea1896a"
 COM_FILES = 12
 
 
@@ -63,6 +63,8 @@ def patch_wry(text, inverse=False):
 
 COM_PREFIX = '#[path = "rescue_host_delivery.rs"]\npub mod rescue_host_delivery;\n'
 COM_PAIRS = [
+    ("if let Ok(result) = rx.try_recv() {",
+     "if let Ok(result) = rescue_host_delivery::Pump::observe(rx.try_recv()) {"),
     ("    let mut msg = MSG::default();\n", "    let mut msg = MSG::default();\n"
      "    let _delivery_pump = rescue_host_delivery::Pump::enter();\n"),
     ("            match WindowsAndMessaging::GetMessageA(&mut msg, None, 0, 0).0 {",

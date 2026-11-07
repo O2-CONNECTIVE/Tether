@@ -2,6 +2,7 @@
 use std::{cell::Cell, sync::mpsc};
 
 unsafe extern "C" {
+    fn rescue_host_delivery_receiver(token: u64, bound: bool, state: u8);
     fn rescue_host_delivery_begin(kind: u8) -> u64;
     fn rescue_host_delivery_event(token: u64, code: u8, context: u8);
 }
@@ -163,6 +164,25 @@ impl Pump {
             original,
             restore: Restore(previous),
         }
+    }
+    // Identity adapter: one original receive, no payload inspection or ownership change.
+    pub(crate) fn observe<T>(
+        value: Result<T, mpsc::TryRecvError>,
+    ) -> Result<T, mpsc::TryRecvError> {
+        let state = match &value {
+            Ok(_) => 0,
+            Err(mpsc::TryRecvError::Empty) => 1,
+            Err(mpsc::TryRecvError::Disconnected) => 2,
+        };
+        CURRENT.with(|cell| {
+            let c = cell.get();
+            let bound =
+                c.token != 0 && c.bound_wait && c.pump_depth == 1 && !c.uncertain && c.phase == 0;
+            unsafe {
+                rescue_host_delivery_receiver(c.token, bound, state);
+            }
+        });
+        value
     }
     pub(crate) fn phase(value: u8) {
         CURRENT.with(|cell| {

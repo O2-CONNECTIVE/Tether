@@ -258,6 +258,10 @@ def publish(root, temp, delivery=False):
         from wry_delivery_record import read_record as read_delivery
         add("delivery", lambda: read_delivery(temp / "tools/app-startup/wry-sdk-delivery.json",
                                              load(temp / "evidence/native-result.json")))
+    if delivery and os.environ.get("WRY_RECEIVER_ENABLED") == "1":
+        from wry_receiver_record import read_record as read_receiver
+        add("receiver", lambda: read_receiver(temp / "tools/app-startup/wry-receiver-polls.json",
+                                              load(temp / "evidence/native-result.json")))
     def driver():
         path = temp / "tools/driver-stage.jsonl"
         if path.is_symlink() or path.stat().st_size > 8192: raise ValueError()
@@ -326,6 +330,9 @@ def publish(root, temp, delivery=False):
         try: classified = complete(files["delivery"]["data"])
         except (ValueError, TypeError, KeyError): classified = False
         passed = passed and classified
+    if delivery and os.environ.get("WRY_RECEIVER_ENABLED") == "1":
+        receiver = files["receiver"]["data"]
+        passed = passed and receiver.get("registered") is True and receiver.get("sealed") is True and receiver.get("lossDetected") is False
     body = {"schema": 1, "variant": "wry240-once-record-1", "purpose": "diagnostic-hints-only",
             "productReference": "4ba768e910af595f26176eb69aaf2e21d663b726", "files": files,
             "controlCommit": control, "sourceCommit": source, "sourceTree": tree, "sourceAndSpecimenStable": stable,

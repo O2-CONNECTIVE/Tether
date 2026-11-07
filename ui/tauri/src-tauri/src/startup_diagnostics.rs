@@ -8,8 +8,8 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering::SeqCst},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering::SeqCst},
     },
     thread,
     time::{Duration, Instant},
@@ -167,6 +167,19 @@ impl Trace {
                     probe.snapshot(registration, worker.complete() || marker.is_file());
                 let delivery_text =
                     delivery.snapshot(delivery_registration, worker.complete() || marker.is_file());
+                let receiver_text = delivery.receiver_snapshot(
+                    delivery_registration,
+                    worker.complete() || marker.is_file(),
+                );
+                if receiver_text.len() <= 2048 {
+                    if let Ok(mut file) = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path.join("wry-receiver-polls.json"))
+                    {
+                        let _ = file.write_all(receiver_text.as_bytes());
+                    }
+                }
                 if delivery_text.len() <= 8192 {
                     if let Ok(mut file) = OpenOptions::new()
                         .write(true)

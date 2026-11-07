@@ -1,7 +1,9 @@
 //! Fixed diagnostic storage. No path, payload, raw token, thread ID, or HRESULT leaves it.
+#[path = "wry_receiver_probe.rs"]
+mod receiver;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering::SeqCst},
     Arc, OnceLock,
+    atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering::SeqCst},
 };
 use std::time::Instant;
 
@@ -146,6 +148,7 @@ struct Sample {
     sent_context: AtomicU8,
 }
 pub(super) struct Probe {
+    receiver: receiver::Summary,
     start: Instant,
     trace_thread: u64,
     scopes: [Scope; 2],
@@ -174,6 +177,7 @@ fn once(counter: &AtomicU8) -> bool {
 impl Probe {
     pub(super) fn memory() -> Arc<Self> {
         Arc::new(Self {
+            receiver: receiver::Summary::default(),
             start: Instant::now(),
             trace_thread: platform::thread(),
             scopes: std::array::from_fn(|_| Scope::default()),
@@ -330,6 +334,13 @@ impl Probe {
             .store(if bound { platform::sent_context() } else { 0 }, SeqCst);
         sample.ready.store(true, SeqCst);
     }
+    pub(super) fn receiver_snapshot(&self, registered: bool, requested: bool) -> String {
+        self.receiver.snapshot(
+            registered,
+            requested,
+            std::array::from_fn(|i| self.scopes[i].ambiguous.load(SeqCst)),
+        )
+    }
     pub(super) fn snapshot(&self, registered: bool, requested: bool) -> String {
         if self.enabled.swap(false, SeqCst) {
             let elapsed = self.start.elapsed().as_micros();
@@ -364,8 +375,17 @@ impl Probe {
             format!("{{\"slot\":\"{}\",\"event\":\"{}\",\"state\":\"{}\",\"seq\":{},\"elapsedUs\":{},\"phase\":\"{}\",\"relation\":\"{}\",\"sentContext\":\"{}\",\"onScopeThread\":{},\"sendSucceeded\":{}}}",
                 SLOTS[i / 3], EVENTS[i % 3], state, seq, elapsed, phase, relation, sent_context, on_thread, success)
         }).collect::<Vec<_>>();
-        format!("{{\"schema\":1,\"variant\":\"wry-sdk-delivery-1\",\"purpose\":\"diagnostic-hints-only\",\"registered\":{},\"sealed\":{},\"sealElapsedUs\":{},\"inFlight\":{},\"lossDetected\":{},\"scopeAttemptsCapped\":{},\"scopes\":[{}],\"samples\":[{}]}}",
-            registered, requested && flight == 0, self.seal_elapsed.load(SeqCst), flight, self.loss.load(SeqCst), self.attempts.load(SeqCst), scopes.join(","), samples.join(","))
+        format!(
+            "{{\"schema\":1,\"variant\":\"wry-sdk-delivery-1\",\"purpose\":\"diagnostic-hints-only\",\"registered\":{},\"sealed\":{},\"sealElapsedUs\":{},\"inFlight\":{},\"lossDetected\":{},\"scopeAttemptsCapped\":{},\"scopes\":[{}],\"samples\":[{}]}}",
+            registered,
+            requested && flight == 0,
+            self.seal_elapsed.load(SeqCst),
+            flight,
+            self.loss.load(SeqCst),
+            self.attempts.load(SeqCst),
+            scopes.join(","),
+            samples.join(",")
+        )
     }
 }
 
@@ -382,9 +402,48 @@ pub extern "C" fn rescue_host_delivery_event(token: u64, code: u8, context: u8) 
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn rescue_host_delivery_receiver(token: u64, bound: bool, state: u8) {
+    let _last_error = platform::ErrorState::save();
+    if let Some(p) = ACTIVE.get() {
+        let bucket = if bound && (1..=2).contains(&token) {
+            let slot = &p.scopes[token as usize - 1];
+            if slot.ready.load(SeqCst) == 2
+                && !slot.ambiguous.load(SeqCst)
+                && slot.owner.load(SeqCst) == platform::thread()
+                && slot.wait_enter.load(SeqCst) == 1
+                && slot.wait_drop.load(SeqCst) == 0
+                && slot.scope_drop.load(SeqCst) == 0
+            {
+                token as usize - 1
+            } else {
+                2
+            }
+        } else {
+            2
+        };
+        p.receiver.observe(bucket, state);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receiver_wrong_token_and_other_thread_are_unbound() {
+        // Isolated process fixture registration; no mutation of any channel ownership.
+        let p = Probe::memory();
+        assert!(p.register());
+        let token = p.begin(1);
+        p.event(token, 3, 24);
+        rescue_host_delivery_receiver(99, true, 1);
+        std::thread::spawn(move || rescue_host_delivery_receiver(token, true, 2))
+            .join()
+            .unwrap();
+        let text = p.receiver_snapshot(true, true);
+        assert!(text.contains("\"bucket\":\"unbound\",\"relation\":\"unknown\",\"readyCapped\":0,\"emptyCapped\":1,\"disconnectedCapped\":1"));
+    }
 
     #[test]
     fn fixed_slots_and_samples_preserve_context_without_identifiers() {
