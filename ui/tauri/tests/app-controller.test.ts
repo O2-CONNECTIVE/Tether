@@ -129,3 +129,40 @@ void test('browser bridgeなしと非対応platformを明示し、Mac routeの�
   const changed = capture(() => Promise.resolve(++calls === 1 ? unavailable() : { protocolVersion: 1, source: 'windows-shell' }));
   await changed.controller.refresh(); await changed.controller.refresh(); assert.equal(changed.last()?.diagnostic, 'INVALID_RESPONSE'); changed.controller.dispose();
 });
+void test('IPC期限のtimerが遅れても期限同値以降の応答を採用しない', async () => {
+  for (const elapsed of [2000, 2001]) {
+    let reads = 0;
+    let calls = 0;
+    const run = capture(() => { calls += 1; return Promise.resolve(sample({ validForMs: 3000 })); },
+      { timeoutMs: 2000, now: () => reads++ === 0 ? 0 : elapsed });
+    await run.controller.refresh();
+    assert.equal(run.last()?.diagnostic, 'IPC_TIMEOUT');
+    assert.equal(run.states.some(state => state.kind === 'observation'), false);
+    await run.controller.refresh();
+    assert.equal(run.states.some(state => state.kind === 'observation'), false);
+    assert.equal(calls, 2);
+    run.controller.dispose();
+  }
+});
+void test('IPC期限直前の応答は残った表示予算内だけ採用する', async () => {
+  let reads = 0;
+  const run = capture(() => Promise.resolve(sample({ validForMs: 3000 })),
+    { timeoutMs: 2000, now: () => reads++ === 0 ? 0 : 1999 });
+  try {
+    await run.controller.refresh();
+    assert.equal(run.last()?.diagnostic, 'MAC_SYNTHETIC_OBSERVATION');
+  } finally { run.controller.dispose(); }
+});
+void test('期限後の履歴とcleanup fieldを新しい観測として保持しない', async () => {
+  let reads = 0;
+  const run = capture(() => Promise.resolve(sample({ validForMs: 3000, cleanupUnknown: true, terminalHistory: true,
+    view: { heading: '期限後の履歴', detail: '古い報告', icon: 'warning' } })),
+    { timeoutMs: 2000, now: () => reads++ === 0 ? 0 : 2000 });
+  try {
+    await run.controller.refresh();
+    assert.equal(run.last()?.diagnostic, 'IPC_TIMEOUT');
+    assert.equal(run.last()?.history, undefined);
+    assert.equal(run.last()?.synthetic, false);
+    assert.equal(run.last()?.view.heading, '状態の更新を確認できません');
+  } finally { run.controller.dispose(); }
+});
