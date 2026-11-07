@@ -128,6 +128,29 @@ def publish(root, setup, trial, source):
     return passed is True, body
 
 
+def usable_failure_observation(value):
+    """A canonical unknown/null projection is still unavailable evidence."""
+    from two_launch_readiness import integer
+    keys = {'status', 'phase', 'elapsedMs', 'documentObservations', 'droppedRequests',
+            'errorClass', 'sessionRequests'}
+    phases = {'bootstrap', 'session-create', 'origin-check', 'readiness', 'main-screenshot',
+              'unwired-contract', 'keyboard', 'diagnostics-screenshot', 'result-write', 'complete'}
+    if (type(value) is not dict or set(value) != keys or value['status'] != 'failed'
+            or type(value['phase']) is not str or value['phase'] not in phases
+            or value['errorClass'] not in ('timeout', 'other')
+            or any(not integer(value[k], 0, 2**53-1) for k in ('elapsedMs', 'documentObservations'))
+            or not integer(value['droppedRequests'], 0, 0)
+            or type(value['sessionRequests']) is not list or len(value['sessionRequests']) > 256):
+        return False
+    for row in value['sessionRequests']:
+        if (type(row) is not dict or set(row) != {'outcome', 'elapsedMs', 'httpStatus'}
+                or row['outcome'] not in ('started', 'ok', 'timeout', 'transport', 'http', 'webdriver', 'invalid-response')
+                or not integer(row['elapsedMs'], 0, 2**53-1)
+                or (row['httpStatus'] is not None and not integer(row['httpStatus'], 100, 599))):
+            return False
+    return True
+
+
 def failure_classification(raw, projection, body, final_ok, launch, native_exit):
     """Keep the observed symptom distinct from a source/specimen-bound target red."""
     from two_launch_readiness import integer
@@ -135,7 +158,8 @@ def failure_classification(raw, projection, body, final_ok, launch, native_exit)
     bound = False
     try:
         requests = projection['sessionRequests']
-        observed = (integer(native_exit, 1, 65535)
+        usable = usable_failure_observation(projection)
+        observed = (usable and integer(native_exit, 1, 65535)
                     and integer(raw.get('nativeTestsRun'), 1, 1)
                     and integer(raw.get('nativeTestsPassed'), 0, 0)
                     and projection['status'] == 'failed' and projection['phase'] == 'session-create' and projection['errorClass'] == 'timeout'
@@ -144,7 +168,7 @@ def failure_classification(raw, projection, body, final_ok, launch, native_exit)
                     and integer(requests[1]['elapsedMs'], 15000, 2**53-1))
         files = body['files']
         data = lambda name: files[name]['data']
-        bound = (integer(native_exit, 1, 65535)
+        bound = (usable and integer(native_exit, 1, 65535)
                  and integer(raw.get('nativeTestsRun'), 1, 1)
                  and integer(raw.get('nativeTestsPassed'), 0, 0)
                  and final_ok is True and body['sourceAndSpecimenStable'] is True

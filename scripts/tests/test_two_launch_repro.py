@@ -183,7 +183,9 @@ class FailureClassificationTests(unittest.TestCase):
         import bounded_pump_capture as control
         raw = {'nativeTestsRun': 1, 'nativeTestsPassed': 0}
         observation = {'status': 'failed', 'phase': 'session-create', 'errorClass': 'timeout', 'documentObservations': 0,
-                       'sessionRequests': [{'outcome': 'started'}, {'outcome': 'timeout', 'elapsedMs': 15004}]}
+                       'elapsedMs': 15009, 'droppedRequests': 0,
+                       'sessionRequests': [{'outcome': 'started', 'elapsedMs': 0, 'httpStatus': None},
+                                           {'outcome': 'timeout', 'elapsedMs': 15004, 'httpStatus': None}]}
         launch = {'sourceCommit': control.SOURCE, 'sourceTree': control.TREE,
                   'exeSha256': 'e'*64, 'overlayLockSha256': 'a'*64}
         body = {'sourceCommit': control.SOURCE, 'sourceTree': control.TREE, 'controlCommit': 'c'*40,
@@ -209,6 +211,23 @@ class FailureClassificationTests(unittest.TestCase):
                 self.assertFalse(failure_classification(raw, observation, bad, True, launch, 1)['targetRedBound'])
             self.assertEqual(failure_classification({}, {}, None, False, launch, 1)['outcome'],
                              'failure-evidence-inconclusive')
+            import wry_probe_ci as source
+            partial = source.observation_summary({'requests': []})
+            candidates = [partial]
+            for key, value in [('status', 'unknown'), ('phase', 'unknown'), ('documentObservations', None),
+                               ('documentObservations', False), ('elapsedMs', '1'), ('droppedRequests', True)]:
+                malformed = copy.deepcopy(observation); malformed[key] = value; candidates.append(malformed)
+            malformed = copy.deepcopy(observation)
+            malformed['sessionRequests'][0]['elapsedMs'] = False; candidates.append(malformed)
+            for malformed in candidates:
+                diagnostic = copy.deepcopy(body); diagnostic['files']['observation']['data'] = malformed
+                with self.subTest(observation=malformed):
+                    self.assertEqual(failure_classification(raw, malformed, diagnostic, True, launch, 1)['outcome'],
+                                     'failure-evidence-inconclusive')
+            other = copy.deepcopy(observation); other.update(phase='readiness', errorClass='other')
+            diagnostic = copy.deepcopy(body); diagnostic['files']['observation']['data'] = other
+            self.assertEqual(failure_classification(raw, other, diagnostic, True, launch, 1)['outcome'],
+                             'other-native-failure')
             for counts in [(True, False), (1, False), (True, 0)]:
                 bad = dict(zip(('nativeTestsRun', 'nativeTestsPassed'), counts))
                 result = failure_classification(bad, observation, body, True, launch, 1)

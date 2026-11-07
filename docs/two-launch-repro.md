@@ -37,6 +37,7 @@ PR250 の三回上限を延長せず、専用の draft PR opened / 同一公開 
 全成功も再現率や原因・修正を証明しません。target-red、その他の native 失敗、証拠/readiness 不明を区別します。
 target-red は厳密な整数の native 1/0、元の timeout 観測、最終 identity と canonical record の source / specimen / observation binding を必要とします。
 元の timeout 観測があっても binding 不明なら、observedSessionTimeout として分離して残し、failure-evidence-inconclusive とします。red に native 成功の合否は要求しません。
+その他の native 失敗という分類にも、failed status、既知 phase、厳密な整数の観測値、欠落のない request 記録が必要です。canonical projection と一致していても unknown / null / 型不正の観測は証拠不明のままです。
 
 ## ローカル検証
 
