@@ -1,4 +1,4 @@
-name: DO NOT MERGE - one exact prior-red source recovery
+name: DO NOT MERGE - one post-verdict delivery anchor
 on:
   pull_request:
     branches: ['diagnostic/two-launch-repro-base-20261107']
@@ -13,7 +13,7 @@ jobs:
     if: >-
       github.run_attempt == 1 && github.event.action == 'synchronize' &&
       github.event.number == 251 && github.event.pull_request.number == 251 &&
-      github.event.before == '8e5d95c1a09cd84523c6dc2bc4b9f7481d7643f3' &&
+      github.event.before == 'ddf2bce36dc81fd74b463d9dd5ad5a33d11fc9b7' &&
       github.event.after != '' && github.event.pull_request.head.sha != '' &&
       github.event.after == github.event.pull_request.head.sha &&
       github.event.after != github.event.before &&
@@ -34,8 +34,8 @@ jobs:
       PYTHONUTF8: '1'
       PYTHONDONTWRITEBYTECODE: '1'
       CONTROL_HEAD: ${{ github.event.pull_request.head.sha }}
-      WRY_PIN: 008073aa952959f2a4937e31fe10de6609c1627a
-      WRY_TREE: 4dcfba754be4a150a28d1dfb770c2ea65e3fcaa4
+      WRY_PIN: a0175710969b76e0c546abadbc46c7da02568ea6
+      WRY_TREE: c86408c6d4ff009ea33eba24aaba1a3b5a5fa7e0
       WRY_SOURCE: ${{ github.workspace }}/.source
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         id: source
         with:
-          ref: 008073aa952959f2a4937e31fe10de6609c1627a
+          ref: a0175710969b76e0c546abadbc46c7da02568ea6
           path: .source
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -98,14 +98,14 @@ jobs:
             Remove-Item Env:WRY_DELIVERY_ENABLED
             Remove-Item Env:WRY_RECEIVER_ENABLED
             try {
-              python -B "$env:GITHUB_WORKSPACE/.control/scripts/prior_red_recovery.py" qualify --root $env:WRY_SOURCE --temp $env:WRY_TEMP
+              python -B "$env:GITHUB_WORKSPACE/.control/scripts/post_verdict_anchor.py" qualify --root $env:WRY_SOURCE --temp $env:WRY_TEMP
               if ($LASTEXITCODE -ne 0) { throw 'FIXTURE' }
-              python -B -m unittest discover -s "$env:GITHUB_WORKSPACE/.control/scripts/tests" -p test_prior_red_recovery.py -v
+              python -B -m unittest discover -s "$env:GITHUB_WORKSPACE/.control/scripts/tests" -p 'test_post_verdict*.py' -v
               if ($LASTEXITCODE -ne 0) { throw 'ADMISSION_FIXTURE' }
             } finally { $env:WRY_DELIVERY_ENABLED = '1'; $env:WRY_RECEIVER_ENABLED = '1' }
           }
       - name: Publish closed qualification evidence before native
-        run: python -B "$env:GITHUB_WORKSPACE/.control/scripts/prior_red_recovery.py" qualification --root $env:WRY_SOURCE --temp $env:WRY_TEMP
+        run: python -B "$env:GITHUB_WORKSPACE/.control/scripts/post_verdict_anchor.py" qualification --root $env:WRY_SOURCE --temp $env:WRY_TEMP
       - name: Run original Host classification fixtures once
         working-directory: .source/ui/tauri
         run: |
@@ -115,7 +115,7 @@ jobs:
         run: |
           . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
           Invoke-ProbeStep parse {
-            foreach ($file in @('scripts/wry-probe-step.ps1', 'scripts/wry-probe-step.test.ps1', 'ui/tauri/native-smoke/supervise.ps1', 'ui/tauri/native-smoke/app-startup-observation.ps1', 'ui/tauri/native-smoke/app-startup-contract.test.ps1', 'ui/tauri/native-smoke/setup.ps1')) {
+            foreach ($file in @('scripts/wry-probe-step.ps1', 'scripts/wry-probe-step.test.ps1', 'ui/tauri/native-smoke/supervise.ps1', 'ui/tauri/native-smoke/app-startup-observation.ps1', 'ui/tauri/native-smoke/app-startup-contract.test.ps1', 'ui/tauri/native-smoke/setup.ps1', 'ui/tauri/native-smoke/post-verdict.ps1', 'ui/tauri/native-smoke/post-verdict-contract.test.ps1', 'ui/tauri/native-smoke/post-verdict-stop.test.ps1')) {
               $tokens = $null; $errors = $null
               [void][Management.Automation.Language.Parser]::ParseFile("$env:WRY_SOURCE/$file", [ref]$tokens, [ref]$errors)
               if ($errors.Count -ne 0) { throw 'PARSE' }
@@ -125,7 +125,16 @@ jobs:
       - name: Run original finite collection fixture once
         run: |
           . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
-          Invoke-ProbeStep harness { pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/app-startup-contract.test.ps1" }
+          Invoke-ProbeStep harness {
+            pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/app-startup-contract.test.ps1"
+            if ($LASTEXITCODE -ne 0) { throw 'ORIGINAL_HARNESS' }
+            pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/post-verdict-contract.test.ps1"
+            if ($LASTEXITCODE -ne 0) { throw 'POST_VERDICT_COOPERATIVE_FIXTURE' }
+            pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/post-verdict-stop.test.ps1" -QualificationPath "$env:WRY_TEMP/post-verdict-engine-qualified.json"
+            if ($LASTEXITCODE -ne 0) { throw 'POST_VERDICT_ENGINE_STOP_FIXTURE' }
+          }
+      - name: Publish actual owned child engine qualification before native
+        run: python -B "$env:GITHUB_WORKSPACE/.control/scripts/post_verdict_anchor.py" engine-qualification --root $env:WRY_SOURCE --temp $env:WRY_TEMP
       - name: Verify existing runtime and prepare original pinned driver variant
         timeout-minutes: 8
         run: |
@@ -184,9 +193,10 @@ jobs:
         run: |
           . "$env:WRY_SOURCE/scripts/wry-probe-step.ps1"
           Invoke-ProbeStep native {
-            python -B "$env:GITHUB_WORKSPACE/.control/scripts/prior_red_recovery.py" admit --root $env:WRY_SOURCE --temp $env:WRY_TEMP
+            python -B "$env:GITHUB_WORKSPACE/.control/scripts/post_verdict_anchor.py" admit --root $env:WRY_SOURCE --temp $env:WRY_TEMP
             if ($LASTEXITCODE -ne 0) { throw 'ADMISSION' }
-            pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/supervise.ps1" -ToolsDirectory "$env:WRY_TEMP/tools" -OutputDirectory "$env:WRY_TEMP/evidence" -ApplicationPath "$env:WRY_TEMP/unpacked/rescue-host-shell.exe" -StartupDiagnostic -StartupManifest "$env:WRY_TEMP/unpacked/BUILD.json" -StartupSource $env:WRY_PIN
+            $env:RESCUE_HOST_POST_VERDICT_MANIFEST_SHA256 = (Get-FileHash "$env:WRY_TEMP/post-verdict.manifest.json" -Algorithm SHA256).Hash.ToLowerInvariant()
+            pwsh -NoLogo -NoProfile -File "$env:WRY_SOURCE/ui/tauri/native-smoke/supervise.ps1" -ToolsDirectory "$env:WRY_TEMP/tools" -OutputDirectory "$env:WRY_TEMP/evidence" -ApplicationPath "$env:WRY_TEMP/unpacked/rescue-host-shell.exe" -StartupDiagnostic -StartupManifest "$env:WRY_TEMP/unpacked/BUILD.json" -StartupSource $env:WRY_PIN -PostVerdictManifest "$env:WRY_TEMP/post-verdict.manifest.json"
           }
       - name: Preserve original Host verdict after cleanup
         if: always() && steps.native.outcome != 'skipped'
@@ -207,4 +217,4 @@ jobs:
           Invoke-ProbeStep final-identity { python -B "$env:WRY_SOURCE/scripts/wry_probe_ci.py" identity --root $env:WRY_SOURCE --temp $env:WRY_TEMP --stage final-identity }
       - name: Publish bounded sanitized JSON and hashes only
         if: always() && steps.source.outcome == 'success'
-        run: python -B "$env:GITHUB_WORKSPACE/.control/scripts/prior_red_recovery.py" publish --root $env:WRY_SOURCE --temp $env:WRY_TEMP
+        run: python -B "$env:GITHUB_WORKSPACE/.control/scripts/post_verdict_anchor.py" publish --root $env:WRY_SOURCE --temp $env:WRY_TEMP

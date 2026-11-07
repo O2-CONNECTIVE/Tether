@@ -141,7 +141,7 @@ class StagingTests(unittest.TestCase):
     def test_workflow_has_one_bounded_entry(self):
         text = (Path(__file__).resolve().parents[2] / '.github/workflows/two-launch-repro.yml').read_text()
         self.assertEqual(text.count('runs-on: windows-2022'), 1)
-        self.assertEqual(text.count('/scripts/prior_red_recovery.py'), 4)
+        self.assertEqual(text.count('/scripts/post_verdict_anchor.py'), 5)
         for required in ('timeout-minutes: 35', "types: [synchronize]", 'github.run_attempt == 1',
                          'github.event.repository.private == false', 'github.event.pull_request.draft == true',
                          'github.event.pull_request.head.repo.full_name == github.repository',
@@ -253,7 +253,7 @@ class CorrectiveTransitionTests(unittest.TestCase):
         import re
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/two-launch-repro.yml').read_text()
         predicate = workflow.split('    if: >-\n', 1)[1].split('    runs-on:', 1)[0]
-        before = '8e5d95c1a09cd84523c6dc2bc4b9f7481d7643f3'
+        before = 'ddf2bce36dc81fd74b463d9dd5ad5a33d11fc9b7'
         repository = 'O2-CONNECTIVE/rescue-host'
         context = {'github': {'run_attempt': 1, 'repository': repository, 'event': {
             'action': 'synchronize', 'number': 251, 'before': before, 'after': 'a'*40,

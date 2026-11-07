@@ -16,10 +16,12 @@ BIND = {'controlCommit': 'c'*40, 'sourceCommit': control.SOURCE, 'sourceTree': c
 ROOT = Path(__file__).resolve().parents[2]
 
 
+# The retired prior-red workflow is a tracked fixture, not the current experiment.
+# No ancestor git object is required in depth-one LF/CRLF checkouts.
 class RecoveryTests(unittest.TestCase):
     def test_original_orchestration_and_one_native_call(self):
         original = (ROOT / '.github/workflows/wry-receiver-once.yml').read_text()
-        current = (ROOT / '.github/workflows/two-launch-repro.yml').read_text()
+        current = (ROOT / 'scripts/tests/fixtures/prior-red-workflow.yml').read_text()
         start = '      - name: Run original Host classification fixtures once\n'
         end = '      - name: Publish bounded sanitized JSON and hashes only\n'
         # Original setup, invocation, reports and final identity remain byte-for-byte.
@@ -41,7 +43,7 @@ class RecoveryTests(unittest.TestCase):
     def test_qualification_publication_is_outside_redirecting_wrapper(self):
         wrapper = (ROOT / 'scripts/wry-probe-step.ps1').read_text()
         self.assertIn('& $Body *> (Join-Path $env:WRY_TEMP "raw-$Name.log")', wrapper)
-        workflow = (ROOT / '.github/workflows/two-launch-repro.yml').read_text()
+        workflow = (ROOT / 'scripts/tests/fixtures/prior-red-workflow.yml').read_text()
         steps = workflow.split('      - name: ')
         qualifier = next(step for step in steps if 'prior_red_recovery.py" qualify ' in step)
         public = next(step for step in steps if 'prior_red_recovery.py" qualification ' in step)
