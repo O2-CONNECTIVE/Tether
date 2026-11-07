@@ -91,10 +91,12 @@ export function createAppController({ invoke, onChange, timeoutMs = 2000, now = 
           } });
           return;
         }
+        const elapsed = now() - started;
+        // A busy event loop can resolve IPC before its already-due timer runs.
+        if (Number.isFinite(elapsed) && elapsed >= timeoutMs) { invalidated = true; unknown('IPC_TIMEOUT'); return; }
         observed = true;
         cleanupUnknown ||= value.cleanupUnknown;
         if (value.terminalHistory) history = value.view;
-        const elapsed = now() - started;
         const budget = Math.floor(value.validForMs - elapsed);
         if (invalidated || !Number.isFinite(elapsed) || elapsed < 0 || budget <= 0) { invalidate(); return; }
         onChange({ kind: 'observation', diagnostic: 'MAC_SYNTHETIC_OBSERVATION', synthetic: true, view: value.view, history });
