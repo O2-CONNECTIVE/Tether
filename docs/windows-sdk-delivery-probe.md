@@ -55,3 +55,5 @@ feedback-loop改善段階。元timeoutを高速・決定的にredへするloop�
 既存collectorが元file closeより前に別の有限record `wry-receiver-polls.json` を保存する。旧delivery schema／意味／元native verdictは変更しない。別storageのsealは別時点であり、SDK phase recordとのatomic snapshotではない。時間順や最後の状態を記録せず、observed Emptyからsenderがその後も生存したとは推定しない。GetMessage内へ入った後のsender-dropは次の元pollまで未観測であり、欠測はliveを意味しない。callback guard-dropはsender-drop証明でもない。
 
 local fixtureは実std::mpsc、実patched pump、実recorderを使い、Win32だけを有限に代替する。Windows API／SDK未実行、元timeout未再現。新publication modeは`WRY_RECEIVER_ENABLED=1`で明示し、旧fixtureでは外す。公開前は最終source/control独立review、sourceをancestorに含むcontrol、空の匿名shallow source fetch、重複確認が必要。child-pwsh launch、元15000ms、profile、cleanup、identity gate、旧受入未達を保持する。
+
+受信診断の完備判定にはlossなし・sealed・registeredに加え、environment/controllerの両方でoriginal-wait対応の非zero観測を要求する。空record／片方欠測／unknownは保存するが診断完備にはしない。native合否と受信診断の完備は別判定で、完備でもtimeout原因や継続的livenessを証明しない。

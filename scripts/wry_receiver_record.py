@@ -18,6 +18,12 @@ def validate(v):
             or not v['registered'] or not v['sealed'] or v['lossDetected']): raise ValueError('RECEIVER_RECORD_REJECTED')
     return v
 
+def complete(value):
+    value = validate(value)
+    return (value['registered'] and value['sealed'] and not value['lossDetected']
+            and all(row['relation'] == 'original-wait' and any(row[k] for k in COUNTS)
+                    for row in value['buckets'][:2]))
+
 def read_record(path, collection):
     s=path.lstat()
     if (type(collection) is not dict or collection.get('appStartupFileClosed') is not True or not stat.S_ISREG(s.st_mode)

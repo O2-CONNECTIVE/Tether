@@ -331,8 +331,10 @@ def publish(root, temp, delivery=False):
         except (ValueError, TypeError, KeyError): classified = False
         passed = passed and classified
     if delivery and os.environ.get("WRY_RECEIVER_ENABLED") == "1":
-        receiver = files["receiver"]["data"]
-        passed = passed and receiver.get("registered") is True and receiver.get("sealed") is True and receiver.get("lossDetected") is False
+        from wry_receiver_record import complete as receiver_complete
+        try: receiver_classified = receiver_complete(files["receiver"]["data"])
+        except (ValueError, TypeError, KeyError): receiver_classified = False
+        passed = passed and receiver_classified
     body = {"schema": 1, "variant": "wry240-once-record-1", "purpose": "diagnostic-hints-only",
             "productReference": "4ba768e910af595f26176eb69aaf2e21d663b726", "files": files,
             "controlCommit": control, "sourceCommit": source, "sourceTree": tree, "sourceAndSpecimenStable": stable,
@@ -341,6 +343,8 @@ def publish(root, temp, delivery=False):
     if delivery:
         body.update(variant="wry240-sdk-delivery-record-1", enabledScope="wry-sdk-delivery-1",
                     deliveryClassificationComplete=classified)
+    if delivery and os.environ.get("WRY_RECEIVER_ENABLED") == "1":
+        body["receiverClassificationComplete"] = receiver_classified
     encoded = canonical(body)
     if len(encoded) > 32768: raise ValueError("RECORD_LIMIT")
     text = encoded.decode()
