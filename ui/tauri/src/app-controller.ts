@@ -85,15 +85,15 @@ export function createAppController({ invoke, onChange, timeoutMs = 2000, now = 
         selected = value.source;
         if (value.source === 'windows-shell') { await shell.refresh(); return; }
         if (value.source === 'unsupported') { unknown('PLATFORM_UNSUPPORTED'); return; }
+        const elapsed = now() - started;
+        // A busy event loop can resolve IPC before its already-due timer runs.
+        if (Number.isFinite(elapsed) && elapsed >= timeoutMs) { invalidated = true; unknown('IPC_TIMEOUT'); return; }
         if (value.state === 'source-unavailable') {
           onChange({ kind: 'unavailable', diagnostic: 'MAC_SOURCE_UNAVAILABLE', synthetic: false, view: {
             heading: 'Mac の状態取得は未接続です', detail: '状態を受け取る native 入力はまだ接続されていません。接続や停止は確認できません。', icon: 'warning'
           } });
           return;
         }
-        const elapsed = now() - started;
-        // A busy event loop can resolve IPC before its already-due timer runs.
-        if (Number.isFinite(elapsed) && elapsed >= timeoutMs) { invalidated = true; unknown('IPC_TIMEOUT'); return; }
         observed = true;
         cleanupUnknown ||= value.cleanupUnknown;
         if (value.terminalHistory) history = value.view;
