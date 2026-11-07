@@ -17,7 +17,7 @@ class QualificationTests(unittest.TestCase):
     def test_missing_duplicate_wrong_target_failure_skip_and_zero_rejected(self):
         case = SimpleNamespace(id=lambda: qualification.REQUIRED)
         good = SimpleNamespace(returncode=0, stdout=b'host: x86_64-pc-windows-msvc\n')
-        result = SimpleNamespace(wasSuccessful=lambda: True, testsRun=1, skipped=[], expectedFailures=[], unexpectedSuccesses=[])
+        result = SimpleNamespace(wasSuccessful=lambda: True, testsRun=1, requiredStarted=1, requiredPassed=1, skipped=[], expectedFailures=[], unexpectedSuccesses=[])
         with patch.object(sys, 'platform', 'win32'), patch.object(qualification.platform, 'machine', return_value='AMD64'), patch.dict(os.environ, {'WRY_PROBE_RUSTC':'fixture'}), patch.object(subprocess, 'run', return_value=good) as compiler, patch.object(unittest.defaultTestLoader, 'discover', return_value=[case]) as loader, patch.object(unittest, 'TextTestRunner') as runner:
             runner.return_value.run.return_value = result
             value = qualification.qualify(Path('source'))
@@ -26,7 +26,7 @@ class QualificationTests(unittest.TestCase):
                 loader.return_value = selected
                 with self.assertRaises(ValueError): qualification.qualify(Path('source'))
             loader.return_value = [case]
-            for key, bad in (('testsRun',0),('skipped',[('x','skip')]),('expectedFailures',[1]),('unexpectedSuccesses',[1]),('wasSuccessful',lambda:False)):
+            for key, bad in (('requiredStarted',0),('requiredStarted',2),('requiredPassed',0),('requiredPassed',2),('testsRun',0),('skipped',[('x','skip')]),('expectedFailures',[1]),('unexpectedSuccesses',[1]),('wasSuccessful',lambda:False)):
                 original = getattr(result,key); setattr(result,key,bad)
                 with self.assertRaises(ValueError): qualification.qualify(Path('source'))
                 setattr(result,key,original)

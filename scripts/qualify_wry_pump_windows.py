@@ -17,6 +17,21 @@ def cases(suite):
         else: yield item
 
 
+class ExecutedResult(unittest.TextTestResult):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.requiredStarted = 0
+        self.requiredPassed = 0
+
+    def startTest(self, test):
+        if test.id() == REQUIRED: self.requiredStarted += 1
+        super().startTest(test)
+
+    def addSuccess(self, test):
+        if test.id() == REQUIRED: self.requiredPassed += 1
+        super().addSuccess(test)
+
+
 def qualify(root):
     if sys.platform != 'win32' or platform.machine().lower() not in ('amd64', 'x86_64'):
         raise ValueError('WINDOWS_X64_REQUIRED')
@@ -27,9 +42,10 @@ def qualify(root):
     selected = list(cases(suite))
     if sum(case.id() == REQUIRED for case in selected) != 1:
         raise ValueError('LAST_ERROR_CASE_REQUIRED')
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    result = unittest.TextTestRunner(verbosity=2, resultclass=ExecutedResult).run(suite)
     if (not result.wasSuccessful() or result.testsRun != len(selected) or not selected
-            or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+            or result.skipped or result.expectedFailures or result.unexpectedSuccesses
+            or result.requiredStarted != 1 or result.requiredPassed != 1):
         raise ValueError('WINDOWS_FIXTURE_REJECTED')
     return {'schema': 1, 'qualification': 'windows-x64-pump-adapter-last-error',
             'testsRun': result.testsRun, 'lastErrorCaseExecuted': True,
