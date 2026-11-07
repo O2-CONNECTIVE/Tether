@@ -70,7 +70,9 @@ func TestCIActualProducerConnection(t *testing.T) {
 			return
 		}
 		stage, code := diag.fields()
-		data, _ := json.Marshal(map[string]any{"stage": stage, "failure_code": code, "outcome": "failed-unknown", "cleanup": "unconfirmed", "test": t.Name(), "invocation": invocation, "helper_sha256": expected, "fixture_retained": true})
+		outcome := map[string]any{"stage": stage, "failure_code": code, "outcome": "failed-unknown", "cleanup": "unconfirmed", "test": t.Name(), "invocation": invocation, "helper_sha256": expected, "fixture_retained": true}
+		diag.annotate(outcome)
+		data, _ := json.Marshal(outcome)
 		if e := ciWriteExclusive(report, append(data, '\n')); e != nil {
 			fmt.Fprintln(os.Stderr, "CI_PRODUCER_OUTCOME_WRITE_FAILED")
 		}
@@ -124,6 +126,9 @@ func TestCIActualProducerConnection(t *testing.T) {
 			diag.fail(t, "request-correlation")
 		}
 		diag.at(mode + "-poll")
+		if mode == "cancel" {
+			diag.at("cancel-await-output")
+		}
 		canceled := false
 		deadline := time.Now().Add(60 * time.Second)
 		var value map[string]any

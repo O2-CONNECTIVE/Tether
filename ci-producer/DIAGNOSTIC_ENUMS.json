@@ -5,6 +5,7 @@
   ],
   "stages": [
     "authenticated",
+    "cancel-await-output",
     "cancel-generation",
     "cancel-initialize",
     "cancel-poll",
@@ -59,9 +60,23 @@
     "mcp-request",
     "mcp-response-io",
     "mcp-tls",
+    "mcp-tool-admission-uncertain",
+    "mcp-tool-busy-refused",
+    "mcp-tool-control-ended",
+    "mcp-tool-error-other",
+    "mcp-tool-error-unspecified",
+    "mcp-tool-generation-mismatch",
     "mcp-tool-name",
+    "mcp-tool-native-cleanup-unknown",
+    "mcp-tool-not-found",
+    "mcp-tool-output-limit",
+    "mcp-tool-registration-unobserved",
     "mcp-tool-response",
     "mcp-tool-result",
+    "mcp-tool-result-flag",
+    "mcp-tool-result-shape",
+    "mcp-tool-result-uncertain",
+    "mcp-tool-start-uncertain",
     "natural-expectation",
     "none",
     "outcome-persist",
@@ -104,5 +119,72 @@
     "work-registration-unobserved",
     "work-start-uncertain"
   ],
-  "semantics": "Producer outcome only; fixed phase and first failure-site classification. No raw errors or observed payload values. Passed outcome is stage complete and failure_code none. Missing enum fields before fixture acquisition remain absent, never inferred."
+  "semantics": "Producer outcome only; fixed phase and first failure-site classification. No raw errors or observed payload values. Passed outcome is stage complete and failure_code none. Missing enum fields before fixture acquisition remain absent, never inferred.",
+  "result_fields": {
+    "tool_operation": [
+      "unavailable",
+      "start",
+      "status",
+      "cancel"
+    ],
+    "result_error": [
+      "unavailable",
+      "none",
+      "admission_refused_or_uncertain",
+      "start_uncertain",
+      "registration_unobserved",
+      "result_unobserved_or_uncertain",
+      "output_limit",
+      "not_found",
+      "control_ended",
+      "request_generation_mismatch",
+      "busy_or_refused"
+    ],
+    "result_phase": [
+      "unavailable",
+      "pending",
+      "running",
+      "finished",
+      "unknown"
+    ],
+    "command_phase": [
+      "unavailable",
+      "starting",
+      "running",
+      "exited",
+      "canceled",
+      "failed",
+      "start_unknown"
+    ],
+    "result_stop": [
+      "unavailable",
+      "none",
+      "canceled",
+      "command_timeout",
+      "revoked",
+      "hard_deadline",
+      "transport_lost",
+      "runtime_fault"
+    ],
+    "command_cleanup": [
+      "unavailable",
+      "pending",
+      "confirmed",
+      "unknown",
+      "not_required"
+    ],
+    "owner_cleanup": [
+      "unavailable",
+      "pending",
+      "confirmed",
+      "unknown"
+    ],
+    "gateway_cleanup": [
+      "unavailable",
+      "pending",
+      "confirmed",
+      "unknown"
+    ]
+  },
+  "result_semantics": "Failure-only fixed enum snapshot from most recent exact tool call. New call resets prior values; unknown/malformed/unlisted values become unavailable. Last observed state is not new cleanup proof."
 }

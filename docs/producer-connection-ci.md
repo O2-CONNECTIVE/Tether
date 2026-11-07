@@ -29,7 +29,10 @@ after failed/unknown is disposal, not evidence of cleanup. A newer commit does n
 The job log and summary expose only fixed phase/lane labels, outcome, source
 revision and helper SHA256. Failed runs may also show fixed stage/failure codes,
 a validated original-test exit code and a fixed observer verdict/reason. These
-fields come only from matching invocation/test markers; missing, malformed or
+fields come only from matching invocation/test markers. Failure summaries may
+also show the last exact tool operation and fixed error, phase, stop and three
+cleanup enums. These snapshots are not fresh observations or cleanup proof;
+each new tool call clears the preceding snapshot. Missing, malformed or
 unrecognized data becomes `unavailable` or `null`. They never change the failed
 result or supersede the immutable observer verdict. Use the job's GitHub Actions
 link when reporting results. No artifacts, raw runtime logs, fixture credentials or policy files

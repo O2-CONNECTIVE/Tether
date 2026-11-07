@@ -116,6 +116,7 @@ func (g *ciGateway) initialize() {
 }
 func (g *ciGateway) tool(name, id string) map[string]any {
 	g.t.Helper()
+	g.diagnostic.beginTool(name)
 	if name != "rescue_fixed_start" && name != "rescue_fixed_status" && name != "rescue_fixed_cancel" {
 		g.diagnostic.fail(g.t, "mcp-tool-name")
 	}
@@ -124,9 +125,53 @@ func (g *ciGateway) tool(name, id string) map[string]any {
 	if status != http.StatusOK || !ok {
 		g.diagnostic.fail(g.t, "mcp-tool-response")
 	}
-	value, ok := result["structuredContent"].(map[string]any)
-	if !ok || result["isError"] != false {
-		g.diagnostic.fail(g.t, "mcp-tool-result")
+	g.diagnostic.observeTool(result)
+	if code := ciToolResultFailure(result); code != "" {
+		g.diagnostic.fail(g.t, code)
 	}
-	return value
+	return result["structuredContent"].(map[string]any)
+}
+
+// Classify only fixed protocol/error enums. Never emit response values, text,
+// identities, commands, paths or error strings. Every prior rejection remains
+// a rejection; this does not make an error result eligible for another poll.
+func ciToolResultFailure(result map[string]any) string {
+	value, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		return "mcp-tool-result-shape"
+	}
+	failed, ok := result["isError"].(bool)
+	if !ok {
+		return "mcp-tool-result-flag"
+	}
+	if !failed {
+		return ""
+	}
+	switch value["error"] {
+	case "admission_refused_or_uncertain":
+		return "mcp-tool-admission-uncertain"
+	case "start_uncertain":
+		return "mcp-tool-start-uncertain"
+	case "registration_unobserved":
+		return "mcp-tool-registration-unobserved"
+	case "result_unobserved_or_uncertain":
+		if value["command_cleanup"] == "unknown" {
+			return "mcp-tool-native-cleanup-unknown"
+		}
+		return "mcp-tool-result-uncertain"
+	case "output_limit":
+		return "mcp-tool-output-limit"
+	case "not_found":
+		return "mcp-tool-not-found"
+	case "control_ended":
+		return "mcp-tool-control-ended"
+	case "request_generation_mismatch":
+		return "mcp-tool-generation-mismatch"
+	case "busy_or_refused":
+		return "mcp-tool-busy-refused"
+	case "", nil:
+		return "mcp-tool-error-unspecified"
+	default:
+		return "mcp-tool-error-other"
+	}
 }
