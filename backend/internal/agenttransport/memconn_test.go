@@ -24,6 +24,8 @@ type memConn struct {
 	closedCh  chan struct{}
 	closeGate chan struct{}
 	closes    int
+	// Set before use to hold the peer's EOF observation independently of Close.
+	readEOFGate <-chan struct{}
 }
 
 type memLink struct {
@@ -104,6 +106,9 @@ func (c *memConn) Read(p []byte) (int, error) {
 		}
 		if c.rd.eof {
 			c.rd.mu.Unlock()
+			if c.readEOFGate != nil {
+				<-c.readEOFGate
+			}
 			return 0, io.EOF
 		}
 		wake := c.rd.wake

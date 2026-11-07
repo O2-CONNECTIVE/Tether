@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,8 +68,15 @@ func residentGeneration(h *Handler) string {
 }
 func TestResidentMutualAuthenticationRefusesWorkAndStops(t *testing.T) {
 	r := newResidentRig(t, nil)
+	// The client can finish before the remote handler observes EOF. Hold that
+	// observation to exercise the ordering deterministically, without sleeps.
+	peerEOF := make(chan struct{})
+	releasePeer := sync.OnceFunc(func() { close(peerEOF) })
+	defer releasePeer()
+	r.m.prepare = func(_, server *memConn) { server.readEOFGate = peerEOF }
 	done := residentRun(r.c)
 	residentReady(t, r)
+	ends := <-r.m.pairs
 	if r.rec.count.Load() != 0 {
 		t.Fatal("idle control became grant registration")
 	}
@@ -95,6 +103,19 @@ func TestResidentMutualAuthenticationRefusesWorkAndStops(t *testing.T) {
 	}
 	if e, ok := r.c.CleanupResult(); !ok || e != nil {
 		t.Fatal("original cleanup unconfirmed", e, ok)
+	}
+	if r.c.Connected() || !ends.client.isClosed() {
+		t.Fatal("client stop did not finish its original transport")
+	}
+	if !r.h.ResidentConnected(hostLabel, member1) {
+		t.Fatal("fixture did not hold the remote EOF observation")
+	}
+	// Client cleanup is not a remote-handler join. Wait for this same memory
+	// request to return before asserting both ends have stopped. Do not close
+	// the handler here: that would mask whether client EOF ended this peer.
+	releasePeer()
+	if e := waitFor(ctx, ends.served); e != nil {
+		t.Fatal("original resident handler did not finish", e)
 	}
 	if r.c.Connected() || r.h.ResidentConnected(hostLabel, member1) {
 		t.Fatal("stop still reports connected")
