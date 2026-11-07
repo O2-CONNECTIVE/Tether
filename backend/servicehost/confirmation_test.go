@@ -33,6 +33,12 @@ func (o *confirmationOwnerModel) ResolvePreviewConfirmation(ctx context.Context,
 func confirmationFixture(t *testing.T, resolve func(context.Context, PreviewConfirmationTicket) error) (*Service, *serviceAuthAdapter, *confirmationOwnerModel) {
 	t.Helper()
 	c := previewConfigFixture(t)
+	c.Budgets.Observe = time.Hour // model-only periodic query suppression
+	return configuredConfirmationFixture(t, c, resolve)
+}
+
+func configuredConfirmationFixture(t *testing.T, c PreviewServiceConfig, resolve func(context.Context, PreviewConfirmationTicket) error) (*Service, *serviceAuthAdapter, *confirmationOwnerModel) {
+	t.Helper()
 	c.RequestLimit, c.LaunchLimit = 8, 9
 	s, err := NewPreviewService(c)
 	if err != nil {
@@ -42,7 +48,6 @@ func confirmationFixture(t *testing.T, resolve func(context.Context, PreviewConf
 	if err := s.BindOuterFinalizer(o); err != nil {
 		t.Fatal(err)
 	}
-	s.cfg.Budgets.Observe = time.Hour // model-only periodic query suppression
 	s.control.prepare = func(context.Context) (serviceControlWitness, error) {
 		return serviceControlWitness{confirm: func(context.Context) error { return nil }, recheck: func(context.Context) error { return nil }, close: func(context.Context) error { return nil }}, nil
 	}
