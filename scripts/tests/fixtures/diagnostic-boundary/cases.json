@@ -1,0 +1,103 @@
+[
+  {
+    "name": "minimal",
+    "record": {
+      "stage": "complete",
+      "failure_code": "none"
+    },
+    "validation": "record-valid"
+  },
+  {
+    "name": "failure",
+    "record": {
+      "stage": "producer-close",
+      "failure_code": "producer-log-write"
+    },
+    "validation": "record-valid"
+  },
+  {
+    "name": "token",
+    "record": {
+      "stage": "complete",
+      "failure_code": "none",
+      "token": "SYNTHETIC-token"
+    },
+    "validation": "unavailable"
+  },
+  {
+    "name": "path",
+    "record": {
+      "stage": "complete",
+      "failure_code": "none",
+      "path": "/SYNTHETIC-user/private"
+    },
+    "validation": "unavailable"
+  },
+  {
+    "name": "exception",
+    "record": {
+      "stage": "complete",
+      "failure_code": "none",
+      "error": "SYNTHETIC exception text"
+    },
+    "validation": "unavailable"
+  },
+  {
+    "name": "output",
+    "record": {
+      "stage": "complete",
+      "failure_code": "none",
+      "stdout": "SYNTHETIC output"
+    },
+    "validation": "unavailable"
+  },
+  {
+    "name": "address",
+    "record": {
+      "stage": "complete",
+      "failure_code": "none",
+      "ip": "192.0.2.27"
+    },
+    "validation": "unavailable"
+  },
+  {
+    "name": "argv",
+    "record": {
+      "stage": "complete",
+      "failure_code": "none",
+      "argv": [
+        "SYNTHETIC command"
+      ]
+    },
+    "validation": "unavailable"
+  },
+  {
+    "name": "identity",
+    "record": {
+      "stage": "complete",
+      "failure_code": "none",
+      "command_id": "SYNTHETIC-id"
+    },
+    "validation": "unavailable"
+  },
+  {
+    "name": "unknown-enum",
+    "record": {
+      "stage": "SYNTHETIC-stage",
+      "failure_code": "none"
+    },
+    "validation": "unavailable"
+  },
+  {
+    "name": "empty",
+    "record": {},
+    "validation": "unavailable"
+  },
+  {
+    "name": "partial",
+    "record": {
+      "stage": "complete"
+    },
+    "validation": "unavailable"
+  }
+]
