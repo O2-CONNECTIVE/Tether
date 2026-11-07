@@ -2,7 +2,7 @@ name: DO NOT MERGE - build once two-launch pilot
 on:
   pull_request:
     branches: ['diagnostic/two-launch-repro-base-20261107']
-    types: [opened]
+    types: [synchronize]
 permissions:
   contents: read
 concurrency:
@@ -11,7 +11,12 @@ concurrency:
 jobs:
   two-launch:
     if: >-
-      github.run_attempt == 1 && github.event.action == 'opened' &&
+      github.run_attempt == 1 && github.event.action == 'synchronize' &&
+      github.event.number == 251 && github.event.pull_request.number == 251 &&
+      github.event.before == 'f73cde083542da63b2072c770b10d987e88ae813' &&
+      github.event.after != '' && github.event.pull_request.head.sha != '' &&
+      github.event.after == github.event.pull_request.head.sha &&
+      github.event.after != github.event.before &&
       github.repository == 'O2-CONNECTIVE/rescue-host' &&
       github.event.repository.private == false && github.event.pull_request.draft == true &&
       github.event.pull_request.head.repo.full_name == github.repository &&

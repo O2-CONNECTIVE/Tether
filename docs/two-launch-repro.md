@@ -2,7 +2,7 @@
 
 この変更は Phase 1 の検証ループ整備であり、起動タイムアウトの原因特定や修正ではありません。
 元のソースは `cee2e9baa22200c929f015199aac68626925a486`、tree は `ce3c61a0e56b2bec1fdc2a5990813dff17afb4ec` に固定します。
-PR250 の三回上限を延長せず、専用の draft PR opened / 同一公開 repository / attempt 1 / 専用 head・base の一 job だけを入口にします。
+PR250 の三回上限を延長せず、専用の draft PR251 synchronize / 同一公開 repository / attempt 1 / 専用 head・base の一 job だけを入口にします。
 35 分の job 上限を維持し、短い外側 watchdog は加えません。
 
 ## 実行と証跡の境界
@@ -44,3 +44,19 @@ target-red は厳密な整数の native 1/0、元の timeout 観測、最終 ide
 新規 control の synthetic fixture は Windows 再現の証拠ではありません。
 Mac に pwsh がないため、実 PowerShell parse、Windows query、41 条件の Windows qualification、staged driver の実検証、native の二回実行は未実行です。
 それらは専用 job の preflight と実測で別判定します。環境不備、0 件、skip、不明を成功に数えません。
+
+## 初回の事前検査結果
+
+[PR251 の初回 run](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/42333272817) は、head `f73cde083542da63b2072c770b10d987e88ae813` で事前検査に失敗しました。
+外部 control の試験 18 件中 1 件が、Windows の path 表記を `/` で分割した assertion の IndexError で停止しました。
+資格証拠の公開、build、native は未実行で、setup / trial / final の公開 block もありません。
+元の起動タイムアウトや target-red ではなく、再利用や速度改善は未実証です。
+修正試験は PurePosixPath / PureWindowsPath の双方で同じ assertion を検証し、実行時 control や固定ソースは変更しません。
+
+修正版は同じ PR251 で、既知の失敗 head からの一回の synchronize 遷移だけを許可します。
+root before は `f73cde083542da63b2072c770b10d987e88ae813`、空でない after は PR head SHA と一致し、before と異なることが必須です。
+PR 番号、draft / public / 同一 repository、既存の branch / base SHA、attempt 1 の条件も維持します。
+opened、任意の後続 synchronize、失敗 run の rerun は入口ではありません。初回 native 0 回なので修正版も最大二回、合計でも二回までです。
+これは修正 head の新しい限定資格確認であり、初回成功の扱いや元の起動タイムアウト再現への読み替えはしません。
+
+根拠: [GitHub の pull_request event](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request)、[synchronize schema](https://raw.githubusercontent.com/octokit/webhooks/main/payload-schemas/api.github.com/pull_request/synchronize.schema.json)、[payload example](https://raw.githubusercontent.com/octokit/webhooks/main/payload-examples/api.github.com/pull_request/synchronize.payload.json)。

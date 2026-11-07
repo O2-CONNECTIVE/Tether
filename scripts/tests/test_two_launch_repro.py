@@ -77,8 +77,19 @@ class StagingTests(unittest.TestCase):
         for name in ('steps.json', 'launch.json', 'final.json', 'evidence/native-result.json',
                      'evidence/native-observation.json', 'evidence/app-startup-report.json'):
             self.assertIn(Path('trial') / name, seen)
-        self.assertTrue(all(p.parts[0] == ('setup' if str(p).split('/',1)[1] in
-                                         ('unpacked/BUILD.json', 'overlay.json') else 'trial') for p in seen))
+        self.assert_publication_origins(seen)
+
+    def assert_publication_origins(self, seen):
+        self.assertTrue(all(p.parts[0] == ('setup' if p.parts[1:] in
+                                         (('unpacked', 'BUILD.json'), ('overlay.json',)) else 'trial') for p in seen))
+
+    def test_publication_origins_are_platform_neutral(self):
+        from pathlib import PurePosixPath, PureWindowsPath
+        from two_launch_repro import SETUP, TRIAL
+        for path_type in (PurePosixPath, PureWindowsPath):
+            with self.subTest(path_type=path_type.__name__):
+                view = PublicationView(path_type('setup'), path_type('trial'))
+                self.assert_publication_origins([view / name for name in (*SETUP, *TRIAL)])
 
     def test_rejected_raw_conditions_cannot_invoke_again(self):
         from copy import deepcopy
@@ -131,7 +142,7 @@ class StagingTests(unittest.TestCase):
         text = (Path(__file__).resolve().parents[2] / '.github/workflows/two-launch-repro.yml').read_text()
         self.assertEqual(text.count('runs-on: windows-2022'), 1)
         self.assertEqual(text.count('two_launch_repro.py'), 1)
-        for required in ('timeout-minutes: 35', "types: [opened]", 'github.run_attempt == 1',
+        for required in ('timeout-minutes: 35', "types: [synchronize]", 'github.run_attempt == 1',
                          'github.event.repository.private == false', 'github.event.pull_request.draft == true',
                          'github.event.pull_request.head.repo.full_name == github.repository',
                          "3bd7ee59dedd38728b731994a4088bd7e8c0a39d", 'contents: read'):
@@ -233,3 +244,78 @@ class FailureClassificationTests(unittest.TestCase):
                 result = failure_classification(bad, observation, body, True, launch, 1)
                 self.assertFalse(result['observedSessionTimeout'])
                 self.assertNotEqual(result['outcome'], 'target-red')
+
+class CorrectiveTransitionTests(unittest.TestCase):
+    def test_actual_workflow_predicate_admits_only_failed_head_transition(self):
+        # Evaluate only this conjunction's primitive comparisons, not arbitrary
+        # GitHub expressions or a strict-type contract for webhook values.
+        import copy
+        import re
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/two-launch-repro.yml').read_text()
+        predicate = workflow.split('    if: >-\n', 1)[1].split('    runs-on:', 1)[0]
+        before = 'f73cde083542da63b2072c770b10d987e88ae813'
+        repository = 'O2-CONNECTIVE/rescue-host'
+        context = {'github': {'run_attempt': 1, 'repository': repository, 'event': {
+            'action': 'synchronize', 'number': 251, 'before': before, 'after': 'a'*40,
+            'repository': {'private': False}, 'pull_request': {'number': 251, 'draft': True,
+                'head': {'repo': {'full_name': repository}, 'ref': 'diagnostic/two-launch-repro-20261107', 'sha': 'a'*40},
+                'base': {'ref': 'diagnostic/two-launch-repro-base-20261107',
+                         'sha': '3bd7ee59dedd38728b731994a4088bd7e8c0a39d'}}}}}
+        def evaluate(candidate):
+            def value(token):
+                if token.startswith('github.'):
+                    current = candidate
+                    for key in token.split('.'):
+                        if type(current) is not dict or key not in current: return ''
+                        current = current[key]
+                    return current
+                if token.startswith("'"): return token[1:-1]
+                if token in ('true', 'false'): return token == 'true'
+                return int(token)
+            results = []
+            for clause in predicate.split('&&'):
+                match = re.fullmatch(r"\s*(github\.[a-zA-Z_.]+)\s*(==|!=)\s*(github\.[a-zA-Z_.]+|'[^']*'|true|false|[0-9]+)\s*", clause)
+                self.assertIsNotNone(match, 'Unsupported actual workflow expression')
+                left, operator, right = match.groups()
+                a, b = value(left), value(right)
+                if type(a) is type(b):
+                    equal = a.casefold() == b.casefold() if type(a) is str else a == b
+                else:
+                    # GitHub expressions coerce unequal primitive types to numbers.
+                    def number(item):
+                        try: return float(item or 0)
+                        except (TypeError, ValueError): return float('nan')
+                    equal = number(a) == number(b)
+                results.append(equal if operator == '==' else not equal)
+            return all(results)
+        self.assertTrue(evaluate(context))
+        mutations = [('github.event.before', 'b'*40), ('github.event.after', 'b'*40),
+                     ('github.event.number', 252), ('github.event.pull_request.number', 252),
+                     ('github.event.action', 'opened'), ('github.run_attempt', 2),
+                     ('github.event.repository.private', True), ('github.event.pull_request.draft', False),
+                     ('github.event.pull_request.head.repo.full_name', 'other/repository'),
+                     ('github.event.pull_request.head.ref', 'other'), ('github.event.pull_request.base.ref', 'other'),
+                     ('github.event.pull_request.base.sha', 'b'*40), ('github.repository', 'other/repository')]
+        def change(candidate, path, value, remove=False):
+            keys = path.split('.'); current = candidate
+            for key in keys[:-1]: current = current[key]
+            if remove: del current[keys[-1]]
+            else: current[keys[-1]] = value
+        for path, bad in mutations:
+            candidate = copy.deepcopy(context); change(candidate, path, bad)
+            with self.subTest(path=path, kind='wrong'): self.assertFalse(evaluate(candidate))
+            # repository.private is a trusted GitHub Boolean; its existing false
+            # comparison is coercive, not a standalone missing-field validator.
+            if path != 'github.event.repository.private':
+                candidate = copy.deepcopy(context); change(candidate, path, None, remove=True)
+                with self.subTest(path=path, kind='missing'): self.assertFalse(evaluate(candidate))
+        for after, head in [('', ''), (before, before), ('', 'a'*40), ('a'*40, '')]:
+            candidate = copy.deepcopy(context)
+            change(candidate, 'github.event.after', after)
+            change(candidate, 'github.event.pull_request.head.sha', head)
+            self.assertFalse(evaluate(candidate))
+        for missing in [('github.event.after',), ('github.event.pull_request.head.sha',),
+                        ('github.event.after', 'github.event.pull_request.head.sha')]:
+            candidate = copy.deepcopy(context)
+            for path in missing: change(candidate, path, None, remove=True)
+            self.assertFalse(evaluate(candidate))
