@@ -19,7 +19,7 @@
 
 fixture の表示予算は source の3秒期限と retained grant deadline の早い方以下へ切り下げ、0–3000msに制限します。frontend は request 開始からの経過時間を差し引き、期限同値、非有限値、時計逆行では進行表示しません。timer、visibility change、復帰、timeout、失敗、不正応答は pending response と現在表示を無効化します。遅着応答で復帰しません。
 
-fixture 応答は timer callback の実行順だけに依存せず、request 開始からの有限な経過時間が IPC timeout 以上なら採用しません。event loop が混雑して応答の Promise が先に解決しても、期限同値・期限超過の表示、履歴、cleanup field を取り込みません。時計異常の既存拒否と、timeout 後に同じ fixture を復活させない制約は維持します。これは frontend の表示防御で、native の期限執行や実 GUI 受入の証明ではありません。
+Mac の通常未接続応答と fixture 応答は timer callback の実行順だけに依存せず、request 開始からの有限な経過時間が IPC timeout 以上なら採用しません。event loop が混雑して応答の Promise が先に解決しても、期限同値・期限超過の表示、履歴、cleanup field を取り込みません。時計異常の既存拒否と、timeout 後に同じ fixture を復活させない制約は維持します。通常の未接続応答も期限同値以降は `IPC_TIMEOUT` とし、新しい要求が期限内に返れば未接続表示へ戻れます。fixture の復活禁止は維持します。これは frontend の表示防御で、native の期限執行や実 GUI 受入の証明ではありません。
 
 この未接続段階の observed fixture は controller の寿命につき一度だけです。再確認は同じ報告を再取得せず、期限を延長しません。これは将来の streaming 契約ではありません。既存 FeedState が stale snapshot query の後に新しい fresh frame を受理できる意味は維持します。native observed source を有効にする時は、continuous clock、reader owner と本物の新しい報告の同一性を別途設計・検証します。
 

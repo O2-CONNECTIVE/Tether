@@ -166,3 +166,30 @@ void test('期限後の履歴とcleanup fieldを新しい観測として保持�
     assert.equal(run.last()?.view.heading, '状態の更新を確認できません');
   } finally { run.controller.dispose(); }
 });
+void test('通常Mac応答もtimerが遅れたIPC期限同値以降は採用せず再確認できる', async () => {
+  for (const elapsed of [2000, 2001]) {
+    let reads = 0;
+    let calls = 0;
+    const run = capture(() => { calls += 1; return Promise.resolve(unavailable()); },
+      { timeoutMs: 2000, now: () => reads++ === 1 ? elapsed : 0 });
+    try {
+      await run.controller.refresh();
+      assert.equal(run.last()?.diagnostic, 'IPC_TIMEOUT');
+      assert.equal(run.states.some(state => state.diagnostic === 'MAC_SOURCE_UNAVAILABLE'), false);
+      assert.equal(run.last()?.synthetic, false);
+      await run.controller.refresh();
+      assert.equal(run.last()?.diagnostic, 'MAC_SOURCE_UNAVAILABLE');
+      assert.equal(calls, 2);
+    } finally { run.controller.dispose(); }
+  }
+});
+void test('通常Mac応答はIPC期限直前なら未接続として表示する', async () => {
+  let reads = 0;
+  const run = capture(() => Promise.resolve(unavailable()),
+    { timeoutMs: 2000, now: () => reads++ === 0 ? 0 : 1999 });
+  try {
+    await run.controller.refresh();
+    assert.equal(run.last()?.diagnostic, 'MAC_SOURCE_UNAVAILABLE');
+    assert.equal(run.last()?.synthetic, false);
+  } finally { run.controller.dispose(); }
+});
