@@ -30,7 +30,33 @@ run = out / 'run_darwin.go'
 run.write_bytes(raw.replace(old, new))
 assert run.read_bytes().replace(new, old) == raw
 mapping = {str(source): str(run)}
-packages = {'ci_producer_transport.go': 'agenttransport', 'ci_producer_transport_test.go': 'agenttransport', 'ci_producer_factory.go': 'residentmac',
+
+# These additional compiler-only observations preserve every original operation.
+# Source-pin changes require independent review, never a permissive fallback.
+def native_overlay(relative, expected, substitutions):
+    source = BACKEND / relative
+    raw = source.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise SystemExit('Native diagnostic source changed: independent review required')
+    modified = raw
+    for old, new in substitutions:
+        if modified.count(old) != 1:
+            raise SystemExit('Native diagnostic seam is not unique')
+        modified = modified.replace(old, new)
+    restored = modified
+    for old, new in reversed(substitutions):
+        if restored.count(new) != 1:
+            raise SystemExit('Native diagnostic seam is not reversible')
+        restored = restored.replace(new, old)
+    if restored != raw:
+        raise SystemExit('Native diagnostic changed original bytes')
+    target = out / (source.parent.name + '_' + source.name)
+    target.write_bytes(modified)
+    mapping[str(source)] = str(target)
+native_overlay('internal/macagent/process.go', 'c89c609171746f0b643304428558d70deb77a3f2da53022229a47037e7a613b6', [(b'type process struct {', b'type process struct {\n\tciCapture ciNativeCapture // compiler-only bounded cached-state evidence'), (b'func (p *process) Terminate(ctx context.Context) error {\n\tp.term.Lock()\n\tdefer p.term.Unlock()', b'func (p *process) Terminate(ctx context.Context) (ciResult error) {\n\tp.term.Lock()\n\tdefer p.term.Unlock()\n\tdefer func() { if ciPanic := recover(); ciPanic != nil { p.ciCapture.last = CINativeSnapshot{}; panic(ciPanic) }; p.ciCaptureCleanup("terminate", ciResult) }()'), (b'func (p *process) Release(context.Context) error {\n\tp.term.Lock()\n\tdefer p.term.Unlock()', b'func (p *process) Release(_ context.Context) (ciResult error) {\n\tp.term.Lock()\n\tdefer p.term.Unlock()\n\tdefer func() { if ciPanic := recover(); ciPanic != nil { p.ciCapture.last = CINativeSnapshot{}; panic(ciPanic) }; p.ciCaptureCleanup("release", ciResult) }()')])
+native_overlay('internal/agentexec/run.go', '91794c8ef9a00cf2b33d30d25633ae3a0afebcb1ebd24975eb408f95c3835392', [(b'\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tc.terminated = terr == nil', b'\n\tif diagnostic, ok := proc.(interface { CIFinalCleanupDiagnostic(string, bool, bool) }); ok {\n\t\tdiagnostic.CIFinalCleanupDiagnostic(c.id, terr != nil, rerr != nil)\n\t}\n\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tc.terminated = terr == nil')])
+
+packages = {'ci_native_capture.go': 'macagent', 'ci_native_capture_test.go': 'macagent', 'ci_native_observation_test.go': 'residentpipe', 'ci_producer_transport.go': 'agenttransport', 'ci_producer_transport_test.go': 'agenttransport', 'ci_producer_factory.go': 'residentmac',
             'ci_producer_entry.go': 'residentpipe', 'ci_gateway_test.go': 'residentpipe',
             'ci_mcp_test.go': 'residentpipe', 'ci_child_test.go': 'residentpipe',
             'ci_connection_test.go': 'residentpipe', 'ci_observation_test.go': 'residentpipe', 'ci_diagnostic_test.go': 'residentpipe'}

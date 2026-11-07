@@ -9,6 +9,7 @@ import "testing"
 type ciDiagnostic struct {
 	stage, failure string
 	toolOperation  string
+	commandID      string
 	toolResult     map[string]string
 }
 
@@ -86,12 +87,14 @@ func (d *ciDiagnostic) beginTool(name string) {
 		d.toolOperation = "cancel"
 	}
 	d.toolResult = nil
+	d.commandID = ""
 }
 func (d *ciDiagnostic) observeTool(result map[string]any) {
 	value, ok := result["structuredContent"].(map[string]any)
 	if !ok {
 		return
 	}
+	d.commandID, _ = value["command_id"].(string)
 	d.toolResult = make(map[string]string)
 	for output, input := range map[string]string{"result_error": "error", "result_phase": "phase", "command_phase": "command_phase", "result_stop": "stop", "command_cleanup": "command_cleanup", "owner_cleanup": "owner_cleanup", "gateway_cleanup": "gateway_cleanup"} {
 		candidate, ok := value[input].(string)

@@ -76,7 +76,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Prepare reviewed source overlay
         run: python3 ci-producer/prepare_overlay.py
-      - name: Compile corresponding helper and both test binaries
+      - name: Compile corresponding helper and test binaries
         working-directory: backend
         env:
           GOPROXY: 'off'
@@ -89,6 +89,7 @@ jobs:
           go build "${flags[@]}" -o "$run_dir/producer-helper" ./cmd/ci-producer-helper
           go test -c "${flags[@]}" -o "$run_dir/connection.test" ./internal/residentpipe
           go test -c "${flags[@]}" -o "$run_dir/transport.test" ./internal/agenttransport
+          go test -c "${flags[@]}" -o "$run_dir/native.test" ./internal/macagent
           git diff --exit-code -- go.mod go.sum
           helper_sha=$(shasum -a 256 "$run_dir/producer-helper" | awk '{print $1}')
           {
@@ -161,6 +162,69 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
               output.write(summary + '\n\n')
           PYGATE
+          done
+      - name: Verify pure native capture and private evidence regressions
+        working-directory: backend
+        env:
+          CI_ACTUAL_PRODUCER: '0'
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: |
+          umask 077
+          for phase in unit-native-capture unit-native-evidence; do
+            if [ "$phase" = unit-native-capture ]; then
+              binary=native.test
+              package=github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent
+              selected='^TestCINativeCleanup(Capture|PanicPreserved)$'
+            else
+              binary=connection.test
+              package=github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe
+              selected='^TestCINativeEvidenceValidation$'
+            fi
+            # Cached/in-memory tests only. Never enable the native evidence sink.
+            code=0
+            "$CI_PRODUCER_RUN_DIR/$binary" "-test.run=$selected" -test.count=1 \
+              -test.timeout=0 -test.v=test2json > "$CI_PRODUCER_RUN_DIR/$phase.log" 2>&1 || code=$?
+            go tool test2json -p "$package" < "$CI_PRODUCER_RUN_DIR/$phase.log" \
+              > "$CI_PRODUCER_RUN_DIR/$phase.jsonl" 2> "$CI_PRODUCER_RUN_DIR/$phase-json.log"
+            python3 - "$phase" "$package" "$code" <<'PYNATIVE'
+          import collections
+          import json
+          import os
+          import pathlib
+          import sys
+
+          phase, package, code = sys.argv[1:]
+          if phase == 'unit-native-capture':
+              expected = {'TestCINativeCleanupCapture', 'TestCINativeCleanupPanicPreserved'}
+          elif phase == 'unit-native-evidence':
+              expected = {'TestCINativeEvidenceValidation'}
+          else:
+              raise SystemExit('UNEXPECTED_NATIVE_UNIT_PHASE')
+          try:
+              path = pathlib.Path(os.environ['CI_PRODUCER_RUN_DIR']) / (phase + '.jsonl')
+              rows = [json.loads(line) for line in path.read_text().splitlines()]
+              counts = collections.Counter((r.get('Test'), r.get('Action')) for r in rows)
+              valid = (
+                  int(code) == 0 and bool(rows)
+                  and all(r.get('Package') == package for r in rows)
+                  and {r.get('Test') for r in rows if r.get('Test')} == expected
+                  and all(counts[(test, 'run')] == counts[(test, 'pass')] == 1 for test in expected)
+                  and counts[(None, 'pass')] == 1
+                  and not any(r.get('Action') in ('fail', 'skip') for r in rows)
+              )
+          except (OSError, ValueError, KeyError, TypeError, AttributeError):
+              valid = False
+          if not valid:
+              raise SystemExit('EXACT_NATIVE_FIXTURE_TESTS_NOT_VERIFIED: ' + phase)
+          public = {'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
+                    'source_revision': os.environ['CI_PRODUCER_SOURCE_SHA'],
+                    'helper_sha256': os.environ['CI_PRODUCER_SHA256']}
+          summary = json.dumps(public, sort_keys=True)
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write(summary + '\n\n')
+          PYNATIVE
           done
       - name: Verify negative TLS, then the actual producer with original owners
         working-directory: backend
@@ -313,6 +377,7 @@ jobs:
               'producer-log-close',
               'producer-log-sync',
               'producer-log-write',
+              'producer-native-evidence-join',
               'producer-observation-deadline',
               'producer-operation',
               'producer-output-close',
@@ -346,6 +411,65 @@ jobs:
               'gateway_cleanup': {'unavailable', 'pending', 'confirmed', 'unknown'},
           }
           public.update({field: 'unavailable' for field in result_fields})
+          # Correlated original-call snapshots only; private identities are absent.
+          native_fields = {
+              'native_capture': {'matched', 'unavailable', 'invalid'},
+              'native_first_method': {'terminate', 'release', 'unavailable'},
+              'native_first_cause': {'none', 'terminal_unknown', 'group_observation', 'observer', 'signal', 'exit_unconfirmed', 'io_unconfirmed', 'not_terminated', 'close_uncertain', 'close_retry', 'other', 'unavailable'},
+              'native_first_group': {'not_attempted', 'owned_group_quiescent_snapshot', 'unknown_anchor', 'unknown_permission', 'unknown_query', 'unknown_truncated', 'unknown_anchor_missing', 'unknown_invalid_list', 'unknown_pid_pgid_changed', 'unknown_query_race', 'observed_live_member_unknown', 'unknown_multiple_members', 'unavailable'},
+              'native_first_io_stdin': {'pending', 'normal', 'expected_local_close', 'abnormal', 'unavailable'},
+              'native_first_io_stdout': {'pending', 'normal', 'expected_local_close', 'abnormal', 'unavailable'},
+              'native_first_io_stderr': {'pending', 'normal', 'expected_local_close', 'abnormal', 'unavailable'},
+              'native_first_group_attempted': {'yes', 'no', 'unavailable'},
+              'native_first_observer_error': {'yes', 'no', 'unavailable'},
+              'native_first_signal_error': {'yes', 'no', 'unavailable'},
+              'native_first_reap_lost': {'yes', 'no', 'unavailable'},
+              'native_first_reaped': {'yes', 'no', 'unavailable'},
+              'native_first_term_attempted': {'yes', 'no', 'unavailable'},
+              'native_first_kill_attempted': {'yes', 'no', 'unavailable'},
+              'native_first_io_errored': {'yes', 'no', 'unavailable'},
+              'native_first_terminal_unknown': {'yes', 'no', 'unavailable'},
+              'native_first_diag_signal_term': {'yes', 'no', 'unavailable'},
+              'native_first_diag_signal_kill': {'yes', 'no', 'unavailable'},
+              'native_first_diag_reap_lost': {'yes', 'no', 'unavailable'},
+              'native_first_diag_reap_timeout': {'yes', 'no', 'unavailable'},
+              'native_first_diag_io_join': {'yes', 'no', 'unavailable'},
+              'native_first_diag_stdin_close': {'yes', 'no', 'unavailable'},
+              'native_first_diag_stdout_close': {'yes', 'no', 'unavailable'},
+              'native_first_diag_stderr_close': {'yes', 'no', 'unavailable'},
+              'native_first_diag_observer_close': {'yes', 'no', 'unavailable'},
+              'native_first_diag_not_terminated': {'yes', 'no', 'unavailable'},
+              'native_final_method': {'terminate', 'release', 'unavailable'},
+              'native_final_cause': {'none', 'terminal_unknown', 'group_observation', 'observer', 'signal', 'exit_unconfirmed', 'io_unconfirmed', 'not_terminated', 'close_uncertain', 'close_retry', 'other', 'unavailable'},
+              'native_final_group': {'not_attempted', 'owned_group_quiescent_snapshot', 'unknown_anchor', 'unknown_permission', 'unknown_query', 'unknown_truncated', 'unknown_anchor_missing', 'unknown_invalid_list', 'unknown_pid_pgid_changed', 'unknown_query_race', 'observed_live_member_unknown', 'unknown_multiple_members', 'unavailable'},
+              'native_final_io_stdin': {'pending', 'normal', 'expected_local_close', 'abnormal', 'unavailable'},
+              'native_final_io_stdout': {'pending', 'normal', 'expected_local_close', 'abnormal', 'unavailable'},
+              'native_final_io_stderr': {'pending', 'normal', 'expected_local_close', 'abnormal', 'unavailable'},
+              'native_final_group_attempted': {'yes', 'no', 'unavailable'},
+              'native_final_observer_error': {'yes', 'no', 'unavailable'},
+              'native_final_signal_error': {'yes', 'no', 'unavailable'},
+              'native_final_reap_lost': {'yes', 'no', 'unavailable'},
+              'native_final_reaped': {'yes', 'no', 'unavailable'},
+              'native_final_term_attempted': {'yes', 'no', 'unavailable'},
+              'native_final_kill_attempted': {'yes', 'no', 'unavailable'},
+              'native_final_io_errored': {'yes', 'no', 'unavailable'},
+              'native_final_terminal_unknown': {'yes', 'no', 'unavailable'},
+              'native_final_diag_signal_term': {'yes', 'no', 'unavailable'},
+              'native_final_diag_signal_kill': {'yes', 'no', 'unavailable'},
+              'native_final_diag_reap_lost': {'yes', 'no', 'unavailable'},
+              'native_final_diag_reap_timeout': {'yes', 'no', 'unavailable'},
+              'native_final_diag_io_join': {'yes', 'no', 'unavailable'},
+              'native_final_diag_stdin_close': {'yes', 'no', 'unavailable'},
+              'native_final_diag_stdout_close': {'yes', 'no', 'unavailable'},
+              'native_final_diag_stderr_close': {'yes', 'no', 'unavailable'},
+              'native_final_diag_observer_close': {'yes', 'no', 'unavailable'},
+              'native_final_diag_not_terminated': {'yes', 'no', 'unavailable'},
+              'native_terminate_failed': {'yes', 'no', 'unavailable'},
+              'native_cleanup_failed': {'yes', 'no', 'unavailable'},
+              'native_first_diag_available': {'yes', 'no', 'unavailable'},
+              'native_final_diag_available': {'yes', 'no', 'unavailable'},
+          }
+          public.update({field: 'unavailable' for field in native_fields})
           outcome_path = pathlib.Path(os.environ['CI_PRODUCER_RESULT'])
           result = read_marker(outcome_path)
           stage, code = result.get('stage'), result.get('failure_code')
@@ -358,6 +482,21 @@ jobs:
                   candidate = result.get(field)
                   if isinstance(candidate, str) and candidate in allowed:
                       public[field] = candidate
+              capture = result.get('native_capture')
+              if isinstance(capture, str) and capture in native_fields['native_capture']:
+                  public['native_capture'] = capture
+              if public['native_capture'] == 'matched':
+                  for field, allowed in native_fields.items():
+                      # An absent recorder cannot establish even a negative flag.
+                      if (field.startswith('native_first_diag_') and field != 'native_first_diag_available'
+                              and result.get('native_first_diag_available') != 'yes'):
+                          continue
+                      if (field.startswith('native_final_diag_') and field != 'native_final_diag_available'
+                              and result.get('native_final_diag_available') != 'yes'):
+                          continue
+                      candidate = result.get(field)
+                      if isinstance(candidate, str) and candidate in allowed:
+                          public[field] = candidate
           joined = read_marker(outcome_path.with_suffix('.supervisor.json'))
           exit_code = joined.get('original_test_exit')
           if ((joined.get('outcome'), joined.get('cleanup')) in

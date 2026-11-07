@@ -117,7 +117,8 @@
     "work-output-limit",
     "work-phase-unknown",
     "work-registration-unobserved",
-    "work-start-uncertain"
+    "work-start-uncertain",
+    "producer-native-evidence-join"
   ],
   "semantics": "Producer outcome only; fixed phase and first failure-site classification. No raw errors or observed payload values. Passed outcome is stage complete and failure_code none. Missing enum fields before fixture acquisition remain absent, never inferred.",
   "result_fields": {
@@ -186,5 +187,333 @@
       "unknown"
     ]
   },
-  "result_semantics": "Failure-only fixed enum snapshot from most recent exact tool call. New call resets prior values; unknown/malformed/unlisted values become unavailable. Last observed state is not new cleanup proof."
+  "result_semantics": "Failure-only fixed enum snapshot from most recent exact tool call. New call resets prior values; unknown/malformed/unlisted values become unavailable. Last observed state is not new cleanup proof.",
+  "native_fields": {
+    "native_capture": [
+      "matched",
+      "unavailable",
+      "invalid"
+    ],
+    "native_first_method": [
+      "terminate",
+      "release",
+      "unavailable"
+    ],
+    "native_first_cause": [
+      "none",
+      "terminal_unknown",
+      "group_observation",
+      "observer",
+      "signal",
+      "exit_unconfirmed",
+      "io_unconfirmed",
+      "not_terminated",
+      "close_uncertain",
+      "close_retry",
+      "other",
+      "unavailable"
+    ],
+    "native_first_group": [
+      "not_attempted",
+      "owned_group_quiescent_snapshot",
+      "unknown_anchor",
+      "unknown_permission",
+      "unknown_query",
+      "unknown_truncated",
+      "unknown_anchor_missing",
+      "unknown_invalid_list",
+      "unknown_pid_pgid_changed",
+      "unknown_query_race",
+      "observed_live_member_unknown",
+      "unknown_multiple_members",
+      "unavailable"
+    ],
+    "native_first_io_stdin": [
+      "pending",
+      "normal",
+      "expected_local_close",
+      "abnormal",
+      "unavailable"
+    ],
+    "native_first_io_stdout": [
+      "pending",
+      "normal",
+      "expected_local_close",
+      "abnormal",
+      "unavailable"
+    ],
+    "native_first_io_stderr": [
+      "pending",
+      "normal",
+      "expected_local_close",
+      "abnormal",
+      "unavailable"
+    ],
+    "native_first_group_attempted": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_observer_error": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_signal_error": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_reap_lost": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_reaped": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_term_attempted": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_kill_attempted": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_io_errored": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_terminal_unknown": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_signal_term": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_signal_kill": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_reap_lost": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_reap_timeout": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_io_join": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_stdin_close": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_stdout_close": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_stderr_close": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_observer_close": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_not_terminated": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_method": [
+      "terminate",
+      "release",
+      "unavailable"
+    ],
+    "native_final_cause": [
+      "none",
+      "terminal_unknown",
+      "group_observation",
+      "observer",
+      "signal",
+      "exit_unconfirmed",
+      "io_unconfirmed",
+      "not_terminated",
+      "close_uncertain",
+      "close_retry",
+      "other",
+      "unavailable"
+    ],
+    "native_final_group": [
+      "not_attempted",
+      "owned_group_quiescent_snapshot",
+      "unknown_anchor",
+      "unknown_permission",
+      "unknown_query",
+      "unknown_truncated",
+      "unknown_anchor_missing",
+      "unknown_invalid_list",
+      "unknown_pid_pgid_changed",
+      "unknown_query_race",
+      "observed_live_member_unknown",
+      "unknown_multiple_members",
+      "unavailable"
+    ],
+    "native_final_io_stdin": [
+      "pending",
+      "normal",
+      "expected_local_close",
+      "abnormal",
+      "unavailable"
+    ],
+    "native_final_io_stdout": [
+      "pending",
+      "normal",
+      "expected_local_close",
+      "abnormal",
+      "unavailable"
+    ],
+    "native_final_io_stderr": [
+      "pending",
+      "normal",
+      "expected_local_close",
+      "abnormal",
+      "unavailable"
+    ],
+    "native_final_group_attempted": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_observer_error": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_signal_error": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_reap_lost": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_reaped": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_term_attempted": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_kill_attempted": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_io_errored": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_terminal_unknown": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_signal_term": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_signal_kill": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_reap_lost": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_reap_timeout": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_io_join": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_stdin_close": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_stdout_close": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_stderr_close": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_observer_close": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_not_terminated": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_terminate_failed": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_cleanup_failed": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_first_diag_available": [
+      "yes",
+      "no",
+      "unavailable"
+    ],
+    "native_final_diag_available": [
+      "yes",
+      "no",
+      "unavailable"
+    ]
+  },
+  "native_semantics": "Optional exact-command correlated first failed original cleanup-call and final original cleanup-call cached snapshots. Not fresh observations, cleanup proof, or authority to retry. Missing/invalid/drop means unavailable. Private command identity never published."
 }
