@@ -86,7 +86,9 @@ class MacPackageTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         result = fixture.run_cli()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        return fixture.output / 'DEPENDENCIES.json'
+        # macOS temp roots may use /var aliases; keep the package's strict
+        # ancestor rejection and pass the fixture's actual directory instead.
+        return (fixture.output / 'DEPENDENCIES.json').resolve()
 
     def test_collector_inventory_matches_without_proving_closure(self):
         inventory = self.collected_inventory()
@@ -127,7 +129,7 @@ class MacPackageTests(unittest.TestCase):
                 record = copy.deepcopy(original); change(record)
                 path.write_text(json.dumps(record), encoding='utf-8')
                 args = self.args(); args['dependency_inventory'] = path
-                with self.assertRaises(m.PackageError):
+                with self.assertRaisesRegex(m.PackageError, 'DEPENDENCY_(INVENTORY_MISMATCH|SOURCE_INVALID)'):
                     m.package(**args)
                 self.assertFalse(self.output.exists())
 
