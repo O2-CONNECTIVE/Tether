@@ -104,8 +104,17 @@ def emit(value):
     print('WRY_PRIOR_RED_QUALIFICATION_END', flush=True)
 
 
+def publish_qualification(temp, source, bind):
+    value = receipt(temp, source, bind)
+    emit(value)
+    write_new(temp / 'prior-red-qualification-published.json', {'qualificationSha256': digest(value), **bind})
+
+
 def admit(root, temp, source, bind):
     value = receipt(temp, source, bind)
+    published = source.load(temp / 'prior-red-qualification-published.json', 2048)
+    if canonical(published) != canonical({'qualificationSha256': digest(value), **bind}):
+        raise ValueError('QUALIFICATION_PUBLICATION_REJECTED')
     steps = source.safe_steps(source.load(temp / 'steps.json', 4096))
     if canonical(steps) != canonical([{'stage': name, 'exitCode': 0} for name in source.STEPS[:12]]):
         raise ValueError('SETUP_REJECTED')
@@ -161,7 +170,7 @@ def publish(root, temp, source, bind):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('qualify', 'admit', 'publish'))
+    parser.add_argument('mode', choices=('qualify', 'qualification', 'admit', 'publish'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--temp', type=Path, required=True)
     args = parser.parse_args(argv)
@@ -172,11 +181,11 @@ def main(argv=None):
                             ':(exclude)ui/tauri/src-tauri/Cargo.lock'], check=True, capture_output=True)
         if args.mode == 'qualify':
             value = qualify(args.root, bind)
-            emit(value)
             write_new(args.temp / 'prior-red-qualification.json', value)
         else:
             source = source_module(args.root)
-            if args.mode == 'admit': admit(args.root, args.temp, source, bind)
+            if args.mode == 'qualification': publish_qualification(args.temp, source, bind)
+            elif args.mode == 'admit': admit(args.root, args.temp, source, bind)
             else: return publish(args.root, args.temp, source, bind)
         return 0
     except (OSError, ValueError, TypeError, KeyError, ImportError, subprocess.SubprocessError):

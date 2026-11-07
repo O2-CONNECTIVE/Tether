@@ -38,6 +38,46 @@ class RecoveryTests(unittest.TestCase):
         for forbidden in ('workflow_dispatch', 'upload-artifact', 'strategy:', 'secrets.', 'actions/cache'):
             self.assertNotIn(forbidden, current)
 
+    def test_qualification_publication_is_outside_redirecting_wrapper(self):
+        wrapper = (ROOT / 'scripts/wry-probe-step.ps1').read_text()
+        self.assertIn('& $Body *> (Join-Path $env:WRY_TEMP "raw-$Name.log")', wrapper)
+        workflow = (ROOT / '.github/workflows/two-launch-repro.yml').read_text()
+        steps = workflow.split('      - name: ')
+        qualifier = next(step for step in steps if 'prior_red_recovery.py" qualify ' in step)
+        public = next(step for step in steps if 'prior_red_recovery.py" qualification ' in step)
+        native = next(step for step in steps if 'prior_red_recovery.py" admit ' in step)
+        self.assertIn('Invoke-ProbeStep python {', qualifier)
+        self.assertNotIn('Invoke-ProbeStep', public)
+        self.assertNotIn('if:', public)  # Normal success dependency, never always-on.
+        self.assertLess(steps.index(qualifier), steps.index(public))
+        self.assertLess(steps.index(public), steps.index(native))
+
+    def test_qualify_command_does_not_hide_a_canonical_publication(self):
+        output = io.StringIO()
+        with patch.object(control, 'binding', return_value=BIND), \
+             patch.object(control, 'qualify', return_value=control.expected(BIND)), \
+             patch.object(control.subprocess, 'run'), patch.object(control, 'write_new') as write, \
+             contextlib.redirect_stdout(output):
+            self.assertEqual(control.main(['qualify', '--root', 'source', '--temp', 'temp']), 0)
+        self.assertEqual(output.getvalue(), '')
+        write.assert_called_once_with(Path('temp/prior-red-qualification.json'), control.expected(BIND))
+
+    def test_publication_receipt_written_only_after_successful_emission(self):
+        value = control.expected(BIND)
+        source = SimpleNamespace(load=lambda *args: value)
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                control.publish_qualification(temp, source, BIND)
+            self.assertEqual(output.getvalue().splitlines()[1], control.canonical(value).decode())
+            marker = temp / 'prior-red-qualification-published.json'
+            self.assertEqual(marker.read_bytes(), control.canonical({'qualificationSha256': control.digest(value), **BIND}))
+            marker.unlink()
+            with patch.object(control, 'emit', side_effect=OSError('output unavailable')):
+                with self.assertRaises(OSError): control.publish_qualification(temp, source, BIND)
+            self.assertFalse(marker.exists())
+
     def test_wrong_source_tree_control_or_environment_rejected(self):
         env = {'CONTROL_HEAD': 'c'*40, 'WRY_PIN': control.SOURCE, 'WRY_TREE': control.TREE}
         for values in (['c'*40, control.SOURCE, control.TREE], ['d'*40],
@@ -122,12 +162,23 @@ class RecoveryTests(unittest.TestCase):
             steps = [{'stage': stage, 'exitCode': 0} for stage in stages[:12]]
             def load(path, *args):
                 return {'prior-red-qualification.json': control.expected(BIND), 'steps.json': steps, 'launch.json': launch,
+                        'prior-red-qualification-published.json': {'qualificationSha256': control.digest(control.expected(BIND)), **BIND},
                         'BUILD.json': {'schema': 1, 'variant': 'host-startup-diagnostic-1', 'sourceCommit': control.SOURCE,
                         'features': ['custom-protocol', 'startup-diagnostics'], 'profile': 'release',
                         'exeSha256': 'hash', 'distribution': False}}[path.name]
             source = SimpleNamespace(load=load, safe_steps=lambda x: x, STEPS=stages,
                      permissions=lambda *args: None, source_identity=lambda *args: dict(identity),
                      digest=lambda x: 'hash' if x == b'fixed' else 'changed', safe_meta=lambda x, **kw: x)
+            original_load = source.load
+            for publication in (None, {}, {**BIND, 'qualificationSha256': '0'*64}):
+                def load_publication(path, *args):
+                    if path.name == 'prior-red-qualification-published.json':
+                        if publication is None: raise FileNotFoundError()
+                        return publication
+                    return original_load(path, *args)
+                with patch.object(source, 'load', side_effect=load_publication):
+                    with self.assertRaises((OSError, ValueError)): control.admit(root, temp, source, BIND)
+                self.assertFalse((temp / 'prior-red-admitted.json').exists())
             control.admit(root, temp, source, BIND)
             with self.assertRaises(FileExistsError): control.admit(root, temp, source, BIND)
             (temp / 'prior-red-admitted.json').unlink()

@@ -104,6 +104,8 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw 'ADMISSION_FIXTURE' }
             } finally { $env:WRY_DELIVERY_ENABLED = '1'; $env:WRY_RECEIVER_ENABLED = '1' }
           }
+      - name: Publish closed qualification evidence before native
+        run: python -B "$env:GITHUB_WORKSPACE/.control/scripts/prior_red_recovery.py" qualification --root $env:WRY_SOURCE --temp $env:WRY_TEMP
       - name: Run original Host classification fixtures once
         working-directory: .source/ui/tauri
         run: |

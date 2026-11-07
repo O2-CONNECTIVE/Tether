@@ -141,7 +141,7 @@ class StagingTests(unittest.TestCase):
     def test_workflow_has_one_bounded_entry(self):
         text = (Path(__file__).resolve().parents[2] / '.github/workflows/two-launch-repro.yml').read_text()
         self.assertEqual(text.count('runs-on: windows-2022'), 1)
-        self.assertEqual(text.count('/scripts/prior_red_recovery.py'), 3)
+        self.assertEqual(text.count('/scripts/prior_red_recovery.py'), 4)
         for required in ('timeout-minutes: 35', "types: [synchronize]", 'github.run_attempt == 1',
                          'github.event.repository.private == false', 'github.event.pull_request.draft == true',
                          'github.event.pull_request.head.repo.full_name == github.repository',

@@ -3,7 +3,7 @@
 現在の入口は PR251 の旧失敗ソース回復です。以下の二回起動設計は過去段階の記録として残します。
 
 - ソースは `008073aa952959f2a4937e31fe10de6609c1627a`、tree は `4dcfba754be4a150a28d1dfb770c2ea65e3fcaa4`。PR248 の元の準備・全 native assertions・15000ms・driver・build・cleanup・12 節 publisher を使います。
-- 元ソースに実在する 31 試験を一度実行し、開始・成功・skip・失敗の閉じた資格 receipt を native 前に公開します。41 条件の pump 資格や 13 節目を生成しません。
+- 元ソースに実在する 31 試験を一度実行します。開始・成功・skip・失敗の閉じた資格 receipt は、raw 出力を捕捉する元の wrapper の外で、成功時だけ別 step から native 前に公開します。公開完了後に書く source / control / hash 付き receipt がなければ起動を拒否します。41 条件の pump 資格や 13 節目を生成しません。
 - fresh VM 一 job、一回だけです。成功・失敗・不明のいずれでも追加起動しません。前回の二回起動 controller と readiness snapshot は呼びません。
 - before は `8e5d95c1a09cd84523c6dc2bc4b9f7481d7643f3`。空でない after が新 head と一致する PR251 synchronize / attempt 1 / draft / 同一公開 repository / 固定 head・base だけを許可します。35 分上限、手動 dispatch・rerun・artifact・cache・secret なしです。
 - これは永続的な exactly-once ledger ではありません。before head への reset / replay は禁止します。新 head の独立レビューと公開前の全 event run 照合が必要です。
