@@ -68,12 +68,12 @@ Windowsの一時guest経路には依存していません。
   - NOTE_EXIT を含まない one-shot event や観測失敗では、終了状態を推測しません。`Wait`はerrorを返し、自然終了として報告しません。
 - **回収は1か所だけ**: `stopAndReap`だけが回収します。下記の限定 snapshot 経路以外は、次の順に進みます。
   1. groupへTERMを送る
-  2. `TermGrace`まで、stdioのEOFを待つ
+  2. 構成済みの `TermGrace` を待つ。ただし元の caller context の取消・期限で待機を打ち切る。stdio の早い EOF では短縮しない
   3. 同じgroupへKILLを送る（ここまで回収前）
   4. `wait4(WNOHANG)`で回収する
 
   限定 snapshot 経路を使わない自然終了でもこの順序を通り、stdio を閉じた同じ group にも回収前に KILL を送ります。各 member の終了そのものを証明する保証ではありません。
-  ただし、既にstdioを閉じていたmemberには、TERMの直後にKILLが届くことがあります。
+  caller context が先に終了した場合は、従来どおり既存の nonblocking snapshot / KILL 判定へ進みます。期限を延長したり、新しい cleanup 予算を作ったりしません。
 - **自然終了のstatus**: 停止signalより前に観測した終了だけを、自然な結果として`Wait`が返します。
   有効な NOTE_EXIT 通知に status がない場合は、groupをsweepした後の回収で得たstatusを返します。終了後に送ったKILLでは、そのstatusは変わりません。
   停止signalの後に観測した終了は、自然な結果として報告しません。
@@ -223,3 +223,27 @@ concurrent stops. Existing same-owner retry after successful signals but an
 unreaped live child is preserved; denied/partial group evidence stays sticky,
 terminal disposition forbids reuse, and signal error evidence cannot be cleared
 or rescued by the new snapshot path.
+
+### TERM grace before the first group decision
+
+The configured `TermGrace` now runs independently of stdio EOF, starting after
+the original TERM attempt and ending when that duration or the original caller
+context ends. It is not a second interval started after EOF. Early EOF no longer
+advances the first pre-KILL snapshot or the existing live-child KILL fallback.
+The owner does not hold its process mutex during this wait; `sweep` still
+serializes the original stop. The known natural-exit snapshot path is unchanged.
+
+This corrects decision timing, not the meaning of cleanup evidence. Neither
+elapsed grace, context expiry, EOF nor successful TERM proves member absence.
+A shorter caller budget may still reach a conservative unknown result. The same
+independent exit evidence, one complete anchor-only snapshot, sole same-owner
+reap, normal owned I/O completion and successful release remain necessary for
+the snapshot path. An attempted negative snapshot remains sticky with no new
+query, signal-based rescue or replacement owner.
+
+Virtual-time regressions use only the existing fake OS and in-memory pipes.
+They check already-closed and delayed EOF, original cancellation/deadline
+including timer coincidence, live-child KILL fallback, immediate natural cleanup
+and retained unknown ownership. They do not establish that an observed extra
+member was a zombie or that waiting will make every native cleanup succeed.
+
