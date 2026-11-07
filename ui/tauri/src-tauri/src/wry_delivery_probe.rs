@@ -434,6 +434,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn receiver_association_requires_closed_old_window() {
+        let p = Probe::memory(); p.begin(1); p.receiver.observe(0, 1);
+        assert!(!p.receiver_snapshot(true, true).contains("\"relation\":\"original-wait\""));
+        let p = Probe::memory(); let token = p.begin(1); p.receiver.observe(0, 1);
+        let _ = p.snapshot(true, true);
+        let before = p.receiver_snapshot(true, true);
+        assert!(before.contains("\"relation\":\"original-wait\""));
+        p.event(token, 10, 32); // Post-seal old event cannot mutate association.
+        assert_eq!(before, p.receiver_snapshot(true, true));
+        let p = Probe::memory(); p.begin(1); p.receiver.observe(0, 1);
+        p.in_flight.store(1, SeqCst); let _ = p.snapshot(true, true);
+        assert!(!p.receiver_snapshot(true, true).contains("\"relation\":\"original-wait\""));
+    }
+
+    #[test]
     fn receiver_wrong_token_and_other_thread_are_unbound() {
         // Isolated process fixture registration; no mutation of any channel ownership.
         let p = Probe::memory();

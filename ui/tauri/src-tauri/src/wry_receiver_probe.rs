@@ -83,6 +83,20 @@ mod tests {
         assert_eq!(s, p.snapshot(true, true, || [false; 2]));
     }
     #[test]
+    fn seal_excludes_late_entries_and_marks_preexisting_flight() {
+        let p = Summary::default(); p.observe(0, 1);
+        let s = p.snapshot(true, true, || { p.observe(0, 2); [false; 2] });
+        assert!(s.contains("\"disconnectedCapped\":0"));
+        assert!(s.contains("\"lossDetected\":false"));
+        let p = Summary::default(); p.observe(0, 1);
+        p.in_flight.store(1, SeqCst); // Entered before seal, before any payload write.
+        let s = p.snapshot(true, true, || [false; 2]);
+        assert!(s.contains("\"sealed\":false"));
+        assert!(s.contains("\"lossDetected\":true"));
+        assert!(!s.contains("\"relation\":\"original-wait\""));
+    }
+
+    #[test]
     fn loss_partial_unknown() {
         let p = Summary::default();
         p.observe(2, 1);
