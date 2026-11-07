@@ -35,3 +35,13 @@ current-threadの[InSendMessageEx](https://learn.microsoft.com/en-us/windows/win
 最終source/controlのStandards／Spec独立review、required preflight、public標準runnerとremote重複確認の後、一つのfresh windows-2022 job、attempt1、native最大1だけ。元request/15000ms／profile／ownership／normal-close／cleanupを保持する。preflight不合格はnative0で停止。欠測／未知／identity／cleanup不確実、または一回終了で停止し、rerun/cap拡張しない。
 
 source/vendor/EXE/archive/driverの実hashと完全な固定schema記録のみをcontrolled log/summaryへ保持する。artifact/cache/app binary転送、raw paths/commands/messages/URLs/stack/memory、secret、追加credentials/security/billing、larger runnerなし。診断sourceは元失敗binaryと同一ではない。#240、main#239失敗、#240→#241→#243／Mac受入／a4/a5/task-7の境界は維持する。
+
+## publication前のsource fetch gate
+
+#246はreview済みsourceがcontrolのsiblingであり、source refをpushに含めなかったためcheckoutで停止した。nativeは0で、過去の失敗を置き換えない。source payloadは`bf33feb738688f72d8ea6e23ff9171d35a5bb564`／tree `29cd44b55f1390de3dd0b8bcb5f5af216a2f1ee6`のまま固定する。
+
+新controlをpublishする前に`python3 -B scripts/check_wry_delivery_fetch.py`を実行する。guardはworkflowのsource SHA/tree/refと固定pinを照合し、空の一時repositoryから同じHTTPS remote・full SHA・depth1・no-tags・no-submodulesでfetch／checkoutする。既存object store／alternates／Git credential/configは使わない。匿名public readは同repositoryのcontents read範囲であり、消滅済みのhosted GITHUB_TOKENを再利用したとは主張しない。sourceを含むrefの存在やlocal cloneだけでは代用しない。省略sibling→fetch失敗、publish後→正確なcommit/tree成功を独立bare-remote回帰で検査する。
+
+guard成功・重複runなし・最終control独立review後に、別のopened-only／attempt1 controlで新たなfresh runner一つ・native最大1だけを認める。元#246はrerunしない。source fetchの修正も実SDK配送やtimeout根因を証明しない。
+
+fetch gateのsubprocessは空の一時HOME／USERPROFILEを使い、netrc・askpassの環境overrideも除く。Git設定とcredential helperだけでなくlibcurlの暗黙のhost認証入力を除外し、匿名public readの記録と一致させる。fixtureは合成netrcと継承環境を渡し、実fetchを呼ぶ境界で隔離を検査する。実個人の認証情報は読み取らない。
