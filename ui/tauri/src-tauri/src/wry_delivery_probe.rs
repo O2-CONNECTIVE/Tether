@@ -1,6 +1,8 @@
 //! Fixed diagnostic storage. No path, payload, raw token, thread ID, or HRESULT leaves it.
 #[path = "wry_receiver_probe.rs"]
 mod receiver;
+#[path = "wry_post_verdict_probe.rs"]
+mod post_verdict;
 use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering::SeqCst},
@@ -137,6 +139,7 @@ struct Scope {
 }
 #[derive(Default)]
 struct Sample {
+    anchor_seq_observed: AtomicU8,
     count: AtomicU8,
     ready: AtomicBool,
     seq: AtomicU8,
@@ -148,6 +151,7 @@ struct Sample {
     sent_context: AtomicU8,
 }
 pub(super) struct Probe {
+    anchor: post_verdict::Anchor,
     receiver: receiver::Summary,
     start: Instant,
     trace_thread: u64,
@@ -177,6 +181,7 @@ fn once(counter: &AtomicU8) -> bool {
 impl Probe {
     pub(super) fn memory() -> Arc<Self> {
         Arc::new(Self {
+            anchor: post_verdict::Anchor::default(),
             receiver: receiver::Summary::default(),
             start: Instant::now(),
             trace_thread: platform::thread(),
@@ -291,13 +296,22 @@ impl Probe {
                 return;
             }
         };
+        // Capture once inside synchronous pre-send event5, before reservation.
+        // Never infer this from the later serialization or send-success hook.
+        let anchor_seq = if token == 2 && code == 5 {
+            self.anchor.ready_seq.load(SeqCst)
+        } else { 0 };
+        #[cfg(test)]
+        self.anchor.test_after_capture();
         let sample = &self.samples[index * 3 + sample_index];
         if !once(&sample.count) {
             self.loss.store(true, SeqCst);
             return;
         }
         let seq = self.sequence.load(SeqCst);
-        if seq >= 6
+        #[cfg(test)]
+        self.anchor.test_before_sequence_cas();
+        if seq >= 7
             || self
                 .sequence
                 .compare_exchange(seq, seq + 1, SeqCst, SeqCst)
@@ -312,6 +326,7 @@ impl Probe {
             return;
         }
         let bound = !uncertain && !slot.ambiguous.load(SeqCst);
+        sample.anchor_seq_observed.store(anchor_seq, SeqCst);
         sample.seq.store(seq + 1, SeqCst);
         sample.elapsed.store(elapsed as u64, SeqCst);
         sample
@@ -372,7 +387,7 @@ impl Probe {
             let relation = if bound { ["unknown", "same-creation", "original-wait"][usize::from(s.relation.load(SeqCst))] } else { "unknown" };
             let sent_context = if bound { ["unknown", "sent-context", "not-sent-context"][usize::from(s.sent_context.load(SeqCst))] } else { "unknown" };
             let (seq, elapsed, on_thread, success) = if observed {
-                (s.seq.load(SeqCst).to_string(), s.elapsed.load(SeqCst).to_string(), s.on_scope_thread.load(SeqCst).to_string(),
+                (self.anchor.project(s.seq.load(SeqCst)).to_string(), s.elapsed.load(SeqCst).to_string(), s.on_scope_thread.load(SeqCst).to_string(),
                  match s.success.load(SeqCst) { 1 => "false", 2 => "true", _ => "null" })
             } else { ("null".into(), "null".into(), "null".into(), "null") };
             format!("{{\"slot\":\"{}\",\"event\":\"{}\",\"state\":\"{}\",\"seq\":{},\"elapsedUs\":{},\"phase\":\"{}\",\"relation\":\"{}\",\"sentContext\":\"{}\",\"onScopeThread\":{},\"sendSucceeded\":{}}}",

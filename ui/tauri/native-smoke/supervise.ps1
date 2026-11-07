@@ -1,11 +1,12 @@
 param([Parameter(Mandatory)][string]$ToolsDirectory, [Parameter(Mandatory)][string]$OutputDirectory, [string]$ApplicationPath,
-    [switch]$StartupDiagnostic, [string]$StartupManifest, [string]$StartupSource)
+    [switch]$StartupDiagnostic, [string]$StartupManifest, [string]$StartupSource, [string]$PostVerdictManifest)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . "$PSScriptRoot/processes.ps1"
 . "$PSScriptRoot/close-observation.ps1"
 . "$PSScriptRoot/startup-observation.ps1"
 . "$PSScriptRoot/app-startup-observation.ps1"
+. "$PSScriptRoot/post-verdict.ps1"
 New-Item -ItemType Directory -Path $OutputDirectory -ErrorAction Stop | Out-Null
 $appPath = (Resolve-Path $(if ($ApplicationPath) { $ApplicationPath } else { "$PSScriptRoot/../src-tauri/target/debug/rescue-host-shell.exe" })).Path
 $edgePath = (Resolve-Path "$ToolsDirectory/edge/msedgedriver.exe").Path
@@ -30,8 +31,10 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'NATIVE_APP_DIAGNOSTIC_BUILD_REJECTED' }
         $appTraceDirectory = Join-Path $ToolsDirectory 'app-startup'
         New-Item -ItemType Directory -Path $appTraceDirectory -ErrorAction Stop | Out-Null
+        if ($PostVerdictManifest) { Initialize-PostVerdictManifest $PostVerdictManifest $appTraceDirectory $appPath }
         $env:RESCUE_HOST_STARTUP_TRACE_DIR = $appTraceDirectory
     }
+    if ($PostVerdictManifest -and -not $StartupDiagnostic) { throw 'NATIVE_POST_VERDICT_REQUIRES_DIAGNOSTIC' }
     $before = Get-Snapshot
     if (@($before | Where-Object ExecutablePath -eq $appPath).Count -ne 0) { throw 'NATIVE_PREEXISTING_APP_REJECTED' }
     if (@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -in @(4444, 4445)).Count -ne 0) { throw 'NATIVE_PORT_ALREADY_IN_USE' }
@@ -149,23 +152,35 @@ try {
         finally { $report.startupFailureQueryMs = $startupQuery.ElapsedMilliseconds }
     }
 } finally {
-    if ($null -ne $appTraceDirectory -and -not $appTraceCollected) {
-        $report.appStartupFileClosed = Wait-AppStartupTrace $appTraceDirectory $diagnosticBudget
-    }
-    # 合否確定後の診断cutoff。新requestは送らず、自己所有workerを最大1秒だけ待つ。
     try {
-        [IO.File]::WriteAllText((Join-Path $ToolsDirectory 'driver-stage.finish'), 'finish')
-        if (-not $diagnosticBudget.IsRunning) { $diagnosticBudget.Start() }
-        do {
-            if (Test-Path (Join-Path $ToolsDirectory 'driver-stage.jsonl')) { break }
-            if ($diagnosticBudget.ElapsedMilliseconds -ge 1000) { break }
-            Start-Sleep -Milliseconds 20
-        } while ($diagnosticBudget.ElapsedMilliseconds -lt 1000)
-        $report.driverStageFileObserved = Test-Path (Join-Path $ToolsDirectory 'driver-stage.jsonl')
-    } catch { Write-Output 'NATIVE_STAGE_FINISH_FAILED' }
-    # 通常closeの合否確定後にのみcleanupし、元のFAILと記録を保持する。
-    try { Complete-NativeCleanup $nodeProcess $driverProcess $children $app $childHandles $report $OutputDirectory $childWaitStartedUtc $env:NATIVE_PROFILE }
-    finally { $env:RESCUE_DRIVER_TRACE = $previousDriverTrace; $env:RESCUE_HOST_STARTUP_TRACE_DIR = $previousAppTrace }
+        if ($PostVerdictManifest -and $null -ne $appTraceDirectory -and $report.nativeTestsPassed -eq 0) {
+            Invoke-PostVerdictObservation $nodeProcess $report $OutputDirectory $appTraceDirectory
+        }
+    } finally {
+        try {
+            try {
+                if ($null -ne $appTraceDirectory -and -not $appTraceCollected) {
+                    $report.appStartupFileClosed = Wait-AppStartupTrace $appTraceDirectory $diagnosticBudget
+                }
+            } finally {
+                # 合否確定後の診断cutoff。新requestは送らず、自己所有workerを最大1秒だけ待つ。
+                try {
+                    [IO.File]::WriteAllText((Join-Path $ToolsDirectory 'driver-stage.finish'), 'finish')
+                    if (-not $diagnosticBudget.IsRunning) { $diagnosticBudget.Start() }
+                    do {
+                        if (Test-Path (Join-Path $ToolsDirectory 'driver-stage.jsonl')) { break }
+                        if ($diagnosticBudget.ElapsedMilliseconds -ge 1000) { break }
+                        Start-Sleep -Milliseconds 20
+                    } while ($diagnosticBudget.ElapsedMilliseconds -lt 1000)
+                    $report.driverStageFileObserved = Test-Path (Join-Path $ToolsDirectory 'driver-stage.jsonl')
+                } catch { Write-Output 'NATIVE_STAGE_FINISH_FAILED' }
+            }
+        } finally {
+            # 通常closeの合否確定後にのみcleanupし、元のFAILと記録を保持する。
+            try { Complete-NativeCleanup $nodeProcess $driverProcess $children $app $childHandles $report $OutputDirectory $childWaitStartedUtc $env:NATIVE_PROFILE }
+            finally { $env:RESCUE_DRIVER_TRACE = $previousDriverTrace; $env:RESCUE_HOST_STARTUP_TRACE_DIR = $previousAppTrace }
+        }
+    }
     if ($phase -eq 'webview-and-ipc' -and $report.nativeTestsPassed -eq 0) {
         try {
             $afterSnapshot = Get-Snapshot
