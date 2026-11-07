@@ -122,7 +122,7 @@ func toolList() []any {
 		}
 		list = append(list, map[string]any{
 			"name": t.name, "title": t.title, "description": t.description,
-			"inputSchema": map[string]any{"type": "object", "properties": t.properties, "required": required, "additionalProperties": false},
+			"inputSchema":  map[string]any{"type": "object", "properties": t.properties, "required": required, "additionalProperties": false},
 			"outputSchema": outputSchema(t.name),
 		})
 	}
