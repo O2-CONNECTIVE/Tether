@@ -69,3 +69,7 @@ healthy 3回でも timeout の原因/解決を証明しません。既存製品 
 実 Windows ABI の実行や timeout 再現ではありません。既存 test_wry*.py の有限 fixture と actionlint を別判定します。
 Mac で Host GUI、native session、新規 toolchain install は行いません。
 公開前に最終 control SHA の独立レビューと実行承認を確認し、初回 timeout または3 healthyまでを一つの有限実験として終端監査します。
+
+CONTROL の bounded fixture も各 Windows job の python stage 内で実行し、失敗時は native 前に停止します。
+control checkout は depth 1 のままです。不変 source input は HEAD blob の固定 SHA256 と実 checkout の厳密な LF/CRLF 表現を照合し、source commit/tree は別の固定 source checkout で照合します。
+source publisher が完全な bounded record を出力した後で summary 書込みに失敗した場合、同じ canonical/hash/size 検証を通った record だけを保全して停止します。未完・不正な出力や例外本文は公開しません。

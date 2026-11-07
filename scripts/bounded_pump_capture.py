@@ -109,8 +109,14 @@ def decision(body, passed, ordinal):
 def finish(root, temp, source):
     # Capture only the unchanged source publisher's finite safe projection, not raw logs.
     output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        passed = source.publish(root, temp, delivery=True)
+    passed = False
+    try:
+        with contextlib.redirect_stdout(output):
+            passed = source.publish(root, temp, delivery=True)
+    except Exception:
+        # A completed safe record may precede a summary-write failure. Retain it
+        # only through the same bounded canonical validation below; never continue.
+        passed = False
     text = output.getvalue()
     lines = text.splitlines()
     if (len(text.encode()) > 34000 or len(lines) != 4 or lines[0] != 'WRY_DIAGNOSTIC_RECORD_BEGIN'

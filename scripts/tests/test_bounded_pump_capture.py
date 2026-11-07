@@ -1,5 +1,6 @@
 """Offline control regressions. Never starts Host or a native session."""
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -163,6 +164,34 @@ class BoundedCaptureTests(unittest.TestCase):
             for section in body['files'].values():
                 self.assertEqual(section['sha256'],gate.digest(section['data']))
 
+    def test_real_source_summary_failure_preserves_complete_safe_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp=Path(directory); display=io.StringIO(); out=temp/'output'; out.write_text('')
+            summary=temp/'PRIVATE_SENTINEL'; summary.mkdir()
+            with patch.dict(os.environ, {'WRY_DELIVERY_ENABLED':'1','WRY_RECEIVER_ENABLED':'1',
+                                         'WRY_PUMP_ENABLED':'1','GITHUB_STEP_SUMMARY':str(summary),
+                                         'GITHUB_OUTPUT':str(out)}), contextlib.redirect_stdout(display):
+                self.assertEqual(gate.main(['finish','--root',str(ROOT),'--temp',str(temp)]),1)
+            text=display.getvalue(); lines=text.splitlines()
+            self.assertIn('WRY_DIAGNOSTIC_RECORD_BEGIN',text)
+            body=json.loads(lines[1])
+            self.assertEqual(len(body['files']),13)
+            self.assertEqual(lines[2],'WRY_DIAGNOSTIC_RECORD_SHA256='+gate.digest(body))
+            self.assertIn('"outcome":"stop"',text)
+            self.assertNotIn('PRIVATE_SENTINEL',text)
+            self.assertEqual(out.read_text(),'')
+
+    def test_publisher_exception_never_releases_malformed_partial_bytes(self):
+        for text in ('PRIVATE_SENTINEL', 'WRY_DIAGNOSTIC_RECORD_BEGIN\nPRIVATE_SENTINEL\n',
+                     'WRY_DIAGNOSTIC_RECORD_BEGIN\n{}\nWRY_DIAGNOSTIC_RECORD_SHA256=bad\nWRY_DIAGNOSTIC_RECORD_END\n'):
+            def publish(*args, **kwargs):
+                print(text,end='')
+                raise OSError('PRIVATE_SENTINEL')
+            display=io.StringIO()
+            with patch.object(gate,'source_module',return_value=SimpleNamespace(publish=publish)), contextlib.redirect_stdout(display):
+                self.assertEqual(gate.main(['finish','--root','unused','--temp','unused']),1)
+            self.assertEqual(display.getvalue(),'{"code":"BOUNDED_CAPTURE_REJECTED"}\n')
+
     def test_bad_cli_arguments_never_echo_arbitrary_values(self):
         for args in ([], ['PRIVATE_SENTINEL'], ['admit','--root','PRIVATE_SENTINEL'],
                      ['admit','--root','x','--temp','y','--PRIVATE_SENTINEL']):
@@ -189,12 +218,24 @@ class BoundedCaptureTests(unittest.TestCase):
         for block in workflow.split('    runs-on: windows-2022')[1:]:
             self.assertLess(block.index(' qualification --root'),block.index('id: native'))
             self.assertLess(block.index(' admit --root'),block.index('Invoke-ProbeStep native'))
+            self.assertLess(block.index('-p test_bounded_pump_capture.py'),block.index(' qualification --root'))
+            self.assertIn("if ($LASTEXITCODE -ne 0) { throw 'BOUNDED_CAPTURE_GATE_FIXTURE' }",block)
         for forbidden in ('upload-artifact','actions/cache','workflow_dispatch','workflow_call','pull_request_target',
                           'continue-on-error','secrets.','strategy:','matrix:','workflow_run','schedule:'):
             self.assertNotIn(forbidden,workflow)
-        baseline='b924553f114dc2dfbb37d6098af585a598d5e7d1'
-        for file in ('scripts/wry_probe_ci.py','scripts/wry-probe-step.ps1','docs/windows-pump-bracket-probe.md'):
-            previous=subprocess.check_output(['git','-C',str(ROOT),'show',baseline+':'+file])
-            self.assertEqual(previous,(ROOT/file).read_bytes())
-        tree=subprocess.check_output(['git','-C',str(ROOT),'rev-parse',gate.SOURCE+'^{tree}']).decode().strip()
+        # HEAD blobs exist in a depth-one control checkout. Their exact pinned
+        # hashes prove unchanged source inputs without depending on any ancestor.
+        pinned = {'scripts/wry_probe_ci.py': '87c1a038954e226f4589d1d54bc74caf60f84f05d4fa7adf89d9f8bf615f5a45', 'scripts/wry-probe-step.ps1': '0c1befcf326a16e813a1c80e04061cdcb3648a0499390a6610eb94a6d6ee0adc', 'docs/windows-pump-bracket-probe.md': '8aa70676a7351d925a772772ae8e0fbd4d90e4a2b298a4034c7ae59218cfeaf2'}
+        for file, expected in pinned.items():
+            blob=subprocess.check_output(['git','-C',str(ROOT),'show','HEAD:'+file])
+            self.assertEqual(hashlib.sha256(blob).hexdigest(),expected)
+            disk=(ROOT/file).read_bytes()
+            self.assertIn(disk,(blob,blob.replace(b'\n',b'\r\n')))
+        # Hosted jobs verify the independently checked-out source; no full-history
+        # fetch or source object in .control is required.
+        source_root=Path(os.environ.get('WRY_SOURCE',str(ROOT)))
+        tree=subprocess.check_output(['git','-C',str(source_root),'rev-parse',gate.SOURCE+'^{tree}']).decode().strip()
         self.assertEqual(tree,gate.TREE)
+        if 'WRY_SOURCE' in os.environ:
+            head=subprocess.check_output(['git','-C',str(source_root),'rev-parse','HEAD']).decode().strip()
+            self.assertEqual(head,gate.SOURCE)

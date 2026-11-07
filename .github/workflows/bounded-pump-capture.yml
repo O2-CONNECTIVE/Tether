@@ -104,6 +104,8 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw 'ADMISSION_FIXTURE' }
               python -B -m unittest discover -s "$env:GITHUB_WORKSPACE/.control/scripts/tests" -p test_wry_pump_qualification.py -v
               if ($LASTEXITCODE -ne 0) { throw 'QUALIFICATION_GATE_FIXTURE' }
+              python -B -m unittest discover -s "$env:GITHUB_WORKSPACE/.control/scripts/tests" -p test_bounded_pump_capture.py -v
+              if ($LASTEXITCODE -ne 0) { throw 'BOUNDED_CAPTURE_GATE_FIXTURE' }
             } finally { $env:WRY_DELIVERY_ENABLED = '1'; $env:WRY_RECEIVER_ENABLED = '1'; $env:WRY_PUMP_ENABLED = '1' }
           }
       - name: Publish closed qualification evidence before native
@@ -310,6 +312,8 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw 'ADMISSION_FIXTURE' }
               python -B -m unittest discover -s "$env:GITHUB_WORKSPACE/.control/scripts/tests" -p test_wry_pump_qualification.py -v
               if ($LASTEXITCODE -ne 0) { throw 'QUALIFICATION_GATE_FIXTURE' }
+              python -B -m unittest discover -s "$env:GITHUB_WORKSPACE/.control/scripts/tests" -p test_bounded_pump_capture.py -v
+              if ($LASTEXITCODE -ne 0) { throw 'BOUNDED_CAPTURE_GATE_FIXTURE' }
             } finally { $env:WRY_DELIVERY_ENABLED = '1'; $env:WRY_RECEIVER_ENABLED = '1'; $env:WRY_PUMP_ENABLED = '1' }
           }
       - name: Publish closed qualification evidence before native
@@ -516,6 +520,8 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw 'ADMISSION_FIXTURE' }
               python -B -m unittest discover -s "$env:GITHUB_WORKSPACE/.control/scripts/tests" -p test_wry_pump_qualification.py -v
               if ($LASTEXITCODE -ne 0) { throw 'QUALIFICATION_GATE_FIXTURE' }
+              python -B -m unittest discover -s "$env:GITHUB_WORKSPACE/.control/scripts/tests" -p test_bounded_pump_capture.py -v
+              if ($LASTEXITCODE -ne 0) { throw 'BOUNDED_CAPTURE_GATE_FIXTURE' }
             } finally { $env:WRY_DELIVERY_ENABLED = '1'; $env:WRY_RECEIVER_ENABLED = '1'; $env:WRY_PUMP_ENABLED = '1' }
           }
       - name: Publish closed qualification evidence before native
