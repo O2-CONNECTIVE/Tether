@@ -79,7 +79,7 @@ source/fake試験は未構成helperの拒否と所有権・期限・停止join�
 SCMの登録や起動、実機の権限分離を検証したとは扱いません。
 localcontrolは共通policy.go/boundary.go/wire.goと、go env GOOSに対応する明示実装だけを許可します。
 Linux/macOSはnative_other.go、Windowsはnative_windows.goとio_windows.goを選び、未知GOOSは拒否します。公開Openの接続ゲートは閉鎖中で、CIは実pipeや実token/ACL検証を行いません。
-現在のfixtureは`_test.go`だけで、特別なfixture用build tagはありません。
+通常laneのfixtureは`_test.go`だけです。実TCP/TLSの接続試験だけは、[MCP loopback CI](mcp-loopback-ci.md)の`ci_mcp_loopback` tagで明示実行し、既存offline suiteには含めません。
 OS別のテストファイル制約を尊重し、fixtureや注入adapterを通常buildへ混ぜません。
 runbackendはruntime.goだけ、childjobは共通child.go/plan.go/fixed_command.go/prepared.go/inspection.go/guest_token.go/guest_token_policy.go/guest_token_buffer.goと、非Windowsのnative_other.go、
 Windowsのnative_windows.go/artifact_windows.go/prepared_windows.goだけを許可します。
