@@ -97,7 +97,7 @@ def read_record(path: Path, collection):
             or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
             or getattr(info, 'st_file_attributes', 0) & 1024 or info.st_size > MAX_BYTES):
         raise ValueError('POST_VERDICT_COLLECTION_REJECTED')
-    data = path.read_bytes()
+    with path.open('rb') as stream: data = stream.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES: raise ValueError('POST_VERDICT_COLLECTION_REJECTED')
     try:
         text = data.decode('utf-8'); value = json.loads(text)

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import unittest
+from unittest.mock import patch
 
 import test_wry_delivery as existing
 ROOT = existing.ROOT
@@ -107,6 +108,21 @@ class AnchorTests(unittest.TestCase):
         path = self.base.temp / 'bounded-companion.json'
         for bad in (data[:-1], data + b'\n', b'{"schema":1,' + data[1:], data + b' ' * record.MAX_BYTES):
             path.write_bytes(bad)
+            with self.assertRaises(ValueError): record.read_record(path, {'appStartupFileClosed': True})
+        path.write_bytes(data)
+        # Actual file grows after metadata was captured. Instrument the real
+        # opened stream to require a max+1 read rather than unbounded allocation.
+        metadata = path.lstat()
+        path.write_bytes(data + b' ' * record.MAX_BYTES)
+        actual = path.open('rb')
+        owner = self
+        class BoundedStream:
+            def __enter__(self): return self
+            def __exit__(self, *args): actual.close()
+            def read(self, count=-1):
+                owner.assertEqual(count, record.MAX_BYTES + 1)
+                return actual.read(count)
+        with patch.object(Path, 'lstat', return_value=metadata), patch.object(Path, 'open', return_value=BoundedStream()):
             with self.assertRaises(ValueError): record.read_record(path, {'appStartupFileClosed': True})
         path.write_bytes(data)
         with self.assertRaises(ValueError): record.read_record(path, {'appStartupFileClosed': False})
