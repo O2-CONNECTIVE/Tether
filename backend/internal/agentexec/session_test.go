@@ -150,19 +150,26 @@ func TestCleanupRetryRepeatsFailedTerminateBeforeRelease(t *testing.T) {
 	}
 	st := e.mustStart("req-1", "sleep\n")
 	p := e.proc()
-	e.session.Cancel(e.ref(st.CommandID))
+	// Receiving the fake process only proves StartShell published it, not that
+	// run installed c.proc. Reading output proves the worker reached pump, so
+	// Cancel must issue the early Terminate before the worker's own attempt.
+	send(t, p, Stdout, "ready")
+	e.readUntil(st.CommandID, 0, 5)
+	if st, err := e.session.Cancel(e.ref(st.CommandID)); err != nil || st.Stop != StopCanceled {
+		t.Fatalf("Cancel = %+v, %v", st, err)
+	}
 	final := e.await(st.CommandID)
 	if final.Cleanup != CleanupUnknown || final.Phase != PhaseCanceled {
 		t.Fatalf("final = %+v", final)
 	}
-	if _, releases := p.counts(); releases != 0 {
-		t.Fatal("Release ran after a failed Terminate")
+	if terminates, releases := p.counts(); terminates != 2 || releases != 0 {
+		t.Fatalf("before retry: terminate=%d release=%d", terminates, releases)
 	}
 	if st, err := e.session.Cleanup(finite(t), e.ref(st.CommandID)); err != nil || st.Cleanup != CleanupConfirmed {
 		t.Fatalf("Cleanup = %+v, %v", st, err)
 	}
-	if _, releases := p.counts(); releases != 1 {
-		t.Fatalf("release=%d", releases)
+	if terminates, releases := p.counts(); terminates != 3 || releases != 1 {
+		t.Fatalf("after retry: terminate=%d release=%d", terminates, releases)
 	}
 	if _, err := e.session.Cleanup(context.Background(), e.ref(st.CommandID)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Cleanup without deadline = %v", err)
