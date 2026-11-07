@@ -80,13 +80,14 @@ class ReadinessTests(unittest.TestCase):
         self.assertTrue(gate.eligibility(data, 0, self.ready())['eligible'])
 
     def test_earlier_live_or_unverified_handle_is_not_final_exit_evidence(self):
-        for state in ('live', 'exited', 'unavailable', 'different-identity'):
-            for identity in (True, False):
+        for state, identities in (('live', (True,)), ('exited', (True,)),
+                                  ('unavailable', (True, False)), ('different-identity', (False,))):
+            for identity in identities:
                 data = healthy()
                 data['childCloseFacts']['rows'][0].update(
                     handleState=state, handleIdentityVerified=identity)
                 self.assertTrue(gate.eligibility(data, 0, self.ready())['eligible'])
-        for state in ('same-identity', 'pid-reused', 'ambiguous', 'absent'):
+        for state in ('pid-reused', 'absent'):
             data = healthy(); data['childCloseFacts']['rows'][0]['snapshotState'] = state
             self.assertTrue(gate.eligibility(data, 0, self.ready())['eligible'])
         for key, values in [('handleState', ('live', 'unavailable', 'different-identity')),
@@ -135,6 +136,16 @@ class ReadinessTests(unittest.TestCase):
         self.assertFalse(gate.eligibility(healthy(), 0, summary)['eligible'])
         summary = self.ready(); summary['private'] = 'SECRET'
         self.assertFalse(gate.eligibility(healthy(), 0, summary)['eligible'])
+
+
+
+    def test_earlier_contradictions_stop_even_with_good_final_facts(self):
+        for key, value in [('snapshotState', 'same-identity'), ('snapshotState', 'ambiguous'),
+                           ('handleIdentityVerified', False), ('handleState', 'different-identity')]:
+            raw = healthy()
+            raw['childCloseFacts']['rows'][0][key] = value
+            with self.subTest(key=key, value=value):
+                self.assertFalse(gate.eligibility(raw, 0, self.ready())['eligible'])
 
 
 if __name__ == '__main__': unittest.main()

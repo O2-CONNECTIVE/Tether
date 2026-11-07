@@ -52,6 +52,8 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 - [Windows completionとwake契約の調査](windows-callback-wake-research.md): 固定source・一次資料とlocal modelを照合。実SDKの配送と起動timeout根因は未観測・未確定です。
 - [SDK completionのphase限定診断](windows-sdk-delivery-probe.md): 同じcreation／元Receiverへのbinding、欠測・nesting・lossと一回の観測上限。製品修正ではありません。
 
+- [一度の準備で二回まで起動する限定診断](two-launch-repro.md): 固定ソースの元の起動と証拠を再利用し、欠落・不明で停止する検証候補。実機での再利用や原因・修正は未実証です。
+
 ## 保存する旧設計・履歴
 
 SSH途中実装の既知の公開WIP保存先は `wip/ssh-owned-shell-20261031` です。これは保存済みcheckpointの案内で、今回remoteの最新状態は再照合していません。未完成コードの保存を製品対応・main統合と見なさないでください。

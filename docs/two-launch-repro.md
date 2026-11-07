@@ -20,6 +20,7 @@ PR250 の三回上限を延長せず、専用の draft PR opened / 同一公開 
 前後の raw child facts は observed 1..32、omitted 0、remaining 0、全行と一意連続 slot が一致しなければなりません。
 前の集合は typed observations と集合整合の証拠です。最終集合の全行だけに verified handle / exited / snapshot absent を必須とします。
 前の handle がまだ live でも最終退出が確認されれば、それだけを理由に拒否しません。
+ただし remaining 0 と same-identity の同居、未検証 handle の live / exited、検証済み handle の different-identity、曖昧な snapshot は拒否します。
 
 元の pwsh 終了後に候補限定の process/listener query を行います。
 候補は app / driver / edge の exact path または固定 basename の和集合です。
@@ -34,6 +35,8 @@ PR250 の三回上限を延長せず、専用の draft PR opened / 同一公開 
 二回とも完全な証拠と readiness を満たした場合だけ mechanical-reuse-demonstrated です。
 二回の native 成功だけでは足りません。欠落・不明・失敗は次回を起動せず、二回目でも成功へ読み替えません。
 全成功も再現率や原因・修正を証明しません。target-red、その他の native 失敗、証拠/readiness 不明を区別します。
+target-red は厳密な整数の native 1/0、元の timeout 観測、最終 identity と canonical record の source / specimen / observation binding を必要とします。
+元の timeout 観測があっても binding 不明なら、observedSessionTimeout として分離して残し、failure-evidence-inconclusive とします。red に native 成功の合否は要求しません。
 
 ## ローカル検証
 

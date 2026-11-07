@@ -85,6 +85,12 @@ def child_count(facts, require_exited=True):
                 or row.get('handleState') not in ('live', 'exited', 'unavailable', 'different-identity')
                 or row.get('snapshotState') not in ('same-identity', 'pid-reused', 'ambiguous', 'absent')):
             return None
+        # A zero remaining count cannot coexist with a matching generation.
+        # Ambiguous snapshots are unknown, rather than evidence of absence.
+        if (row['snapshotState'] in ('same-identity', 'ambiguous')
+                or (row['handleState'] in ('live', 'exited') and not row['handleIdentityVerified'])
+                or (row['handleState'] == 'different-identity' and row['handleIdentityVerified'])):
+            return None
         if require_exited and (row['handleIdentityVerified'] is not True
                                or row['handleState'] != 'exited' or row['snapshotState'] != 'absent'):
             return None

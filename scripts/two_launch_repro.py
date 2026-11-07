@@ -128,6 +128,44 @@ def publish(root, setup, trial, source):
     return passed is True, body
 
 
+def failure_classification(raw, projection, body, final_ok, launch, native_exit):
+    """Keep the observed symptom distinct from a source/specimen-bound target red."""
+    from two_launch_readiness import integer
+    observed = False
+    bound = False
+    try:
+        requests = projection['sessionRequests']
+        observed = (integer(native_exit, 1, 65535)
+                    and integer(raw.get('nativeTestsRun'), 1, 1)
+                    and integer(raw.get('nativeTestsPassed'), 0, 0)
+                    and projection['status'] == 'failed' and projection['phase'] == 'session-create' and projection['errorClass'] == 'timeout'
+                    and integer(projection['documentObservations'], 0, 0) and len(requests) == 2
+                    and requests[0]['outcome'] == 'started' and requests[1]['outcome'] == 'timeout'
+                    and integer(requests[1]['elapsedMs'], 15000, 2**53-1))
+        files = body['files']
+        data = lambda name: files[name]['data']
+        bound = (integer(native_exit, 1, 65535)
+                 and integer(raw.get('nativeTestsRun'), 1, 1)
+                 and integer(raw.get('nativeTestsPassed'), 0, 0)
+                 and final_ok is True and body['sourceAndSpecimenStable'] is True
+                 and body['sourceCommit'] == control.SOURCE and body['sourceTree'] == control.TREE
+                 and body['controlCommit'] == os.environ.get('CONTROL_HEAD')
+                 and launch['sourceCommit'] == control.SOURCE and launch['sourceTree'] == control.TREE
+                 and control.canonical(data('launch')) == control.canonical(launch)
+                 and control.canonical(data('final')) == control.canonical(launch)
+                 and control.canonical(data('observation')) == control.canonical(projection)
+                 and integer(data('native').get('nativeTestsRun'), 1, 1)
+                 and integer(data('native').get('nativeTestsPassed'), 0, 0)
+                 and data('build')['sourceCommit'] == control.SOURCE
+                 and data('build')['exeSha256'] == launch['exeSha256']
+                 and data('overlay')['overlayLockSha256'] == launch['overlayLockSha256'])
+    except (KeyError, TypeError, ValueError): pass
+    return {'observedSessionTimeout': observed, 'targetRedBound': observed and bound,
+            'outcome': 'not-applicable' if integer(native_exit, 0, 0) else
+                       'target-red' if observed and bound else 'other-native-failure' if bound
+                       else 'failure-evidence-inconclusive'}
+
+
 def execute(root, setup, source, cwd):
     from two_launch_readiness import eligibility
     control.admit(setup, source)
@@ -201,34 +239,28 @@ def execute(root, setup, source, cwd):
         gate_started = time.monotonic()
         readiness = eligibility({}, 65535, {})
         raw_hash = None
+        raw = {}
         try:
             raw = source.load(trial / 'evidence/native-result.json')
             raw_hash = source.digest(regular(trial / 'evidence/native-result.json'))
             readiness = eligibility(raw, native_exit, snapshot(expected, cwd))
         except Exception: pass
         healthy = passed and final_ok and readiness.get('eligible') is True
+        projection = {}
+        try: projection = source.observation_summary(source.load(trial / 'evidence/native-observation.json'))
+        except Exception: pass
+        failure = failure_classification(raw, projection, body, final_ok, launch, native_exit)
         result = {'schema': 1, 'trialOrdinal': ordinal, 'sameVm': True, 'reusedSpecimen': True,
                   'setupReceiptSha256': control.digest(receipt), 'reusedSetupStages': setup_steps,
                   'executedTrialStages': stages, 'diagnosticSha256': control.digest(body) if body is not None else None,
                   'gateElapsedMs': round((time.monotonic() - gate_started) * 1000), 'nativeResultSha256': raw_hash, 'readiness': readiness, 'nativeElapsedMs': native_ms,
                   'trialElapsedMs': round((time.monotonic() - started) * 1000),
-                  'healthy': healthy, 'rootCauseEstablished': False, 'timeoutFixed': False}
+                  'healthy': healthy, 'failureObservation': failure, 'rootCauseEstablished': False, 'timeoutFixed': False}
         control.write_new(trial / 'receipt.json', result)
         control.emit('TWO_LAUNCH_TRIAL', result)
         if healthy: return 'healthy'
         if native_exit == 0: return 'readiness-or-evidence-inconclusive'
-        try:
-            observation = source.load(trial / 'evidence/native-observation.json')
-            projection = source.observation_summary(observation)
-            requests = projection['sessionRequests']
-            if (raw.get('nativeTestsRun') == 1 and raw.get('nativeTestsPassed') == 0
-                    and projection['phase'] == 'session-create' and projection['errorClass'] == 'timeout'
-                    and projection['documentObservations'] == 0 and len(requests) == 2
-                    and requests[0]['outcome'] == 'started' and requests[1]['outcome'] == 'timeout'
-                    and type(requests[1]['elapsedMs']) is int and requests[1]['elapsedMs'] >= 15000):
-                return 'target-red'
-        except Exception: pass
-        return 'other-native-failure'
+        return failure['outcome']
     outcome = serial(invoke)
     control.emit('TWO_LAUNCH_FINAL', {'outcome': outcome, 'rootCauseEstablished': False, 'timeoutFixed': False})
     return 0 if outcome == 'mechanical-reuse-demonstrated' else 1

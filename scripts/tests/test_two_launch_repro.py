@@ -91,6 +91,9 @@ class StagingTests(unittest.TestCase):
             raw = healthy(); raw[key] = value; mutations.append((raw, 0, ready))
         for key, value in [('observed', 0), ('omittedRows', 1), ('rows', [])]:
             raw = healthy(); raw['afterDriverCleanupFacts'][key] = value; mutations.append((raw, 0, ready))
+        for key, value in [('snapshotState', 'same-identity'), ('handleIdentityVerified', False)]:
+            raw = healthy(); raw['childCloseFacts']['rows'][0][key] = value
+            mutations.append((raw, 0, ready))
         mutations.extend([(healthy(), 1, ready), (healthy(), 0, snapshot_summary([], [4444], PATHS)),
                           (healthy(), 0, snapshot_summary([], [], PATHS, process_ok=False))])
         for raw, exit_code, snapshot in mutations:
@@ -170,3 +173,44 @@ class StagingTests(unittest.TestCase):
                      patch.object(pilot, 'publish', return_value=(True, {})), contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(pilot.execute(root, setup, source, root), 0 if good else 1)
                 self.assertEqual(len(calls), 2 if good else 1)
+
+class FailureClassificationTests(unittest.TestCase):
+    def test_target_red_needs_strict_counts_and_bound_diagnostic(self):
+        import copy
+        import os
+        from unittest.mock import patch
+        from two_launch_repro import failure_classification
+        import bounded_pump_capture as control
+        raw = {'nativeTestsRun': 1, 'nativeTestsPassed': 0}
+        observation = {'status': 'failed', 'phase': 'session-create', 'errorClass': 'timeout', 'documentObservations': 0,
+                       'sessionRequests': [{'outcome': 'started'}, {'outcome': 'timeout', 'elapsedMs': 15004}]}
+        launch = {'sourceCommit': control.SOURCE, 'sourceTree': control.TREE,
+                  'exeSha256': 'e'*64, 'overlayLockSha256': 'a'*64}
+        body = {'sourceCommit': control.SOURCE, 'sourceTree': control.TREE, 'controlCommit': 'c'*40,
+                'sourceAndSpecimenStable': True, 'allOriginalAndDiagnosticChecksPassed': False,
+                'files': {'native': {'data': raw}, 'observation': {'data': observation},
+                          'launch': {'data': launch}, 'final': {'data': launch},
+                          'build': {'data': {'sourceCommit': control.SOURCE, 'exeSha256': 'e'*64}},
+                          'overlay': {'data': {'overlayLockSha256': 'a'*64}}}}
+        with patch.dict(os.environ, {'CONTROL_HEAD': 'c'*40}):
+            result = failure_classification(raw, observation, body, True, launch, 1)
+            self.assertEqual(result['outcome'], 'target-red')
+            self.assertTrue(result['observedSessionTimeout'])
+            for final_ok, diagnostic in [(False, body), (True, None)]:
+                result = failure_classification(raw, observation, diagnostic, final_ok, launch, 1)
+                self.assertTrue(result['observedSessionTimeout'])
+                self.assertFalse(result['targetRedBound'])
+                self.assertEqual(result['outcome'], 'failure-evidence-inconclusive')
+            for field in ('sourceCommit', 'sourceTree', 'controlCommit', 'sourceAndSpecimenStable'):
+                bad = copy.deepcopy(body); bad[field] = None
+                self.assertFalse(failure_classification(raw, observation, bad, True, launch, 1)['targetRedBound'])
+            for section in ('native', 'observation', 'launch', 'final', 'build', 'overlay'):
+                bad = copy.deepcopy(body); bad['files'][section]['data'] = {}
+                self.assertFalse(failure_classification(raw, observation, bad, True, launch, 1)['targetRedBound'])
+            self.assertEqual(failure_classification({}, {}, None, False, launch, 1)['outcome'],
+                             'failure-evidence-inconclusive')
+            for counts in [(True, False), (1, False), (True, 0)]:
+                bad = dict(zip(('nativeTestsRun', 'nativeTestsPassed'), counts))
+                result = failure_classification(bad, observation, body, True, launch, 1)
+                self.assertFalse(result['observedSessionTimeout'])
+                self.assertNotEqual(result['outcome'], 'target-red')
