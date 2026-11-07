@@ -1,4 +1,5 @@
 """Synthetic Mach-O bytes only; never execute/build/distribute a native binary."""
+import copy
 import importlib.util
 import json
 import os
@@ -67,6 +68,85 @@ class MacPackageTests(unittest.TestCase):
         a = self.args(); a['output'] = self.root / 'second.zip'
         m.package(**a)
         self.assertEqual(data, a['output'].read_bytes())
+
+    def test_missing_inventory_keeps_explicit_dependency_gaps(self):
+        m.package(**self.args())
+        with zipfile.ZipFile(self.output) as archive:
+            audit = json.loads(archive.read('MANIFEST.json'))['dependencyAudit']
+        self.assertEqual(audit['inventoryStatus'], 'not-supplied')
+        self.assertEqual(audit['unverifiedScopes'], [
+            'binary-source-correspondence', 'linked-module-closure',
+            'stdlib-vendored-notices', 'platform-runtime-notices',
+            'toolchain-provenance', 'build-tool-dependencies'])
+
+    def collected_inventory(self):
+        from scripts.tests.test_go_licenses import GoLicenseTests
+        fixture = GoLicenseTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        result = fixture.run_cli()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # macOS temp roots may use /var aliases; keep the package's strict
+        # ancestor rejection and pass the fixture's actual directory instead.
+        return (fixture.output / 'DEPENDENCIES.json').resolve()
+
+    def test_collector_inventory_matches_without_proving_closure(self):
+        inventory = self.collected_inventory()
+        args = self.args(); args['dependency_inventory'] = inventory
+        m.package(**args)
+        with zipfile.ZipFile(self.output) as archive:
+            manifest = json.loads(archive.read('MANIFEST.json'))
+            self.assertEqual(len(archive.namelist()), 11)
+        self.assertEqual(manifest['dependencyAudit']['inventoryStatus'], 'fixed-record-matched')
+        self.assertEqual(manifest['dependencyAudit']['inventorySha256'], m.sha(inventory.read_bytes()))
+        self.assertEqual(len(manifest['dependencyAudit']['unverifiedScopes']), 6)
+        for field in ('binarySourceCorrespondenceVerified', 'binaryDependenciesVerified',
+                      'noticeCompletenessVerified', 'binarySecretAuditVerified', 'notarizationVerified'):
+            self.assertIs(manifest[field], False)
+        self.assertEqual(manifest['distributionStatus'], 'blocked')
+
+    def test_inventory_mismatch_is_rejected_before_output(self):
+        path = self.collected_inventory()
+        original = json.loads(path.read_bytes())
+        changes = [
+            lambda r: r['modules'].pop(),
+            lambda r: r['modules'].append(copy.deepcopy(r['modules'][0])),
+            lambda r: r['modules'][0].update(module='PRIVATE/unknown'),
+            lambda r: r['modules'][0].update(version='v0.0.0'),
+            lambda r: r['modules'][0].update(moduleSum='PRIVATE'),
+            lambda r: r['modules'][0]['texts'].clear(),
+            lambda r: r['modules'][0]['texts']['LICENSE.txt'].update(path='../PRIVATE'),
+            lambda r: r['toolchain'].update(version='go0.0.0'),
+            lambda r: r['lockFiles'].update({'go.mod': '0'*64}),
+            lambda r: r.update(distributionStatus='ready'),
+            lambda r: r.update(binaryDependenciesVerified=True),
+            lambda r: r.update(binaryDependenciesVerified=0),
+            lambda r: r.update(sourceCommit='PRIVATE'),
+            lambda r: r.update(extra='PRIVATE'),
+        ]
+        for index, change in enumerate(changes):
+            with self.subTest(index=index):
+                record = copy.deepcopy(original); change(record)
+                path.write_text(json.dumps(record), encoding='utf-8')
+                args = self.args(); args['dependency_inventory'] = path
+                with self.assertRaisesRegex(m.PackageError, 'DEPENDENCY_(INVENTORY_MISMATCH|SOURCE_INVALID)'):
+                    m.package(**args)
+                self.assertFalse(self.output.exists())
+
+    def test_inventory_cli_duplicate_invalid_and_private_input(self):
+        path = self.root / 'PRIVATE.json'
+        for content in ('{}', '{"sourceCommit": "a", "sourceCommit": "b"}',
+                        '[]', 'PRIVATE', '[' * 1500):
+            path.write_text(content, encoding='utf-8')
+            command = [sys.executable, str(ROOT / 'scripts/package_mac_agent.py')]
+            for name, value in self.args().items():
+                command.extend(['--' + name.replace('_', '-'), str(value)])
+            command.extend(['--dependency-inventory', str(path)])
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual(result.stderr, '')
+            self.assertNotIn('PRIVATE', result.stdout)
+            self.assertFalse(self.output.exists())
 
     def test_wrong_hash_target_header_size_and_provenance(self):
         for field, value in [('expected_sha256', '0'*64), ('expected_sha256', 'bad'),

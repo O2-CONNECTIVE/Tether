@@ -10,6 +10,11 @@ import stat
 import struct
 import zipfile
 
+try:
+    from scripts import collect_go_licenses as licenses
+except ModuleNotFoundError:
+    import collect_go_licenses as licenses
+
 ROOT = Path(__file__).resolve().parent.parent
 BINARY_LIMIT = 64 * 1024 * 1024
 TEXT_LIMIT = 16 * 1024
@@ -32,7 +37,11 @@ correspondence, reproducible build, linked dependency closure and complete notic
 remain unverified. Embedded secrets/build paths have not been audited; this is
 also a distribution blocker. Notarization/signature validity is not checked.
 Fixed Go/direct-module license texts are NOT a complete legal
-or distribution clearance. Do not distribute this candidate until those gaps close.
+or distribution clearance. Optional --dependency-inventory checks only the fixed
+collector record against this checkout's locks and the fixed notice identities.
+The inventory source commit remains an unverified declaration. The input record
+is not copied into the archive; its hash and unchecked scopes are recorded.
+Do not distribute this candidate until those gaps close.
 
 For an already enrolled Mac only, after separate explicit authorization: a human
 may manually invoke rescue-mac-agent with -config and an existing protected config
@@ -134,7 +143,41 @@ def version_string(value):
     return f'{value >> 16}.{(value >> 8) & 255}.{value & 255}'
 
 
-def package(binary, expected_sha256, target, source_manifest_sha256, notices_root, output):
+def dependency_audit(path):
+    # A supplied collector record is checked, never treated as build evidence.
+    audit = {'inventoryStatus': 'not-supplied',
+             'scope': 'fixed-direct-modules-and-toolchain-texts-only',
+             'unverifiedScopes': [
+                 'binary-source-correspondence', 'linked-module-closure',
+                 'stdlib-vendored-notices', 'platform-runtime-notices',
+                 'toolchain-provenance', 'build-tool-dependencies']}
+    if path is None:
+        return audit
+    data = read_regular(path, 64 * 1024)
+    try:
+        record = json.loads(data, object_pairs_hook=licenses.strict_object)
+        require(isinstance(record, dict), 'DEPENDENCY_INVENTORY_INVALID')
+        source = record.get('sourceCommit')
+        require(isinstance(source, str) and re.fullmatch('[0-9a-f]{40}', source),
+                'DEPENDENCY_SOURCE_INVALID')
+        locks = {name: read_regular(ROOT / 'backend' / name, TEXT_LIMIT)
+                 for name in ('go.mod', 'go.sum')}
+        licenses.check_locks(locks)
+        expected = licenses.inventory_record(source, locks)
+        # Canonical JSON distinguishes booleans from 0/1, unlike Python equality.
+        require(json.dumps(record, sort_keys=True) == json.dumps(expected, sort_keys=True),
+                'DEPENDENCY_INVENTORY_MISMATCH')
+        declared = {item['path']: item['sha256'] for component in
+                    [record['toolchain'], *record['modules']]
+                    for item in component['texts'].values()}
+        require(declared == TEXTS, 'DEPENDENCY_NOTICE_SET_MISMATCH')
+    except licenses.CollectionError as error:
+        raise PackageError('DEPENDENCY_INVENTORY_INVALID') from error
+    audit.update(inventoryStatus='fixed-record-matched', inventorySha256=sha(data))
+    return audit
+
+
+def package(binary, expected_sha256, target, source_manifest_sha256, notices_root, output, dependency_inventory=None):
     require(bool(re.fullmatch('[0-9a-f]{64}', expected_sha256)) and
             bool(re.fullmatch('[0-9a-f]{64}', source_manifest_sha256)), 'HASH_INVALID')
     output = Path(output)
@@ -143,6 +186,7 @@ def package(binary, expected_sha256, target, source_manifest_sha256, notices_roo
     data = read_regular(binary, BINARY_LIMIT)
     require(sha(data) == expected_sha256, 'BINARY_HASH_MISMATCH')
     platform = macho(data, target)
+    audit = dependency_audit(dependency_inventory)
     files = {'rescue-mac-agent': data, 'LICENSE': read_regular(ROOT / 'LICENSE', TEXT_LIMIT),
              'RECIPIENT.txt': INSTRUCTIONS.encode('utf-8')}
     # Fixed files only; never enumerate or copy unrelated content in this root.
@@ -153,7 +197,7 @@ def package(binary, expected_sha256, target, source_manifest_sha256, notices_roo
     manifest = {'schema': 1, 'target': target, 'signingStatus': 'unsigned-unverified',
                 'distributionStatus': 'blocked', 'binarySourceCorrespondenceVerified': False,
                 'binaryDependenciesVerified': False, 'noticeCompletenessVerified': False, 'binarySecretAuditVerified': False,
-                'notarizationVerified': False,
+                'notarizationVerified': False, 'dependencyAudit': audit,
                 'sourceManifestSha256Supplied': source_manifest_sha256,
                 'platformDeclaration': platform,
                 'files': {name: sha(value) for name, value in sorted(files.items())}}
@@ -185,12 +229,13 @@ def main(argv=None):
         parser = Parser(description=__doc__)
         for option in ('binary', 'expected-sha256', 'target', 'source-manifest-sha256', 'notices-root', 'output'):
             parser.add_argument('--' + option, required=True)
+        parser.add_argument('--dependency-inventory', help='Optional fixed collector DEPENDENCIES.json; does not verify closure')
         args = parser.parse_args(argv)
         result = package(**vars(args))
     except PackageError as error:
         print(json.dumps({'status': 'refused', 'code': str(error)}))
         return 1
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, RecursionError):
         print(json.dumps({'status': 'refused', 'code': 'IO_OR_INPUT_INVALID'}))
         return 1
     print(json.dumps(result, sort_keys=True))
