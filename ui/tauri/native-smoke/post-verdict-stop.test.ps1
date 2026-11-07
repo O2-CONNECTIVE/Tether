@@ -178,7 +178,7 @@ foreach ($case in @('before-entry', 'during-grace', 'admission-overbudget', 'dia
         [IO.File]::WriteAllText((Join-Path $OwnedChildDirectory ($case + '.json')), ($receipt | ConvertTo-Json -Compress))
     } finally {
         # Never Dispose/EndInvoke a still-running pipeline: those can block forever.
-        if ($null -eq $pending -or ($pending.IsCompleted -and $pipeline.InvocationStateInfo.State -in @('Stopped', 'Failed', 'Completed'))) {
+        if ($pipeline.InvocationStateInfo.State -in @('NotStarted', 'Stopped', 'Failed', 'Completed') -and ($null -eq $pending -or $pending.IsCompleted)) {
             $pipeline.Dispose()
             $shared.QueryEntered.Dispose()
             $shared.AdmissionEntered.Dispose()
