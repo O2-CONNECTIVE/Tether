@@ -72,6 +72,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		stage, code := diag.fields()
 		outcome := map[string]any{"stage": stage, "failure_code": code, "outcome": "failed-unknown", "cleanup": "unconfirmed", "test": t.Name(), "invocation": invocation, "helper_sha256": expected, "fixture_retained": true}
 		diag.annotate(outcome)
+		ciAnnotateNative(outcome, child, diag.commandID)
 		data, _ := json.Marshal(outcome)
 		if e := ciWriteExclusive(report, append(data, '\n')); e != nil {
 			fmt.Fprintln(os.Stderr, "CI_PRODUCER_OUTCOME_WRITE_FAILED")

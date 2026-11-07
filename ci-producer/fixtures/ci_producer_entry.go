@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 	"golang.org/x/sys/unix"
 	"io"
@@ -29,6 +30,20 @@ var ciEntered atomic.Bool
 // FD3 is bootstrap only: close it before original capturePipes/run begins.
 func CIProducerMain() int {
 	if !ciEntered.CompareAndSwap(false, true) {
+		return 1
+	}
+	// Diagnostic FD is inherited only by this helper, never by native work.
+	if unix.SetNonblock(4, true) != nil {
+		return 1
+	}
+	if _, err := unix.FcntlInt(4, unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
+		return 1
+	}
+	if flags, err := unix.FcntlInt(4, unix.F_GETFD, 0); err != nil || flags&unix.FD_CLOEXEC == 0 {
+		return 1
+	}
+	var nativeStat unix.Stat_t
+	if unix.Fstat(4, &nativeStat) != nil || nativeStat.Mode&unix.S_IFMT != unix.S_IFIFO {
 		return 1
 	}
 	// Configure only our inherited bootstrap pipe for bounded Go polling.
@@ -67,7 +82,15 @@ func CIProducerMain() int {
 		return 1
 	}
 	ciTrust = trust
-	return ExitCode(run(b.Policy))
+	if !macagent.CIEnableNativeDiagnosticSink() {
+		return 1
+	}
+	code := ExitCode(run(b.Policy))
+	macagent.CIDisableNativeDiagnosticSink()
+	if unix.Close(4) != nil {
+		return 1
+	}
+	return code
 }
 func ciLoadStandby(ctx context.Context, policy string) (*residentmac.Standby, error) {
 	return residentmac.CILoadProducer(ctx, policy, ciTrust)

@@ -13,8 +13,9 @@ next to the repository's `backend/`. Generated binaries, overlays, private
 notes, manifests from a developer computer and raw logs are not source inputs.
 
 Run `python3 ci-producer/prepare_overlay.py` to generate compiler overlays.
-The script verifies the pinned production run source and changes exactly one
-loader expression. The producer lifecycle, unknown-retention branch and
+The script verifies three pinned production sources. It changes one resident
+loader expression, adds cached-state capture defers/fields to native cleanup,
+and adds one optional final-cleanup observation hook in Session.run. The producer lifecycle, unknown-retention branch and
 capturePipes implementation remain unchanged. Any source pin update needs
 independent review, not an automatic replacement of the expected hash.
 
@@ -82,3 +83,44 @@ TLS trust-negative tests use the same keeper/observer with
 They are separate actual socket tests, not producer
 execution evidence. They must reject wrong CA/hostname for both transport
 bindings and preserve normal TLS validation and native owned dial tracking.
+
+## Compiler-only native cleanup diagnostics
+
+The generated process.go overlay preserves original return expressions and all
+OS operations. Named-return capture defers copy fixed cached fields while the
+original term lock is held, briefly taking mu. A panic is rethrown unchanged
+without capture, preserving the original guard behavior. First failure and last
+call are separate immutable value records; no raw error is stored. I/O completion
+may advance before this snapshot, so it is an original failed-call snapshot,
+not a fresh observation or proof of the exact earlier OS instant.
+
+The generated agentexec/run.go adds one optional interface call after the
+original final Terminate and conditional Release, before terminal publication.
+It targets that exact process and passes that original command ID privately.
+The hook copies the record outside session locks, releases term, and performs
+one raw nonblocking write to fixture-owned FD4. The 64-byte versioned binary
+record is below the POSIX minimum PIPE_BUF; no retries, callbacks or native
+queries are added. Reserved bytes, enums and record consistency are validated.
+The sink is disabled by default in every tagged test binary. Only the helper
+enables it once after adopting its pipe; disabling joins any in-flight bounded
+export before descriptor close. FD4 is verified as a pipe, made nonblocking and CLOEXEC before native launch.
+The unmodified native descriptor scanner still runs. Native commands cannot
+inherit FD4. The parent closes its inherited write duplicate before bootstrap.
+
+On failure, the parent reads at most the two serial work records for at most
+two seconds and accepts only the current MCP result's exact command ID. It
+publishes fixed first/final cause, group, I/O and diagnostic-category fields,
+never the ID, errors, PIDs, paths or payload. Optional cleanup-recorder
+categories are unavailable when that production recorder was not configured,
+not reported as an observed absence. A missing, dropped or invalid
+record remains unavailable/invalid; it cannot turn failed cleanup into success.
+On confirmed original producer closure and Wait, the parent additionally joins
+FD4 EOF and closes its read owner. On unknown it retains that owner, like all
+other fixture resources. Instrumentation can perturb scheduling; a later pass
+is not evidence that the original failure was fixed.
+
+Pure regressions (no process/socket/native operations):
+TestCINativeCleanupCapture, TestCINativeCleanupPanicPreserved (macagent), and
+TestCINativeEvidenceValidation (residentpipe). Original connection success
+assertions, fixed shell command, native ownership rules and unknown retention
+remain unchanged. All generated overlays and binaries remain excluded.

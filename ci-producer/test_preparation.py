@@ -21,6 +21,12 @@ class PreparationTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             raw = b'owner, e := residentmac.LoadStandby(ctx, protectedPolicy)\n'
             source.write_bytes(raw)
+            # Copy source bytes only for the two independently pinned diagnostic seams.
+            # This regression executes Python generator logic, never Go/native code.
+            for relative in ('internal/macagent/process.go', 'internal/agentexec/run.go'):
+                target = backend / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((HERE.parent / 'backend' / relative).read_bytes())
             (backend / 'go.mod').write_text('fixture only\n')
             script = root / 'prepare_overlay.py'
             text = (HERE / 'prepare_overlay.py').read_text()

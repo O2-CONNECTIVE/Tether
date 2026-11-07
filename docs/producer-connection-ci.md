@@ -3,12 +3,15 @@
 The `Actual producer connection` workflow runs the reviewed `ci-producer/`
 fixture on standard GitHub-hosted `macos-26` ARM64 VMs with Go 1.27.3. Normal
 and race are independent matrix jobs with fail-fast disabled. Each compiles
-its own helper, resident test binary and transport test binary. Actions are
+its own helper, resident test binary, transport test binary and native capture
+test binary. Actions are
 commit-pinned, checkout identity is checked, modules must remain unchanged,
 and the build and execution steps have module network access disabled.
 
 Each job first runs the exact in-memory parser, trust validation, per-instance
-TLS clone and certificate-byte ownership regressions. It then requires all four
+TLS clone and certificate-byte ownership regressions. Separate pure gates also
+require native cached-state capture, preserved-panic and private-record validation
+tests. It then requires all four
 real TLS rejection cases: wrong CA and wrong hostname through both worker and
 resident-control transports. A strict JSON
 gate rejects skipped, missing, duplicate or unexpected tests, including exact
@@ -34,7 +37,16 @@ also show the last exact tool operation and fixed error, phase, stop and three
 cleanup enums. These snapshots are not fresh observations or cleanup proof;
 each new tool call clears the preceding snapshot. Missing, malformed or
 unrecognized data becomes `unavailable` or `null`. They never change the failed
-result or supersede the immutable observer verdict. Use the job's GitHub Actions
+result or supersede the immutable observer verdict.
+
+Optional native first/final cleanup fields are fixed enums from the original
+cleanup calls, correlated privately to the exact command. An unavailable or
+invalid capture leaves all snapshot fields unavailable; diagnostic flags also
+require an available original recorder. No private command ID or record bytes
+are published. These cached snapshots authorize no additional observation,
+signal, cleanup retry or claim of confirmed cleanup.
+
+Use the job's GitHub Actions
 link when reporting results. No artifacts, raw runtime logs, fixture credentials or policy files
 are uploaded. See [the fixture contract](../ci-producer/README.md) for exact
 ownership and cleanup assertions. This is instrumented-source connection

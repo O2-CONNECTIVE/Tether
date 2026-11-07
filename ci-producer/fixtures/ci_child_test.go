@@ -17,6 +17,7 @@ import (
 )
 
 type ciChild struct {
+	nativeEvidence                 *os.File
 	diagnosticCode                 string
 	lastSource                     uint64
 	cmd                            *exec.Cmd
@@ -61,13 +62,19 @@ func startCIChild(binary, root string, b ciBootstrap) (*ciChild, error) {
 	if err != nil {
 		return p, err
 	}
+	nativeRead, nativeWrite, err := os.Pipe()
+	if err != nil {
+		return p, err
+	}
+	p.nativeEvidence = nativeRead
+	p.launch = append(p.launch, nativeWrite)
 	p.cmd = exec.Command(binary)
 	p.cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
 	p.cmd.Dir = root
 	p.cmd.Stdin = childIn
 	p.cmd.Stdout = childOut
 	p.cmd.Stderr = p.diagnostic
-	p.cmd.ExtraFiles = []*os.File{bootstrap}
+	p.cmd.ExtraFiles = []*os.File{bootstrap, nativeWrite}
 	if err = p.cmd.Start(); err != nil {
 		return p, err
 	}
@@ -75,7 +82,7 @@ func startCIChild(binary, root string, b ciBootstrap) (*ciChild, error) {
 	go func() { e := p.cmd.Wait(); p.mu.Lock(); p.waitErr = e; p.mu.Unlock(); close(p.waitDone) }()
 	go p.read()
 	// Retire inherited duplicates before bootstrap/ON; no descriptor repairs.
-	for _, f := range []*os.File{childIn, childOut, bootstrap} {
+	for _, f := range []*os.File{childIn, childOut, bootstrap, nativeWrite} {
 		if err = f.Close(); err != nil {
 			return p, err
 		}
@@ -368,6 +375,10 @@ func (p *ciChild) finish() error {
 	}
 	if p.unknown || !p.closed || p.readErr != nil || p.waitErr != nil {
 		return errors.Join(errors.New("original producer cleanup not confirmed"), p.readErr, p.waitErr)
+	}
+	if err := p.finishNativeEvidence(); err != nil {
+		p.diagnosticCode = "producer-native-evidence-join"
+		return err
 	}
 	err := p.diagnostic.Close()
 	if err != nil && p.diagnosticCode == "" {
