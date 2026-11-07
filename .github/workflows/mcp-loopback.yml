@@ -1,0 +1,94 @@
+name: MCP loopback TLS connection
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/mcp-loopback.yml'
+      - 'scripts/check_ci_checkout.py'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/mcp-loopback.yml'
+      - 'scripts/check_ci_checkout.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac-loopback:
+    name: Mac TCP, verified TLS and MCP lifecycle
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOENV: 'off'
+      GOFLAGS: ''
+      GOMAXPROCS: '2'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the exact source without retained credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source identity
+        run: python3 scripts/check_ci_checkout.py
+      - name: Require the standard Mac arm64 runner
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+      - name: Set up fixed Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          architecture: arm64
+          cache: false
+      - name: Prepare locked public modules
+        working-directory: backend
+        run: |
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+      - name: Run the explicit connection test normally and with race checks
+        working-directory: backend
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: |
+          for lane in normal race; do
+            flags=()
+            if [ "$lane" = race ]; then flags=(-race); fi
+            report="$RUNNER_TEMP/mcp-loopback-$lane.jsonl"
+            code=0
+            go test -mod=readonly -count=1 -json -p=1 -parallel=1 -timeout=60s \
+              -tags=ci_mcp_loopback -run '^TestLoopbackTLSMCPConnection$' \
+              "${flags[@]}" ./internal/agentgateway > "$report" || code=$?
+            python3 - "$report" "$code" "$lane" <<'PY'
+          import json, pathlib, sys
+          rows = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+          package = 'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway'
+          name = 'TestLoopbackTLSMCPConnection'
+          tests = [r for r in rows if r.get('Test') == name and r.get('Package') == package]
+          run = sum(r.get('Action') == 'run' for r in tests)
+          passed = sum(r.get('Action') == 'pass' for r in tests)
+          bad = any(r.get('Action') in ('fail', 'skip') for r in rows)
+          package_pass = sum(r.get('Action') == 'pass' and r.get('Package') == package and not r.get('Test') for r in rows)
+          unexpected = any(r.get('Test') and r['Test'] != name for r in rows)
+          result = {'lane': sys.argv[3], 'started': run, 'passed': passed, 'package_pass': package_pass, 'failed_or_skipped': bad}
+          print(json.dumps(result, sort_keys=True))
+          if int(sys.argv[2]) or run != 1 or passed != 1 or package_pass != 1 or bad or unexpected:
+              raise SystemExit('MCP_LOOPBACK_NOT_VERIFIED')
+          PY
+          done
