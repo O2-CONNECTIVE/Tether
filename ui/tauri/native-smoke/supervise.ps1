@@ -151,35 +151,34 @@ try {
         } catch { $report.startupFailureObservation = 'unavailable' }
         finally { $report.startupFailureQueryMs = $startupQuery.ElapsedMilliseconds }
     }
+    # Normal failed execution only. Never begin observation during finally unwind:
+    # PowerShell suspends pipeline stopping while it executes a finally block.
+    if ($PostVerdictManifest -and $null -ne $appTraceDirectory -and $report.nativeTestsPassed -eq 0) {
+        Invoke-PostVerdictObservation $nodeProcess $report $OutputDirectory $appTraceDirectory
+    }
 } finally {
     try {
-        if ($PostVerdictManifest -and $null -ne $appTraceDirectory -and $report.nativeTestsPassed -eq 0) {
-            Invoke-PostVerdictObservation $nodeProcess $report $OutputDirectory $appTraceDirectory
-        }
-    } finally {
         try {
-            try {
-                if ($null -ne $appTraceDirectory -and -not $appTraceCollected) {
-                    $report.appStartupFileClosed = Wait-AppStartupTrace $appTraceDirectory $diagnosticBudget
-                }
-            } finally {
-                # 合否確定後の診断cutoff。新requestは送らず、自己所有workerを最大1秒だけ待つ。
-                try {
-                    [IO.File]::WriteAllText((Join-Path $ToolsDirectory 'driver-stage.finish'), 'finish')
-                    if (-not $diagnosticBudget.IsRunning) { $diagnosticBudget.Start() }
-                    do {
-                        if (Test-Path (Join-Path $ToolsDirectory 'driver-stage.jsonl')) { break }
-                        if ($diagnosticBudget.ElapsedMilliseconds -ge 1000) { break }
-                        Start-Sleep -Milliseconds 20
-                    } while ($diagnosticBudget.ElapsedMilliseconds -lt 1000)
-                    $report.driverStageFileObserved = Test-Path (Join-Path $ToolsDirectory 'driver-stage.jsonl')
-                } catch { Write-Output 'NATIVE_STAGE_FINISH_FAILED' }
+            if ($null -ne $appTraceDirectory -and -not $appTraceCollected) {
+                $report.appStartupFileClosed = Wait-AppStartupTrace $appTraceDirectory $diagnosticBudget
             }
         } finally {
-            # 通常closeの合否確定後にのみcleanupし、元のFAILと記録を保持する。
-            try { Complete-NativeCleanup $nodeProcess $driverProcess $children $app $childHandles $report $OutputDirectory $childWaitStartedUtc $env:NATIVE_PROFILE }
-            finally { $env:RESCUE_DRIVER_TRACE = $previousDriverTrace; $env:RESCUE_HOST_STARTUP_TRACE_DIR = $previousAppTrace }
+            # 合否確定後の診断cutoff。新requestは送らず、自己所有workerを最大1秒だけ待つ。
+            try {
+                [IO.File]::WriteAllText((Join-Path $ToolsDirectory 'driver-stage.finish'), 'finish')
+                if (-not $diagnosticBudget.IsRunning) { $diagnosticBudget.Start() }
+                do {
+                    if (Test-Path (Join-Path $ToolsDirectory 'driver-stage.jsonl')) { break }
+                    if ($diagnosticBudget.ElapsedMilliseconds -ge 1000) { break }
+                    Start-Sleep -Milliseconds 20
+                } while ($diagnosticBudget.ElapsedMilliseconds -lt 1000)
+                $report.driverStageFileObserved = Test-Path (Join-Path $ToolsDirectory 'driver-stage.jsonl')
+            } catch { Write-Output 'NATIVE_STAGE_FINISH_FAILED' }
         }
+    } finally {
+        # 通常closeの合否確定後にのみcleanupし、元のFAILと記録を保持する。
+        try { Complete-NativeCleanup $nodeProcess $driverProcess $children $app $childHandles $report $OutputDirectory $childWaitStartedUtc $env:NATIVE_PROFILE }
+        finally { $env:RESCUE_DRIVER_TRACE = $previousDriverTrace; $env:RESCUE_HOST_STARTUP_TRACE_DIR = $previousAppTrace }
     }
     if ($phase -eq 'webview-and-ipc' -and $report.nativeTestsPassed -eq 0) {
         try {

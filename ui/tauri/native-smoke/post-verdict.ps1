@@ -34,6 +34,7 @@ function Initialize-PostVerdictManifest([string]$Manifest, [string]$Directory, [
     Write-PostVerdictBytes (Join-Path $Directory 'post-verdict.manifest.json') $raw
 }
 function Invoke-PostVerdictObservation($NodeProcess, $Report, [string]$OutputDirectory, [string]$Directory) {
+    # Call only in normal failure handling, never from finally unwind.
     # Start once BEFORE all new failure admission/copy/hash/flush work. Never reset.
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $state = 'rejected'

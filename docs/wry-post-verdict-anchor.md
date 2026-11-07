@@ -42,12 +42,20 @@ Windows reparse・link・exclusive open の実動作は Windows fixture で別�
 copy、hash、flush、signal、grace は予算をリセットしない。
 同期 filesystem・Python subprocess が停止した場合の hard deadline ではない。
 正常・非対象・不正入力に grace を与えない。元の15秒 AbortSignal と native1/0・exit1 を変更しない。
+追加の grace は通常の失敗 catch 内だけで開始し、取消の unwind/finally 内から開始しない。
 finish helper と診断例外からも元の cleanup が呼ばれる nested finally とする。
 新しい kill 権限や全子孫回収の保証はない。
 
 PowerShell fixture の child cancel-file は、その協調経路だけを検証する。
-実 runner から child-pwsh への協調割込み経路は未確認であり、native launch は HOLD とする。
-hard kill 時の finally を保証しない。別 watchdog や console framework は追加しない。
+`post-verdict-stop.test.ps1` は所有する child pwsh 内の実 engine Stop と元の catch/finally を検査する。
+起動前停止、grace 中停止、予算超過、診断・finish・cleanup 例外の6条件を別 receipt にする。
+所有 child の終了と全条件を確認後だけ、source/tree/control に束縛した閉じた summary を create-new で保存する。
+control はその厳密な型・ケース集合・hash と公開 receipt を Python qualification と別に検査する。
+実行 engine は厳密に7.6.9に限定し、相違時に近い版へ fallback しない。
+[PowerShell の確認対象 source](https://github.com/PowerShell/PowerShell/tree/bf5fc434120666e5f1a8d1dfd6ecac7efc17a4be) と同じ版を要求する。
+これは runner から child-pwsh までの graceful 伝播を保証せず、hard kill 時の finally も保証しない。
+Windows preflight と最終 review は未実行のため native launch は HOLD とする。
+別 watchdog や console framework は追加しない。
 
 ## 入力 identity と検証対象
 
