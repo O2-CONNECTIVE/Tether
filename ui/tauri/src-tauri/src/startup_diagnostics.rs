@@ -165,12 +165,26 @@ impl Trace {
                 // Write it first: the original exclusive-file close observation remains last.
                 let probe_text =
                     probe.snapshot(registration, worker.complete() || marker.is_file());
+                // Own association window closes first. These three seals are not an atomic join.
+                let pump_text = delivery.pump_snapshot(
+                    delivery_registration,
+                    worker.complete() || marker.is_file(),
+                );
                 let delivery_text =
                     delivery.snapshot(delivery_registration, worker.complete() || marker.is_file());
                 let receiver_text = delivery.receiver_snapshot(
                     delivery_registration,
                     worker.complete() || marker.is_file(),
                 );
+                if pump_text.len() <= 4096 {
+                    if let Ok(mut file) = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path.join("wry-pump-brackets.json"))
+                    {
+                        let _ = file.write_all(pump_text.as_bytes());
+                    }
+                }
                 if receiver_text.len() <= 2048 {
                     if let Ok(mut file) = OpenOptions::new()
                         .write(true)

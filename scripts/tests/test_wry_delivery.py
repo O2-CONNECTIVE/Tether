@@ -131,7 +131,7 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(prepare.patch_com(com, True).encode()).hexdigest(), prepare.COM_ORIGINAL)
         self.assertEqual(wry.count("let sent = tx.send(result)"), 2)
         self.assertEqual(wry.count("let result = __delivery.wait(rx)?;"), 2)
-        self.assertIn("match WindowsAndMessaging::GetMessageA(&mut msg, None, 0, 0).0 {\n                -1 =>", com)
+        self.assertIn("match rescue_host_delivery::Pump::get_return(WindowsAndMessaging::GetMessageA(&mut msg, None, 0, 0).0) {\n                -1 =>", com)
 
     def test_exact_lock_lf_crlf_and_wrong_or_already_projected_inputs(self):
         blob = ci.git(ROOT, "show", "HEAD:ui/tauri/src-tauri/Cargo.lock")

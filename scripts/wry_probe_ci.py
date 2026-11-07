@@ -262,6 +262,10 @@ def publish(root, temp, delivery=False):
         from wry_receiver_record import read_record as read_receiver
         add("receiver", lambda: read_receiver(temp / "tools/app-startup/wry-receiver-polls.json",
                                               load(temp / "evidence/native-result.json")))
+    if delivery and os.environ.get("WRY_PUMP_ENABLED") == "1":
+        from wry_pump_record import read_record as read_pump
+        add("pump", lambda: read_pump(temp / "tools/app-startup/wry-pump-brackets.json",
+                                     load(temp / "evidence/native-result.json")))
     def driver():
         path = temp / "tools/driver-stage.jsonl"
         if path.is_symlink() or path.stat().st_size > 8192: raise ValueError()
@@ -335,6 +339,11 @@ def publish(root, temp, delivery=False):
         try: receiver_classified = receiver_complete(files["receiver"]["data"])
         except (ValueError, TypeError, KeyError): receiver_classified = False
         passed = passed and receiver_classified
+    if delivery and os.environ.get("WRY_PUMP_ENABLED") == "1":
+        from wry_pump_record import complete as pump_complete
+        try: pump_classified = pump_complete(files["pump"]["data"])
+        except (ValueError, TypeError, KeyError): pump_classified = False
+        passed = passed and pump_classified
     body = {"schema": 1, "variant": "wry240-once-record-1", "purpose": "diagnostic-hints-only",
             "productReference": "4ba768e910af595f26176eb69aaf2e21d663b726", "files": files,
             "controlCommit": control, "sourceCommit": source, "sourceTree": tree, "sourceAndSpecimenStable": stable,
@@ -345,6 +354,8 @@ def publish(root, temp, delivery=False):
                     deliveryClassificationComplete=classified)
     if delivery and os.environ.get("WRY_RECEIVER_ENABLED") == "1":
         body["receiverClassificationComplete"] = receiver_classified
+    if delivery and os.environ.get("WRY_PUMP_ENABLED") == "1":
+        body["pumpClassificationComplete"] = pump_classified
     encoded = canonical(body)
     if len(encoded) > 32768: raise ValueError("RECORD_LIMIT")
     text = encoded.decode()
@@ -363,6 +374,9 @@ def main():
         if delivery not in ("", "1"): raise ValueError("DELIVERY_MODE_REJECTED")
         receiver = os.environ.get("WRY_RECEIVER_ENABLED", "")
         if receiver not in ("", "1") or (receiver == "1" and delivery != "1"): raise ValueError("RECEIVER_MODE_REJECTED")
+        pump = os.environ.get("WRY_PUMP_ENABLED", "")
+        if pump not in ("", "1") or (pump == "1" and (delivery != "1" or receiver != "1")):
+            raise ValueError("PUMP_MODE_REJECTED")
         delivery = delivery == "1"
         parser = Parser(add_help=False)
         parser.add_argument("mode", choices=("step", "identity", "permissions", "publish"))

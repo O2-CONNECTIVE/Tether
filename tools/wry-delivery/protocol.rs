@@ -1,10 +1,26 @@
-//! Diagnostic-only, private creation/receiver binding. No OS call, lock or I/O here.
+//! Diagnostic-only private binding; new brackets save/restore Win32 LastError only.
 use std::{cell::Cell, sync::mpsc};
 
 unsafe extern "C" {
+    fn rescue_host_delivery_pump(token: u64, bound: bool, event: u8);
     fn rescue_host_delivery_receiver(token: u64, bound: bool, state: u8);
     fn rescue_host_delivery_begin(kind: u8) -> u64;
     fn rescue_host_delivery_event(token: u64, code: u8, context: u8);
+}
+
+// Save before TLS or host lookup, including first use, not just inside the host hook.
+#[cfg(windows)]
+mod last_error {
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn GetLastError() -> u32; fn SetLastError(value: u32); }
+    pub struct Saved(u32);
+    impl Saved { pub fn save() -> Self { Self(unsafe { GetLastError() }) } }
+    impl Drop for Saved { fn drop(&mut self) { unsafe { SetLastError(self.0); } } }
+}
+#[cfg(not(windows))]
+mod last_error {
+    pub struct Saved;
+    impl Saved { pub fn save() -> Self { Self } }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -185,12 +201,35 @@ impl Pump {
         value
     }
     pub(crate) fn phase(value: u8) {
+        let _last_error = last_error::Saved::save();
+        if value == 2 || value == 3 { Self::bracket(if value == 2 { 0 } else { 4 }); }
         CURRENT.with(|cell| {
             let mut c = cell.get();
             c.phase = value;
             cell.set(c);
         });
     }
+    fn bracket(event: u8) {
+        CURRENT.with(|cell| {
+            let c = cell.get();
+            let bound = c.token != 0 && c.bound_wait && c.pump_depth == 1 && !c.uncertain;
+            unsafe { rescue_host_delivery_pump(c.token, bound, event); }
+        });
+    }
+    // Scalar identity only. The original match and Error::from_thread stay untouched.
+    pub(crate) fn get_return(value: i32) -> i32 {
+        let _last_error = last_error::Saved::save();
+        #[cfg(rescue_host_pump_fixture)]
+        crate::pump_adapter_before_tls();
+        Self::bracket(match value { -1 => 1, 0 => 2, _ => 3 });
+        value
+    }
+    pub(crate) fn dispatch_return() {
+        let _last_error = last_error::Saved::save();
+        Self::bracket(5);
+        Self::phase(0);
+    }
+
 }
 impl Drop for Pump {
     fn drop(&mut self) {

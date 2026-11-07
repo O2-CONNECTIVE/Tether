@@ -11,8 +11,8 @@ import prepare_wry_probe as base
 COM_SHA = "3f89fca7a704cee10dcb3654c1dbb8941d1783132f1917358af75bec37a7d7e6"
 COM_ORIGINAL = "de9ec5585a990725576de47557f93529cddbdf267ab3847835689e2a01c854fe"
 WRY_POST = "150fa0120f6a461875915d86675eb61dac596c992ec639a9e3424be36f1363b9"
-COM_POST = "40930342fb4fbae77a89d3242ea52cdb3c2f7cdf7b1476acd03d29949d7b47c0"
-PROTOCOL_SHA = "695e6147f3c27b117dc01278b410059cdc5d555d376d1ffba8bee0069ea1896a"
+COM_POST = "4719232d58bd642437a58b120f023748cf1ed8d339541659cc33b531bf8ebcd2"
+PROTOCOL_SHA = "03c2170668ffc99c8f326d8f08b173e9d8b5e617fb53830ca8c83c14d246305d"
 COM_FILES = 12
 
 
@@ -69,14 +69,14 @@ COM_PAIRS = [
      "    let _delivery_pump = rescue_host_delivery::Pump::enter();\n"),
     ("            match WindowsAndMessaging::GetMessageA(&mut msg, None, 0, 0).0 {",
      "            rescue_host_delivery::Pump::phase(2);\n"
-     "            match WindowsAndMessaging::GetMessageA(&mut msg, None, 0, 0).0 {"),
+     "            match rescue_host_delivery::Pump::get_return(WindowsAndMessaging::GetMessageA(&mut msg, None, 0, 0).0) {"),
     ("                    let _ = WindowsAndMessaging::TranslateMessage(&msg);\n"
      "                    WindowsAndMessaging::DispatchMessageA(&msg);",
      "                    rescue_host_delivery::Pump::phase(0);\n"
      "                    let _ = WindowsAndMessaging::TranslateMessage(&msg);\n"
      "                    rescue_host_delivery::Pump::phase(3);\n"
      "                    WindowsAndMessaging::DispatchMessageA(&msg);\n"
-     "                    rescue_host_delivery::Pump::phase(0);"),
+     "                    rescue_host_delivery::Pump::dispatch_return();"),
 ]
 
 

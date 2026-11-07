@@ -1,6 +1,8 @@
 //! Fixed diagnostic storage. No path, payload, raw token, thread ID, or HRESULT leaves it.
 #[path = "wry_receiver_probe.rs"]
 mod receiver;
+#[path = "wry_pump_probe.rs"]
+mod pump;
 use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering::SeqCst},
@@ -149,6 +151,7 @@ struct Sample {
 }
 pub(super) struct Probe {
     receiver: receiver::Summary,
+    pump: pump::Summary,
     start: Instant,
     trace_thread: u64,
     scopes: [Scope; 2],
@@ -178,6 +181,7 @@ impl Probe {
     pub(super) fn memory() -> Arc<Self> {
         Arc::new(Self {
             receiver: receiver::Summary::default(),
+            pump: pump::Summary::default(),
             start: Instant::now(),
             trace_thread: platform::thread(),
             scopes: std::array::from_fn(|_| Scope::default()),
@@ -211,6 +215,12 @@ impl Probe {
         Some(flight)
     }
     fn begin(&self, kind: u8) -> u64 {
+        let writer = self.pump.writer(); // Admission before old validation and early-out.
+        let token = self.begin_old(kind);
+        if let Some(writer) = writer { writer.begin(kind, token); }
+        token
+    }
+    fn begin_old(&self, kind: u8) -> u64 {
         let Some(_flight) = self.flight() else {
             return 0;
         };
@@ -240,6 +250,12 @@ impl Probe {
         u64::from(kind) // Issued once per kind; private and never serialized or reused.
     }
     fn event(&self, token: u64, code: u8, context: u8) {
+        if let Some(writer) = self.pump.writer() {
+            writer.event(token, code, context, |i| self.scopes[i].owner.load(SeqCst) == platform::thread());
+        }
+        self.event_old(token, code, context);
+    }
+    fn event_old(&self, token: u64, code: u8, context: u8) {
         let Some(_flight) = self.flight() else {
             return;
         };
@@ -334,6 +350,9 @@ impl Probe {
             .store(if bound { platform::sent_context() } else { 0 }, SeqCst);
         sample.ready.store(true, SeqCst);
     }
+    pub(super) fn pump_snapshot(&self, registered: bool, requested: bool) -> String {
+        self.pump.snapshot(registered, requested)
+    }
     pub(super) fn receiver_snapshot(&self, registered: bool, requested: bool) -> String {
         self.receiver.snapshot(registered, requested, || {
             // Existing delivery snapshot must seal first. A live/in-flight old
@@ -406,6 +425,16 @@ pub extern "C" fn rescue_host_delivery_event(token: u64, code: u8, context: u8) 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rescue_host_delivery_pump(token: u64, bound: bool, event: u8) {
+    let _last_error = platform::ErrorState::save();
+    if let Some(p) = ACTIVE.get() {
+        if let Some(writer) = p.pump.writer() {
+            writer.bracket(token, bound, event, |i| p.scopes[i].owner.load(SeqCst) == platform::thread());
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rescue_host_delivery_receiver(token: u64, bound: bool, state: u8) {
     let _last_error = platform::ErrorState::save();
     if let Some(p) = ACTIVE.get() {
@@ -432,6 +461,21 @@ pub extern "C" fn rescue_host_delivery_receiver(token: u64, bound: bool, state: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pump_association_stays_live_after_old_delivery_seal() {
+        for late_begin in [false, true] {
+            let p = Probe::memory(); let token = p.begin(1); p.event(token, 3, 24);
+            let _old = p.snapshot(true, true);
+            if late_begin { assert_eq!(p.begin(2), 0); }
+            else { p.event(token, 10, 48); }
+            let first = p.pump_snapshot(true, true);
+            assert!(first.contains("\"lossDetected\":true"));
+            assert!(!first.contains("\"relation\":\"original-wait\""));
+            p.event(token, 4, 24);
+            assert_eq!(first, p.pump_snapshot(true, true));
+        }
+    }
 
     #[test]
     fn receiver_association_requires_closed_old_window() {
