@@ -1,0 +1,464 @@
+name: Actual producer connection
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'ci-producer/**'
+      - '.github/workflows/producer-connection.yml'
+      - 'scripts/check_ci_checkout.py'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'ci-producer/**'
+      - '.github/workflows/producer-connection.yml'
+      - 'scripts/check_ci_checkout.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Do not interrupt an original owner merely because a newer commit arrives.
+  cancel-in-progress: false
+
+jobs:
+  producer:
+    name: Actual producer (${{ matrix.lane }}, Mac ARM64)
+    runs-on: macos-26
+    timeout-minutes: 30
+    strategy:
+      # Every lane gets a fresh VM; a failure cannot reuse or cancel its sibling.
+      fail-fast: false
+      matrix:
+        lane: [normal, race]
+    env:
+      LANE: ${{ matrix.lane }}
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOENV: 'off'
+      GOFLAGS: ''
+      GOMAXPROCS: '2'
+      CGO_ENABLED: '1'
+      GORACE: 'halt_on_error=0 exitcode=66'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out exact source without retained credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source identity
+        run: python3 scripts/check_ci_checkout.py
+      - name: Require the standard hosted Mac ARM64 runner
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = macOS
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+      - name: Set up fixed Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          architecture: arm64
+          cache: false
+      - name: Prepare locked public modules
+        working-directory: backend
+        run: |
+          test "$(go env GOVERSION)" = go1.27.3
+          test "$(go env GOOS)/$(go env GOARCH)" = darwin/arm64
+          go mod download
+          go mod verify
+          git diff --exit-code -- go.mod go.sum
+      - name: Prepare reviewed source overlay
+        run: python3 ci-producer/prepare_overlay.py
+      - name: Compile corresponding helper and both test binaries
+        working-directory: backend
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: |
+          umask 077
+          run_dir=$(mktemp -d "$RUNNER_TEMP/producer-$LANE.XXXXXX")
+          flags=(-mod=readonly -p=1 -tags=ci_actual_producer "-overlay=$GITHUB_WORKSPACE/ci-producer/OVERLAY.json")
+          if [ "$LANE" = race ]; then flags+=(-race); fi
+          go build "${flags[@]}" -o "$run_dir/producer-helper" ./cmd/ci-producer-helper
+          go test -c "${flags[@]}" -o "$run_dir/connection.test" ./internal/residentpipe
+          go test -c "${flags[@]}" -o "$run_dir/transport.test" ./internal/agenttransport
+          git diff --exit-code -- go.mod go.sum
+          helper_sha=$(shasum -a 256 "$run_dir/producer-helper" | awk '{print $1}')
+          {
+            printf 'CI_PRODUCER_RUN_DIR=%s\n' "$run_dir"
+            printf 'CI_PRODUCER_BINARY=%s\n' "$run_dir/producer-helper"
+            printf 'CI_PRODUCER_SHA256=%s\n' "$helper_sha"
+            printf 'CI_PRODUCER_SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+      - name: Verify pure fixture parser and trust regressions
+        working-directory: backend
+        env:
+          CI_ACTUAL_PRODUCER: '0'
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: |
+          umask 077
+          for phase in unit-trust unit-observation; do
+            if [ "$phase" = unit-trust ]; then
+              binary=transport.test
+              package=github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport
+              selected='^TestCIProducerTrust(Validation|InstanceClones|OwnsCertificateBytes)$'
+            else
+              binary=connection.test
+              package=github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe
+              selected='^TestCIProducerObservationValidation$'
+            fi
+            # These exact tests have no producer, pipe, socket or native runtime.
+            # CI_ACTUAL_PRODUCER=0 also refuses accidental live-test selection.
+            code=0
+            "$CI_PRODUCER_RUN_DIR/$binary" "-test.run=$selected" -test.count=1 \
+              -test.timeout=0 -test.v=test2json > "$CI_PRODUCER_RUN_DIR/$phase.log" 2>&1 || code=$?
+            go tool test2json -p "$package" < "$CI_PRODUCER_RUN_DIR/$phase.log" \
+              > "$CI_PRODUCER_RUN_DIR/$phase.jsonl" 2> "$CI_PRODUCER_RUN_DIR/$phase-json.log"
+            python3 - "$phase" "$package" "$code" <<'PYGATE'
+          import collections
+          import json
+          import os
+          import pathlib
+          import sys
+
+          phase, package, code = sys.argv[1:]
+          expected = {'TestCIProducerObservationValidation'}
+          if phase == 'unit-trust':
+              expected = {'TestCIProducerTrustOwnsCertificateBytes'}
+              for test in ('TestCIProducerTrustValidation', 'TestCIProducerTrustInstanceClones'):
+                  expected |= {test, test + '/worker', test + '/control'}
+          elif phase != 'unit-observation':
+              raise SystemExit('UNEXPECTED_PURE_TEST_PHASE')
+          try:
+              path = pathlib.Path(os.environ['CI_PRODUCER_RUN_DIR']) / (phase + '.jsonl')
+              rows = [json.loads(line) for line in path.read_text().splitlines()]
+              counts = collections.Counter((r.get('Test'), r.get('Action')) for r in rows)
+              valid = (
+                  int(code) == 0 and bool(rows)
+                  and all(r.get('Package') == package for r in rows)
+                  and {r.get('Test') for r in rows if r.get('Test')} == expected
+                  and all(counts[(test, 'run')] == counts[(test, 'pass')] == 1 for test in expected)
+                  and counts[(None, 'pass')] == 1
+                  and not any(r.get('Action') in ('fail', 'skip') for r in rows)
+              )
+          except (OSError, ValueError, KeyError, TypeError, AttributeError):
+              valid = False
+          if not valid:
+              raise SystemExit('EXACT_PURE_FIXTURE_TESTS_NOT_VERIFIED: ' + phase)
+          public = {'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
+                    'source_revision': os.environ['CI_PRODUCER_SOURCE_SHA'],
+                    'helper_sha256': os.environ['CI_PRODUCER_SHA256']}
+          summary = json.dumps(public, sort_keys=True)
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write(summary + '\n\n')
+          PYGATE
+          done
+      - name: Verify negative TLS, then the actual producer with original owners
+        working-directory: backend
+        env:
+          CI_ACTUAL_PRODUCER: '1'
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: |
+          umask 077
+          supervisor="$GITHUB_WORKSPACE/ci-producer/supervise_ci.py"
+          report_unknown() {
+            python3 - "$1" "$2" "$3" <<'PYFAIL'
+          import json
+          import os
+          import pathlib
+          import re
+          import stat
+          import sys
+
+          phase, name, trigger = sys.argv[1:]
+          expected_names = {'connection': 'TestCIActualProducerConnection',
+                            'tls-negative': 'TestCIProducerTrustTLSNegative'}
+          lane = os.environ.get('LANE', '')
+          sha = os.environ.get('CI_PRODUCER_SHA256', '')
+          revision = os.environ.get('CI_PRODUCER_SOURCE_SHA', '')
+          invocation = os.environ.get('CI_PRODUCER_INVOCATION', '')
+          if (expected_names.get(phase) != name or lane not in ('normal', 'race')
+                  or trigger not in ('preflight', 'observer', 'keeper')
+                  or re.fullmatch('[0-9a-f]{64}', sha) is None
+                  or re.fullmatch('[0-9a-f]{40}', revision) is None
+                  or re.fullmatch('[0-9a-f]{32}', invocation) is None):
+              raise SystemExit('ALLOWLISTED_DIAGNOSTIC_IDENTITY_UNAVAILABLE')
+          public = {'lane': lane, 'phase': phase, 'outcome': 'failed-unknown',
+                    'source_revision': revision, 'helper_sha256': sha,
+                    'stage': 'unavailable', 'failure_code': 'unavailable',
+                    'original_test_exit': None, 'observer_verdict': 'unavailable',
+                    'observer_reason': 'unavailable'}
+
+          def read_marker(path):
+              # Never read a stale preflight target, symlink, special file or log.
+              if trigger == 'preflight':
+                  return {}
+              try:
+                  if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode):
+                      return {}
+                  with path.open('rb') as source:
+                      raw = source.read(16385)
+                  if len(raw) > 16384:
+                      return {}
+                  value = json.loads(raw)
+                  if (not isinstance(value, dict) or value.get('invocation') != invocation
+                          or value.get('test') != name):
+                      return {}
+                  return value
+              except (OSError, ValueError, TypeError):
+                  return {}
+
+          # These are fixed source-code enums, never arbitrary assertion text.
+          stages = {
+              'authenticated',
+              'cancel-generation',
+              'cancel-initialize',
+              'cancel-poll',
+              'cancel-start',
+              'cancel-submit',
+              'cancel-verify',
+              'complete',
+              'fixture-dispose',
+              'gateway-close',
+              'gateway-setup',
+              'initial-off',
+              'natural-generation',
+              'natural-initialize',
+              'natural-poll',
+              'natural-start',
+              'natural-verify',
+              'off-confirm',
+              'off-idle',
+              'off-submit',
+              'on-confirm',
+              'on-submit',
+              'producer-close',
+              'producer-start',
+          }
+          failure_codes = {
+              'cancel-expectation',
+              'child-exited-before-off',
+              'cleanup-missing',
+              'command-cleanup-unknown',
+              'fixture-remains',
+              'fixture-remove',
+              'gateway-cleanup-unknown',
+              'gateway-close',
+              'gateway-join',
+              'gateway-listener',
+              'gateway-root',
+              'gateway-setup',
+              'generation-changed',
+              'generation-missing',
+              'handler-close',
+              'http-serve',
+              'http-serve-deadline',
+              'http-shutdown',
+              'mcp-auth-negative',
+              'mcp-construction',
+              'mcp-correlation',
+              'mcp-initialize',
+              'mcp-notification-build',
+              'mcp-notification-request',
+              'mcp-notification-response',
+              'mcp-principal-isolation',
+              'mcp-request',
+              'mcp-response-io',
+              'mcp-tls',
+              'mcp-tool-name',
+              'mcp-tool-response',
+              'mcp-tool-result',
+              'natural-expectation',
+              'outcome-persist',
+              'output-base64',
+              'output-mismatch',
+              'output-schema',
+              'owner-cleanup-unknown',
+              'producer-acquisition',
+              'producer-cleanup-unknown',
+              'producer-closed-missing',
+              'producer-diagnostic-close',
+              'producer-ended',
+              'producer-envelope-invalid',
+              'producer-eof-deadline',
+              'producer-eof-partial',
+              'producer-frame-malformed',
+              'producer-frame-oversized',
+              'producer-input-close',
+              'producer-log-close',
+              'producer-log-sync',
+              'producer-log-write',
+              'producer-observation-deadline',
+              'producer-operation',
+              'producer-output-close',
+              'producer-read',
+              'producer-receipt-mismatch',
+              'producer-receipt-unknown',
+              'producer-reported-unknown',
+              'producer-stale-snapshot',
+              'producer-transition-unknown',
+              'producer-wait-deadline',
+              'producer-wait-nonzero',
+              'request-correlation',
+              'terminal-missing',
+              'uncategorized',
+              'work-admission-uncertain',
+              'work-other-error',
+              'work-output-limit',
+              'work-phase-unknown',
+              'work-registration-unobserved',
+              'work-start-uncertain',
+          }
+          outcome_path = pathlib.Path(os.environ['CI_PRODUCER_RESULT'])
+          result = read_marker(outcome_path)
+          stage, code = result.get('stage'), result.get('failure_code')
+          if (phase == 'connection' and result.get('outcome') == 'failed-unknown'
+                  and result.get('cleanup') == 'unconfirmed' and result.get('helper_sha256') == sha
+                  and isinstance(stage, str) and isinstance(code, str)
+                  and stage in stages and code in failure_codes):
+              public.update(stage=stage, failure_code=code)
+          joined = read_marker(outcome_path.with_suffix('.supervisor.json'))
+          exit_code = joined.get('original_test_exit')
+          if ((joined.get('outcome'), joined.get('cleanup')) in
+                  (('passed', 'confirmed'), ('failed-unknown', 'unconfirmed'))
+                  and type(exit_code) is int and -128 <= exit_code <= 255):
+              public['original_test_exit'] = exit_code
+          verdict = read_marker(outcome_path.with_suffix('.verdict.json'))
+          reasons = {
+              ('passed', 'confirmed', 'original-test-joined'): 'original-test-joined',
+              ('failed-unknown', 'unconfirmed', 'Failed/unknown: owners retained; runner teardown is not cleanup proof'): 'test-failed-unknown',
+              ('failed-unknown', 'unconfirmed', 'Observation timed out: failure/unknown, no cleanup or kill attempted'): 'observation-timeout',
+          }
+          fields = (verdict.get('outcome'), verdict.get('cleanup'), verdict.get('reason'))
+          if all(isinstance(value, str) for value in fields) and fields in reasons:
+              public.update(observer_verdict=fields[0], observer_reason=reasons[fields])
+          # A diagnostic never changes the failure return or the immutable verdict.
+          summary = json.dumps(public, sort_keys=True)
+          print(summary)
+          try:
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+                  output.write(summary + '\n\n')
+          except OSError:
+              raise SystemExit('ALLOWLISTED_DIAGNOSTIC_SUMMARY_UNAVAILABLE')
+          PYFAIL
+          }
+          # No traps, signals, test deadlines, retries or alternate owner handles.
+          # On unknown, the original keeper/test remain until runner destruction.
+          run_owned_test() {
+            local phase="$1" binary="$2" name="$3" package="$4"
+            local keeper observer_exit=0 keeper_exit=0
+            export CI_PRODUCER_RESULT="$CI_PRODUCER_RUN_DIR/$phase-result.json"
+            export CI_PRODUCER_INVOCATION
+            CI_PRODUCER_INVOCATION=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+            # Check freshness before starting either role (not after a test can
+            # legitimately create its result). Never consume a previous success.
+            for path in "$CI_PRODUCER_RESULT" "${CI_PRODUCER_RESULT%.json}.supervisor.json" \
+              "${CI_PRODUCER_RESULT%.json}.verdict.json" \
+              "$CI_PRODUCER_RUN_DIR/$phase.log" "$CI_PRODUCER_RUN_DIR/$phase-keeper.log" \
+              "$CI_PRODUCER_RUN_DIR/$phase-observer.log" "$CI_PRODUCER_RUN_DIR/$phase.jsonl"; do
+              if [ -e "$path" ] || [ -L "$path" ]; then
+                printf '%s: refused stale outcome or log path\n' "$phase"
+                report_unknown "$phase" "$name" preflight
+                return 1
+              fi
+            done
+            printf '%s: starting (%s)\n' "$phase" "$LANE"
+            python3 "$supervisor" keeper \
+              --test "$CI_PRODUCER_RUN_DIR/$binary" --test-name "$name" \
+              --invocation "$CI_PRODUCER_INVOCATION" \
+              --report "$CI_PRODUCER_RESULT" --log "$CI_PRODUCER_RUN_DIR/$phase.log" \
+              > "$CI_PRODUCER_RUN_DIR/$phase-keeper.log" 2>&1 &
+            keeper=$!
+            python3 "$supervisor" observer --report "$CI_PRODUCER_RESULT" \
+              --test-name "$name" --invocation "$CI_PRODUCER_INVOCATION" \
+              > "$CI_PRODUCER_RUN_DIR/$phase-observer.log" 2>&1 || observer_exit=$?
+            if [ "$observer_exit" -ne 0 ]; then
+              printf '%s: failed-unknown; no cleanup proof, signal or retry\n' "$phase"
+              report_unknown "$phase" "$name" observer
+              return 1
+            fi
+            # This joins the same keeper only AFTER its durable original Wait0.
+            wait "$keeper" || keeper_exit=$?
+            if [ "$keeper_exit" -ne 0 ]; then
+              printf '%s: failed-unknown; original keeper did not exit successfully\n' "$phase"
+              report_unknown "$phase" "$name" keeper
+              return 1
+            fi
+            go tool test2json -p "$package" < "$CI_PRODUCER_RUN_DIR/$phase.log" \
+              > "$CI_PRODUCER_RUN_DIR/$phase.jsonl" 2> "$CI_PRODUCER_RUN_DIR/$phase-json.log"
+            python3 - "$phase" "$package" "$name" <<'PY'
+          import collections
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+
+          phase, package, name = sys.argv[1:]
+          root = pathlib.Path(os.environ['CI_PRODUCER_RUN_DIR'])
+          expected = {name}
+          if phase == 'tls-negative':
+              expected |= {name + '/' + kind + '/' + failure
+                           for kind in ('worker', 'control')
+                           for failure in ('wrong-ca', 'wrong-hostname')}
+          elif phase != 'connection':
+              raise SystemExit('UNEXPECTED_TEST_PHASE')
+          try:
+              rows = [json.loads(line) for line in (root / (phase + '.jsonl')).read_text().splitlines()]
+              outcome_path = pathlib.Path(os.environ['CI_PRODUCER_RESULT'])
+              outcome = json.loads(outcome_path.read_text())
+              joined = json.loads(outcome_path.with_suffix('.supervisor.json').read_text())
+              verdict = json.loads(outcome_path.with_suffix('.verdict.json').read_text())
+              invocation = os.environ['CI_PRODUCER_INVOCATION']
+              counts = collections.Counter((r.get('Test'), r.get('Action')) for r in rows)
+              sha = os.environ['CI_PRODUCER_SHA256']
+              valid = (
+                  bool(rows) and all(r.get('Package') == package for r in rows)
+                  and {r.get('Test') for r in rows if r.get('Test')} == expected
+                  and all(counts[(test, 'run')] == counts[(test, 'pass')] == 1 for test in expected)
+                  and counts[(None, 'pass')] == 1
+                  and not any(r.get('Action') in ('fail', 'skip') for r in rows)
+                  and outcome.get('outcome') == 'passed' and outcome.get('cleanup') == 'confirmed'
+                  and outcome.get('test') == name and outcome.get('invocation') == invocation
+                  and joined.get('outcome') == 'passed' and joined.get('cleanup') == 'confirmed'
+                  and joined.get('test') == name and joined.get('invocation') == invocation
+                  and verdict.get('outcome') == 'passed' and verdict.get('cleanup') == 'confirmed'
+                  and verdict.get('test') == name and verdict.get('invocation') == invocation
+                  and re.fullmatch('[0-9a-f]{32}', invocation) is not None
+                  and type(joined.get('original_test_exit')) is int and joined['original_test_exit'] == 0
+                  and re.fullmatch('[0-9a-f]{64}', sha) is not None
+                  and re.fullmatch('[0-9a-f]{40}', os.environ['CI_PRODUCER_SOURCE_SHA']) is not None
+              )
+              if phase == 'connection':
+                  valid = valid and outcome.get('helper_sha256') == sha and outcome.get('fixture_retained') is False
+          except (OSError, ValueError, KeyError, TypeError, AttributeError):
+              valid = False
+          if not valid:
+              raise SystemExit('EXACT_TEST_AND_ORIGINAL_JOIN_NOT_VERIFIED: ' + phase)
+          # Do not print JSON rows, fixture data, paths or child/keeper logs.
+          public = {'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
+                    'source_revision': os.environ['CI_PRODUCER_SOURCE_SHA'],
+                    'helper_sha256': os.environ['CI_PRODUCER_SHA256']}
+          summary = json.dumps(public, sort_keys=True)
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write(summary + '\n\n')
+          PY
+          }
+          # The four real trust failures must pass their exact JSON/Wait0 gate
+          # before the resident test is permitted to start the actual helper.
+          run_owned_test tls-negative transport.test TestCIProducerTrustTLSNegative \
+            github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport
+          run_owned_test connection connection.test TestCIActualProducerConnection \
+            github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe
+          # Intentionally no artifact upload, raw-log publication or cleanup job.
