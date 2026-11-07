@@ -353,14 +353,14 @@ func (p *process) signal(s signal) {
 }
 
 // stopAndReap is the only path that reaps. A fresh known natural exit may use
-// an anchor-only group snapshot before any signal. Otherwise it sends TERM, waits up to
-// the grace period for the group's stdio to close, then sends KILL to the same
-// group, all before the reap. A fresh successful TERM may also use the
+// an anchor-only group snapshot before any signal. Otherwise it sends TERM, waits
+// for the configured grace period unless the caller context ends, then sends
+// KILL to the same group, all before the reap. A fresh successful TERM may also use the
 // independent pre-KILL anchor-only observation. A natural exit without an eligible snapshot
 // adapter follows this original sweep. A failed attempted snapshot is sticky
 // unknown and retains the anchor; it is not retried through another API.
 // Successful signal delivery does not prove every member has exited.
-// A member that already closed its stdio may get KILL right after TERM.
+// Stdio EOF does not shorten the TERM grace or prove that group members exited.
 func (p *process) stopAndReap(ctx context.Context) error {
 	p.sweep.Lock()
 	defer p.sweep.Unlock()
@@ -413,7 +413,7 @@ func (p *process) stopAndReap(ctx context.Context) error {
 		return lost
 	}
 	p.signal(sigTerm)
-	waitClosed(ctx, p.ioDone, p.timing.termGrace)
+	waitTermGrace(ctx, p.timing.termGrace)
 	if handled, err := p.preKillSnapshot(firstStop); handled {
 		return err
 	}
@@ -427,6 +427,19 @@ func (p *process) stopAndReap(ctx context.Context) error {
 		return errUnconfirmed
 	}
 	return nil
+}
+
+// waitTermGrace preserves the original caller budget without letting early
+// stdio EOF advance the first group decision. A caller cancellation/deadline
+// still ends this wait and proceeds to the existing nonblocking stop decision.
+// Neither timer expiry nor context completion is cleanup evidence.
+func waitTermGrace(ctx context.Context, limit time.Duration) {
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 // preKillSnapshot is only for a fresh TERM-success stop, before any KILL.
