@@ -152,6 +152,36 @@ def check_locks(locks):
     require(sorted(actual) == sorted(expected_sum), 'GO_LICENSE_LOCK_MISMATCH')
 
 
+def inventory_record(source, locks):
+    """Fixed notice identities only; this does not establish dependency closure."""
+    def records(destination, hashes):
+        return {name: {'path': destination + '/' + name, 'sha256': value}
+                for name, value in hashes.items()}
+
+    inventory = {
+        'schema': 'rescue-host-go-license-inventory/1', 'sourceCommit': source,
+        'sourceCommitVerified': False,
+        'scope': 'fixed-direct-modules-and-toolchain-texts-only', 'distributionStatus': 'blocked',
+        'moduleGraphVerified': False, 'binaryDependenciesVerified': False,
+        'productionGateClosed': True,
+        'lockFiles': {name: digest(data) for name, data in locks.items()},
+        'toolchain': {'version': GO_VERSION, 'source': 'https://github.com/golang/go/tree/' + GO_VERSION,
+                      'archiveVerified': False,
+                      'texts': records('go-toolchain/' + GO_VERSION, TEXT_SHA)},
+        'modules': [],
+    }
+    for module, (version, module_sum, mod_sum) in MODULES.items():
+        name = module.rsplit('/', 1)[1]
+        upstream, hashes = MODULE_TEXTS[module]
+        inventory['modules'].append({
+            'module': module, 'version': version, 'moduleSum': module_sum, 'goModSum': mod_sum,
+            'source': upstream + '/tree/' + version,
+            'directoryVerified': False,
+            'texts': records(name + '-' + version, hashes),
+        })
+    return inventory
+
+
 def collect(args):
     require(re.fullmatch('[0-9a-f]{40}', args.source) is not None, 'GO_LICENSE_SOURCE_INVALID')
     fixed_directory(args.module_root)
@@ -169,37 +199,18 @@ def collect(args):
     files = {}
 
     def texts(root, destination, hashes):
-        records = {}
         for name in hashes:
             data = read_file(root / name, 16 * 1024)
             require(digest(data) == hashes[name], 'GO_LICENSE_TEXT_HASH_MISMATCH')
             path = destination + '/' + name
             files[path] = data
-            records[name] = {'path': path, 'sha256': digest(data)}
-        return records
 
-    inventory = {
-        'schema': 'rescue-host-go-license-inventory/1', 'sourceCommit': args.source,
-        'sourceCommitVerified': False,
-        'scope': 'fixed-direct-modules-and-toolchain-texts-only', 'distributionStatus': 'blocked',
-        'moduleGraphVerified': False, 'binaryDependenciesVerified': False,
-        'productionGateClosed': True,
-        'lockFiles': {name: digest(data) for name, data in locks.items()},
-        'toolchain': {'version': GO_VERSION, 'source': 'https://github.com/golang/go/tree/' + GO_VERSION,
-                      'archiveVerified': False,
-                      'texts': texts(args.go_root, 'go-toolchain/' + GO_VERSION, TEXT_SHA)},
-        'modules': [],
-    }
-    for module, (version, module_sum, mod_sum) in MODULES.items():
+    texts(args.go_root, 'go-toolchain/' + GO_VERSION, TEXT_SHA)
+    for module, (version, _, _) in MODULES.items():
         name = module.rsplit('/', 1)[1]
-        upstream, hashes = MODULE_TEXTS[module]
-        inventory['modules'].append({
-            'module': module, 'version': version, 'moduleSum': module_sum, 'goModSum': mod_sum,
-            'source': upstream + '/tree/' + version,
-            'directoryVerified': False,
-            'texts': texts(fixed_directory(args.module_cache, module + '@' + version),
-                           name + '-' + version, hashes),
-        })
+        texts(fixed_directory(args.module_cache, module + '@' + version),
+              name + '-' + version, MODULE_TEXTS[module][1])
+    inventory = inventory_record(args.source, locks)
     files['DEPENDENCIES.json'] = (json.dumps(inventory, indent=2, sort_keys=True) + '\n').encode()
     try:
         args.output.mkdir(exist_ok=False)
