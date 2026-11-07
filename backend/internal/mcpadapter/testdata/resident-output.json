@@ -1,0 +1,180 @@
+{
+  "pending": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "pending",
+    "profile": "",
+    "command_id": "",
+    "command_phase": "",
+    "exit": {
+      "known": false
+    },
+    "stop": "none",
+    "terminal": false,
+    "command_cleanup": "",
+    "owner_cleanup": "pending",
+    "gateway_cleanup": "pending",
+    "chunks": [],
+    "next_cursor": 0,
+    "error": ""
+  },
+  "running": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "running",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "running",
+    "exit": {
+      "known": false
+    },
+    "stop": "none",
+    "terminal": false,
+    "command_cleanup": "pending",
+    "owner_cleanup": "pending",
+    "gateway_cleanup": "pending",
+    "chunks": [
+      {
+        "stream": "stdout",
+        "offset": 0,
+        "encoding": "base64",
+        "data": "AP8="
+      },
+      {
+        "stream": "stderr",
+        "offset": 2,
+        "encoding": "base64",
+        "data": "b2s="
+      }
+    ],
+    "next_cursor": 4,
+    "error": ""
+  },
+  "finished": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "finished",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "exited",
+    "exit": {
+      "known": true,
+      "code": 0
+    },
+    "stop": "none",
+    "terminal": true,
+    "command_cleanup": "confirmed",
+    "owner_cleanup": "confirmed",
+    "gateway_cleanup": "confirmed",
+    "chunks": [
+      {
+        "stream": "stdout",
+        "offset": 0,
+        "encoding": "base64",
+        "data": "AP8="
+      },
+      {
+        "stream": "stderr",
+        "offset": 2,
+        "encoding": "base64",
+        "data": "b2s="
+      }
+    ],
+    "next_cursor": 4,
+    "error": ""
+  },
+  "unknown": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "unknown",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "running",
+    "exit": {
+      "known": false
+    },
+    "stop": "none",
+    "terminal": false,
+    "command_cleanup": "unknown",
+    "owner_cleanup": "unknown",
+    "gateway_cleanup": "confirmed",
+    "chunks": [
+      {
+        "stream": "stdout",
+        "offset": 0,
+        "encoding": "base64",
+        "data": "AP8="
+      },
+      {
+        "stream": "stderr",
+        "offset": 2,
+        "encoding": "base64",
+        "data": "b2s="
+      }
+    ],
+    "next_cursor": 4,
+    "error": "result_unobserved_or_uncertain"
+  },
+  "released_before_command": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "finished",
+    "profile": "",
+    "command_id": "",
+    "command_phase": "",
+    "exit": {
+      "known": false
+    },
+    "stop": "none",
+    "terminal": false,
+    "command_cleanup": "",
+    "owner_cleanup": "confirmed",
+    "gateway_cleanup": "confirmed",
+    "chunks": [],
+    "next_cursor": 0,
+    "error": "admission_refused_or_uncertain",
+    "result_released": true
+  },
+  "not_sent": {
+    "error": "not_sent"
+  },
+  "not_released": {
+    "error": "not_released"
+  },
+  "not_found": {
+    "error": "not_found"
+  },
+  "request_generation_mismatch": {
+    "error": "request_generation_mismatch"
+  },
+  "replay_ledger_full": {
+    "error": "replay_ledger_full"
+  },
+  "cleanup_not_confirmed": {
+    "error": "cleanup_not_confirmed"
+  },
+  "busy_or_refused": {
+    "error": "busy_or_refused",
+    "owner_cleanup": "unknown"
+  },
+  "control_ended": {
+    "error": "control_ended",
+    "owner_cleanup": "unknown",
+    "reinitialize_required": true
+  },
+  "released_finished": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "finished",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "exited",
+    "exit": {
+      "known": true,
+      "code": 0
+    },
+    "stop": "none",
+    "terminal": true,
+    "command_cleanup": "confirmed",
+    "owner_cleanup": "confirmed",
+    "gateway_cleanup": "confirmed",
+    "chunks": [],
+    "next_cursor": 4,
+    "error": "",
+    "result_released": true
+  }
+}

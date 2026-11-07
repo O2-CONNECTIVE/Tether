@@ -15,13 +15,13 @@ type fixedBackendFixture struct {
 func (b *fixedBackendFixture) FixedStart(_ context.Context, id string) map[string]any {
 	b.starts++
 	b.id = id
-	return map[string]any{"request_id": id, "phase": "pending", "owner_cleanup": "pending"}
+	return fixedResultFixture(id)
 }
 func (b *fixedBackendFixture) FixedStatus(_ context.Context, id string) map[string]any {
-	return map[string]any{"request_id": id, "phase": "pending"}
+	return fixedResultFixture(id)
 }
 func (b *fixedBackendFixture) FixedCancel(_ context.Context, id string) map[string]any {
-	return map[string]any{"request_id": id, "phase": "stopping"}
+	return fixedResultFixture(id)
 }
 func TestResidentHTTPOnlyFixedScopeAndOriginalCorrelation(t *testing.T) {
 	b := &fixedBackendFixture{}
@@ -58,4 +58,10 @@ func TestResidentHTTPOnlyFixedScopeAndOriginalCorrelation(t *testing.T) {
 	if reply.Error || reply.Kind != HTTPResponse || b.starts != 1 || b.id != "0123456789abcdef0123456789abcdef" {
 		t.Fatal(string(reply.Body), b)
 	}
+}
+
+// Match the concrete pending gateway result, including command fields that
+// have not been observed yet. Cancellation requests do not invent a new phase.
+func fixedResultFixture(id string) map[string]any {
+	return map[string]any{"request_id": id, "phase": "pending", "profile": "", "command_id": "", "command_phase": "", "exit": map[string]any{"known": false}, "stop": "none", "terminal": false, "command_cleanup": "", "owner_cleanup": "pending", "gateway_cleanup": "pending", "chunks": []any{}, "next_cursor": 0, "error": ""}
 }

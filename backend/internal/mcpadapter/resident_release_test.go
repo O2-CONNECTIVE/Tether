@@ -14,7 +14,10 @@ type releaseBackendFixture struct {
 
 func (b *releaseBackendFixture) FixedRelease(_ context.Context, id string) map[string]any {
 	b.releases++
-	return map[string]any{"request_id": id, "result_released": true}
+	v := fixedResultFixture(id)
+	v["phase"], v["owner_cleanup"], v["gateway_cleanup"] = "finished", "confirmed", "confirmed"
+	v["result_released"] = true
+	return v
 }
 func TestResidentReleaseToolIsExplicitOptionalAndStrict(t *testing.T) {
 	b := &releaseBackendFixture{}
