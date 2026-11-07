@@ -17,7 +17,9 @@ MSG、payload、window/thread/process ID、address、path、raw scalar は出力
 
 original-wait は**公開済みの観測の由来**です。最後に公開された整合した観測列を示し、seal 時の唯一の active wait、PC、継続停止、原因を保証しません。
 既存 protocol の TLS 変更から FFI 通知までには未公開の区間があります。その区間で別の wait が始まっていないとは主張しません。
-完了した pre-seal の nested/invalid/old-scope/foreign 通知は unknown にします。旧 delivery の seal 後も、新記録自身の seal まで association 通知を受け付けます。
+完了した pre-seal の nested/invalid/old-scope/foreign 通知は unknown にします。
+対象 scope の begin から scope-drop までは receiver 通知も新記録の入口で検査し、foreign/unbound の即時 Ready も invalidation に含めます。
+対象 scope が一つも開いていない時の token0 の unbound receiver/pump hook は対象外です。非ゼロの古い token や不正 token は拒否します。終了後の script wait によって完了済み由来を無効化しません。旧 delivery の seal 後も、新記録自身の seal まで association 通知を受け付けます。
 GetMessage bracket は内部の sent-message 処理、API 前後の preemption、純粋な queue 待ちを区別しません。
 旧 delivery と receiver と pump の seal は別々です。同時刻の join や cross-record duration を計算しません。
 

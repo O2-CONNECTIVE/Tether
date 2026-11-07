@@ -138,6 +138,11 @@ fn main() {
         .join()
         .unwrap();
     }
+    let poll_case = std::env::args().nth(2).unwrap_or_default();
+    let foreign_ready = || thread::spawn(|| {
+        let (tx, rx) = mpsc::channel(); tx.send(9_u8).unwrap();
+        assert_eq!(wait_with_pump(rx), Ok(9)); // No TLS scope and no Get/Dispatch call.
+    }).join().unwrap();
     let p = recorder::Probe::memory();
     assert!(p.register());
     let s = Arc::new(State {
@@ -169,6 +174,8 @@ fn main() {
     let held = matches!(case.as_str(), "get-held" | "dispatch-held" | "caps");
     let frozen = if held {
         s.entered.wait();
+        if poll_case == "foreign-after-old-seal" { let _ = p.snapshot(true, true); }
+        if poll_case.starts_with("foreign-") { foreign_ready(); }
         let text = p.pump_snapshot(true, true);
         s.release.wait();
         Some(text)
@@ -176,6 +183,16 @@ fn main() {
         None
     };
     let result = worker.join().unwrap();
+    if poll_case == "outside-ready" { foreign_ready(); }
+    if poll_case == "outside-quit" {
+        thread::spawn(|| {
+            let outside = Arc::new(State { case: "quit".into(), entered: Barrier::new(1), release: Barrier::new(1), get: AtomicUsize::new(0), dispatch: AtomicUsize::new(0), translate: AtomicUsize::new(0) });
+            STATE.with(|v| *v.borrow_mut() = Some(outside.clone()));
+            let (_tx, rx) = mpsc::channel::<u8>();
+            assert_eq!(wait_with_pump(rx), Err(Error::TaskCanceled));
+            assert_eq!(outside.get.load(SeqCst), 1);
+        }).join().unwrap();
+    }
     let good = matches!(
         case.as_str(),
         "ready" | "positive" | "other-negative" | "dispatch-held"

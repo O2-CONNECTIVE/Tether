@@ -238,6 +238,31 @@ impl Writer<'_> {
             }
         });
     }
+    fn active_target(&self) -> bool {
+        let rows = self.0.live.load(SeqCst);
+        (0..2).any(|i| {
+            let row = (rows >> (i * WIDTH)) & ROW;
+            count(row, 0) == 1 && count(row, 3) == 0
+        })
+    }
+    pub(super) fn receiver(&self, token: u64, bound: bool, owner: impl FnOnce(usize) -> bool) {
+        // Ignore only genuinely unbound script waits outside all target lifetimes.
+        // Nonzero stale/invalid tokens remain errors even after scope-drop.
+        if token == 0 && !bound && !self.active_target() {
+            return;
+        }
+        if !bound || !(1..=2).contains(&token) || !owner(token as usize - 1) {
+            self.reject();
+            return;
+        }
+        self.update(token as usize - 1, |row| {
+            count(*row, 0) == 1
+                && count(*row, 1) == 1
+                && count(*row, 2) == 0
+                && count(*row, 3) == 0
+                && state(*row) == 1
+        });
+    }
     pub(super) fn bracket(
         &self,
         token: u64,
@@ -245,6 +270,9 @@ impl Writer<'_> {
         event: u8,
         owner: impl FnOnce(usize) -> bool,
     ) {
+        if token == 0 && !bound && !self.active_target() {
+            return;
+        }
         if !bound || !(1..=2).contains(&token) || event > 5 || !owner(token as usize - 1) {
             self.reject();
             return;

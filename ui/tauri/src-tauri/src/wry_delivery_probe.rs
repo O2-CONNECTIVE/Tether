@@ -438,6 +438,9 @@ pub extern "C" fn rescue_host_delivery_pump(token: u64, bound: bool, event: u8) 
 pub extern "C" fn rescue_host_delivery_receiver(token: u64, bound: bool, state: u8) {
     let _last_error = platform::ErrorState::save();
     if let Some(p) = ACTIVE.get() {
+        if let Some(writer) = p.pump.writer() {
+            writer.receiver(token, bound, |i| p.scopes[i].owner.load(SeqCst) == platform::thread());
+        }
         let bucket = if bound && (1..=2).contains(&token) {
             let slot = &p.scopes[token as usize - 1];
             if slot.ready.load(SeqCst) == 2

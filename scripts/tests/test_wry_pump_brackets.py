@@ -38,8 +38,8 @@ class PumpBracketTests(unittest.TestCase):
                                         capture_output=True, timeout=40)
                 self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
 
-            def run(case):
-                result = subprocess.run([str(exe), case], capture_output=True, timeout=15)
+            def run(case, poll_case=""):
+                result = subprocess.run([str(exe), case, poll_case], capture_output=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
                 value = json.loads(result.stdout)
                 from wry_pump_record import validate
@@ -73,6 +73,19 @@ class PumpBracketTests(unittest.TestCase):
                     self.assertEqual(row['waitDropsCapped'], int(case not in ('get-held', 'dispatch-held', 'caps')))
                     self.assertEqual(value['slots'][1]['relation'], 'unknown')
                     self.assertEqual(value['slots'][1]['state'], 'missing')
+            # A completed unbound ready-only poll has no lifecycle/bracket hook.
+            # It must poison an open target window, even after old delivery seal.
+            for poll_case in ('foreign-ready', 'foreign-after-old-seal'):
+                value = run('get-held', poll_case)
+                self.assertTrue(value['lossDetected'])
+                self.assertTrue(all(row['relation'] == 'unknown' for row in value['slots']))
+            outside_baseline = run('ready')
+            for poll_case in ('outside-ready', 'outside-quit'):
+                value = run('ready', poll_case)
+                self.assertFalse(value['lossDetected'])
+                self.assertEqual(value['slots'][0]['state'], 'wait-ended')
+                self.assertEqual(value['slots'][0]['relation'], 'original-wait')
+                self.assertEqual(value, outside_baseline, 'outside wait changed target counts/state')
             # Mutants are applied to actual patched pump bytes, not a modeled FSM.
             for seam, case in (
                 ('rescue_host_delivery::Pump::phase(2);', 'get-held'),
