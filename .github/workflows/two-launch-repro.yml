@@ -34,8 +34,8 @@ jobs:
       PYTHONUTF8: '1'
       PYTHONDONTWRITEBYTECODE: '1'
       CONTROL_HEAD: ${{ github.event.pull_request.head.sha }}
-      WRY_PIN: a0175710969b76e0c546abadbc46c7da02568ea6
-      WRY_TREE: c86408c6d4ff009ea33eba24aaba1a3b5a5fa7e0
+      WRY_PIN: cad02a5b6fefd3ac11a4b8b45758feb438bf024b
+      WRY_TREE: 3bb45eb8c459761898bfff160a4931ed895e4463
       WRY_SOURCE: ${{ github.workspace }}/.source
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         id: source
         with:
-          ref: a0175710969b76e0c546abadbc46c7da02568ea6
+          ref: cad02a5b6fefd3ac11a4b8b45758feb438bf024b
           path: .source
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7

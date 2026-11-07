@@ -1,7 +1,7 @@
 # 単回の判定後配送診断: control
 
 このcontrolはPR251の既存workflowを別実験として置換する。以前の実行予算を再使用しない。
-新sourceは `a0175710969b76e0c546abadbc46c7da02568ea6`、treeは `c86408c6d4ff009ea33eba24aaba1a3b5a5fa7e0`。
+新sourceは `cad02a5b6fefd3ac11a4b8b45758feb438bf024b`、treeは `3bb45eb8c459761898bfff160a4931ed895e4463`。
 実験は元の15秒要求とnative失敗を維持し、別の閉じたcausal recordだけを付加する。
 古い12-section recordのdeliveryは、source文書に記載したanchor位置の明示的ordinal projectionであり、旧sourceの未変更記録とは呼ばない。
 

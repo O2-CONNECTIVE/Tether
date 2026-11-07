@@ -13,8 +13,8 @@ import subprocess
 import sys
 import unittest
 
-SOURCE = 'a0175710969b76e0c546abadbc46c7da02568ea6'
-TREE = 'c86408c6d4ff009ea33eba24aaba1a3b5a5fa7e0'
+SOURCE = 'cad02a5b6fefd3ac11a4b8b45758feb438bf024b'
+TREE = '3bb45eb8c459761898bfff160a4931ed895e4463'
 SECTIONS = {'steps', 'native', 'observation', 'wry', 'delivery', 'receiver',
             'driver', 'host', 'launch', 'final', 'overlay', 'build'}
 # Fixed test IDs are populated only from the reviewed final source, never a count inherited from an older variant.
