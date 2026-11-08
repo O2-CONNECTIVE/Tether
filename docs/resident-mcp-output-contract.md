@@ -8,6 +8,8 @@
 
 一覧対応backendではさらに `rescue_fixed_list` を公開します。入力cursor/limitとsummary出力の契約は[所有実行一覧](resident-execution-list.md)を参照してください。以下のwork結果schemaとは別のversion 1一覧schemaです。
 
+保持出力読取に対応するbackendは `rescue_fixed_read_output` も公開します。byte cursorと最大4096 decoded bytesによる非ack読取で、[保持出力読取](resident-read-output.md)のversion 1 schemaを使います。既存work結果schemaは変更しません。
+
 [gateway](../backend/internal/agentgateway/http.go) が認証済みprincipal・明示enrollment・現在のcontrol generationへ束縛した別経路です。旧4本と恒久的unbound discoveryを変更せず、sessionへ後からgrantを付けません。generation切断後の結果保持・再initialize、許可発行、失効の意味も変えません。
 
 ## 実際のstructuredContent
