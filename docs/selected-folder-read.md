@@ -34,7 +34,7 @@ entry以降の呼出側による再利用・並行操作・dupした別名handle
 1. pathは最大1024 byte・16 component、componentは最大255 byteです。空、絶対path、dot/dot-dot、隠しcomponent、NUL、backslash、colon、非ASCIIや空白等は拒否し、clean/正規化で別pathへ変換しません。
 2. 各componentを親descriptorから `fstatat(AT_SYMLINK_NOFOLLOW)` で事前照会し、`openat(O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)` で取得します。中間には `O_DIRECTORY` も要求します。取得前後のmetadataが不一致なら拒否します。
 3. root/中間directoryは現在実効UIDと一致し、group/world-write modeを拒否します。leafは同じUIDの通常file、link count 1、非負sizeだけです。全componentのdeviceとfilesystem IDをrootと比較します。
-4. rootからleafまでdescriptorを保持し、各checkpointと次の子の照会前に、同じdescriptorのmetadataと親nameからのno-follow照会を照合します。認可callback中にroot/ancestorの持続変更が起きた場合は、変更前のparent handleから次の子を照会・openする前に拒否します。root・祖先のmetadata変化も保守的に拒否し、無関係な兄弟file更新でも拒否する場合があります。
+4. rootからleafまでdescriptorを保持し、各checkpointと次の子の照会前に、同じdescriptorのmetadataと親nameからのno-follow照会を照合します。認可callbackから戻った時点でroot/ancestorのmetadataや親nameの不一致を観測した場合は、変更前のparent handleから次の子を照会・openする前に拒否します。root移動が必ずmetadataへ現れるとは保証しません。無関係な兄弟file更新でも拒否する場合があります。
 5. 既存 `readOwned` を使い、最大48KiB、最大64 read、overflowしないrange計算、途中失敗時の無payload、binary slice、scratchの可能な範囲のclearを維持します。
 6. rootを含む取得済みhandleは失敗経路も逆順に一回closeを試みます。途中取得失敗でも先のhandleを残しません。一つのclose失敗で他のcloseを省略せず、cleanup unknownを独立errorとして保持してbytesを抑止します。自動retryやclose再試行はありません。
 

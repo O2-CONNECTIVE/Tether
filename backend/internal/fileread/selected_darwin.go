@@ -71,7 +71,7 @@ func readSelectedAcquiring(ctx context.Context, root *os.File, permission readPe
 			return selectedResult{}, err
 		}
 		// The provider call may outlive a persistent root/ancestor change.
-		// Refuse it before another child lookup/open through a retained fd.
+		// Reject observed changes before another lookup/open via a retained fd.
 		// This check is still not atomic with the following lookup or open.
 		if _, err := h.inspect(ctx); err != nil {
 			return selectedResult{}, errChanged
