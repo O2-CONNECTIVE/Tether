@@ -40,8 +40,16 @@ uint32_t rh_resident_preparation_retire_active_io(uint64_t handle);
  * half-close and nonblocking same-owner collection; no kill or close retry. */
 uint32_t rh_resident_preparation_abandon_active(uint64_t handle);
 
+/* Explicit shutdown preserves observation until raw EOF, even after exit.
+ * Discard: rejected0 progress1 pending2 rawEOF3 error4. One nonblocking read
+ * into fixed private 4096-byte storage; no payload/control/cleanup permission.
+ * Requires same active, unretired handle/TLS worker after shutdown request. */
+uint32_t rh_resident_preparation_request_active_close(uint64_t handle);
+uint32_t rh_resident_preparation_discard_observation(uint64_t handle);
+
 #ifdef RESIDENT_LAUNCH_FIXTURE
-/* Separate untrusted self-child owner. mode0 echo,1 early exit,2 early lost ack,3 exit2,4 self SIGTERM.
+/* Separate untrusted self-child owner. mode0 echo,1 early exit,2 early lost ack,3 exit2,4 self SIGTERM,
+ * 5/6 finite malformed output,7 finite output with lost close receipt.
  * Not callable from a requirement-bearing production preparation. */
 uint64_t rh_fixture_preparation_create_active(uint32_t mode);
 /* Same original worker/record collection after incomplete fixture Drop only. */

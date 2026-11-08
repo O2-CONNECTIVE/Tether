@@ -1,6 +1,8 @@
 use super::{NativePreparation, State};
 
 unsafe extern "C" {
+    pub(super) fn rh_resident_preparation_request_active_close(handle: u64) -> u32;
+    pub(super) fn rh_resident_preparation_discard_observation(handle: u64) -> u32;
     pub(super) fn rh_resident_preparation_exit(handle: u64) -> u64;
     pub(super) fn rh_resident_preparation_retire_active_io(handle: u64) -> u32;
     pub(super) fn rh_resident_preparation_abandon_active(handle: u64) -> u32;
@@ -30,7 +32,38 @@ impl ExitObservation {
     }
 }
 
+/// Shutdown discard only; neither bytes nor lifecycle permission are returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiscardObservation {
+    Rejected,
+    Progress,
+    Pending,
+    Eof,
+    Error,
+}
+
+impl DiscardObservation {
+    /// Only actual raw EOF completes drain, even when exact Wait already exists.
+    pub fn is_eof(self) -> bool {
+        self == Self::Eof
+    }
+}
+
 impl NativePreparation {
+    pub fn discard_observation(&mut self) -> DiscardObservation {
+        if !self.active || self.state != State::Unknown {
+            return DiscardObservation::Rejected;
+        }
+        // SAFETY: private original handle; native validates TLS and shutdown state.
+        match unsafe { rh_resident_preparation_discard_observation(self.handle.get()) } {
+            0 => DiscardObservation::Rejected,
+            1 => DiscardObservation::Progress,
+            2 => DiscardObservation::Pending,
+            3 => DiscardObservation::Eof,
+            _ => DiscardObservation::Error,
+        }
+    }
+
     pub fn poll_exit(&mut self) -> ExitObservation {
         if !self.active {
             return ExitObservation::Unavailable;
@@ -68,7 +101,9 @@ impl NativePreparation {
     /// No receipt, EOF, Wait or join is established; UNKNOWN stays retained.
     pub fn request_active_close(&mut self) {
         if self.active {
-            self.abandon_active();
+            // SAFETY: original private owner; close once without early retirement.
+            let _ = unsafe { rh_resident_preparation_request_active_close(self.handle.get()) };
+            self.state = State::Unknown;
         }
     }
 

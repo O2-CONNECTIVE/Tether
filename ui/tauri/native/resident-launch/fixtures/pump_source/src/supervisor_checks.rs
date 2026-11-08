@@ -1,4 +1,6 @@
-//! Actual parent/worker handoff, not a replacement launcher or Quit proof.
+#[cfg(resident_launch_fixture)]
+#[path = "discard_checks.rs"]
+mod discard_checks;
 use super::owner::native::{NativeIoSupervisor, NativeJoined, NativeOutcome};
 #[cfg(resident_launch_fixture)]
 use crate::native_preparation::{ExitObservation, NativePreparation, State};
@@ -42,6 +44,13 @@ pub(crate) fn run(mode: &str) {
 }
 #[cfg(resident_launch_fixture)]
 fn active(mode: &str) {
+    if matches!(
+        mode,
+        "supervisor-discard-trailing" | "supervisor-discard-pending"
+    ) {
+        discard_checks::run(mode);
+        return;
+    }
     if mode == "supervisor-prepared" {
         let (mut supervisor, source) = NativeIoSupervisor::fixture_prepared().unwrap();
         let mut passed = 0;
@@ -68,6 +77,9 @@ fn active(mode: &str) {
         return;
     }
     let (fixture, id) = match mode {
+        "supervisor-finite-malformed" => (FixedActiveFixture::FiniteMalformed, None),
+        "supervisor-finite-unwind" => (FixedActiveFixture::FiniteUnwind, None),
+        "supervisor-finite-unknown" => (FixedActiveFixture::FiniteUnknown, None),
         "supervisor-confirmed" => (FixedActiveFixture::Echo, Some(1)),
         "supervisor-unknown" => (FixedActiveFixture::Echo, Some(2)),
         "supervisor-missing" => (FixedActiveFixture::Echo, Some(3)),
@@ -79,8 +91,11 @@ fn active(mode: &str) {
         "supervisor-unwind" | "supervisor-drop" => (FixedActiveFixture::Echo, None),
         _ => panic!("unknown native supervisor fixture"),
     };
-    let (mut supervisor, source) =
-        NativeIoSupervisor::fixture(fixture, mode == "supervisor-unwind").unwrap();
+    let (mut supervisor, source) = NativeIoSupervisor::fixture(
+        fixture,
+        matches!(mode, "supervisor-unwind" | "supervisor-finite-unwind"),
+    )
+    .unwrap();
     let mut passed = 0;
     let mut check = |v: bool| {
         assert!(v, "native supervisor condition {}", passed + 1);
@@ -129,6 +144,9 @@ fn active(mode: &str) {
             check(!supervisor.wire_close_confirmed());
         }
         let actual = join(&mut supervisor);
+        if mode.starts_with("supervisor-finite-") {
+            eprintln!("finite collected: {:?}", actual.outcome());
+        }
         let expected_exit = match mode {
             "supervisor-rejected" => ExitObservation::Exit(2),
             "supervisor-signal" => ExitObservation::Signal(15),
@@ -136,7 +154,12 @@ fn active(mode: &str) {
         };
         let expected_io = if matches!(
             mode,
-            "supervisor-invalid" | "supervisor-lost-receipt" | "supervisor-unwind"
+            "supervisor-invalid"
+                | "supervisor-lost-receipt"
+                | "supervisor-unwind"
+                | "supervisor-finite-malformed"
+                | "supervisor-finite-unwind"
+                | "supervisor-finite-unknown"
         ) {
             State::Unknown
         } else {
@@ -147,7 +170,7 @@ fn active(mode: &str) {
                 == NativeOutcome::Active {
                     exit: expected_exit,
                     io: expected_io,
-                    unwound: mode == "supervisor-unwind",
+                    unwound: matches!(mode, "supervisor-unwind" | "supervisor-finite-unwind"),
                 },
         );
         check(supervisor.joined() == Some(actual));
@@ -160,7 +183,15 @@ fn active(mode: &str) {
     check(NativePreparation::fixture_counts().closes == 4);
     check(NativePreparation::fixture_counts().retire_calls == 0);
     check(NativePreparation::fixture_active_stats().waits == 1);
-    let abandons = if mode == "supervisor-lost-receipt" {
+    let abandons = if matches!(
+        mode,
+        "supervisor-invalid"
+            | "supervisor-unwind"
+            | "supervisor-lost-receipt"
+            | "supervisor-finite-unknown"
+            | "supervisor-finite-malformed"
+            | "supervisor-finite-unwind"
+    ) {
         3
     } else {
         2

@@ -12,7 +12,8 @@ from check_mac_enrollment_lookup import command
 from check_mac_native_pump import CRATE, validate_dependencies
 from check_mac_rust_owner import build_swift
 
-CASES = {'supervisor-prepared': 13, 'supervisor-confirmed': 20,
+CASES = {'supervisor-discard-pending': 23, 'supervisor-discard-trailing': 23, 'supervisor-finite-malformed': 14, 'supervisor-finite-unwind': 14,
+         'supervisor-finite-unknown': 14, 'supervisor-prepared': 13, 'supervisor-confirmed': 20,
          'supervisor-unknown': 18, 'supervisor-missing': 18, 'supervisor-malformed': 18,
          'supervisor-invalid': 14, 'supervisor-rejected': 14, 'supervisor-signal': 14,
          'supervisor-lost-receipt': 14, 'supervisor-unwind': 14, 'supervisor-drop': 13}
@@ -64,11 +65,11 @@ def run():
                 output = command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
                 passed += validate_report(mode, output)
     print(json.dumps({'fixture': 'native-io-supervisor-source', 'passed': passed,
-                      'normalModes': 1, 'fixtureModes': 11, 'activeModes': 10,
-                      'fixtureChildrenStarted': 10, 'fixtureChildrenWaited': 10,
-                      'physicalActiveEndpointsClosed': 40, 'unlaunchedEndpointsClosed': 4,
-                      'actualActiveIoWorkerJoins': 10, 'preparationWorkerJoins': 2,
-                      'retainedUnknownRecords': 10, 'lockedOffline': True,
+                      'normalModes': 1, 'fixtureModes': 16, 'activeModes': 15,
+                      'fixtureChildrenStarted': 15, 'fixtureChildrenWaited': 15,
+                      'physicalActiveEndpointsClosed': 60, 'unlaunchedEndpointsClosed': 4,
+                      'actualActiveIoWorkerJoins': 13, 'directDiscardWorkerJoins': 2, 'preparationWorkerJoins': 2,
+                      'retainedUnknownRecords': 15, 'lockedOffline': True,
                       'existingDependencyPackages': 11, 'clippyVariants': 2,
                       'producerLaunches': 0, 'hostOnly': True,
                       'scope': 'same affine native IO worker / Wait / component receipts; no outer joins / Quit permit'}))

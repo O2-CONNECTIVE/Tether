@@ -23,6 +23,10 @@ pub(crate) fn run(arguments: &[String]) {
         );
     }
     match arguments[1].as_str() {
+        "finite" => {
+            finite_output();
+            return;
+        }
         "early" => {
             println!("{{not-json");
             return;
@@ -86,5 +90,38 @@ pub(crate) fn run(arguments: &[String]) {
     }
     if id == 4 {
         println!("{{bad-after-close");
+    }
+}
+
+// Fixed self-owned escape makes the red collectable without parent kill.
+fn finite_output() {
+    unsafe extern "C" {
+        fn fcntl(fd: i32, command: i32, ...) -> i32;
+    }
+    // SAFETY: only this fixed child stdout, Darwin F_GETFL/F_SETFL/O_NONBLOCK.
+    unsafe {
+        let flags = fcntl(1, 3);
+        assert!(flags >= 0 && fcntl(1, 4, flags | 4) == 0);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut bytes = vec![b'x'; 1024 * 1024];
+    bytes[..10].copy_from_slice(b"{not-json\n");
+    let mut offset = 0;
+    let mut out = std::io::stdout().lock();
+    while offset < bytes.len() {
+        match out.write(&bytes[offset..]) {
+            Ok(0) => std::process::exit(87),
+            Ok(n) => offset += n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(_) => std::process::exit(87),
+        }
+        if std::time::Instant::now() >= deadline {
+            std::process::exit(88);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }

@@ -6,7 +6,8 @@ import sys
 from check_mac_enrollment_lookup import command
 from check_mac_native_source_variants import source_variants, validate_dependencies
 
-CASES = {'outer-prepared': 13, 'outer-confirmed': 20, 'outer-unknown': 20,
+CASES = {'outer-finite-malformed': 16, 'outer-finite-unwind': 16,
+         'outer-finite-unknown': 16, 'outer-prepared': 13, 'outer-confirmed': 20, 'outer-unknown': 20,
          'outer-missing': 20, 'outer-malformed': 20, 'outer-invalid': 16,
          'outer-rejected': 16, 'outer-signal': 16, 'outer-lost-receipt': 16,
          'outer-unwind': 16, 'outer-drop': 12, 'outer-held': 20, 'outer-panic': 16, 'outer-prejoined': 16}
@@ -31,12 +32,12 @@ def run():
             output = command([str(variant.executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
             passed += validate_report(mode, output)
     print(json.dumps({'fixture': 'native-outer-monitor-source', 'passed': passed,
-                      'normalModes': 2, 'fixtureModes': 14, 'activeModes': 13,
-                      'fixtureChildrenStarted': 13, 'fixtureChildrenWaited': 13,
-                      'physicalActiveEndpointsClosed': 52, 'unlaunchedEndpointsClosed': 4,
-                      'actualActiveIoWorkerJoins': 13, 'successfulActiveOuterJoins': 12,
+                      'normalModes': 2, 'fixtureModes': 17, 'activeModes': 16,
+                      'fixtureChildrenStarted': 16, 'fixtureChildrenWaited': 16,
+                      'physicalActiveEndpointsClosed': 64, 'unlaunchedEndpointsClosed': 4,
+                      'actualActiveIoWorkerJoins': 16, 'successfulActiveOuterJoins': 15,
                       'failedActiveOuterJoins': 1, 'preparationOuterJoins': 3,
-                      'retainedNativeUnknownRecords': 13, 'quitPermits': 0,
+                      'retainedNativeUnknownRecords': 16, 'quitPermits': 0,
                       'lockedOffline': True, 'existingDependencyPackages': 11,
                       'clippyVariants': 2, 'producerLaunches': 0, 'hostOnly': True,
                       'scope': 'same native IO + actual outer monitor joins; UNKNOWN and no application Quit permission'}))

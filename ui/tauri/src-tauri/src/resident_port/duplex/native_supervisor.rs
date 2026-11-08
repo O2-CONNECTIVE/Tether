@@ -150,6 +150,7 @@ fn run(
         let _ = send.try_send(Err(unavailable()));
         return NativeOutcome::Prepared(State::Unknown);
     }
+    let mut clean_eof = false;
     let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut pump = Pump::take_active(&mut original).map_err(|_| unavailable())?;
         let clock = ContinuousClock::new().ok_or_else(unavailable)?;
@@ -170,7 +171,9 @@ fn run(
                     let _ = pump.step(state, clock);
                     panic!("fixed native supervisor IO unwind");
                 }
-                pump.step(state, clock)
+                let result = pump.step(state, clock);
+                clean_eof = matches!(result, Ok(true));
+                result
             },
             clock,
             shared.clone(),
@@ -183,15 +186,19 @@ fn run(
     let _ = send.try_send(Err(unavailable()));
     // Full transport loss closes only this owner's control. UNKNOWN prevents
     // ordinary IO but still permits a close request and same-Process polling.
-    if original.state() == State::Active {
+    if clean_eof && original.state() == State::Active {
         let _ = original.io().half_close_control();
     }
-    if original.state() == State::Unknown {
+    if !clean_eof || original.state() == State::Unknown {
         original.request_active_close();
     }
+    let mut drained = clean_eof;
     let exit = loop {
+        if !drained {
+            drained = original.discard_observation().is_eof();
+        }
         let value = original.poll_exit();
-        if matches!(value, ExitObservation::Exit(_) | ExitObservation::Signal(_)) {
+        if drained && matches!(value, ExitObservation::Exit(_) | ExitObservation::Signal(_)) {
             break value;
         }
         // No replacement / signal / detached TLS exit on pending or unknown.

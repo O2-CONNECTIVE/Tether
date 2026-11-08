@@ -190,6 +190,19 @@ final class OwnedPreparationIO {
         }
     }
 
+    // Shutdown-only bounded discard. No payload leaves Swift and no close is retried.
+    func discardObservation() -> UInt32 {
+        guard active, !retired, ends.count == 4, ends[1].attempted,
+              !ends[2].attempted else { return 0 }
+        var scratch = [UInt8](repeating: 0, count: 4096)
+        let count = Darwin.read(ends[2].fd, &scratch, scratch.count)
+        if count == 0 { sawEOF = true; return 3 }
+        if count > 0 { return 1 }
+        if [EAGAIN, EINTR].contains(errno) { return 2 }
+        fault = true
+        return 4 // Error is not EOF; retain uncertainty.
+    }
+
     private func byteResult(_ count: Int) -> PreparedByteResult {
         if count > 0 { return .init(tag: .bytes, count: UInt32(count)) }
         let error = errno

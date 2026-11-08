@@ -14,7 +14,7 @@ from check_mac_launch_requirement import NATIVE, validate_weak_link
 CASES = {'lifetime': 12, 'drop': 6, 'io': 7, 'unknown': 9,
          'acquire-unknown': 7, 'thread-exit': 5, 'unwind': 6,
          'byte-stream': 23, 'byte-unknown': 9, 'byte-reject': 7}
-NORMAL_EXPORTS = {'_rh_resident_preparation_' + name for name in ('create', 'state', 'retire', 'read', 'write', 'half_close', 'exit', 'retire_active_io', 'abandon_active')}
+NORMAL_EXPORTS = {'_rh_resident_preparation_' + name for name in ('create', 'state', 'retire', 'read', 'write', 'half_close', 'exit', 'retire_active_io', 'abandon_active', 'request_active_close', 'discard_observation')}
 FIXTURE_EXPORTS = {'_rh_fixture_preparation_' + name for name in
                    ('create', 'probe', 'exchange', 'close_count', 'open_count', 'exhaust', 'retire_calls', 'peer', 'send', 'receive', 'create_active', 'collect_active', 'active_stats', 'retained_state')}
 

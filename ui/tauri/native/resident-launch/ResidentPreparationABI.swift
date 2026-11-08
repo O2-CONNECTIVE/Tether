@@ -16,6 +16,7 @@ private final class PreparationSlot: @unchecked Sendable {
         var unknown = false
         var active = false
         var activeIORetired = false
+        var shuttingDown = false
     }
     private let lock = NSLock()
     private let key: pthread_key_t?
@@ -180,6 +181,31 @@ private final class PreparationSlot: @unchecked Sendable {
         return stateLocked(handle)
     }
 
+    func requestActiveClose(_ handle: UInt64) -> PreparationState {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, handle != 0, record.handle == handle else { return .invalid }
+        guard worker(create: false) === record.worker else { return .wrongThread }
+        guard record.active, !record.activeIORetired else { return stateLocked(handle) }
+        #if RESIDENT_LAUNCH_FIXTURE
+        activeAbandons += 1
+        #endif
+        _ = record.owner.bytes(.halfClose)
+        self.record?.shuttingDown = true
+        self.record?.unknown = true
+        // Unlike destructor abandonment, leave trailing observation bytes open.
+        return .unknown
+    }
+
+    func discardObservation(_ handle: UInt64) -> UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, handle != 0, record.handle == handle,
+              worker(create: false) === record.worker,
+              record.active, !record.activeIORetired, record.shuttingDown else { return 0 }
+        return record.owner.discardObservation()
+    }
+
     func abandonActive(_ handle: UInt64) -> PreparationState {
         lock.lock()
         defer { lock.unlock() }
@@ -204,14 +230,14 @@ private final class PreparationSlot: @unchecked Sendable {
     func createActive(_ mode: UInt32) -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        guard mode <= 4, record == nil, issued < UInt64.max,
+        guard mode <= 7, record == nil, issued < UInt64.max,
               let identity = worker(create: true) else { return 0 }
         let owner = ResidentLaunchPreparation.completionFixture()
         issued += 1
         record = Record(handle: issued, worker: identity, owner: owner, active: true)
-        if mode == 2 { owner.loseCloseAcknowledgement() }
+        if mode == 2 || mode == 7 { owner.loseCloseAcknowledgement() }
         do {
-            if try !owner.runOwnedIOFixture(mode == 0 ? .echo : mode == 3 ? .exitTwo : mode == 4 ? .signal : .early) { record?.unknown = true }
+            if try !owner.runOwnedIOFixture(mode >= 5 ? .finite : mode == 0 ? .echo : mode == 3 ? .exitTwo : mode == 4 ? .signal : .early) { record?.unknown = true }
         } catch { record?.unknown = true }
         return issued
     }
@@ -314,6 +340,12 @@ private let preparationSlot = PreparationSlot()
 }
 @c @implementation public func rh_resident_preparation_retire_active_io(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.retireActiveIO(handle).rawValue }
+}
+@c @implementation public func rh_resident_preparation_request_active_close(_ handle: UInt64) -> UInt32 {
+    autoreleasepool { preparationSlot.requestActiveClose(handle).rawValue }
+}
+@c @implementation public func rh_resident_preparation_discard_observation(_ handle: UInt64) -> UInt32 {
+    autoreleasepool { preparationSlot.discardObservation(handle) }
 }
 @c @implementation public func rh_resident_preparation_abandon_active(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.abandonActive(handle).rawValue }
