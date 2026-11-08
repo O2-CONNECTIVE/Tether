@@ -51,6 +51,9 @@ func residentToolList(b ResidentBackend) []any {
 	if _, ok := b.(ResidentReadOutputBackend); ok {
 		list = append(list, residentReadOutputTool())
 	}
+	if _, ok := b.(ResidentGetExecutionBackend); ok {
+		list = append(list, residentGetExecutionTool())
+	}
 	return list
 }
 func (s *HTTPSession) residentToolCall(id *requestID, params json.RawMessage) HTTPReply {
@@ -61,6 +64,12 @@ func (s *HTTPSession) residentToolCall(id *requestID, params json.RawMessage) HT
 	}
 	var invoke func(context.Context, string) map[string]any
 	switch name {
+	case "rescue_fixed_get_execution":
+		if b, ok := s.resident.(ResidentGetExecutionBackend); ok {
+			invoke = b.FixedGetExecution
+		} else {
+			return failed(id, codeInvalidParams, "fixed execution metadata unavailable")
+		}
 	case "rescue_fixed_read_output":
 		return s.residentReadOutputCall(id, m["arguments"])
 	case "rescue_fixed_list":
