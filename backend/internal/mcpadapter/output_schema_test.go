@@ -14,7 +14,7 @@ import (
 func checkOutputShape(schema map[string]any, value any) error {
 	for key := range schema {
 		switch key {
-		case "type", "properties", "required", "additionalProperties", "oneOf", "enum", "minimum", "maximum", "pattern", "items", "description":
+		case "type", "properties", "required", "additionalProperties", "oneOf", "enum", "minimum", "maximum", "pattern", "items", "description", "maxItems", "maxLength":
 		default:
 			return fmt.Errorf("unsupported schema keyword %s", key)
 		}
@@ -70,6 +70,9 @@ func checkOutputShape(schema map[string]any, value any) error {
 		if !ok {
 			return fmt.Errorf("not array")
 		}
+		if max, ok := schema["maxItems"].(float64); ok && float64(len(array)) > max {
+			return fmt.Errorf("too many items")
+		}
 		for _, v := range array {
 			if err := checkOutputShape(schema["items"].(map[string]any), v); err != nil {
 				return err
@@ -79,6 +82,9 @@ func checkOutputShape(schema map[string]any, value any) error {
 		s, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("not string")
+		}
+		if max, ok := schema["maxLength"].(float64); ok && float64(len([]rune(s))) > max {
+			return fmt.Errorf("string too long")
 		}
 		if pattern, ok := schema["pattern"].(string); ok {
 			matched, err := regexp.MatchString(pattern, s)

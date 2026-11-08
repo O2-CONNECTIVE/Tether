@@ -43,7 +43,7 @@ func residentToolList(b ResidentBackend) []any {
 		definitions = append(definitions, [2]string{"rescue_fixed_release", "Explicitly acknowledge and discard this finished result payload only after original owner and gateway cleanup are confirmed. A replay tombstone remains; unknown work cannot be released."})
 	}
 	for _, v := range definitions {
-		list = append(list, map[string]any{"name": v[0], "description": v[1] + " Only tether-fixed-command-v1 is supported; no shell arguments are accepted.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"request_id": map[string]any{"type": "string", "pattern": "^[0-9a-f]{32}$"}}, "required": []string{"request_id"}, "additionalProperties": false}})
+		list = append(list, map[string]any{"name": v[0], "outputSchema": residentOutputSchema(v[0]), "description": v[1] + " Only tether-fixed-command-v1 is supported; no shell arguments are accepted.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"request_id": map[string]any{"type": "string", "pattern": "^[0-9a-f]{32}$"}}, "required": []string{"request_id"}, "additionalProperties": false}})
 	}
 	return list
 }
