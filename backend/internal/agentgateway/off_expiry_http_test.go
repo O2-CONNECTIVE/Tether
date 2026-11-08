@@ -118,7 +118,9 @@ func checkOffAndExpiry(t *testing.T, m *mac, do func(string, string, string, str
 	if fresh.status != http.StatusOK || freshID == "" {
 		t.Fatalf("fresh discovery: %d", fresh.status)
 	}
-	do(http.MethodPost, bearer, freshID, rpc(nil, "notifications/initialized", nil))
+	if res := do(http.MethodPost, bearer, freshID, rpc(nil, "notifications/initialized", nil)); res.status != http.StatusAccepted {
+		t.Fatalf("fresh discovery initialized: %d %s", res.status, res.body)
+	}
 	denied := do(http.MethodPost, bearer, freshID, start("fresh-after-off"))
 	if denied.status != http.StatusNotFound {
 		t.Fatalf("fresh discovery admitted work: %d %s", denied.status, denied.body)
