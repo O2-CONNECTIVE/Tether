@@ -90,8 +90,8 @@ func checkOffAndExpiry(t *testing.T, m *mac, do func(string, string, string, str
 	if m.issuer.Snapshot().HasAuthority {
 		t.Fatal("OFF retained authority")
 	}
-	if err := m.waitHost(t); err == nil {
-		t.Fatal("host concealed unconfirmed cleanup")
+	if err := m.waitHost(t); !errors.Is(err, agentexec.ErrCleanupUnknown) {
+		t.Fatalf("host concealed unconfirmed cleanup: %v", err)
 	}
 	select {
 	case <-proc.killed:
