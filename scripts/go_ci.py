@@ -66,6 +66,7 @@ PRODUCT_FILES = {
         'staging_execution.go', 'staging_preview.go', 'operator_policy.go', 'runtime_execution.go', 'runtime_native.go', 'runtime_source.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/servicecontrol': {'request.go', 'strict.go', 'response.go', 'response_fields.go', 'response_preview.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceauthowner': {'owner.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/fileread': {'read.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec': {'contract.go', 'output.go', 'run.go', 'session.go', 'local_summary.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel': {'channel.go', 'server.go', 'client.go', 'conn.go', 'keys.go', 'liveness.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire': {'client.go', 'server.go', 'strict.go', 'wire.go'},

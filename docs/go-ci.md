@@ -291,5 +291,15 @@ strict vet / build と runtime unit、cross compile、実機の証拠を分け�
 非ackの保持bytes読取と公開schemaの回帰であり、実dot/native/GUI接続や新たな認可を有効化しません。
 
 固定作業のmetadata照会は、agentgatewayとmcpadapterの `resident_get_execution.go` 各1件だけを追加登録します。
-現inventoryは45 package、cgo有効時Linux358 / Darwin361 / Windows389 production file、Darwinのcgo無効時359 fileです。
+固定作業metadata照会の段階は45 package、cgo有効時Linux358 / Darwin361 / Windows389 production file、Darwinのcgo無効時359 fileでした。
 保持結果と既存tombstoneの非破壊照会を追加するだけで、権限・出力保持・実接続の境界は変えません。
+
+
+## 非公開の有限ファイル読取コア
+
+`internal/fileread` は `read.go` 一件だけを全OS共通のinventoryへ追加します。
+現inventoryは46 package、cgo有効時Linux359 / Darwin362 / Windows390 production file、Darwinのcgo無効時360 fileです。
+欠落package/file、未知adapter、package結果の欠落をhelperで拒否します。他45 packageのfile集合は変更しません。
+非exportedの関数・抽象handleと匿名メモリfixtureだけで、production caller、OS filesystem配線、path open、MCP公開はありません。
+通常/race試験の成功を実OSのroot拘束・symlink/TOCTOU防御・実認可・原子的snapshotの証拠にしません。
+所有権、協調式取消、cleanup unknown、次段階の未決事項は[有限読取の境界](bounded-file-read-core.md)を参照してください。
