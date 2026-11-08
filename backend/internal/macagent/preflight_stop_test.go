@@ -83,3 +83,39 @@ func TestSessionStopDuringMacPreflightDoesNotSpawn(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalDispositionDuringPreflightDoesNotSpawn(t *testing.T) {
+	for _, check := range []string{"child-reaping", "descriptors"} {
+		t.Run(check, func(t *testing.T) {
+			d := &TerminalDisposition{}
+			diag := &StartDiagnostics{}
+			cfg := testTiming
+			cfg.TerminalDisposition, cfg.StartDiagnostics = d, diag
+			calls := 0
+			spawn := func(spawnSpec) (spawned, error) { calls++; return spawned{}, errFake }
+			checks := hostChecks{childReaping: func() error { return nil }, inheritableFDs: func() error { return nil }}
+			r, err := newRuntime(cfg, spawn, checks, time.Millisecond)
+			if err != nil {
+				t.Fatal(err)
+			}
+			terminalize := func() error {
+				if err := d.RelinquishUnknown(false); !errors.Is(err, ErrTerminalCleanupUnknown) {
+					t.Fatal(err)
+				}
+				return nil
+			}
+			if check == "child-reaping" {
+				r.checks.childReaping = terminalize
+			} else {
+				r.checks.inheritableFDs = terminalize
+			}
+			p, err := r.StartShell(finite(t), supervisor.Binding{Generation: 1}, []byte("memory-only"))
+			if calls != 0 || p != nil || !errors.Is(err, agentexec.ErrNotStarted) || !errors.Is(err, ErrTerminalCleanupUnknown) {
+				t.Fatalf("terminal preflight spawned work: calls=%d process=%t err=%v", calls, p != nil, err)
+			}
+			if !d.IsTerminal() || diag.Failure() != StartFailureNone {
+				t.Fatal("terminal disposition changed or mislabeled", diag.Failure())
+			}
+		})
+	}
+}
