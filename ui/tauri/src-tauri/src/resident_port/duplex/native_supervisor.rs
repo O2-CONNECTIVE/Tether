@@ -211,7 +211,7 @@ fn run(
         if drained && matches!(value, ExitObservation::Exit(_) | ExitObservation::Signal(_)) {
             break value;
         }
-        // Every bounded chunk polls the same Process, then yields fairly.
+        // Every bounded chunk polls the same Process, then offers a scheduling hint.
         // A timer after successful reads needlessly throttles finite drainage.
         if progressed {
             thread::yield_now();

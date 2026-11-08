@@ -42,6 +42,7 @@ pub(super) fn run(mode: &str) {
             let released = original.fixture_release_control_gate();
             let released_once = !original.fixture_release_control_gate();
             let mut progress = 0;
+            let mut saw_eof = false;
             // Fixture failure escape only; after this bound still collect the
             // same self-timed child and retire before asserting anything.
             let read_until = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -51,14 +52,17 @@ pub(super) fn run(mode: &str) {
                         std::thread::yield_now();
                     }
                     D::Progress => progress += 1,
-                    D::Eof => break,
+                    D::Eof => {
+                        saw_eof = true;
+                        break;
+                    }
                     D::Error | D::Rejected => break,
                 }
                 let _ = original.poll_exit();
             }
             // One call discards at most4096, and Pending never masquerades as EOF.
             checks.push(empty_open && released && released_once);
-            checks.push(progress >= 256);
+            checks.push(saw_eof && progress >= 256);
             while matches!(original.poll_exit(), ExitObservation::Pending) {
                 std::thread::yield_now();
             }
