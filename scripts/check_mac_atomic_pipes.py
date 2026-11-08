@@ -17,7 +17,7 @@ from check_mac_launch_requirement import NATIVE, validate_weak_link
 # passed, allocations, closed, spawned (each child and its thread must be joined)
 CASES = {'allocation': (11, 2, 4, 0), 'partial': (21, 3, 6, 0),
          'lost': (21, 3, 6, 0), 'concurrent': (65, 16, 32, 16), 'guards': (9, 0, 0, 0)}
-REPORT = r'NATIVE_ATOMIC_PIPE mode=([a-z]+) passed=(\d+) failed=(\d+) allocations=(\d+) closed=(\d+) open=(\d+) childrenStarted=(\d+) childrenWaited=(\d+) threadsJoined=(\d+) producer=(\d+)\n?'
+REPORT = r'NATIVE_ATOMIC_PIPE mode=([a-z]+) passed=(\d+) failed=(\d+) allocations=(\d+) closed=(\d+) open=(\d+) childrenStarted=(\d+) childrenWaited=(\d+) threadsJoined=(\d+) inheritanceExits=(\d+) producer=(\d+)\n?'
 
 
 def require_version(value):
@@ -70,7 +70,7 @@ def report_counts(mode, output):
 def validate_report(mode, output):
     counts = report_counts(mode, output)
     passed, allocations, closed, children = CASES[mode]
-    if counts != (passed, 0, allocations, closed, 0, children, children, children, 0):
+    if counts != (passed, 0, allocations, closed, 0, children, children, children, 0, 0):
         raise ValueError('incomplete, failed or uncollected atomic pipe fixture')
     return passed
 
@@ -103,7 +103,7 @@ def execute_mode(executable, mode, progress, mutant=False):
     if mutant:
         # Every child exits specifically for descriptor inheritance, is waited,
         # and has its pthread joined. All owned endpoints are closed afterwards.
-        if report_counts(mode, result.stdout) != (33, 32, 16, 32, 0, 16, 16, 16, 0) or \
+        if report_counts(mode, result.stdout) != (33, 32, 16, 32, 0, 16, 16, 16, 16, 0) or \
                 progress['condition'] != 1 or progress['child_exit'] != 89:
             raise ValueError('legacy mutation did not fail at the expected executed boundary')
         return 32
@@ -154,9 +154,9 @@ def run(progress=None):
         passed = sum(execute_mode(executable, mode, progress) for mode in CASES)
     print(json.dumps({'fixture': 'atomic-owned-preparation-pipes', 'passed': passed,
                       'allocations': 24, 'ownedEndsClosed': 48, 'fixtureChildrenStarted': 16,
-                      'fixtureChildrenWaited': 16, 'fixtureThreadJoins': 16, 'producerLaunches': 0,
+                      'fixtureChildrenWaited': 16, 'fixtureThreadJoins': 16, 'fixtureInheritanceExits': 0, 'producerLaunches': 0,
                       'runtime': platform.mac_ver()[0], 'normalCompileTargets': 1, 'fixtureCompileTargets': 1,
-                      'executedLegacyMutation': {'failedConditions': rejected, 'childrenWaited': 16, 'threadJoins': 16, 'ownedEndsClosed': 32},
+                      'executedLegacyMutation': {'failedConditions': rejected, 'inheritanceExits': 16, 'childrenWaited': 16, 'threadJoins': 16, 'ownedEndsClosed': 32},
                       'scope': 'atomic allocation and independent self-child exec only; no signed launch or product activation'}))
 
 

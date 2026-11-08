@@ -16,7 +16,7 @@ sys.path.pop(0)
 class AtomicPipeTests(unittest.TestCase):
     def report(self, mode):
         passed, allocations, closed, children = tool.CASES[mode]
-        return f'NATIVE_ATOMIC_PIPE mode={mode} passed={passed} failed=0 allocations={allocations} closed={closed} open=0 childrenStarted={children} childrenWaited={children} threadsJoined={children} producer=0\n'
+        return f'NATIVE_ATOMIC_PIPE mode={mode} passed={passed} failed=0 allocations={allocations} closed={closed} open=0 childrenStarted={children} childrenWaited={children} threadsJoined={children} inheritanceExits=0 producer=0\n'
 
     def test_all_exact_reports(self):
         for mode, expected in tool.CASES.items():
@@ -27,6 +27,7 @@ class AtomicPipeTests(unittest.TestCase):
             report = self.report(mode)
             for output in ['', report + report, report + 'extra', report.replace('failed=0', 'failed=1'),
                            report.replace('open=0', 'open=1'), report.replace('producer=0', 'producer=1'),
+                           report.replace('inheritanceExits=0', 'inheritanceExits=1'),
                            report.replace('passed=', 'unknown='), report.replace(f'mode={mode}', 'mode=other'),
                            report.replace(f'closed={tool.CASES[mode][2]}', 'closed=99'),
                            report.replace(f'allocations={tool.CASES[mode][1]}', 'allocations=99')]:
@@ -107,7 +108,7 @@ class AtomicPipeTests(unittest.TestCase):
             self.assertIsNone(progress['child_exit'])
 
     def test_only_expected_executed_and_collected_mutant_counts_as_red(self):
-        output = self.report('concurrent').replace('passed=65 failed=0', 'passed=33 failed=32')
+        output = self.report('concurrent').replace('passed=65 failed=0', 'passed=33 failed=32').replace('inheritanceExits=0', 'inheritanceExits=16')
         diagnostics = 'NATIVE_ATOMIC_PIPE_CONDITION 1\nNATIVE_ATOMIC_PIPE_CHILD_EXIT 89\n'
         result = SimpleNamespace(returncode=1, stdout=output, stderr=diagnostics)
         with patch.object(tool, 'completed', return_value=result):
@@ -129,3 +130,17 @@ class AtomicPipeTests(unittest.TestCase):
         with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
             tool.command(['compiler'], {}, progress)
         self.assertEqual(progress, {'phase': 'mutant-build', 'mode': None, 'returncode': 1})
+
+
+    def test_mixed_child_failures_cannot_pass_as_inheritance_red(self):
+        # First child really reports inheritance; later children may instead
+        # fail their sentinel, arguments, fd scan, or terminate by signal.
+        # Total failed checks / waits / joins / closes are unchanged.
+        base = self.report('concurrent').replace('passed=65 failed=0', 'passed=33 failed=32')
+        diagnostics = 'NATIVE_ATOMIC_PIPE_CONDITION 1\nNATIVE_ATOMIC_PIPE_CHILD_EXIT 89\n'
+        for inherited in [0, 1, 15, 17]:
+            result = SimpleNamespace(returncode=1,
+                                     stdout=base.replace('inheritanceExits=0', f'inheritanceExits={inherited}'),
+                                     stderr=diagnostics)
+            with self.subTest(inherited=inherited), patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+                tool.execute_mode('fixture', 'concurrent', {}, mutant=True)

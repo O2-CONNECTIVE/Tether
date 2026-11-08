@@ -50,6 +50,7 @@ private enum Check {
     static var started = 0
     static var waited = 0
     static var joined = 0
+    static var inheritanceExits = 0
     static var childExitReported = false
     static var allocations = 0
     static var closed = 0
@@ -80,7 +81,7 @@ struct AtomicPipeDriver {
         case "guards": guards()
         default: Darwin.exit(78)
         }
-        print("NATIVE_ATOMIC_PIPE mode=\(arguments[0]) passed=\(Check.passed) failed=\(Check.failed) allocations=\(Check.allocations) closed=\(Check.closed) open=\(Check.open) childrenStarted=\(Check.started) childrenWaited=\(Check.waited) threadsJoined=\(Check.joined) producer=0")
+        print("NATIVE_ATOMIC_PIPE mode=\(arguments[0]) passed=\(Check.passed) failed=\(Check.failed) allocations=\(Check.allocations) closed=\(Check.closed) open=\(Check.open) childrenStarted=\(Check.started) childrenWaited=\(Check.waited) threadsJoined=\(Check.joined) inheritanceExits=\(Check.inheritanceExits) producer=0")
         Darwin.exit(Check.failed == 0 ? 0 : 1)
     }
 
@@ -188,6 +189,9 @@ struct AtomicPipeDriver {
                 }
                 Check.joined += 1
                 Unmanaged<SpawnProbe>.fromOpaque(context).release()
+                // Count every collected child, not only the first diagnostic.
+                // Signals, missing waits, and all other exit codes do not count.
+                if spawn.waited && spawn.exitStatus == 89 { Check.inheritanceExits += 1 }
                 if let code = spawn.exitStatus, code != 0, !Check.childExitReported {
                     try? FileHandle.standardError.write(contentsOf: Data("NATIVE_ATOMIC_PIPE_CHILD_EXIT \(code)\n".utf8))
                     Check.childExitReported = true
