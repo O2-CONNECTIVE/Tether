@@ -287,5 +287,9 @@ source unit は自己所有pipe、専用の無害test child、checkout内の合�
 strict vet / build と runtime unit、cross compile、実機の証拠を分けます。詳細は [source組成](mac-resident-producer-composition.md) を参照してください。
 
 常駐固定操作の保持出力読取は、agentgatewayとmcpadapterの `resident_read_output.go` 各1件だけを追加登録します。
-現inventoryは45 package、cgo有効時Linux356 / Darwin359 / Windows387 production file、Darwinのcgo無効時357 fileです。
+この段階は45 package、cgo有効時Linux356 / Darwin359 / Windows387 production file、Darwinのcgo無効時357 fileでした。
 非ackの保持bytes読取と公開schemaの回帰であり、実dot/native/GUI接続や新たな認可を有効化しません。
+
+固定作業のmetadata照会は、agentgatewayとmcpadapterの `resident_get_execution.go` 各1件だけを追加登録します。
+現inventoryは45 package、cgo有効時Linux358 / Darwin361 / Windows389 production file、Darwinのcgo無効時359 fileです。
+保持結果と既存tombstoneの非破壊照会を追加するだけで、権限・出力保持・実接続の境界は変えません。

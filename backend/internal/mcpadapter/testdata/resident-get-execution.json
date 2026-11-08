@@ -1,0 +1,138 @@
+{
+  "pending": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "pending",
+    "profile": "",
+    "command_id": "",
+    "command_phase": "",
+    "exit": {
+      "known": false
+    },
+    "stop": "none",
+    "terminal": false,
+    "command_cleanup": "",
+    "owner_cleanup": "pending",
+    "gateway_cleanup": "pending",
+    "schema_version": 1,
+    "collection_ended": false,
+    "result_released": false,
+    "work_error": ""
+  },
+  "running": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "running",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "running",
+    "exit": {
+      "known": false
+    },
+    "stop": "none",
+    "terminal": false,
+    "command_cleanup": "pending",
+    "owner_cleanup": "pending",
+    "gateway_cleanup": "pending",
+    "schema_version": 1,
+    "collection_ended": false,
+    "result_released": false,
+    "work_error": ""
+  },
+  "finished": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "finished",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "exited",
+    "exit": {
+      "known": true,
+      "code": 0
+    },
+    "stop": "none",
+    "terminal": true,
+    "command_cleanup": "confirmed",
+    "owner_cleanup": "confirmed",
+    "gateway_cleanup": "confirmed",
+    "schema_version": 1,
+    "collection_ended": true,
+    "result_released": false,
+    "work_error": ""
+  },
+  "unknown": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "unknown",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "running",
+    "exit": {
+      "known": false
+    },
+    "stop": "none",
+    "terminal": false,
+    "command_cleanup": "unknown",
+    "owner_cleanup": "unknown",
+    "gateway_cleanup": "confirmed",
+    "schema_version": 1,
+    "collection_ended": true,
+    "result_released": false,
+    "work_error": "result_unobserved_or_uncertain"
+  },
+  "released_before_command": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "finished",
+    "profile": "",
+    "command_id": "",
+    "command_phase": "",
+    "exit": {
+      "known": false
+    },
+    "stop": "none",
+    "terminal": false,
+    "command_cleanup": "",
+    "owner_cleanup": "confirmed",
+    "gateway_cleanup": "confirmed",
+    "schema_version": 1,
+    "collection_ended": true,
+    "result_released": true,
+    "work_error": "admission_refused_or_uncertain"
+  },
+  "released_finished": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "finished",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "exited",
+    "exit": {
+      "known": true,
+      "code": 0
+    },
+    "stop": "none",
+    "terminal": true,
+    "command_cleanup": "confirmed",
+    "owner_cleanup": "confirmed",
+    "gateway_cleanup": "confirmed",
+    "schema_version": 1,
+    "collection_ended": true,
+    "result_released": true,
+    "work_error": ""
+  },
+  "terminal_collecting": {
+    "request_id": "11111111111111111111111111111111",
+    "phase": "running",
+    "profile": "mac_current_user",
+    "command_id": "22222222222222222222222222222222",
+    "command_phase": "exited",
+    "exit": {
+      "known": true,
+      "code": 0
+    },
+    "stop": "none",
+    "terminal": true,
+    "command_cleanup": "confirmed",
+    "owner_cleanup": "pending",
+    "gateway_cleanup": "pending",
+    "schema_version": 1,
+    "collection_ended": false,
+    "result_released": false,
+    "work_error": ""
+  }
+}
