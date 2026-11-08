@@ -21,10 +21,12 @@
 
 ## 現在地
 
-進捗確認: 2026-11-08、source基点 `49adb980`（[#271](https://github.com/O2-CONNECTIVE/rescue-host/pull/271)）。この基点のpostmerge CIは対象9 workflowが成功しています。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
+進捗確認: 2026-11-08、source基点 `4b710776`（[#273](https://github.com/O2-CONNECTIVE/rescue-host/pull/273)、#274を含む）。この基点のCI結果は同PRの固定SHA記録で確認してください。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
 
 - **接続の隔離検証:** [#252](https://github.com/O2-CONNECTIVE/rescue-host/pull/252)の実loopback TCP/TLSと、[#253](https://github.com/O2-CONNECTIVE/rescue-host/pull/253)のMac実producer・固定command・OFF・元所有者終了確認を統合。合成認証と試験用CA/overlayを使い、実dotや通常製品認証は未受入です。#253初回のfailed-unknownは原因未解明のまま保持します。
 - **共通所有と停止:** [#267](https://github.com/O2-CONNECTIVE/rescue-host/pull/267)のMac公開stack、[#269](https://github.com/O2-CONNECTIVE/rescue-host/pull/269)の故障後有限出力回収、[#270](https://github.com/O2-CONNECTIVE/rescue-host/pull/270)のHTTP失効・OFF回帰、[#271](https://github.com/O2-CONNECTIVE/rescue-host/pull/271)の原子的pipe取得を統合。実GUI/dot・署名済みlaunch・製品全回収/Quitの完了ではありません。
+- **両プロファイルの共通契約:** [#274](https://github.com/O2-CONNECTIVE/rescue-host/pull/274)でMac current-user / Windows guestの同じ実行coreとmemory通信を照合する回帰を追加。取消受付と回収、unknown時の新規拒否、失効した単発許可の非復活、別grantの分離を検査します。実OS・GUI・認証通信の受入ではありません。
+- **固定作業の一覧操作:** [#273](https://github.com/O2-CONNECTIVE/rescue-host/pull/273)で `rescue_fixed_list` を追加。同じ認証主体・登録host・control世代の保持記録を1要求最大32件で見つけ、既存status/cancel/releaseへ進めます。payload解放済み記録も表示しますが、作業内容・出力は列挙しません。[利用契約と制限](docs/resident-execution-list.md)を参照してください。対応backendのみの操作で、新しいhost一覧・任意実行・永続記録・実dot受入は追加しません。
 - **操作辞書を早期拡充:** [#261](https://github.com/O2-CONNECTIVE/rescue-host/pull/261)と[#265](https://github.com/O2-CONNECTIVE/rescue-host/pull/265)で既存操作の出力契約を明示済み。[#188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) / [#32](https://github.com/O2-CONNECTIVE/rescue-host/issues/32)に沿い、実接続受入と並行して専用操作を小さいPRで実装・検証します。端末一覧やファイル読取・検索・編集等が提供済みという宣言ではありません。
 
 ### 旧pilotと実利用の未確認範囲
