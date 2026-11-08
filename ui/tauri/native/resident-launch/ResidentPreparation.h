@@ -49,11 +49,14 @@ uint32_t rh_resident_preparation_discard_observation(uint64_t handle);
 
 #ifdef RESIDENT_LAUNCH_FIXTURE
 /* Separate untrusted self-child owner. mode0 echo,1 early exit,2 early lost ack,3 exit2,4 self SIGTERM,
- * 5/6 finite malformed output,7 finite output with lost close receipt.
+ * 5/6 finite malformed output,7 finite output with lost close receipt,
+ * 8 finite output after a fixture-only held control EOF.
  * Not callable from a requirement-bearing production preparation. */
 uint64_t rh_fixture_preparation_create_active(uint32_t mode);
 /* Same original worker/record collection after incomplete fixture Drop only. */
 uint64_t rh_fixture_preparation_collect_active(void);
+/* Close the same fixed fixture gate once; never a production control write. */
+uint32_t rh_fixture_preparation_release_control_gate(uint64_t handle);
 /* high32 actual same-Process Wait calls, low32 active abandonment calls. */
 uint64_t rh_fixture_preparation_active_stats(void);
 uint32_t rh_fixture_preparation_retained_state(void);

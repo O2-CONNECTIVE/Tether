@@ -47,7 +47,9 @@ python3 scripts/check_mac_native_supervisor.py
 
 固定childは不正な最初のframeに続けて1 MiBを書きます。pre-close parser fault、IO unwind、launch時点で既にUnknownの3条件で旧実装は元Wait / join後にExit(88)となるred、変更後はExit(0) / Unknown / close4 / Wait1のgreenです。child自身のstdoutはnonblockingで、5秒の固定escapeを持ちます。これは赤試験を回収するためのchild内の失敗終了であり、親のtimeout成功・kill・製品の時間上限ではありません。
 
-direct契約は、元Wait後に残ったbytes、PendingとEOFの区別、4096-byte以下の進捗、wrong handle / wrong thread / 未起動 / 退役済み拒否、通常Unknown read/write拒否、close-once、置換拒否を検査します。元Wait後もError / Rejected / PendingはEOFにならない実supervisorと同じ判定を確認します。回収不能なworkerを残すため、永続read障害でsupervisorが永久保持する経路自体を起動する試験は行いません。
+direct契約は、元Wait後に残ったbytes、PendingとEOFの区別、4096-byte以下の進捗、wrong handle / wrong thread / 未起動 / 退役済み拒否、通常Unknown read/write拒否、close-once、置換拒否を検査します。元Wait後もError / Rejected / PendingはEOFにならない実supervisorと同じ判定を確認します。Pending試験は、固定childのcontrol EOFをfixture専用CLOEXEC複製writerで保留し、空でwriterが開いたpipeを実際に観測してからそのgateを一度だけ閉じます。schedulerの隙間やsleepをPendingの証拠にしません。追加gateのclose receiptと二度目のclose拒否も同じ契約で確認し、childの固定timerは失敗時の自己回収だけに使います。
+
+回収不能なworkerを残すため、永続read障害でsupervisorが永久保持する経路自体を起動する試験は行いません。
 
 normal / fixture の build / clippy は locked / offline、既存11 dependency packagesのみ。既存 active bridge は未起動 close no-op の1条件を加え240条件、借用 close 拒否を加え compile refusal9。Intel は同じ source の owner / active / Pump の normal / fixture compile/link、refusal18を検査し、foreign image を実行しません。prepared Pump133、active Pump129と従来 owner / C ABI / Swift の契約は弱めません。
 

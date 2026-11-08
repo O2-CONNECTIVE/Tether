@@ -8,7 +8,7 @@ pub(super) fn run(mode: &str) {
     let pending = mode == "supervisor-discard-pending";
     let checks = std::thread::spawn(move || {
         let preparation = NativePreparation::fixture_active(if pending {
-            FixedActiveFixture::FiniteUnknown
+            FixedActiveFixture::FiniteHeldUnknown
         } else {
             FixedActiveFixture::Early
         });
@@ -37,12 +37,14 @@ pub(super) fn run(mode: &str) {
         checks.push(original.io().read(&mut [0]).is_err());
         checks.push(original.io().write(b"x").is_err());
         if pending {
-            let mut saw_pending = false;
+            // No child stdout can exist before its held control EOF is released.
+            let empty_open = original.discard_observation() == D::Pending;
+            let released = original.fixture_release_control_gate();
+            let released_once = !original.fixture_release_control_gate();
             let mut progress = 0;
             loop {
                 match original.discard_observation() {
                     D::Pending => {
-                        saw_pending = true;
                         std::thread::yield_now();
                     }
                     D::Progress => progress += 1,
@@ -52,7 +54,7 @@ pub(super) fn run(mode: &str) {
                 let _ = original.poll_exit();
             }
             // One call discards at most4096, and Pending never masquerades as EOF.
-            checks.push(saw_pending);
+            checks.push(empty_open && released && released_once);
             checks.push(progress >= 256);
             while matches!(original.poll_exit(), ExitObservation::Pending) {
                 std::thread::yield_now();
@@ -91,5 +93,7 @@ pub(super) fn run(mode: &str) {
         NativePreparation::fixture_collect_retained_active(),
         ExitObservation::Unavailable
     );
-    println!("NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=1 producer=0");
+    println!(
+        "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=1 producer=0"
+    );
 }

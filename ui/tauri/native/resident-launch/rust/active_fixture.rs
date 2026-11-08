@@ -3,6 +3,7 @@ use super::{ExitObservation, NativePreparation, Preparation, State};
 use std::{marker::PhantomData, num::NonZeroU64};
 
 unsafe extern "C" {
+    fn rh_fixture_preparation_release_control_gate(handle: u64) -> u32;
     fn rh_fixture_preparation_create_active(mode: u32) -> u64;
     fn rh_fixture_preparation_collect_active() -> u64;
     fn rh_fixture_preparation_active_stats() -> u64;
@@ -18,6 +19,7 @@ pub enum FixedActiveFixture {
     FiniteMalformed = 5,
     FiniteUnwind = 6,
     FiniteUnknown = 7,
+    FiniteHeldUnknown = 8,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -111,6 +113,10 @@ impl ExitObservation {
 }
 
 impl NativePreparation {
+    pub fn fixture_release_control_gate(&mut self) -> bool {
+        // SAFETY: same private native owner/TLS; closes only its fixed fixture gate.
+        unsafe { rh_fixture_preparation_release_control_gate(self.handle.get()) == 1 }
+    }
     pub fn fixture_discard_rejected(&self) -> bool {
         // SAFETY: exact original handle; this fixture checks the native gate too.
         unsafe {

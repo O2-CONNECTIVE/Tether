@@ -230,16 +230,23 @@ private final class PreparationSlot: @unchecked Sendable {
     func createActive(_ mode: UInt32) -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        guard mode <= 7, record == nil, issued < UInt64.max,
+        guard mode <= 8, record == nil, issued < UInt64.max,
               let identity = worker(create: true) else { return 0 }
         let owner = ResidentLaunchPreparation.completionFixture()
         issued += 1
         record = Record(handle: issued, worker: identity, owner: owner, active: true)
-        if mode == 2 || mode == 7 { owner.loseCloseAcknowledgement() }
+        if mode == 2 || mode == 7 || mode == 8 { owner.loseCloseAcknowledgement() }
         do {
-            if try !owner.runOwnedIOFixture(mode >= 5 ? .finite : mode == 0 ? .echo : mode == 3 ? .exitTwo : mode == 4 ? .signal : .early) { record?.unknown = true }
+            if try !owner.runOwnedIOFixture(mode == 8 ? .finiteHeld : mode >= 5 ? .finite : mode == 0 ? .echo : mode == 3 ? .exitTwo : mode == 4 ? .signal : .early) { record?.unknown = true }
         } catch { record?.unknown = true }
         return issued
+    }
+    func releaseFixtureControlEOF(_ handle: UInt64) -> UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, handle != 0, record.handle == handle,
+              worker(create: false) === record.worker, record.active else { return 0 }
+        return record.owner.releaseFixtureControlEOF() ? 1 : 0
     }
     func collectActiveFixture() -> UInt64 {
         lock.lock()
@@ -354,6 +361,9 @@ private let preparationSlot = PreparationSlot()
 #if RESIDENT_LAUNCH_FIXTURE
 @c @implementation public func rh_fixture_preparation_create_active(_ mode: UInt32) -> UInt64 {
     autoreleasepool { preparationSlot.createActive(mode) }
+}
+@c @implementation public func rh_fixture_preparation_release_control_gate(_ handle: UInt64) -> UInt32 {
+    autoreleasepool { preparationSlot.releaseFixtureControlEOF(handle) }
 }
 @c @implementation public func rh_fixture_preparation_collect_active() -> UInt64 {
     autoreleasepool { preparationSlot.collectActiveFixture() }

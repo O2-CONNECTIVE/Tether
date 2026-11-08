@@ -16,7 +16,7 @@ CASES = {'lifetime': 12, 'drop': 6, 'io': 7, 'unknown': 9,
          'byte-stream': 23, 'byte-unknown': 9, 'byte-reject': 7}
 NORMAL_EXPORTS = {'_rh_resident_preparation_' + name for name in ('create', 'state', 'retire', 'read', 'write', 'half_close', 'exit', 'retire_active_io', 'abandon_active', 'request_active_close', 'discard_observation')}
 FIXTURE_EXPORTS = {'_rh_fixture_preparation_' + name for name in
-                   ('create', 'probe', 'exchange', 'close_count', 'open_count', 'exhaust', 'retire_calls', 'peer', 'send', 'receive', 'create_active', 'collect_active', 'active_stats', 'retained_state')}
+                   ('create', 'probe', 'exchange', 'close_count', 'open_count', 'exhaust', 'retire_calls', 'peer', 'send', 'receive', 'create_active', 'collect_active', 'active_stats', 'retained_state', 'release_control_gate')}
 
 
 def validate_report(mode, output):

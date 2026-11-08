@@ -1,7 +1,7 @@
 //! Fixed untrusted self-child; no policy, producer or real external connection.
 use super::test_frames;
 use crate::mac_status::ContinuousClock;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 fn now() -> u64 {
     ContinuousClock::new().unwrap().now_millis().unwrap()
@@ -23,6 +23,11 @@ pub(crate) fn run(arguments: &[String]) {
         );
     }
     match arguments[1].as_str() {
+        "finite-held" => {
+            await_control_eof();
+            finite_output();
+            return;
+        }
         "finite" => {
             finite_output();
             return;
@@ -123,5 +128,36 @@ fn finite_output() {
             std::process::exit(88);
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+// Synchronize on the fixture gate, not scheduler timing. The timer is failure
+// escape only, so a broken parent can still collect this exact child.
+fn await_control_eof() {
+    use std::io::Read;
+    unsafe extern "C" {
+        fn fcntl(fd: i32, command: i32, ...) -> i32;
+    }
+    // SAFETY: fixed self-child stdin only, Darwin F_GETFL/F_SETFL/O_NONBLOCK.
+    unsafe {
+        let flags = fcntl(0, 3);
+        assert!(flags >= 0 && fcntl(0, 4, flags | 4) == 0);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match std::io::stdin().read(&mut [0]) {
+            Ok(0) => return,
+            Ok(_) => std::process::exit(87),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(_) => std::process::exit(87),
+        }
+        if std::time::Instant::now() >= deadline {
+            std::process::exit(88);
+        }
+        std::thread::yield_now();
     }
 }

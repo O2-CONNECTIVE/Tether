@@ -20,6 +20,18 @@ final class OwnedPreparationIO {
     private var boundTask: ObjectIdentifier?
     var needsRetention: Bool { active && !complete }
     #if RESIDENT_LAUNCH_FIXTURE
+    private var fixtureControlGate: Int32?
+    func holdFixtureControlEOF() throws {
+        guard !active, !retired, ends.count == 4, fixtureControlGate == nil else { throw PreparationFailure.ioPreparation }
+        let fd = fcntl(ends[1].fd, F_DUPFD_CLOEXEC, 3)
+        guard fd >= 3 else { throw PreparationFailure.ioPreparation }
+        fixtureControlGate = fd // Fixed self-child synchronization only.
+    }
+    func releaseFixtureControlEOF() -> Bool {
+        guard let fd = fixtureControlGate else { return false }
+        fixtureControlGate = nil // Never retry an uncertain close integer.
+        return Darwin.close(fd) == 0
+    }
     func fixtureDescription() throws -> String {
         guard ends.count == 4, !active, !retired, ends.allSatisfy({ !$0.attempted }),
               ends.allSatisfy({ fcntl($0.fd, F_GETFD) & FD_CLOEXEC != 0 }),
