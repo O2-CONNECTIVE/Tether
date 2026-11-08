@@ -3,6 +3,7 @@ package mcpadapter_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -53,6 +54,15 @@ func TestResidentListOutputSchemaAndBounds(t *testing.T) {
 		{"schema_version": 1, "executions": rows, "next_cursor": strings.Repeat("f", 32)},
 		{"error": "not_read"}, {"error": "invalid"},
 	}
+	raw, err := os.ReadFile("testdata/resident-list-output.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden map[string]any
+	if json.Unmarshal(raw, &golden) != nil {
+		t.Fatal("bad golden")
+	}
+	valid = append(valid, golden)
 	for _, v := range valid {
 		b.value = v
 		result := request("tools/call", map[string]any{"name": "rescue_fixed_list", "arguments": map[string]any{"cursor": "", "limit": 32}})
@@ -79,7 +89,7 @@ func TestResidentListOutputSchemaAndBounds(t *testing.T) {
 		}
 	}
 	row["chunks"] = []any{"PRIVATE"}
-	raw, _ := json.Marshal(map[string]any{"schema_version": 1, "executions": []any{row}, "next_cursor": ""})
+	raw, _ = json.Marshal(map[string]any{"schema_version": 1, "executions": []any{row}, "next_cursor": ""})
 	var jsonValue any
 	json.Unmarshal(raw, &jsonValue)
 	if checkOutputShape(schema, jsonValue) == nil {

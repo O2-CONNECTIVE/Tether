@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,12 +26,18 @@ func TestResidentListScopePaginationAndDetachedSummaries(t *testing.T) {
 	id := func(n int) string { return fmt.Sprintf("%032x", n) }
 	for n := 1; n <= 35; n++ {
 		s.entry.works[id(n)] = listWork(id(n), s.generation)
+		if n >= 32 {
+			releaseListWork(t, s, id(n), false)
+		}
 	}
 	s.entry.works[id(99)] = listWork(id(99), "other-generation")
 	other := &residentSession{gateway: g, entry: &residentEntry{works: map[string]*residentWork{id(80): listWork(id(80), s.generation)}}, generation: s.generation}
-	first := s.FixedList(context.Background(), "", 32)
+	if page := s.FixedList(context.Background(), "", 32); len(page["executions"].([]map[string]any)) != 32 {
+		t.Fatal(page)
+	}
+	first := s.FixedList(context.Background(), "", 30)
 	entries := first["executions"].([]map[string]any)
-	if len(entries) != 32 || first["next_cursor"] != id(32) || first["schema_version"] != 1 {
+	if len(entries) != 30 || first["next_cursor"] != id(30) || first["schema_version"] != 1 {
 		t.Fatal(first)
 	}
 	for n, e := range entries {
@@ -39,26 +46,15 @@ func TestResidentListScopePaginationAndDetachedSummaries(t *testing.T) {
 		}
 	}
 	// Transition one original retained record into the existing replay tombstone.
-	w := s.entry.works[id(33)]
-	w.phase = "finished"
-	w.done = true
-	w.ownerCleanup = "confirmed"
-	w.gatewayCleanup = "confirmed"
-	w.status.Terminal = true
-	w.status.Cleanup = agentexec.CleanupConfirmed
-	w.completed = make(chan struct{})
-	close(w.completed)
-	if released := s.FixedRelease(context.Background(), id(33)); released["result_released"] != true {
-		t.Fatal(released)
-	}
+	releaseListWork(t, s, id(31), true)
 	second := s.FixedList(context.Background(), first["next_cursor"].(string), 32)
 	tail := second["executions"].([]map[string]any)
-	if len(tail) != 3 || second["next_cursor"] != "" || tail[0]["request_id"] != id(33) || tail[0]["result_released"] != true || tail[0]["owner_cleanup"] != "confirmed" {
+	if len(tail) != 5 || second["next_cursor"] != "" || tail[0]["request_id"] != id(31) || tail[0]["result_released"] != true || tail[0]["owner_cleanup"] != "confirmed" {
 		t.Fatal(second)
 	}
 	tail[0]["phase"] = "MUTATED"
 	entries[0]["phase"] = "MUTATED"
-	if s.FixedStatus(context.Background(), id(33))["phase"] != "finished" || s.entry.works[id(1)].phase != "pending" {
+	if s.FixedStatus(context.Background(), id(31))["phase"] != "finished" || s.entry.works[id(1)].phase != "pending" {
 		t.Fatal("list aliases owned records")
 	}
 	if own := other.FixedList(context.Background(), "", 32)["executions"].([]map[string]any); len(own) != 1 || own[0]["request_id"] != id(80) {
@@ -70,8 +66,8 @@ func TestResidentListScopePaginationAndDetachedSummaries(t *testing.T) {
 		t.Fatal("foreign generation leaked", empty)
 	}
 	// Keyset remains usable when the cursor record itself is absent.
-	delete(s.entry.works, id(32))
-	if got := s.FixedList(context.Background(), id(32), 32)["executions"].([]map[string]any); len(got) != 3 {
+	delete(s.entry.works, id(30))
+	if got := s.FixedList(context.Background(), id(30), 32)["executions"].([]map[string]any); len(got) != 5 {
 		t.Fatal(got)
 	}
 	// A new smaller ID is found by refreshing, not falsely promised by old pages.
@@ -98,7 +94,7 @@ func TestResidentListScopePaginationAndDetachedSummaries(t *testing.T) {
 	if bytes.Contains(raw, []byte("PRIVATE")) || bytes.Contains(raw, []byte("chunks")) || bytes.Contains(raw, []byte("generation")) {
 		t.Fatal("private payload in summary")
 	}
-	if len(s.entry.works) != 35 || len(s.entry.tombstones) != 1 {
+	if len(s.entry.works) != 31 || len(s.entry.tombstones) != 5 {
 		t.Fatal("read changed ledger")
 	}
 }
@@ -165,5 +161,49 @@ func TestResidentListThroughAuthenticatedGateway(t *testing.T) {
 	}
 	if s.entry.current != nil || s.principal.route != nil {
 		t.Fatal("list acquired work")
+	}
+}
+
+func releaseListWork(t *testing.T, s *residentSession, id string, terminal bool) {
+	t.Helper()
+	w := s.entry.works[id]
+	w.phase = "finished"
+	w.done = true
+	w.ownerCleanup = "confirmed"
+	w.gatewayCleanup = "confirmed"
+	w.status.Terminal = terminal
+	if terminal {
+		w.status.Cleanup = agentexec.CleanupConfirmed
+	}
+	w.completed = make(chan struct{})
+	close(w.completed)
+	if v := s.FixedRelease(context.Background(), id); v["result_released"] != true {
+		t.Fatal(v)
+	}
+}
+func TestResidentListMatchesSharedSchemaGolden(t *testing.T) {
+	_, s, _, _ := residentEvidenceRig(t)
+	pending := strings.Repeat("1", 32)
+	released := strings.Repeat("2", 32)
+	s.entry.works[pending] = listWork(pending, s.generation)
+	s.entry.works[pending].phase = "unknown"
+	s.entry.works[pending].ownerCleanup = "unknown"
+	s.entry.works[pending].gatewayCleanup = "unknown"
+	s.entry.works[pending].failure = "start_uncertain"
+	s.entry.works[released] = listWork(released, s.generation)
+	releaseListWork(t, s, released, false)
+	raw, err := os.ReadFile("../mcpadapter/testdata/resident-list-output.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want any
+	if json.Unmarshal(raw, &want) != nil {
+		t.Fatal("bad golden")
+	}
+	actual, _ := json.Marshal(s.FixedList(context.Background(), "", 32))
+	var got any
+	json.Unmarshal(actual, &got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("gateway list changed: %s", actual)
 	}
 }
