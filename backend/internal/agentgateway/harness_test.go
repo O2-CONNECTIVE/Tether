@@ -426,6 +426,7 @@ type fakeProc struct {
 	exited   chan struct{}
 	killed   chan struct{}
 	killOnce sync.Once
+	release  func(context.Context) error
 }
 
 func (p *fakeProc) Next(ctx context.Context) (agentexec.Stream, []byte, error) {
@@ -458,13 +459,19 @@ func (p *fakeProc) Terminate(context.Context) error {
 	return nil
 }
 
-func (p *fakeProc) Release(context.Context) error { return nil }
+func (p *fakeProc) Release(ctx context.Context) error {
+	if p.release != nil {
+		return p.release(ctx)
+	}
+	return nil
+}
 
 type macRuntime struct {
-	mu     sync.Mutex
-	starts int
-	stdin  [][]byte
-	procs  chan *fakeProc
+	mu        sync.Mutex
+	starts    int
+	stdin     [][]byte
+	procs     chan *fakeProc
+	configure func(*fakeProc)
 }
 
 func (r *macRuntime) AgentProfile() agentexec.Profile { return agentexec.ProfileMacCurrentUser }
@@ -475,6 +482,9 @@ func (r *macRuntime) StartShell(_ context.Context, _ supervisor.Binding, stdin [
 	r.stdin = append(r.stdin, append([]byte(nil), stdin...))
 	r.mu.Unlock()
 	p := &fakeProc{events: make(chan event), exited: make(chan struct{}), killed: make(chan struct{})}
+	if r.configure != nil {
+		r.configure(p)
+	}
 	r.procs <- p
 	return p, nil
 }
