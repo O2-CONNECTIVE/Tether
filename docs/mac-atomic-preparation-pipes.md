@@ -26,7 +26,7 @@ native checker は既存の Apple Silicon / macOS 27以上 / SDK 27以上を要�
 5 mode の固定期待値は合計127条件、24回の pipe 割当、48端点の物理 close、16 self-child の開始・exact Wait・元 pthread join です。これは期待契約であり、未実行 head の成功件数ではありません。
 
 - `allocation`: 各 syscall の直後、後続 flag 設定前に CLOEXEC / FIFO / blocking を確認します。完了後は parent だけ nonblocking、NOSIGPIPE、元 wrapper を確認します。
-- `partial` / `lost`: 最初と2本目の取得直後に固定 fault を入れ、2 / 4端点の回収と再 close / 再 configure 拒否を確認します。lost は実 close 成功後の receipt だけを失わせます。実 kernel EMFILE / close errno の注入ではありません。
+- `partial` / `lost`: 最初と2本目の取得直後に固定 fault を入れ、2 / 4端点の回収と再 close / 再 configure 拒否を確認します。Process の標準入出力は最初の binding を記録し、部分失敗後にも同じ object / nil 状態であることを要求します。Foundation の既定値を nil と仮定しません。lost は実 close 成功後の receipt だけを失わせます。実 kernel EMFILE / close errno の注入ではありません。
 - `concurrent`: allocator を各取得直後に止め、別 pthread で固定の自分自身だけを plain `posix_spawn` します。close actions / CLOEXEC_DEFAULT は使いません。意図的に継承可能にした自己所有 `/dev/null` sentinel の継承を child が確認するため、spawn 側が全 fd を隠してテストを通すことはできません。新しい pipe は child に残らず、元 child の Wait と元 pthread の join 後に取得を再開します。8回の準備で両取得境界を検査します。
 - `guards`: OS version 境界と production publisher 未設定の拒否を確認します。actual 旧 OS の load を新 OS 上の version fixture で証明しません。
 

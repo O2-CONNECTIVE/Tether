@@ -130,10 +130,21 @@ struct AtomicPipeDriver {
         collect(io, task, expected: 4)
     }
 
+    private static func sameBinding(_ original: Any?, _ current: Any?) -> Bool {
+        switch (original, current) {
+        case (nil, nil): return true
+        case let (left as FileHandle, right as FileHandle): return left === right
+        case let (left as Pipe, right as Pipe): return left === right
+        default: return false
+        }
+    }
+
     @MainActor
     private static func partial(lostReceipt: Bool) throws {
         for count in [1, 2] {
             let io = OwnedPreparationIO(), task = Process()
+            // Process defaults are inherited FileHandles, not necessarily nil.
+            let originalInput = task.standardInput, originalOutput = task.standardOutput
             var calls = 0
             io.fixtureAllocationProbe = { pair in
                 probe(pair)
@@ -143,7 +154,7 @@ struct AtomicPipeDriver {
             do { try io.configure(task, partial: false); Check.that(false) }
             catch PreparationFailure.ioPreparation { Check.that(true) }
             Check.that(calls == count && io.open == UInt32(count * 2) && io.closed == 0)
-            Check.that(task.standardInput == nil && task.standardOutput == nil)
+            Check.that(sameBinding(originalInput, task.standardInput) && sameBinding(originalOutput, task.standardOutput))
             io.loseCloseAcknowledgement = lostReceipt
             collect(io, task, expected: UInt32(count * 2), complete: !lostReceipt)
             do { try io.configure(task, partial: false); Check.that(false) }
