@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -15,7 +16,7 @@ sys.path.pop(0)
 class AtomicPipeTests(unittest.TestCase):
     def report(self, mode):
         passed, allocations, closed, children = tool.CASES[mode]
-        return f'NATIVE_ATOMIC_PIPE mode={mode} passed={passed} failed=0 allocations={allocations} closed={closed} open=0 childrenStarted={children} childrenWaited={children} producer=0\n'
+        return f'NATIVE_ATOMIC_PIPE mode={mode} passed={passed} failed=0 allocations={allocations} closed={closed} open=0 childrenStarted={children} childrenWaited={children} threadsJoined={children} producer=0\n'
 
     def test_all_exact_reports(self):
         for mode, expected in tool.CASES.items():
@@ -32,7 +33,7 @@ class AtomicPipeTests(unittest.TestCase):
                 with self.subTest(mode=mode, output=output), self.assertRaises(ValueError):
                     tool.validate_report(mode, output)
         report = self.report('concurrent')
-        for field in ['childrenStarted', 'childrenWaited']:
+        for field in ['childrenStarted', 'childrenWaited', 'threadsJoined']:
             with self.assertRaises(ValueError):
                 tool.validate_report('concurrent', report.replace(f'{field}=16', f'{field}=15'))
 
@@ -67,3 +68,64 @@ class AtomicPipeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tool.run()
         start.assert_not_called()
+
+
+    def test_temporary_legacy_mutation_restores_old_gap(self):
+        source = (tool.NATIVE / 'OwnedPreparationIO.swift').read_text(encoding='utf-8')
+        mutated = tool.legacy_mutant(source)
+        self.assertIn('Darwin.pipe(&pair)', mutated)
+        self.assertNotIn('Darwin.pipe2', mutated)
+        self.assertIn('fcntl(end.fd, F_SETFD, flags | FD_CLOEXEC)', mutated)
+        self.assertLess(mutated.index('try adoptPipe()\n        for end'), mutated.index('fcntl(end.fd, F_SETFD'))
+        self.assertIn('try fixtureAllocationProbe?(pair)', mutated)
+        with self.assertRaises(ValueError):
+            tool.validate_source(mutated)
+        with self.assertRaises(ValueError):
+            tool.legacy_mutant(source.replace('// Parent write/read only.', '// anchor changed'))
+        self.assertEqual((tool.NATIVE / 'OwnedPreparationIO.swift').read_text(encoding='utf-8'), source)
+
+    def test_executed_success_and_sanitized_failure_diagnostics(self):
+        result = SimpleNamespace(returncode=0, stdout=self.report('concurrent'), stderr='')
+        progress = {}
+        with patch.object(tool, 'completed', return_value=result):
+            self.assertEqual(tool.execute_mode('fixture', 'concurrent', progress), 65)
+        result = SimpleNamespace(returncode=1, stdout='', stderr='private/path\nNATIVE_ATOMIC_PIPE_CONDITION 2\nNATIVE_ATOMIC_PIPE_CHILD_EXIT 89\n')
+        with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+            tool.execute_mode('fixture', 'concurrent', progress)
+        self.assertEqual(progress, {'phase': 'fixture-execute', 'mode': 'concurrent', 'returncode': 1, 'condition': 2, 'child_exit': 89})
+        self.assertNotIn('private', str(progress))
+
+    def test_malformed_or_unbounded_diagnostics_are_not_retained(self):
+        for diagnostic in ['NATIVE_ATOMIC_PIPE_CONDITION 66\nNATIVE_ATOMIC_PIPE_CHILD_EXIT 256\n',
+                           'NATIVE_ATOMIC_PIPE_CONDITION path\nNATIVE_ATOMIC_PIPE_CHILD_EXIT -1\n',
+                           'NATIVE_ATOMIC_PIPE_CONDITION 2\nNATIVE_ATOMIC_PIPE_CONDITION 3\n']:
+            result = SimpleNamespace(returncode=1, stdout='', stderr=diagnostic)
+            progress = {}
+            with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+                tool.execute_mode('fixture', 'concurrent', progress)
+            self.assertIsNone(progress['condition'])
+            self.assertIsNone(progress['child_exit'])
+
+    def test_only_expected_executed_and_collected_mutant_counts_as_red(self):
+        output = self.report('concurrent').replace('passed=65 failed=0', 'passed=33 failed=32')
+        diagnostics = 'NATIVE_ATOMIC_PIPE_CONDITION 1\nNATIVE_ATOMIC_PIPE_CHILD_EXIT 89\n'
+        result = SimpleNamespace(returncode=1, stdout=output, stderr=diagnostics)
+        with patch.object(tool, 'completed', return_value=result):
+            self.assertEqual(tool.execute_mode('fixture', 'concurrent', {}, mutant=True), 32)
+        failures = [SimpleNamespace(returncode=code, stdout=output, stderr=diagnostics) for code in [0, 2, -11]]
+        failures += [SimpleNamespace(returncode=1, stdout=bad, stderr=diagnostics) for bad in [
+            '', output + output, output.replace('childrenWaited=16', 'childrenWaited=15'),
+            output.replace('threadsJoined=16', 'threadsJoined=15'), output.replace('open=0', 'open=1'),
+            output.replace('closed=32', 'closed=31'), output.replace('failed=32', 'failed=31')]]
+        failures += [SimpleNamespace(returncode=1, stdout=output, stderr=bad) for bad in [
+            'compiler failed', '', diagnostics.replace('CONDITION 1', 'CONDITION 2'), diagnostics.replace('EXIT 89', 'EXIT 78')]]
+        for result in failures:
+            with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+                tool.execute_mode('fixture', 'concurrent', {}, mutant=True)
+
+    def test_build_failure_cannot_count_as_expected_native_red(self):
+        progress = {'phase': 'mutant-build', 'mode': None}
+        result = SimpleNamespace(returncode=1, stdout=self.report('concurrent'), stderr='private compiler/path')
+        with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+            tool.command(['compiler'], {}, progress)
+        self.assertEqual(progress, {'phase': 'mutant-build', 'mode': None, 'returncode': 1})

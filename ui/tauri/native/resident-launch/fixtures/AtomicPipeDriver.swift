@@ -8,6 +8,7 @@ private final class SpawnProbe {
     var started = false
     var waited = false
     var passed = false
+    var exitStatus: Int32?
 
     init(descriptions: String, sentinel: String) {
         self.descriptions = descriptions
@@ -37,6 +38,7 @@ private final class SpawnProbe {
         var observed: pid_t
         repeat { observed = waitpid(pid, &status, 0) } while observed == -1 && errno == EINTR
         waited = observed == pid
+        if waited && status & 0x7f == 0 { exitStatus = (status >> 8) & 0xff }
         passed = waited && status == 0
     }
 }
@@ -47,11 +49,18 @@ private enum Check {
     static var failed = 0
     static var started = 0
     static var waited = 0
+    static var joined = 0
+    static var childExitReported = false
     static var allocations = 0
     static var closed = 0
     static var open = 0
     static func that(_ value: Bool) {
-        if value { passed += 1 } else { failed += 1 }
+        if value { passed += 1 } else {
+            if failed == 0 {
+                try? FileHandle.standardError.write(contentsOf: Data("NATIVE_ATOMIC_PIPE_CONDITION \(passed + failed + 1)\n".utf8))
+            }
+            failed += 1
+        }
     }
 }
 
@@ -71,7 +80,7 @@ struct AtomicPipeDriver {
         case "guards": guards()
         default: Darwin.exit(78)
         }
-        print("NATIVE_ATOMIC_PIPE mode=\(arguments[0]) passed=\(Check.passed) failed=\(Check.failed) allocations=\(Check.allocations) closed=\(Check.closed) open=\(Check.open) childrenStarted=\(Check.started) childrenWaited=\(Check.waited) producer=0")
+        print("NATIVE_ATOMIC_PIPE mode=\(arguments[0]) passed=\(Check.passed) failed=\(Check.failed) allocations=\(Check.allocations) closed=\(Check.closed) open=\(Check.open) childrenStarted=\(Check.started) childrenWaited=\(Check.waited) threadsJoined=\(Check.joined) producer=0")
         Darwin.exit(Check.failed == 0 ? 0 : 1)
     }
 
@@ -177,7 +186,12 @@ struct AtomicPipeDriver {
                     print("NATIVE_ATOMIC_PIPE_UNEXECUTED join_unknown")
                     pthread_exit(nil)
                 }
+                Check.joined += 1
                 Unmanaged<SpawnProbe>.fromOpaque(context).release()
+                if let code = spawn.exitStatus, code != 0, !Check.childExitReported {
+                    try? FileHandle.standardError.write(contentsOf: Data("NATIVE_ATOMIC_PIPE_CHILD_EXIT \(code)\n".utf8))
+                    Check.childExitReported = true
+                }
                 Check.started += spawn.started ? 1 : 0
                 Check.waited += spawn.waited ? 1 : 0
                 Check.that(spawn.passed)
@@ -211,9 +225,11 @@ struct AtomicPipeDriver {
             var value = stat()
             return fstat(fd, &value) == 0 && Int64(value.st_dev) == device && value.st_ino == inode
         }
-        guard matches(Substring(arguments[2])) == true,
-              descriptions.allSatisfy({ matches($0) == false }),
-              let ownFDs = try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd") else { Darwin.exit(89) }
+        guard matches(Substring(arguments[2])) == true else { Darwin.exit(87) }
+        let inherited = descriptions.map { matches($0) }
+        guard inherited.allSatisfy({ $0 != nil }) else { Darwin.exit(78) }
+        guard inherited.allSatisfy({ $0 == false }) else { Darwin.exit(89) }
+        guard let ownFDs = try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd") else { Darwin.exit(86) }
         // Audit aliases as well as the original descriptor numbers. Only this
         // fixed child's own table is inspected, never another process's fds.
         for name in ownFDs {

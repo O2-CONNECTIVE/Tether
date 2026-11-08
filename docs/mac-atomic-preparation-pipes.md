@@ -23,12 +23,18 @@ python3 -m unittest discover -s scripts/tests -p 'test_mac_*.py' -v
 
 native checker は既存の Apple Silicon / macOS 27以上 / SDK 27以上を要求します。Swift 6 normal / fixture を warning-as-error で compileし、合成 fixture のみ実行します。Linux / 古い OS・SDK / 部分結果 / 0件 / 未回収 child は非0終了で、skip を成功へ変換しません。
 
-5 mode の固定期待値は合計127条件、24回の pipe 割当、48端点の物理 close、16 self-child の開始・exact Wait です。これは期待契約であり、未実行 head の成功件数ではありません。
+5 mode の固定期待値は合計127条件、24回の pipe 割当、48端点の物理 close、16 self-child の開始・exact Wait・元 pthread join です。これは期待契約であり、未実行 head の成功件数ではありません。
 
 - `allocation`: 各 syscall の直後、後続 flag 設定前に CLOEXEC / FIFO / blocking を確認します。完了後は parent だけ nonblocking、NOSIGPIPE、元 wrapper を確認します。
 - `partial` / `lost`: 最初と2本目の取得直後に固定 fault を入れ、2 / 4端点の回収と再 close / 再 configure 拒否を確認します。lost は実 close 成功後の receipt だけを失わせます。実 kernel EMFILE / close errno の注入ではありません。
 - `concurrent`: allocator を各取得直後に止め、別 pthread で固定の自分自身だけを plain `posix_spawn` します。close actions / CLOEXEC_DEFAULT は使いません。意図的に継承可能にした自己所有 `/dev/null` sentinel の継承を child が確認するため、spawn 側が全 fd を隠してテストを通すことはできません。新しい pipe は child に残らず、元 child の Wait と元 pthread の join 後に取得を再開します。8回の準備で両取得境界を検査します。
 - `guards`: OS version 境界と production publisher 未設定の拒否を確認します。actual 旧 OS の load を新 OS 上の version fixture で証明しません。
+
+同じ checker は一時 source copy だけで旧 `pipe()` → 2本取得後の `fcntl(F_SETFD)` を再現し、**同じ固定 driver の concurrent mode を実行してから**修正 source を実行します。旧方式では取得直後の16条件と child 継承の16条件、計32条件が失敗し、16 child の exact Wait、16 pthread join、32端点の物理 close を終えた固定 report と exit 1を要求します。最初の失敗条件1と child exit 89（継承検出）も照合します。compiler failure、signal死、任意の非0終了、不完全回収は期待した red になりません。mutant は一時領域だけで生成し、production source / export / flag には残しません。この red / green の実行済み判定は macOS 27 の exact head report が必要で、Python の source mutation 回帰だけでは native TDD 成功になりません。
+
+sentinel の `/dev/null` metadata 一致だけでは同じ open file description を証明できません。旧方式の実行で pipe 継承を検出する負例も要求し、将来 spawn 側が一律 close へ変わって positive だけが通ることを防ぎます。child の sentinel 不一致（87）、入力不正（78）、fd table 読取り失敗（86）は、pipe 継承検出（89）と区別します。
+
+失敗時は有限の phase / mode / exit code / 最初の失敗条件番号 / child exit code だけを JSON へ記録します。compiler の raw stderr、path、fd / inode、任意のエラー文は保存・公開しません。
 
 これは原子的割当の直接 API と固定 exec 回帰です。あらゆるスケジューリングを網羅する stress 証明ではなく、実 producer / 実署名の起動時 enforcement、protected policy、鍵、GUI、外部接続を使いません。通常 export に fixture hook や任意 path / argv / fd / trust 入力を追加しません。publisher / exact release は未設定のまま fail closed です。
 
