@@ -194,6 +194,9 @@ func (r *Runtime) StartShell(ctx context.Context, grant supervisor.Binding, stdi
 		r.diagnostics.record(StartFailureContext)
 		return nil, agentexec.ErrNotStarted
 	}
+	if r.terminalDisposition.IsTerminal() {
+		return nil, errors.Join(agentexec.ErrNotStarted, ErrTerminalCleanupUnknown)
+	}
 	sp, err := r.spawn(spec)
 	if sp.proc == nil {
 		closeAll(sp)

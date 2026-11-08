@@ -247,3 +247,23 @@ including timer coincidence, live-child KILL fallback, immediate natural cleanup
 and retained unknown ownership. They do not establish that an observed extra
 member was a zombie or that waiting will make every native cleanup succeed.
 
+## 起動前検査中に届いた停止の再確認
+
+`StartShell` は、読取り専用の SIGCHLD・descriptor 検査後、spawn を呼ぶ直前に、
+元の command context の取消と同じ local terminal disposition を再確認します。
+検査中に届いた Cancel・Revoke・TransportLost・Close、または terminal unknown を
+既に観測できる場合は、shell を起動せず `ErrNotStarted` を返します。
+context の拒否は既存の固定診断 `context`、terminal disposition は
+`ErrTerminalCleanupUnknown` を維持します。新しい timer や権限判定は追加しません。
+
+これは取消と fork の原子化ではありません。直前の確認後に停止が届く場合や、
+既に入った spawn が遅れて process を返す場合は残ります。
+その process は従来どおり同じ owner が保持し、停止と回収を別々に確認します。
+terminal unknown の後着取得も未知のまま保持し、成功へ戻しません。
+
+回帰は公開 Session と実 Mac runtime の組成、および公開 `StartShell` を通し、
+host 検査と spawn の OS 境界だけを memory fixture に置き換えます。
+両検査中の4種類の停止と terminal disposition で spawn 0件を red→green で確認し、
+既存の遅延起動・後着取得の所有回帰を維持します。実 OS の fork 競合、実dot、
+GUI、常駐版・単発版の実接続受入を完了したとは扱いません。
+
