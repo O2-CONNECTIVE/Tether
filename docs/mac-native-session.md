@@ -39,3 +39,15 @@ close 後の既存回帰も、Receiver が作れたことだけでなく、unbou
 native record の全解放・full cleanup / application Quit はこの session では許可しません。現在の worker Drop / TLS exit は Unknown を保持し、outer join が揃っても解除できません。次の終了実装には、元 worker 上で quiescence を準備し、実 IO / outer joins と結び付ける coherent な手順が必要です。raw handle と bool、PID 再取得、他 thread の Process 操作、既存 Unknown の clear で代用しません。unbounded drain / pending TLS exit の liveness も未証明です。
 
 会社 Mac の実 GUI / producer / host、実鍵 / policy、署名・配置・OS trust・外部接続・persistent access は未実行です。a4 / a5 / task-7 は不変で、解除連絡待ちです。旧実機証拠を新 pin に引き継ぎません。
+
+
+## 閲覧終了前後の鮮度比較
+
+元の状態報告は同じでも、`current()` は同じ期限から `validForMs` を毎回計算する。
+借用viewを閉じた前後でJSON全体を等値比較すると、時計が1ms進むだけで試験が失敗する。
+固定childの検査では5msを挟み、鮮度以外の全fieldが不変であることと、残り鮮度が正かつ厳密に減少することを別々に要求する。
+製品clock・3秒の上限・期限切れ判定・所有者・終了条件は変更しない。
+
+checkerの失敗は固定phase、固定mode、exit code、既知の数値conditionだけをstderrへ残す。
+raw stderr・payload・path・例外本文は公開しない。成功の251条件・元childのWait/close/unknown保持は従来どおり必要で、部分成功を全体成功にしない。
+候補と同treeのpostmergeで異なる結果が出ても、既往失敗を消したり無条件rerunで解消扱いにしない。

@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -47,3 +48,32 @@ class NativeSessionReportTests(unittest.TestCase):
                           (1, 'error[E0505]: unrelated borrow')]:
             with self.subTest(code=code, log=log), self.assertRaises(ValueError):
                 tool.validate_borrow_refusal(code, log)
+
+
+class NativeSessionFailureEvidenceTests(unittest.TestCase):
+    def test_fixture_failure_keeps_only_mode_exit_and_bounded_condition(self):
+        for stderr, condition in [('private/path\nsession condition 6\nsecret', 6),
+                                  ('\nsession condition 27\n', None),
+                                  ('\nsession condition 999\n', None),
+                                  ('private token or arbitrary exception', None)]:
+            progress = {}
+            result = subprocess.CompletedProcess([], 101, 'private payload', stderr)
+            with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+                tool.execute_mode(Path('/private/fixture'), 'session-confirmed', progress)
+            self.assertEqual(progress, {'phase': 'fixture', 'mode': 'session-confirmed',
+                                        'returncode': 101, 'condition': condition})
+
+    def test_malformed_success_is_report_failure_not_fixture_success(self):
+        progress = {}
+        result = subprocess.CompletedProcess([], 0, 'private malformed payload', 'private stderr')
+        with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+            tool.execute_mode(Path('/private/fixture'), 'session-confirmed', progress)
+        self.assertEqual(progress, {'phase': 'report', 'mode': 'session-confirmed',
+                                   'returncode': 0, 'condition': None})
+
+    def test_completed_report_still_requires_original_counts(self):
+        progress = {}
+        report = 'NATIVE_SESSION_FIXTURE mode=session-confirmed passed=26 failed=0 childrenStarted=1 childrenWaited=1 open=0 nativeUnknown=1 producer=0\n'
+        result = subprocess.CompletedProcess([], 0, report, 'ignored private stderr')
+        with patch.object(tool, 'completed', return_value=result):
+            self.assertEqual(tool.execute_mode(Path('/private/fixture'), 'session-confirmed', progress), 26)

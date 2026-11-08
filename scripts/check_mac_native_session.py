@@ -4,7 +4,7 @@ import re
 import sys
 import subprocess
 
-from check_mac_enrollment_lookup import command
+from check_mac_enrollment_lookup import command, completed
 from check_mac_native_source_variants import source_variants, validate_dependencies
 
 CASES = {'session-confirmed': 26, 'session-unknown': 26,
@@ -29,20 +29,41 @@ def validate_borrow_refusal(returncode, stderr):
         raise ValueError('missing exact session borrow refusal')
 
 
-def run():
+def execute_mode(executable, mode, progress):
+    # The executable is a fixed source fixture, not a producer. Never publish
+    # raw stderr, paths, exception text or payloads from the child.
+    progress.update(phase='fixture', mode=mode, returncode=None, condition=None)
+    result = completed([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
+    progress['returncode'] = result.returncode
+    if result.returncode:
+        match = re.search(r'\nsession condition ([1-9][0-9]?)\n', result.stderr)
+        if match and 1 <= int(match.group(1)) <= 26:
+            progress['condition'] = int(match.group(1))
+        raise ValueError('native session fixture failed')
+    progress['phase'] = 'report'
+    return validate_report(mode, result.stdout)
+
+
+def run(progress=None):
+    if progress is None:
+        progress = {}
+    progress.update(phase='invocation', mode=None, returncode=None, condition=None)
     if len(sys.argv) != 1 or sys.platform != 'darwin':
         raise ValueError('unsupported native session invocation')
     passed = 0
+    progress['phase'] = 'normal-build'
     for variant in source_variants('native-session-'):
         for mode in CASES if variant.fixture else ('session-normal',):
-            output = command([str(variant.executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
-            passed += validate_report(mode, output)
+            passed += execute_mode(variant.executable, mode, progress)
         # Compiler guard: a real typed view cannot outlive its owning session.
         if not variant.fixture:
+            progress.update(phase='borrow-refusal', mode=None, returncode=None, condition=None)
             result = subprocess.run([variant.cargo, 'rustc', '--locked', '--offline', '--jobs', '2'] + variant.manifest +
                                     ['--', '--cfg', 'resident_session_borrow_refusal', '--emit=metadata'],
                                     env=variant.env, text=True, capture_output=True, timeout=60)
+            progress['returncode'] = result.returncode
             validate_borrow_refusal(result.returncode, result.stderr)
+        progress.update(phase='fixture-build', mode=None, returncode=None, condition=None)
     print(json.dumps({'fixture': 'native-session-source', 'passed': passed,
                       'normalModes': 1, 'fixtureModes': 11,
                       'fixtureChildrenStarted': 11, 'fixtureChildrenWaited': 11,
@@ -55,8 +76,9 @@ def run():
 
 
 if __name__ == '__main__':
+    progress = {}
     try:
-        run()
+        run(progress)
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
-        print('NATIVE_SESSION_FAILED', file=sys.stderr)
+        print('NATIVE_SESSION_FAILED ' + json.dumps(progress, sort_keys=True), file=sys.stderr)
         raise SystemExit(1)
