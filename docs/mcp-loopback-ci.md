@@ -12,6 +12,15 @@
 
 - initialize、initialized、4 tools の一覧、start、status、output、cancel、session削除。
 - 未信頼証明書、bearerなし／不正署名、別principalによるsession利用の拒否。
+- 稼働中の合成作業に対する期限切れbearerでのinitialize、一覧、start、status、cancel、DELETEをHTTP 401で拒否。正しいbearerのsessionと元作業は維持する。
+- trusted ownerの`Session.Revoke`によるhost OFF後、新規startと旧sessionのHTTP 404拒否、fresh discoveryからの実行拒否、元作業の停止を分けて確認する。
+- fake runtimeのRelease失敗を注入し、Host終了を回収成功と扱わず`cleanup=unknown`を維持する。owner限定の再試行後だけ`confirmed`となり、権限や作業を復活させない。
+
+OFF・期限切れbearerの共通シナリオは、通常Go laneの
+`TestHTTPHostOffAndExpiredCredential`でも直接HTTP handler経由で実行します。
+既存実装への後付け回帰であり、新仕様のTDD red/greenではありません。
+transport認証期限とgrant期限は別です。ここで期限切れにするのは合成bearerで、
+既存のgrant hard deadline回帰を置換しません。
 - 自己所有 listener／HTTP server の終了と実行結果。timeout時は失敗。
 
 TLS証明書・秘密鍵は試験内だけで生成します。信頼点はそのclientのcert poolだけで、

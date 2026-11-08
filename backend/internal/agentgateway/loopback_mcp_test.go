@@ -13,6 +13,11 @@ import (
 )
 
 func TestLoopbackTLSMCPConnection(t *testing.T) {
+	offRig := newRig(t, 2*time.Second)
+	offMac := offRig.approve(0, 60*time.Second)
+	offClient := newLoopbackMCP(t, offRig.gw)
+	checkOffAndExpiry(t, offMac, offClient.do)
+
 	r := newRig(t, 2*time.Second)
 	m := r.approve(0, 60*time.Second)
 	c := newLoopbackMCP(t, r.gw)
