@@ -66,7 +66,7 @@ PRODUCT_FILES = {
         'staging_execution.go', 'staging_preview.go', 'operator_policy.go', 'runtime_execution.go', 'runtime_native.go', 'runtime_source.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/servicecontrol': {'request.go', 'strict.go', 'response.go', 'response_fields.go', 'response_preview.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/serviceauthowner': {'owner.go'},
-    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/fileread': {'read.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/fileread': {'read.go', 'access.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec': {'contract.go', 'output.go', 'run.go', 'session.go', 'local_summary.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel': {'channel.go', 'server.go', 'client.go', 'conn.go', 'keys.go', 'liveness.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire': {'client.go', 'server.go', 'strict.go', 'wire.go'},
@@ -216,6 +216,8 @@ def product_files_for(goos, cgo_enabled=True):
             or goos not in GUEST_ACCOUNT_FILES or goos not in MAC_AGENT_FILES):
         raise ValueError('Unsupported Go target for production inventory')
     expected = {package: set(files) for package, files in PRODUCT_FILES.items()}
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/fileread'].update(
+        {'selected_darwin.go', 'selected_observation_darwin.go'} if goos == 'darwin' else {'selected_other.go'})
     if goos == 'darwin' and cgo_enabled:
         expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe'].update({'owned_darwin.go', 'run_darwin.go'})
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent'].update(MAC_AGENT_FILES[goos])
