@@ -720,11 +720,17 @@ func (s *Session) stopCommand(c *command, reason StopReason) {
 	}
 	c.killSent = true
 	c.terms.Add(1)
-	s.mu.Unlock()
-	defer c.terms.Done()
 	ctx, cancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
-	defer cancel()
-	_ = guard(func() error { return proc.Terminate(ctx) })
+	s.mu.Unlock()
+	// The stop caller owns admission/cancellation, not this potentially slower
+	// native operation. Keep the one early attempt owned by the command: run
+	// joins terms before its final Terminate/Release and before closing done.
+	// A caller's shorter Close budget can return unknown without detaching it.
+	go func() {
+		defer c.terms.Done()
+		defer cancel()
+		_ = guard(func() error { return proc.Terminate(ctx) })
+	}()
 }
 
 // Close revokes the grant and waits for every command worker within ctx. It
