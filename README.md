@@ -21,11 +21,19 @@
 
 ## 現在地
 
+進捗確認: 2026-11-08、source基点 `49adb980`（[#271](https://github.com/O2-CONNECTIVE/rescue-host/pull/271)）。この基点のpostmerge CIは対象9 workflowが成功しています。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
+
+- **接続の隔離検証:** [#252](https://github.com/O2-CONNECTIVE/rescue-host/pull/252)の実loopback TCP/TLSと、[#253](https://github.com/O2-CONNECTIVE/rescue-host/pull/253)のMac実producer・固定command・OFF・元所有者終了確認を統合。合成認証と試験用CA/overlayを使い、実dotや通常製品認証は未受入です。#253初回のfailed-unknownは原因未解明のまま保持します。
+- **共通所有と停止:** [#267](https://github.com/O2-CONNECTIVE/rescue-host/pull/267)のMac公開stack、[#269](https://github.com/O2-CONNECTIVE/rescue-host/pull/269)の故障後有限出力回収、[#270](https://github.com/O2-CONNECTIVE/rescue-host/pull/270)のHTTP失効・OFF回帰、[#271](https://github.com/O2-CONNECTIVE/rescue-host/pull/271)の原子的pipe取得を統合。実GUI/dot・署名済みlaunch・製品全回収/Quitの完了ではありません。
+- **操作辞書を早期拡充:** [#261](https://github.com/O2-CONNECTIVE/rescue-host/pull/261)と[#265](https://github.com/O2-CONNECTIVE/rescue-host/pull/265)で既存操作の出力契約を明示済み。[#188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) / [#32](https://github.com/O2-CONNECTIVE/rescue-host/issues/32)に沿い、実接続受入と並行して専用操作を小さいPRで実装・検証します。端末一覧やファイル読取・検索・編集等が提供済みという宣言ではありません。
+
+### 旧pilotと実利用の未確認範囲
+
 | 境界 | 確認したこと | まだ確認していないこと |
 | --- | --- | --- |
 | Mac native command | 固定した旧 snapshot の1名・1 Macで正常実行、取消、要求なし期限切れ、実行中通信断の4 case | 任意 workload、他端末・他利用者、新しい build 全体の実動作 |
 | Claude Code HTTP/OAuth | 実認証・接続と4 toolの discovery | Claude からの実 command。native 4 caseとは別の証跡 |
-| dot → MCP | 実装・接続準備 | workspace の plugin 作成が403拒否。管理者による利用許可確認待ち |
+| dot → MCP | 実装・接続準備。旧pilotではplugin作成403を記録 | 実利用dot接続。過去403を現在の権限状態と断定せず、現行の利用可否は別確認 |
 | Mac status GUI | 読取専用 SwiftUI、build・合成状態・所有 window 終了、ローカル評価 `.app` | 実 agent と GUI の同時動作、Finder/Gatekeeper、署名済み配布 |
 | 人間による一時派遣 | 前景 CLI、評価 package 作成ツールの source | 一般受領者の起動受入、初回 enrollment、配布条件の充足 |
 
@@ -49,9 +57,9 @@ gateway は呼出主体と登録済みホストを照合しますが、Mac の�
 
 | 対象 | 現時点の範囲 |
 | --- | --- |
-| Mac command target | 現在ユーザー権限、昇格なし・sandboxなし。現在の agent build 宣言は macOS **26.0** |
+| Mac command target | 現在ユーザー権限、昇格なし・sandboxなし。旧pilot agent build宣言はmacOS **26.0**。#271のnative pipe取得は**27以上**を要求し、旧方式へfallbackしない。製品セット全体の互換性は未受入 |
 | Mac status viewer | macOS **13.0**以上を宣言。ただし13実機未検証で、agent全体の対応下限ではない |
-| Linux / Windows | gateway の配置候補と source/build 検証を、command target対応と区別。Windows target追加は保留 |
+| Linux / Windows | gatewayの配置候補とsource/build検証をcommand target対応と区別。製品目標はMac先行、その後Windows。Windows製品の実接続受入は未完 |
 | 旧 Windows Tauri / Python | 履歴として保持。現在のMac実行基盤へ接続されたGUIではない |
 
 ## ローカル開発の最短入口
