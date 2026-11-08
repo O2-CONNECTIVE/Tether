@@ -16,10 +16,10 @@ concurrency:
 jobs:
   native-source:
     name: Native source, owned fixtures and Intel compile only
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 30
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       PYTHONDONTWRITEBYTECODE: '1'
       GOTOOLCHAIN: local
       GOWORK: 'off'
@@ -46,7 +46,9 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$RUNNER_ARCH" = ARM64
           test "$(uname -m)" = arm64
-          test "$(xcodebuild -version | head -n 1)" = "Xcode 26.5"
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 27.1"
+          test "$(sw_vers -productVersion | cut -d. -f1)" -ge 27
+          test "$(xcrun --sdk macosx --show-sdk-version | cut -d. -f1)" -ge 27
           xcrun swift --version
           xcrun --sdk macosx --show-sdk-version
       - name: Set up fixed Go for source-only fixtures
@@ -70,6 +72,7 @@ jobs:
       - name: Check preparation, fixed self-child completion and same-owner fixtures
         run: |
           mkdir -p "$RUNNER_TEMP/native-source-evidence"
+          python scripts/check_mac_atomic_pipes.py | tee "$RUNNER_TEMP/native-source-evidence/atomic-pipes.json"
           python scripts/check_mac_launch_requirement.py | tee "$RUNNER_TEMP/native-source-evidence/requirement.json"
           python scripts/check_mac_process_completion.py | tee "$RUNNER_TEMP/native-source-evidence/completion.json"
           python scripts/check_mac_active_io.py | tee "$RUNNER_TEMP/native-source-evidence/active-io.json"

@@ -26,7 +26,7 @@ Team の字形・hash のサイズ検査は、署名や publisher の証明で�
 
 ## macOS と保証範囲
 
-Process.launchRequirement / LaunchCodeRequirement は macOS 14.4+ です。
+Process.launchRequirement / LaunchCodeRequirement は macOS 14.4+ です。[後続の原子的な匿名 IO](mac-atomic-preparation-pipes.md)は別に macOS 27以上を要求し、割当前に拒否します。
 actual `#available` と native OS version の両方を確認し、14.4 未満は当該機能を拒否します。fixture の version 引数で actual guard を回避できません。
 現在のアプリの実効 deployment target はこの source から推定しません。アプリの最低 OS を引き上げる設定変更もありません。
 [Apple Process API](https://developer.apple.com/documentation/foundation/process/launchrequirement)、[LaunchCodeRequirement](https://developer.apple.com/documentation/lightweightcoderequirements/launchcoderequirement)

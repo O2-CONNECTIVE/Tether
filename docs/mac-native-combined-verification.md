@@ -17,7 +17,7 @@
 | 通常アプリ | README の正規 frontend build 後、Rust の default / custom-protocol test、clippy、fmt、build。Mac unavailable と Windows output 契約の既存回帰を残す | GUI 起動、resident binding、実通信 |
 | Native source | `check_mac_launch_requirement.py`、`check_mac_preparation_ffi.py`、`check_mac_rust_owner.py`、`check_mac_native_pump.py`。各 positive / compile refusal、所有 IO の終了、normal / fixture export 分離を独立記録 | 署名済み image の実 enforcement、実 Process Wait、active joins |
 | 明示 source cfg | 同じ app の `resident_native_source` compile と fixture の locked / offline build・clippy。通常 build で cfg が有効化されていないことも確認 | startup / IPC への binding |
-| Architecture / OS | Swift と Rust の arm64 / Intel を言語別、compile / 実行別に記録。macOS 14.4 未満の fail closed と古い OS の load は別に実証 | Swift Intel compile だけによる Rust Intel 成功、host 上だけの旧 OS 対応 |
+| Architecture / OS | Swift と Rust の arm64 / Intel を言語別、compile / 実行別に記録。typed requirement の14.4未満拒否、原子的 IO の27未満拒否、古い OS の load は別に実証 | Swift Intel compile だけによる Rust Intel 成功、host 上だけの旧 OS 対応 |
 | Producer 基盤 | 公開 Go CI 手順の build / normal / race / vet と対象 cross build、strict inventory / API 差分を同じ候補で再確認 | 実 protected policy、full authenticated consume、native producer の起動 |
 | Frontend / tools | README と各 workflow の typecheck / lint / Knip / tests / notices、Python check / tool tests / syntax / tokens / sizes / commit 検査 | browser fixture による Rust IPC や実 GUI の成功 |
 | CI | 候補 exact head の必須 workflow と実 check conclusion / URL を確認。Windows の元の失敗と診断証拠を区別し、担当が定義した真の安全条件へ照合 | rerun だけによる根因解消、診断 profile の成功を製品判定へ読み替えること |
@@ -42,7 +42,7 @@ sealed release には承認 publisher / exact release と保護配置・artifact
 
 ## 同じ head を実行する CI 入口
 
-`mac-native-source.yml` は通常 startup へ接続せず、既存の native source checker 群、合成 enrollment replay、source library build、Intel compile/link を実行します。実 producer、実 policy、鍵、署名・配置・OS trust は使いません。
+`mac-native-source.yml` の Apple Silicon job は、公式 `xcode-27` image の既存 Xcode 27.1を選び、実 OS / SDK 27以上を要求します。[原子的な pipe 取得](mac-atomic-preparation-pipes.md)の専用 checker も同じ候補で実行します。通常 startup へ接続せず、既存の native source checker 群、合成 enrollment replay、source library build、Intel compile/link を実行します。実 producer、実 policy、鍵、署名・配置・OS trust は使いません。
 既存製品 workflow のコマンド・timeout・判定を維持し、checkout だけを event の exact head に固定します。`check_ci_checkout.py` は実 `HEAD` / tree と期待 head を照合し、PR base と event SHA を別に記録します。event SHA が synthetic merge ref でも、それを実行した head と読み替えません。
 これは branch protection の設定や他 PR の変更を追加しません。base 前進時の freshness は統合担当が別に確認します。
 
