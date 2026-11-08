@@ -267,3 +267,21 @@ host 検査と spawn の OS 境界だけを memory fixture に置き換えます
 既存の遅延起動・後着取得の所有回帰を維持します。実 OS の fork 競合、実dot、
 GUI、常駐版・単発版の実接続受入を完了したとは扱いません。
 
+## 起動結果を受け取った後の入力抑止
+
+spawn が process を返しても、observer 登録などの起動準備が失敗した場合、またはその間に元の command context の取消や terminal unknown を観測した場合は、その shell へ command bytes の送信を始めません。
+stdin を空のまま閉じる処理と、元の I/O worker の所有は維持します。
+正常な起動だけが従来どおり同じ command bytes を送信します。
+
+既に取得した process と元の pipe は同じ owner に返します。
+入力を抑止したことを `ErrNotStarted`、自然終了、回収成功へ読み替えず、元の起動 error と停止理由を維持します。
+停止、reap、正常な出力 EOF、I/O worker の join、Release はそれぞれ必要なままです。
+回収失敗は unknown として保持し、新規作業を拒否します。
+terminal unknown の後着取得は元の参照を保持し、query、signal、reap、Release の再試行で成功へ戻しません。
+
+この再確認も取消と入力 Write を原子化しません。
+確認後に届く停止や既に送信した command の副作用は取り消せず、元の停止と回収の経路で扱います。
+公開 `StartShell` の再現試験では、spawn error、observer error、取消、terminal unknown を固定し、停止処理を呼ぶ前の stdin 非送信を red→green で確認します。
+公開 Session の組成回帰は4種類の停止、部分起動失敗、回収 unknown と同じ owner の保持を別々に確認します。
+いずれも memory/fake OS 境界であり、実 OS の起動競合、実dot、GUI、常駐版と単発版の実接続受入は未検証です。
+

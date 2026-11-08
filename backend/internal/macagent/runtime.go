@@ -220,6 +220,14 @@ func (r *Runtime) StartShell(ctx context.Context, grant supervisor.Binding, stdi
 			err = errNoProcess
 		}
 	}
+	// A returned shell is already owned, but failed setup or a stop observed
+	// during spawn must not initiate command delivery. Keep the original result
+	// and all I/O/cleanup ownership: empty input is neither ErrNotStarted nor
+	// proof of a natural exit or successful cleanup. A later stop can still race
+	// the writer; this observation does not make cancellation atomic with Write.
+	if err != nil || ctx.Err() != nil || r.terminalDisposition.IsTerminal() {
+		stdin = nil
+	}
 	p := newProcess(sp, r.timing, stdin)
 	p.partialPipes = partialPipes        // assigned before ownership is published
 	p.diagnostics = r.cleanupDiagnostics // before ownership is returned to any caller
