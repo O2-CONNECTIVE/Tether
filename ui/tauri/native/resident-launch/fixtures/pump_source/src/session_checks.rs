@@ -3,8 +3,8 @@ use super::native_session::NativeSession;
 #[cfg(resident_launch_fixture)]
 use crate::native_preparation::{FixedActiveFixture, NativePreparation, Preparation};
 use crate::resident_port::duplex::owner::native::NativeOutcome;
-use crate::standby_lifecycle::{native::NativeOuterJoined, Outcome};
-use serde_json::{json, Value};
+use crate::standby_lifecycle::{Outcome, native::NativeOuterJoined};
+use serde_json::{Value, json};
 fn status(session: &NativeSession) -> Value {
     serde_json::to_value(session.port().current()).unwrap()
 }
@@ -104,7 +104,18 @@ fn active(mode: &str) {
             check(serde_json::to_value(view.current()).unwrap()["standby"] == "off");
         }
         check(NativePreparation::fixture_active_stats().waits == 0);
-        check(status(&session) == before);
+        // Dropping a borrowed view changes no observation fields, but the
+        // original freshness deadline continues to elapse. Cross a real clock
+        // tick so comparing the entire JSON cannot accidentally pass.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let after = status(&session);
+        let before_budget = before["validForMs"].as_u64().unwrap();
+        let after_budget = after["validForMs"].as_u64().unwrap();
+        let mut stable_before = before.clone();
+        let mut stable_after = after;
+        stable_before.as_object_mut().unwrap().remove("validForMs");
+        stable_after.as_object_mut().unwrap().remove("validForMs");
+        check(stable_after == stable_before && after_budget > 0 && after_budget < before_budget);
         check(
             session
                 .port()
@@ -159,5 +170,7 @@ fn active(mode: &str) {
 }
 fn report(mode: &str, passed: usize, child: bool) {
     let child = u8::from(child);
-    println!("NATIVE_SESSION_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={child} producer=0");
+    println!(
+        "NATIVE_SESSION_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={child} producer=0"
+    );
 }
