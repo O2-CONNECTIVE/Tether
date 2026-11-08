@@ -36,16 +36,23 @@ enum Bootstrap {
     Fixture(crate::native_preparation::FixedActiveFixture, bool),
 }
 impl Bootstrap {
-    fn open(self) -> (Preparation, bool) {
+    fn open(self) -> (Preparation, bool, bool) {
         match self {
-            Self::Preparation => (NativePreparation::prepare(), false),
+            Self::Preparation => (NativePreparation::prepare(), false, false),
             #[cfg(resident_launch_fixture)]
             Self::PreparedFixture => (
                 NativePreparation::fixture(crate::native_preparation::FixedFixture::Normal),
                 false,
+                false,
             ),
             #[cfg(resident_launch_fixture)]
-            Self::Fixture(mode, unwind) => (NativePreparation::fixture_active(mode), unwind),
+            Self::Fixture(mode, unwind) => {
+                let coalesced = matches!(
+                    mode,
+                    crate::native_preparation::FixedActiveFixture::FiniteCoalesced
+                );
+                (NativePreparation::fixture_active(mode), unwind, coalesced)
+            }
         }
     }
 }
@@ -132,7 +139,7 @@ fn run(
     shared: Arc<Mutex<Shared>>,
     send: std::sync::mpsc::SyncSender<io::Result<BoundDuplex>>,
 ) -> NativeOutcome {
-    let (preparation, _unwind) = bootstrap.open();
+    let (preparation, _unwind, _coalesced) = bootstrap.open();
     let mut original = match preparation {
         Preparation::Refused => {
             let _ = send.try_send(Err(unavailable()));
@@ -194,14 +201,29 @@ fn run(
     }
     let mut drained = clean_eof;
     let exit = loop {
+        let mut progressed = false;
         if !drained {
-            drained = original.discard_observation().is_eof();
+            let discard = original.discard_observation();
+            drained = discard.is_eof();
+            progressed = discard == crate::native_preparation::DiscardObservation::Progress;
         }
         let value = original.poll_exit();
         if drained && matches!(value, ExitObservation::Exit(_) | ExitObservation::Signal(_)) {
             break value;
         }
+        // Every bounded chunk polls the same Process, then yields fairly.
+        // A timer after successful reads needlessly throttles finite drainage.
+        if progressed {
+            thread::yield_now();
+            continue;
+        }
         // No replacement / signal / detached TLS exit on pending or unknown.
+        // Fixed fixture models a delayed timer delivery, not a timeout success.
+        #[cfg(resident_launch_fixture)]
+        if _coalesced {
+            thread::sleep(Duration::from_millis(25));
+            continue;
+        }
         thread::sleep(Duration::from_millis(5));
     };
     let io = original.retire_active_io();

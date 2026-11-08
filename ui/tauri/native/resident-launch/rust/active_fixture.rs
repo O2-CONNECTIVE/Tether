@@ -20,6 +20,7 @@ pub enum FixedActiveFixture {
     FiniteUnwind = 6,
     FiniteUnknown = 7,
     FiniteHeldUnknown = 8,
+    FiniteCoalesced = 9,
 }
 
 #[derive(Debug, PartialEq, Eq)]

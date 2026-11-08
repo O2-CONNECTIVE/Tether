@@ -230,7 +230,7 @@ private final class PreparationSlot: @unchecked Sendable {
     func createActive(_ mode: UInt32) -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        guard mode <= 8, record == nil, issued < UInt64.max,
+        guard mode <= 9, record == nil, issued < UInt64.max,
               let identity = worker(create: true) else { return 0 }
         let owner = ResidentLaunchPreparation.completionFixture()
         issued += 1

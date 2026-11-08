@@ -43,7 +43,7 @@ Pumpが Ok(true) で終わった場合だけ通常の EOF 完了として扱い�
 python3 scripts/check_mac_native_supervisor.py
 ```
 
-通常準備7条件、fixture16 modes は258条件、計265条件をstrict reportで確認します。15 active childrenの元Wait、60 active endpoints、13 actual supervisor IO worker joins、2 direct discard worker joins、未起動4 endpointsと2 preparation worker joinsを確認します。従来177条件に、有限出力の3 supervisor modesと2 discard契約modesを追加します。
+通常準備7条件、fixture17 modes は272条件、計279条件をstrict reportで確認します。16 active childrenの元Wait、64 active endpoints、14 actual supervisor IO worker joins、2 direct discard worker joins、未起動4 endpointsと2 preparation worker joinsを確認します。従来177条件に、有限出力の4 supervisor modesと2 discard契約modesを追加します。
 
 固定childは不正な最初のframeに続けて1 MiBを書きます。pre-close parser fault、IO unwind、launch時点で既にUnknownの3条件で旧実装は元Wait / join後にExit(88)となるred、変更後はExit(0) / Unknown / close4 / Wait1のgreenです。child自身のstdoutはnonblockingで、5秒の固定escapeを持ちます。これは赤試験を回収するためのchild内の失敗終了であり、親のtimeout成功・kill・製品の時間上限ではありません。
 
@@ -59,6 +59,16 @@ normal / fixture の build / clippy は locked / offline、既存11 dependency p
 
 ## 今回のローカル確認と未実行
 
-arm64 Macの既存Rust 1.99.1 / Python 3.13.2を使用しました。supervisor265、outer301、session251、active bridge240＋compile refusal9、Rust owner92＋compile refusal9と、Mac checkerのPython110試験を確認しています。Swiftのnormal / fixtureはarm64とIntelの双方でcompileしますが、Intel Rust stdが存在せず、`check_mac_native_cross.py` は準備段階で停止しました。Intelの18 compile refusal / link / clippyはこの環境では未実行です。導入や設定変更は行いません。
+arm64 Macの既存Rust 1.99.1 / Python 3.13.2を使用しました。supervisor279、outer301、session251、active bridge240＋compile refusal9、Rust owner92＋compile refusal9と、Mac checkerのPython116試験を確認しています。Swiftのnormal / fixtureはarm64とIntelの双方でcompileしますが、Intel Rust stdが存在せず、`check_mac_native_cross.py` は準備段階で停止しました。Intelの18 compile refusal / link / clippyはこの環境では未実行です。導入や設定変更は行いません。
 
 Pythonのsyntax / tokens / sizesは成功しましたが、一般の`dev.py check`は既存interpreterに`_tkinter`がなく停止しました。PythonのCI固定版3.13.17での確認、CI結果、最終headの独立レビューは別判定です。実GUI・実producer・実認証・終了許可の成功とは扱いません。
+
+## 進捗ごとの待機とCI失敗の切分け
+
+PR #269のhead `2568b978cb17e646aab3c88963562c3c730a9109` は、CI run42437710534のnative source job128600122286でsupervisor checkerが失敗しました。残された記録は汎用の失敗markerだけで、当該CIの失敗mode・条件・child終了値は未特定です。同じheadの固定binaryではローカル20全mode周回が成功しましたが、それでCIの失敗を取り消しません。
+
+別の制御された再現として、fixture専用の25ms timer配送を固定し、4096-byteのProgress後にも毎回sleepする旧loopがchildの5秒escapeへ到達することを確認しました。redは `supervisor-finite-coalesced` / condition3 / child exit88です。Progress後は元Processをpollしてyieldし、Pending / errorなどだけsleepする変更後、同じ固定入力でexit0となります。read量の上限、毎chunkの元Wait観測、公平なyield、Unknown保持は変えず、childの期限延長やtimeout成功で解消しません。この再現を元CIの実timer測定や確定原因とは扱いません。
+
+checker失敗時には固定phase / mode、実returncode、範囲検査済みのfailed conditionとchild exitだけを出します。生のstderr・payload・path・例外文を転記しません。Swift build内の失敗などexit値を捕捉できない箇所はnullのままにし、取得したように扱いません。診断の秘匿とmodeごとの条件上限をPython試験で検査します。
+
+元Wait後のdirect discard試験も、EINTR由来のPendingをProgressやEOFと混同せず、固定回数だけ再読します。budget切れは失敗であり、元childのWaitとIO回収・worker joinを完了してからassertします。

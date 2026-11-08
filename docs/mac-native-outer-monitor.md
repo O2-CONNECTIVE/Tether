@@ -35,6 +35,6 @@ held fixture は実 monitor handle 登録後に同じ monitor の自己 join 拒
 
 先に同じ supervisor の IO join を取得済みの場合も、保存済み NativeJoined を元 owner の証拠として再利用します。未起動・active 両方の prejoined 回帰を実行し、外側 monitor の実 join は別途要求します。再 Wait や別 owner への置換は行いません。
 
-normal / fixture は locked / offline、既存11 dependencies、clippy 両構成。supervisor / discard契約の265条件・app 両構成・native source 全検査を維持し、Intel は同じ source の compile / link のみで foreign 実行はしません。
+normal / fixture は locked / offline、既存11 dependencies、clippy 両構成。supervisor / discard契約の279条件・app 両構成・native source 全検査を維持し、Intel は同じ source の compile / link のみで foreign 実行はしません。
 
 実 GUI / producer / host、実鍵 / protected policy、外部 / Tunnel / OS trust、署名・配置・persistent access は未実行です。a4 / a5 は不変で解除連絡待ち。full native cleanup / Quit、signed launch / verify-to-exec / atomic inheritance、製品認証・実機受入は残件です。既知 Windows timeout は未解明のまま保持し、この source 成功で解消したとは扱いません。

@@ -22,7 +22,7 @@ pub(crate) fn run(mode: &str) {
         let (mut supervisor, source) = NativeIoSupervisor::prepare().unwrap();
         let mut passed = 0;
         let mut check = |v: bool| {
-            assert!(v);
+            assert!(v, "native supervisor condition {}", passed + 1);
             passed += 1;
         };
         check(source.is_err());
@@ -34,7 +34,9 @@ pub(crate) fn run(mode: &str) {
         check(supervisor.poll_join().is_none());
         check(!supervisor.wire_close_confirmed());
         drop(supervisor);
-        println!("NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 unknown=0 producer=0");
+        println!(
+            "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 unknown=0 producer=0"
+        );
         return;
     }
     #[cfg(resident_launch_fixture)]
@@ -55,7 +57,7 @@ fn active(mode: &str) {
         let (mut supervisor, source) = NativeIoSupervisor::fixture_prepared().unwrap();
         let mut passed = 0;
         let mut check = |v: bool| {
-            assert!(v);
+            assert!(v, "native supervisor condition {}", passed + 1);
             passed += 1;
         };
         check(source.is_err());
@@ -73,10 +75,13 @@ fn active(mode: &str) {
         check(NativePreparation::fixture_active_stats().waits == 0);
         check(NativePreparation::fixture_active_stats().abandons == 0);
         check(NativePreparation::fixture_retained_state() == 0);
-        println!("NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 unknown=0 producer=0");
+        println!(
+            "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 unknown=0 producer=0"
+        );
         return;
     }
     let (fixture, id) = match mode {
+        "supervisor-finite-coalesced" => (FixedActiveFixture::FiniteCoalesced, None),
         "supervisor-finite-malformed" => (FixedActiveFixture::FiniteMalformed, None),
         "supervisor-finite-unwind" => (FixedActiveFixture::FiniteUnwind, None),
         "supervisor-finite-unknown" => (FixedActiveFixture::FiniteUnknown, None),
@@ -145,7 +150,13 @@ fn active(mode: &str) {
         }
         let actual = join(&mut supervisor);
         if mode.starts_with("supervisor-finite-") {
-            eprintln!("finite collected: {:?}", actual.outcome());
+            if let NativeOutcome::Active {
+                exit: ExitObservation::Exit(code),
+                ..
+            } = actual.outcome()
+            {
+                eprintln!("NATIVE_SUPERVISOR_CHILD_EXIT {code}");
+            }
         }
         let expected_exit = match mode {
             "supervisor-rejected" => ExitObservation::Exit(2),
@@ -157,6 +168,7 @@ fn active(mode: &str) {
             "supervisor-invalid"
                 | "supervisor-lost-receipt"
                 | "supervisor-unwind"
+                | "supervisor-finite-coalesced"
                 | "supervisor-finite-malformed"
                 | "supervisor-finite-unwind"
                 | "supervisor-finite-unknown"
@@ -189,6 +201,7 @@ fn active(mode: &str) {
             | "supervisor-unwind"
             | "supervisor-lost-receipt"
             | "supervisor-finite-unknown"
+            | "supervisor-finite-coalesced"
             | "supervisor-finite-malformed"
             | "supervisor-finite-unwind"
     ) {
@@ -203,5 +216,7 @@ fn active(mode: &str) {
         crate::native_preparation::Preparation::Refused
     ));
     check(NativePreparation::fixture_collect_retained_active() == ExitObservation::Unavailable);
-    println!("NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=1 producer=0");
+    println!(
+        "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=1 producer=0"
+    );
 }

@@ -8,11 +8,11 @@ import shutil
 import sys
 import tempfile
 
-from check_mac_enrollment_lookup import command
+from check_mac_enrollment_lookup import command, completed
 from check_mac_native_pump import CRATE, validate_dependencies
 from check_mac_rust_owner import build_swift
 
-CASES = {'supervisor-discard-pending': 23, 'supervisor-discard-trailing': 23, 'supervisor-finite-malformed': 14, 'supervisor-finite-unwind': 14,
+CASES = {'supervisor-finite-coalesced': 14, 'supervisor-discard-pending': 23, 'supervisor-discard-trailing': 23, 'supervisor-finite-malformed': 14, 'supervisor-finite-unwind': 14,
          'supervisor-finite-unknown': 14, 'supervisor-prepared': 13, 'supervisor-confirmed': 20,
          'supervisor-unknown': 18, 'supervisor-missing': 18, 'supervisor-malformed': 18,
          'supervisor-invalid': 14, 'supervisor-rejected': 14, 'supervisor-signal': 14,
@@ -29,14 +29,46 @@ def validate_report(mode, output):
     return expected
 
 
-def run():
+def execute_mode(executable, mode, progress):
+    if mode not in {'supervisor-normal', *CASES}:
+        raise ValueError('unsupported native supervisor mode')
+    progress.update(phase='fixture', mode=mode, returncode=None, condition=None, child_exit=None)
+    result = completed([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
+    progress['returncode'] = result.returncode
+    if result.returncode:
+        match = re.search(r'\nnative supervisor condition ([1-9][0-9]?)\n', result.stderr)
+        limit = 7 if mode == 'supervisor-normal' else CASES[mode]
+        if match and 1 <= int(match.group(1)) <= limit:
+            progress['condition'] = int(match.group(1))
+        child = re.search(r'\nNATIVE_SUPERVISOR_CHILD_EXIT ([0-9]{1,3})\n', '\n' + result.stderr)
+        if child and int(child.group(1)) <= 255:
+            progress['child_exit'] = int(child.group(1))
+        raise ValueError('native supervisor fixture failed')
+    progress['phase'] = 'report'
+    return validate_report(mode, result.stdout)
+
+
+def build_command(arguments, env, progress):
+    result = completed(arguments, env)
+    progress['returncode'] = result.returncode
+    if result.returncode:
+        raise ValueError('native supervisor build failed')
+    return result.stdout
+
+
+def run(progress=None):
+    if progress is None:
+        progress = {}
+    progress.update(phase='invocation', mode=None, returncode=None, condition=None, child_exit=None)
     if len(sys.argv) != 1 or sys.platform != 'darwin':
         raise ValueError('unsupported native supervisor invocation')
     arch = {'arm64': 'arm64', 'x86_64': 'x86_64'}.get(platform.machine())
     if arch is None:
         raise ValueError('unsupported native Pump architecture')
+    progress['phase'] = 'dependencies'
     validate_dependencies()
     env = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'CARGO_HOME')}
+    progress['phase'] = 'toolchain'
     cargo = shutil.which('cargo', path=env.get('PATH'))
     swift = command(['/usr/bin/xcrun', '--find', 'swiftc'], env).strip()
     sdk = command(['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'], env).strip()
@@ -49,6 +81,8 @@ def run():
         for fixture in (False, True):
             directory = root / ('fixture' if fixture else 'normal')
             directory.mkdir()
+            label = 'fixture' if fixture else 'normal'
+            progress.update(phase=label + '-swift', mode=None, returncode=None, condition=None, child_exit=None)
             build_swift(swift, sdk, arch, fixture, directory, root / 'swift-cache', env)
             variant = dict(env, CARGO_TARGET_DIR=str(directory / 'target'))
             flags = ['-Dwarnings', '-L', 'native=' + str(directory), '-l', 'dylib=ResidentPreparation',
@@ -58,27 +92,29 @@ def run():
                 flags += ['--cfg', 'resident_launch_fixture']
             variant['CARGO_ENCODED_RUSTFLAGS'] = '\x1f'.join(flags)
             manifest = ['--manifest-path', str(CRATE / 'Cargo.toml')]
-            command([cargo, 'build', '--locked', '--offline', '--jobs', '2'] + manifest, variant)
-            command([cargo, 'clippy', '--locked', '--offline', '--jobs', '2'] + manifest + ['--', '-Dwarnings'], variant)
+            progress['phase'] = label + '-build'
+            build_command([cargo, 'build', '--locked', '--offline', '--jobs', '2'] + manifest, variant, progress)
+            progress.update(phase=label + '-clippy', returncode=None)
+            build_command([cargo, 'clippy', '--locked', '--offline', '--jobs', '2'] + manifest + ['--', '-Dwarnings'], variant, progress)
             executable = directory / 'target/debug/native-pump-source-fixture'
             for mode in CASES if fixture else ('supervisor-normal',):
-                output = command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
-                passed += validate_report(mode, output)
+                passed += execute_mode(executable, mode, progress)
     print(json.dumps({'fixture': 'native-io-supervisor-source', 'passed': passed,
-                      'normalModes': 1, 'fixtureModes': 16, 'activeModes': 15,
-                      'fixtureChildrenStarted': 15, 'fixtureChildrenWaited': 15,
-                      'physicalActiveEndpointsClosed': 60, 'unlaunchedEndpointsClosed': 4,
-                      'actualActiveIoWorkerJoins': 13, 'directDiscardWorkerJoins': 2,
+                      'normalModes': 1, 'fixtureModes': 17, 'activeModes': 16,
+                      'fixtureChildrenStarted': 16, 'fixtureChildrenWaited': 16,
+                      'physicalActiveEndpointsClosed': 64, 'unlaunchedEndpointsClosed': 4,
+                      'actualActiveIoWorkerJoins': 14, 'directDiscardWorkerJoins': 2,
                       'fixtureControlGatesClosed': 1, 'preparationWorkerJoins': 2,
-                      'retainedUnknownRecords': 15, 'lockedOffline': True,
+                      'retainedUnknownRecords': 16, 'lockedOffline': True,
                       'existingDependencyPackages': 11, 'clippyVariants': 2,
                       'producerLaunches': 0, 'hostOnly': True,
                       'scope': 'same affine native IO worker / Wait / component receipts; no outer joins / Quit permit'}))
 
 
 if __name__ == '__main__':
+    progress = {}
     try:
-        run()
+        run(progress)
     except (OSError, ValueError, KeyError):
-        print('NATIVE_SUPERVISOR_FAILED', file=sys.stderr)
+        print('NATIVE_SUPERVISOR_FAILED ' + json.dumps(progress, sort_keys=True), file=sys.stderr)
         raise SystemExit(1)
