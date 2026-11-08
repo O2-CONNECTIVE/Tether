@@ -2,18 +2,47 @@
 
 [用語と名前の境界](../GLOSSARY.md)
 
-更新: 2026-11-01。現在の目標は **AIによる遠隔command操作** と **必要時だけの人間によるagent派遣**です。Macを優先し、人向けSSH互換・Windows target追加は保留しています。
+索引更新: 2026-11-08（参照source: `90f4e666`）。製品の方向・完了条件は[製品目標](product/README.md)、実装・検証の範囲は対象版の契約と証跡に分けます。Mac優先の常駐ホストを目指すことは、実GUI接続・実dot接続・Windows対応の達成を意味しません。
 
 ## 読む順序と正本
 
 1. [プロジェクト入口](../README.md): 目標、対象環境、ローカル開発の入口。
-2. **[検証状態・残件](tether-pilot-status.md)**: 実証済み / source・fixtureのみ / 未完の正本。固定snapshotの証拠を後続buildへ引き継がない。
+2. **[限定pilotの検証記録・残件](tether-pilot-status.md)**: 2026-11-01時点の実証済み / source・fixtureのみ / 未完の記録。後続sourceの検証は各PRの固定headとCIで確認し、固定snapshotの証拠を後続buildへ引き継がない。
 3. [agent CLI](agent-cli.md): 保護設定、前景起動、fresh同意、期限、終了、status pipeの契約。
 4. [Mac runtime](mac-agent-runtime.md): 現在ユーザー・隔離なし、process群とI/Oの所有、回収不明の扱い。
 5. [共通開発手順](agent-workflow.md): ファイル所有、検証、証跡、拒否と再開の扱い。
 
 ここでの「現行」はこの開発ソースの方針・契約です。公開main統合済み、一般配布可能、試験用入口が稼働中という意味ではありません。
 旧Python/Windowsの開始拒否、限定実演後の入口閉鎖、dot workspaceの403は、それぞれ別の状態です。
+
+## 読者別の入口
+
+これは既存文書への案内です。新しい利用者向けの完成済み手順書・配布許可ではありません。
+
+| 読者 | 読む順序・章立て | 正本に残す内容 |
+| --- | --- | --- |
+| 初めて読む人 | [README](../README.md) → [製品目標](product/README.md) → [限定pilot記録](tether-pilot-status.md) | 価値・将来目標と、対象版の提供範囲・未検証を分ける |
+| 評価する人 | [CLI](agent-cli.md) → [Mac runtime](mac-agent-runtime.md) → [viewer](../ui/mac-status/README.md) | 起動前提、本人同意、期限、停止と回収。実GUI・実dot接続の未検証を手順完了にしない |
+| 運用する人 | [identity](tether-access-identity.md) → [鍵loader](agent-key-loader.md) → [gateway](agent-gateway.md) → [配布条件](distribution.md) | 登録・権限・鍵・公開入口と配布の条件。秘密や原ログを公開記録へ複製しない |
+| 開発する人 | [共通開発手順](agent-workflow.md) → [配置方針](repository-layout.md) → [Go CI](go-ci.md) / [viewer](../ui/mac-status/README.md) / [Python](development.md) | 所有権・setup・対象別試験・証跡・統合。旧Pythonの成功を全製品の成功にしない |
+
+### 停止・問題時に確認する文書
+
+- 前景agentの期限・取消とgateway終了: [CLIの順序と所有](agent-cli.md)、[commandの取消契約](agent-command-contract.md)。この案内から新しい接続や実操作を開始しないでください。
+- 終了理由と回収の区別: [Mac runtime](mac-agent-runtime.md)。command終了と全回収は別です。`cleanup unknown`は非成功・再開不可で、盲目的な再実行をしません。
+- 表示が止まった・windowを閉じた: [viewerの契約](../ui/mac-status/README.md)。GUI閉鎖、EOF、残時間0はagent停止の証拠ではありません。
+- 起動・登録・配布の前提が足りない: [限定pilot記録](tether-pilot-status.md)と[配布条件](distribution.md)。未登録identity、未承認の公開入口、未確認のartifactを保護回避で補いません。
+- 旧Python / Windowsの回復: [旧回復手順](recovery.md)。Macの回復操作へ転用しません。
+
+### 版・証跡・更新の読み方
+
+source commit、アプリの版表示、配布物hash、実画面の確認環境は別の識別子です。
+同じ版名や近いcommitだけでは同じ実行物と判断せず、対象PRの固定head、build入力、artifact hash、実施環境と検証範囲を対応づけます。
+対応が確認できない項目は未検証のまま残します。文書の更新日だけで試験を再実行した扱いにはしません。
+
+実装・契約を変える担当は該当する正本とこの索引を照合し、検証担当は対象版と実行範囲を記録します。
+実画面・配布物・対応OSが変わった場合は利用手順をその版で見直します。恒常的な運用責任者・脆弱性受付窓口はこの索引では設定しません。
+貢献規約・templateは[#8](https://github.com/O2-CONNECTIVE/rescue-host/issues/8)、読者別手順の版確定と実機確認は[#31](https://github.com/O2-CONNECTIVE/rescue-host/issues/31)に残し、[LICENSE](../LICENSE)・[CHANGELOG](../CHANGELOG.md)の存在を窓口運用や最新配布版の保証にしません。
 
 ## 現行構成と責任
 
@@ -50,6 +79,10 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 - [検証状態](tether-pilot-status.md)のpackage節に、license閉包・署名・notarization・受領者起動の残件を集約。
 - [旧Python開発手順](development.md)はPython部分の検証用。Go/Swiftの全試験を包含しない。
 
+- [active native owner と Pump](mac-native-active-pump.md): 元 owner の実 IO を既存 shared driver へ接続し、wire / EOF / Wait / close / IO worker join を別々に検査。通常起動と native Supervisor の全 joins は未接続です。
+
+- [同じ native IO worker の supervisor](mac-native-io-supervisor.md): 元 owner の Wait / IO 回収と実 join の component を接続。通常起動・outer joins・Quit 許可は未接続です。
+
 ## 保存する旧設計・履歴
 
 SSH途中実装の既知の公開WIP保存先は `wip/ssh-owned-shell-20261031` です。これは保存済みcheckpointの案内で、今回remoteの最新状態は再照合していません。未完成コードの保存を製品対応・main統合と見なさないでください。
@@ -60,7 +93,3 @@ SSH途中実装の既知の公開WIP保存先は `wip/ssh-owned-shell-20261031` 
 - [旧構成図](architecture.md) / [旧SSH・Windows安全要件](security.md) / [旧脅威モデル](threat-model.md)。
 - [SSH backend基盤](../backend/README.md) / [旧通信契約](communication-contract.md) / [Windows評価手順](windows-evaluation-runbook.md)。
 - [Windows LocalService helper ADR](adr/0004-localservice-auth-helper.md) / [旧Tauri評価版](tauri-evaluation.md)。
-
-- [active native owner と Pump](mac-native-active-pump.md): 元 owner の実 IO を既存 shared driver へ接続し、wire / EOF / Wait / close / IO worker join を別々に検査。通常起動と native Supervisor の全 joins は未接続です。
-
-- [同じ native IO worker の supervisor](mac-native-io-supervisor.md): 元 owner の Wait / IO 回収と実 join の component を接続。通常起動・outer joins・Quit 許可は未接続です。
