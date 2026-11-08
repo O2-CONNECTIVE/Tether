@@ -303,3 +303,14 @@ strict vet / build と runtime unit、cross compile、実機の証拠を分け�
 非exportedの関数・抽象handleと匿名メモリfixtureだけで、production caller、OS filesystem配線、path open、MCP公開はありません。
 通常/race試験の成功を実OSのroot拘束・symlink/TOCTOU防御・実認可・原子的snapshotの証拠にしません。
 所有権、協調式取消、cleanup unknown、次段階の未決事項は[有限読取の境界](bounded-file-read-core.md)を参照してください。
+
+## 非公開の選択folder読取候補
+
+[有限読取コア](bounded-file-read-core.md)の同一packageへ共通 `access.go` と、Darwinの `selected_darwin.go` / `selected_observation_darwin.go`、他OSの拒否用 `selected_other.go` を限定追加します。
+46 packageは不変で、cgo有効時のinventoryはLinux361 / Darwin365 / Windows392 production file、Darwinのcgo無効時は363 fileです。
+追加adapterはcgo非依存です。各file欠落・未知provider・exported入口・通常callerをhelper回帰で拒否します。
+
+DarwinのGo試験だけが新規の匿名一時folderで `openat` / `fstatat` / `pread` / closeを実行します。
+Linux/Windowsは非対応の拒否・root handle消費と共通permission契約を検証し、Darwin実行の代用にしません。
+許可やOS入力の偽装は試験内の値で行い、owner変更・mount・実credential・実folder選択を行いません。
+[残余リスク](selected-folder-read.md)はsource/CI成功でも解除しません。

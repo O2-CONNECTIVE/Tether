@@ -4,18 +4,20 @@
 
 ## 提供段階
 
-`backend/internal/fileread/read.go` は、匿名メモリfixtureで契約を確認する準備実装です。
-関数・型・定数・errorは非exportedで、production caller、path引数、file open、OS adapter、MCP登録、transport配線はありません。
-既存command grantから `files:read` を派生せず、context発行、許可root設定、秘密file分類、実file取得は追加しません。
+`backend/internal/fileread/read.go` は、匿名メモリfixtureで有限読取・再認可・closeの契約を確認する非公開コアです。
+コア自体はpath引数やfile openを持ちません。
+同じ非公開packageへ、後続の[選択folder読取候補](selected-folder-read.md)を追加しました。
+Darwin adapterは呼出側が既に所有するdirectory handleから有限に辿りますが、通常caller・root選択・実権威provider・MCP登録・transport配線はありません。
+既存command grantから `files:read` を派生せず、context発行や本人の実folder取得は追加しません。
 `tether_read_file` の提供開始や目標5/#188の完了ではありません。
 既存の固定作業状態照会・保持出力読取と、実filesystem読取を区別します。
 
 ## 最小契約と所有
 
 `readOwned` は、信頼される呼出側から既に取得済みのhandle一個と、期待する観測値、offset、最大bytes、認可再確認関数を受け取ります。
-handleの取得方法はこの実装に存在しません。
+コアはhandleの取得方法に依存しません。Darwin候補の取得方法と未解決の境界は別文書で定義します。
 期待値のidentity/versionは固定長のopaque tokenで、通常file種別と非負sizeも比較します。
-非zero tokenは認可やOS同一性の証拠ではありません。token生成・強度・OS別の意味は未決です。
+非zero tokenは認可やOS同一性の証拠ではありません。コアはtoken生成・強度・OS別の意味を定義しません。Darwin候補はmetadata hashを使いますが、credentialやcontent hashとは扱いません。
 
 認可関数には期待対象と要求rangeの全体を値として渡します。
 将来の信頼できる組成側が、同じ対象・主体・操作・範囲・有効期間に結び付く既存権威を再確認する責任を持ちます。
@@ -58,10 +60,11 @@ fakeが返す通常file種別やidentity/versionは、symlink、reparse、TOCTOU
 
 ## 検証の読み方
 
-Go試験は匿名in-memory handleだけを使います。
+コアのGo試験は匿名in-memory handleだけを使います。
+後続adapterのDarwin試験は新規の匿名一時directoryだけを使い、既存fileや本人の実folderを使いません。
 binary、空file、末尾、上限、offset、短いread、途中error/EOF、無進捗、count偽装、call予算、対象/版/種別の変化、取消・失効・期限、close失敗、copy分離を検査します。
 観測間の復元を検出できない例と、非協調readが終了するまで取消応答も返らない例を明示します。
-Python helperではproduction inventoryへの一file限定追加、欠落/未知adapter拒否、package結果欠落拒否、production importerなしを確認します。
+Python helperではproduction inventoryへの明示したfile限定追加、欠落/未知adapter拒否、package結果欠落拒否、exported入口・production importerなしを確認します。
 
 Goの通常/race/vet/buildは最終headの[Go CI](go-ci.md)を照合します。
 ローカルの標準library不足、未実行、hosted CIの成功を混同せず、PRで対象SHAと各結果を記録します。

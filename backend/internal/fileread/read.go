@@ -1,5 +1,5 @@
-// Package fileread contains an unexposed, memory-tested bounded read contract.
-// It has no path opener, OS adapter, authority issuer or production caller.
+// Package fileread contains an unexposed bounded read contract and a Darwin
+// selected-folder candidate. It has no authority issuer or production caller.
 package fileread
 
 import (
@@ -49,7 +49,8 @@ type result struct {
 // handle is already supplied by a trusted owner; this core cannot open files.
 // Methods must be synchronous and cooperate with ctx. readAt must not retain p
 // or use it after returning. close must attempt release even after cancellation.
-// No method may create unreported resources or panic. Real OS rules are absent.
+// No method may create unreported resources or panic. Each adapter must state
+// its OS rules and limitations separately from this generic contract.
 type handle interface {
 	inspect(context.Context) (observation, error)
 	readAt(context.Context, []byte, int64) (int, error)
