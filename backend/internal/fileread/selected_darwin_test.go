@@ -252,6 +252,26 @@ func TestSelectedOwnedRefusesChangesAfterResolvingTarget(t *testing.T) {
 	}
 }
 
+func TestSelectedOwnedAfterCloseRevocationSuppressesBytes(t *testing.T) {
+	_, root, req, p := folderFixture(t, []byte("anonymous fixture"))
+	closedCheck := false
+	p.recheck = func(_ context.Context, access readAccess) error {
+		if _, err := root.Stat(); errors.Is(err, os.ErrClosed) {
+			if !access.resolved {
+				t.Fatal("target binding lost after close")
+			}
+			closedCheck = true
+			return errors.New("revoked during cleanup")
+		}
+		return nil
+	}
+	out, err := readSelectedOwned(deadline(t), root, p, req)
+	requireSelectedRefusal(t, root, out, err)
+	if !closedCheck || err != errDenied {
+		t.Fatalf("after-close denial missing: %v", err)
+	}
+}
+
 func TestSelectedOwnedRefusesRootMoveDuringLookup(t *testing.T) {
 	path, root, req, p := folderFixture(t, []byte("fixture"))
 	parent := t.TempDir()
@@ -327,9 +347,13 @@ func TestSelectedNativeStateRejectsOtherOwnerDeviceAndMount(t *testing.T) {
 			t.Fatal("unsafe native state accepted")
 		}
 	}
-	// These metadata hashes are not content hashes: same stamps can report
-	// equality despite unobserved byte mutations.
-	if leaf.observation() != leaf.observation() {
-		t.Fatal("unstable metadata hash")
+	// Byte content is absent from this metadata model. Different anonymous
+	// payloads with the same modeled stamps yield the same observed version;
+	// this is not an OS experiment that restores ctime or an atomic snapshot.
+	firstBytes, secondBytes := []byte("aaa"), []byte("bbb")
+	first, second := leaf, leaf
+	first.size, second.size = int64(len(firstBytes)), int64(len(secondBytes))
+	if bytes.Equal(firstBytes, secondBytes) || first.observation() != second.observation() {
+		t.Fatal("metadata-only version model changed")
 	}
 }
