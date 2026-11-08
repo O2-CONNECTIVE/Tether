@@ -187,6 +187,16 @@ func (r *Runtime) StartShell(ctx context.Context, grant supervisor.Binding, stdi
 	}
 	spec := r.spec
 	spec.argv, spec.env = shellArgv(), environment(r.home)
+	// Host checks can outlast the original command scope. Re-observe it at
+	// spawn admission rather than start new work after an already known stop.
+	// This is not atomic with fork: a later stop still owns any late process.
+	if ctx.Err() != nil {
+		r.diagnostics.record(StartFailureContext)
+		return nil, agentexec.ErrNotStarted
+	}
+	if r.terminalDisposition.IsTerminal() {
+		return nil, errors.Join(agentexec.ErrNotStarted, ErrTerminalCleanupUnknown)
+	}
 	sp, err := r.spawn(spec)
 	if sp.proc == nil {
 		closeAll(sp)
