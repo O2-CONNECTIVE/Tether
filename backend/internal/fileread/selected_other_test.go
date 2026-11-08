@@ -19,8 +19,8 @@ func TestSelectedOwnedUnsupportedConsumesRoot(t *testing.T) {
 		t.Fatalf("unsupported: %+v %v", out, err)
 	}
 	// Windows Stat on a closed directory can return ERROR_INVALID_HANDLE,
-	// not os.ErrClosed. Fd's documented invalid sentinel checks closed Go
-	// ownership on every platform without accepting an arbitrary Stat error.
+	// not os.ErrClosed. Check the invalid descriptor sentinel used by the
+	// tested Unix/Windows Go implementations, not an arbitrary Stat error.
 	if root.Fd() != ^uintptr(0) {
 		t.Fatal("root ownership not consumed")
 	}
