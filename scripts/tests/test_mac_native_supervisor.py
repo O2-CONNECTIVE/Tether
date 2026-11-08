@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -38,3 +39,57 @@ class NativeSupervisorReportTests(unittest.TestCase):
                 tool.run()
         start.assert_not_called()
         dependencies.assert_not_called()
+
+
+class NativeSupervisorDiagnosticTests(unittest.TestCase):
+    def test_failure_retains_only_fixed_mode_exit_and_valid_condition(self):
+        for stderr, condition, child in [
+            ('private/path\nnative supervisor condition 3\nNATIVE_SUPERVISOR_CHILD_EXIT 88\nsecret', 3, 88),
+            ('\nnative supervisor condition 24\nNATIVE_SUPERVISOR_CHILD_EXIT 256\n', None, None),
+            ('\nnative supervisor condition 999\n', None, None),
+            ('private token or unrelated panic', None, None),
+        ]:
+            progress = {}
+            result = subprocess.CompletedProcess([], 101, 'private payload', stderr)
+            with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+                tool.execute_mode(Path('/private/fixture'), 'supervisor-discard-pending', progress)
+            self.assertEqual(progress, {'phase': 'fixture', 'mode': 'supervisor-discard-pending',
+                                       'returncode': 101, 'condition': condition, 'child_exit': child})
+
+    def test_unknown_mode_is_rejected_before_execution_or_diagnostic_echo(self):
+        progress = {}
+        with patch.object(tool, 'completed') as execute, self.assertRaises(ValueError):
+            tool.execute_mode(Path('/private/fixture'), 'private arbitrary input', progress)
+        execute.assert_not_called()
+        self.assertEqual(progress, {})
+
+    def test_condition_is_bounded_by_selected_mode(self):
+        progress = {}
+        result = subprocess.CompletedProcess([], 101, '', '\nnative supervisor condition 15\n')
+        with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+            tool.execute_mode(Path('/private/fixture'), 'supervisor-finite-malformed', progress)
+        self.assertIsNone(progress['condition'])
+
+    def test_successful_exit_with_bad_report_is_separate_failure(self):
+        progress = {}
+        result = subprocess.CompletedProcess([], 0, 'private malformed output', 'private stderr')
+        with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+            tool.execute_mode(Path('/private/fixture'), 'supervisor-confirmed', progress)
+        self.assertEqual(progress, {'phase': 'report', 'mode': 'supervisor-confirmed',
+                                   'returncode': 0, 'condition': None, 'child_exit': None})
+
+    def test_success_still_requires_complete_original_counts(self):
+        progress = {}
+        report = 'NATIVE_SUPERVISOR_FIXTURE mode=supervisor-confirmed passed=20 failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=1 producer=0\n'
+        result = subprocess.CompletedProcess([], 0, report, 'ignored stderr')
+        with patch.object(tool, 'completed', return_value=result):
+            self.assertEqual(tool.execute_mode(Path('/private/fixture'), 'supervisor-confirmed', progress), 20)
+
+    def test_build_failure_keeps_phase_and_exit_not_command_or_output(self):
+        progress = {'phase': 'fixture-clippy', 'mode': None, 'returncode': None,
+                    'condition': None, 'child_exit': None}
+        result = subprocess.CompletedProcess([], 101, 'private source', 'private path/token')
+        with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+            tool.build_command(['/private/compiler'], {}, progress)
+        self.assertEqual(progress, {'phase': 'fixture-clippy', 'mode': None, 'returncode': 101,
+                                   'condition': None, 'child_exit': None})

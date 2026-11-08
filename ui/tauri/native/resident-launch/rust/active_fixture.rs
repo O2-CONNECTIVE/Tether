@@ -3,6 +3,7 @@ use super::{ExitObservation, NativePreparation, Preparation, State};
 use std::{marker::PhantomData, num::NonZeroU64};
 
 unsafe extern "C" {
+    fn rh_fixture_preparation_release_control_gate(handle: u64) -> u32;
     fn rh_fixture_preparation_create_active(mode: u32) -> u64;
     fn rh_fixture_preparation_collect_active() -> u64;
     fn rh_fixture_preparation_active_stats() -> u64;
@@ -15,6 +16,11 @@ pub enum FixedActiveFixture {
     LostCloseReceipt = 2,
     ExitTwo = 3,
     Signal = 4,
+    FiniteMalformed = 5,
+    FiniteUnwind = 6,
+    FiniteUnknown = 7,
+    FiniteHeldUnknown = 8,
+    FiniteCoalesced = 9,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -81,6 +87,8 @@ impl NativePreparation {
                 super::active::rh_resident_preparation_exit(handle) == 5_u64 << 32
                     && super::active::rh_resident_preparation_retire_active_io(handle) == 4
                     && super::active::rh_resident_preparation_abandon_active(handle) == 4
+                    && super::active::rh_resident_preparation_request_active_close(handle) == 4
+                    && super::active::rh_resident_preparation_discard_observation(handle) == 0
             }
         })
         .join()
@@ -89,7 +97,10 @@ impl NativePreparation {
     pub fn fixture_reject_prelaunch_active_calls(&self) -> bool {
         // SAFETY: same real unlaunched native handle; reject active operations.
         unsafe {
-            super::active::rh_resident_preparation_exit(self.handle.get()) == 0
+            super::active::rh_resident_preparation_discard_observation(self.handle.get()) == 0
+                && super::active::rh_resident_preparation_request_active_close(self.handle.get())
+                    == 1
+                && super::active::rh_resident_preparation_exit(self.handle.get()) == 0
                 && super::active::rh_resident_preparation_retire_active_io(self.handle.get()) == 1
                 && super::active::rh_resident_preparation_abandon_active(self.handle.get()) == 1
         }
@@ -99,5 +110,28 @@ impl ExitObservation {
     // Test-only packed ABI parser seam; observations grant no lifecycle rights.
     pub fn fixture_decode(raw: u64) -> Self {
         Self::decode(raw)
+    }
+}
+
+impl NativePreparation {
+    pub fn fixture_release_control_gate(&mut self) -> bool {
+        // SAFETY: same private native owner/TLS; closes only its fixed fixture gate.
+        unsafe { rh_fixture_preparation_release_control_gate(self.handle.get()) == 1 }
+    }
+    pub fn fixture_discard_rejected(&self) -> bool {
+        // SAFETY: exact original handle; this fixture checks the native gate too.
+        unsafe {
+            super::active::rh_resident_preparation_discard_observation(self.handle.get()) == 0
+        }
+    }
+    pub fn fixture_unknown_bytes_rejected(&self) -> bool {
+        let mut byte = 0_u8;
+        // SAFETY: live one-byte buffers; direct ABI negatives cannot bypass UNKNOWN.
+        unsafe {
+            super::byte_io::rh_resident_preparation_read(self.handle.get(), &mut byte, 1) == 0
+                && super::byte_io::rh_resident_preparation_write(self.handle.get(), &byte, 1) == 0
+                && super::active::rh_resident_preparation_discard_observation(0) == 0
+                && super::active::rh_resident_preparation_request_active_close(0) == 0
+        }
     }
 }

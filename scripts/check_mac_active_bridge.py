@@ -41,7 +41,8 @@ def active_variant(rust, directory, fixture, env, target=None, execute=True):
         for mode in CASES if fixture else ('normal',):
             passed += validate_report(mode, command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'}))
     negatives = [('BorrowActiveRetire', 'E0499', 'more than once'), ('BorrowActivePoll', 'E0499', 'more than once'),
-                 ('BorrowActiveClose', 'E0499', 'more than once')]
+                 ('BorrowActiveClose', 'E0499', 'more than once'),
+                 ('BorrowActiveDiscard', 'E0499', 'more than once')]
     if not fixture:
         negatives += [('NoNormalActiveFixture', 'E0599', 'fixture_active')]
     for name, code, message in negatives:

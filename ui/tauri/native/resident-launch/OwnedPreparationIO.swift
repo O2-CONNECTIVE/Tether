@@ -20,6 +20,18 @@ final class OwnedPreparationIO {
     private var boundTask: ObjectIdentifier?
     var needsRetention: Bool { active && !complete }
     #if RESIDENT_LAUNCH_FIXTURE
+    private var fixtureControlGate: Int32?
+    func holdFixtureControlEOF() throws {
+        guard !active, !retired, ends.count == 4, fixtureControlGate == nil else { throw PreparationFailure.ioPreparation }
+        let fd = fcntl(ends[1].fd, F_DUPFD_CLOEXEC, 3)
+        guard fd >= 3 else { throw PreparationFailure.ioPreparation }
+        fixtureControlGate = fd // Fixed self-child synchronization only.
+    }
+    func releaseFixtureControlEOF() -> Bool {
+        guard let fd = fixtureControlGate else { return false }
+        fixtureControlGate = nil // Never retry an uncertain close integer.
+        return Darwin.close(fd) == 0
+    }
     func fixtureDescription() throws -> String {
         guard ends.count == 4, !active, !retired, ends.allSatisfy({ !$0.attempted }),
               ends.allSatisfy({ fcntl($0.fd, F_GETFD) & FD_CLOEXEC != 0 }),
@@ -188,6 +200,19 @@ final class OwnedPreparationIO {
             closeOnce(1) // Parent control writer, never its child FileHandle.
             return .init(tag: ends[1].confirmed ? .halfClosed : .unknown)
         }
+    }
+
+    // Shutdown-only bounded discard. No payload leaves Swift and no close is retried.
+    func discardObservation() -> UInt32 {
+        guard active, !retired, ends.count == 4, ends[1].attempted,
+              !ends[2].attempted else { return 0 }
+        var scratch = [UInt8](repeating: 0, count: 4096)
+        let count = Darwin.read(ends[2].fd, &scratch, scratch.count)
+        if count == 0 { sawEOF = true; return 3 }
+        if count > 0 { return 1 }
+        if [EAGAIN, EINTR].contains(errno) { return 2 }
+        fault = true
+        return 4 // Error is not EOF; retain uncertainty.
     }
 
     private func byteResult(_ count: Int) -> PreparedByteResult {

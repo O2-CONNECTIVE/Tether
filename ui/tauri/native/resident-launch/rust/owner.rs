@@ -7,6 +7,7 @@ mod fixture;
 #[cfg(resident_launch_fixture)]
 pub use fixture::{Counts, FixedFixture};
 mod active;
+pub type DiscardObservation = active::DiscardObservation;
 pub type ExitObservation = active::ExitObservation;
 #[cfg(resident_launch_fixture)]
 mod active_fixture;

@@ -83,6 +83,9 @@ fn active(mode: &str) {
         return;
     }
     let (fixture, id) = match mode {
+        "outer-finite-malformed" => (FixedActiveFixture::FiniteMalformed, None),
+        "outer-finite-unwind" => (FixedActiveFixture::FiniteUnwind, None),
+        "outer-finite-unknown" => (FixedActiveFixture::FiniteUnknown, None),
         "outer-confirmed" => (FixedActiveFixture::Echo, Some(1)),
         "outer-unknown" => (FixedActiveFixture::Echo, Some(2)),
         "outer-missing" => (FixedActiveFixture::Echo, Some(3)),
@@ -96,8 +99,11 @@ fn active(mode: &str) {
         }
         _ => panic!("unknown outer fixture"),
     };
-    let (mut producer, source) =
-        NativeIoSupervisor::fixture(fixture, mode == "outer-unwind").unwrap();
+    let (mut producer, source) = NativeIoSupervisor::fixture(
+        fixture,
+        matches!(mode, "outer-unwind" | "outer-finite-unwind"),
+    )
+    .unwrap();
     let first = source.as_ref().ok().and_then(|view| view.first().ok());
     if mode == "outer-prejoined" {
         producer.request_close_transport();
@@ -195,7 +201,12 @@ fn active(mode: &str) {
             };
             let io = if matches!(
                 mode,
-                "outer-invalid" | "outer-lost-receipt" | "outer-unwind"
+                "outer-invalid"
+                    | "outer-lost-receipt"
+                    | "outer-unwind"
+                    | "outer-finite-malformed"
+                    | "outer-finite-unwind"
+                    | "outer-finite-unknown"
             ) {
                 State::Unknown
             } else {
@@ -206,7 +217,7 @@ fn active(mode: &str) {
                     == NativeOutcome::Active {
                         exit,
                         io,
-                        unwound: mode == "outer-unwind",
+                        unwound: matches!(mode, "outer-unwind" | "outer-finite-unwind"),
                     },
             );
             check(
@@ -227,7 +238,19 @@ fn active(mode: &str) {
     check(NativePreparation::fixture_active_stats().waits == 1);
     check(
         NativePreparation::fixture_active_stats().abandons
-            == if mode == "outer-lost-receipt" { 3 } else { 2 },
+            == if matches!(
+                mode,
+                "outer-lost-receipt"
+                    | "outer-invalid"
+                    | "outer-unwind"
+                    | "outer-finite-malformed"
+                    | "outer-finite-unwind"
+                    | "outer-finite-unknown"
+            ) {
+                3
+            } else {
+                2
+            },
     );
     check(NativePreparation::fixture_retained_state() == 3);
     check(matches!(

@@ -36,16 +36,23 @@ enum Bootstrap {
     Fixture(crate::native_preparation::FixedActiveFixture, bool),
 }
 impl Bootstrap {
-    fn open(self) -> (Preparation, bool) {
+    fn open(self) -> (Preparation, bool, bool) {
         match self {
-            Self::Preparation => (NativePreparation::prepare(), false),
+            Self::Preparation => (NativePreparation::prepare(), false, false),
             #[cfg(resident_launch_fixture)]
             Self::PreparedFixture => (
                 NativePreparation::fixture(crate::native_preparation::FixedFixture::Normal),
                 false,
+                false,
             ),
             #[cfg(resident_launch_fixture)]
-            Self::Fixture(mode, unwind) => (NativePreparation::fixture_active(mode), unwind),
+            Self::Fixture(mode, unwind) => {
+                let coalesced = matches!(
+                    mode,
+                    crate::native_preparation::FixedActiveFixture::FiniteCoalesced
+                );
+                (NativePreparation::fixture_active(mode), unwind, coalesced)
+            }
         }
     }
 }
@@ -132,7 +139,7 @@ fn run(
     shared: Arc<Mutex<Shared>>,
     send: std::sync::mpsc::SyncSender<io::Result<BoundDuplex>>,
 ) -> NativeOutcome {
-    let (preparation, _unwind) = bootstrap.open();
+    let (preparation, _unwind, _coalesced) = bootstrap.open();
     let mut original = match preparation {
         Preparation::Refused => {
             let _ = send.try_send(Err(unavailable()));
@@ -150,6 +157,7 @@ fn run(
         let _ = send.try_send(Err(unavailable()));
         return NativeOutcome::Prepared(State::Unknown);
     }
+    let mut clean_eof = false;
     let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut pump = Pump::take_active(&mut original).map_err(|_| unavailable())?;
         let clock = ContinuousClock::new().ok_or_else(unavailable)?;
@@ -170,7 +178,9 @@ fn run(
                     let _ = pump.step(state, clock);
                     panic!("fixed native supervisor IO unwind");
                 }
-                pump.step(state, clock)
+                let result = pump.step(state, clock);
+                clean_eof = matches!(result, Ok(true));
+                result
             },
             clock,
             shared.clone(),
@@ -183,18 +193,37 @@ fn run(
     let _ = send.try_send(Err(unavailable()));
     // Full transport loss closes only this owner's control. UNKNOWN prevents
     // ordinary IO but still permits a close request and same-Process polling.
-    if original.state() == State::Active {
+    if clean_eof && original.state() == State::Active {
         let _ = original.io().half_close_control();
     }
-    if original.state() == State::Unknown {
+    if !clean_eof || original.state() == State::Unknown {
         original.request_active_close();
     }
+    let mut drained = clean_eof;
     let exit = loop {
+        let mut progressed = false;
+        if !drained {
+            let discard = original.discard_observation();
+            drained = discard.is_eof();
+            progressed = discard == crate::native_preparation::DiscardObservation::Progress;
+        }
         let value = original.poll_exit();
-        if matches!(value, ExitObservation::Exit(_) | ExitObservation::Signal(_)) {
+        if drained && matches!(value, ExitObservation::Exit(_) | ExitObservation::Signal(_)) {
             break value;
         }
+        // Every bounded chunk polls the same Process, then offers a scheduling hint.
+        // A timer after successful reads needlessly throttles finite drainage.
+        if progressed {
+            thread::yield_now();
+            continue;
+        }
         // No replacement / signal / detached TLS exit on pending or unknown.
+        // Fixed fixture models a delayed timer delivery, not a timeout success.
+        #[cfg(resident_launch_fixture)]
+        if _coalesced {
+            thread::sleep(Duration::from_millis(25));
+            continue;
+        }
         thread::sleep(Duration::from_millis(5));
     };
     let io = original.retire_active_io();
