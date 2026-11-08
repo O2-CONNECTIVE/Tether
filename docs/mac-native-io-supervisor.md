@@ -40,3 +40,5 @@ python3 scripts/check_mac_native_supervisor.py
 normal / fixture の build / clippy は locked / offline、既存11 dependency packagesのみ。既存 active bridge は未起動 close no-op の1条件を加え240条件、借用 close 拒否を加え compile refusal7。Intel は同じ source の owner / active / Pump の normal / fixture compile/link、refusal16を検査し、foreign image を実行しません。prepared Pump133、active Pump129と従来 owner / C ABI / Swift の契約は弱めません。
 
 実 GUI / producer / host、実鍵 / protected policy、外部 / Tunnel / OS trust、署名・配置・persistent access は未実行。signed launch / verify-to-exec / atomic inheritance、native full Supervisor / outer joins / Quit と実機は残件です。a4 / a5 / task-7 は無変更、解除連絡待ちです。base の Windows debug session timeout は未解明のまま保持し、この source 試験で解消したとは扱いません。driver 起点の drop 時刻と forward 所要時間、別 Instant の Host 時刻も混同しません。
+
+[後続の outer monitor](mac-native-outer-monitor.md) が同じ supervisor を保持し、別の monitor join component を検査します。native Unknown は解除せず、全回収・Quit 許可にはしません。

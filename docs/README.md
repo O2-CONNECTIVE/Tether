@@ -83,6 +83,10 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 
 - [同じ native IO worker の supervisor](mac-native-io-supervisor.md): 元 owner の Wait / IO 回収と実 join の component を接続。通常起動・outer joins・Quit 許可は未接続です。
 
+- [同じ native owner の outer monitor](mac-native-outer-monitor.md): 実 IO join に続く monitor の実 join を接続。Unknown と Quit 拒否、通常未接続を維持します。
+
+- [同じ native owner と typed port の寿命](mac-native-session.md): 元の監視所有者と状態ポートを同じ寿命で保持する source-only 組成。通常起動は未接続です。
+
 ## 保存する旧設計・履歴
 
 SSH途中実装の既知の公開WIP保存先は `wip/ssh-owned-shell-20261031` です。これは保存済みcheckpointの案内で、今回remoteの最新状態は再照合していません。未完成コードの保存を製品対応・main統合と見なさないでください。
