@@ -159,13 +159,19 @@ Macの現在利用者profileは、guest分離を偽って表明しないよう�
 - 回収未確認のcommandが残る間、新しいStartは`ErrCleanupUnknown`または`ErrBusy`で拒否します。
   Cleanupは、失敗した段階（Terminate、またはReleaseのみ）を同じprocessで再試行します。grantは不要です。
 - `Close`はgrantを失効させ、全workerの終了と回収確認を待ちます。未確認なら`ErrCleanupUnknown`を返します。
+- Cancel・失効・transport喪失で行う早期`Terminate`は、同じcommandが最大1本だけ所有します。
+  停止要求の呼出しとは分離し、`CleanupTimeout`はgoroutineへ渡す前に固定します。workerはその完了をjoinしてから最終`Terminate`と`Release`へ進みます。
+  `Cancel`の成功は停止受付だけで、早期停止の完了や回収成功ではありません。`Close`の呼出側期限が先に切れた場合はunknownを返し、未終了の処理とprocess参照を同じcommandに保持します。
+- 早期停止の待機中は新規StartとCleanup再試行を拒否し、繰返しの停止で別の早期`Terminate`を作りません。
+  元処理の完了・panic回収・context期限後も最終停止と回収を別に判定します。自然終了を先に観測したworkerの停止所有と結果は、後からのCancelやCloseで置き換えません。
 
 ## 制限
 
 - 1承認につき、同時に動かせる非終端commandは1つだけです。並列command、対話shell、PTY、stdinの追加送信、長期sessionは未実装で、multi-command sessionとしての完成とは扱いません。
 - Session内のcommand記録は`MaxCommands`件までです。新しいStartは、前commandの未確認出力を解放します。
-- goroutineは、Sessionごとの失効監視1本、commandごとのworker 1本、timer callbackだけです。
+- goroutineは、Sessionごとの失効監視1本、commandごとのworker 1本と最大1本の早期停止、timer callbackです。
   監視goroutineは失効かCloseで終わります。workerは、`GuestProcess`がcontextと`Terminate`に従う前提で動き、nativeがそれに反すると回収未確認のまま残ります。
+  呼出側の有限待機は、応答しないnative処理の強制終了や所有processの退出許可ではありません。後着の完了を待つ同じownerを保持し、別Sessionへの置換・grant復活・回収成功へ読み替えません。
 
 ## 次に必要なnative adapterとcaller
 
@@ -234,4 +240,7 @@ Macの最小派遣経路は受領者の前景CLI起動とfresh同意です。Win
   - 背圧と上限、終端後のStatus
   - issuer/Ownerの外部失効を、requestなしで停止すること
   - transport喪失、回収未確認とClose・再試行、command IDの衝突
+- 早期停止の追加試験は、Mac current-user / Windows guestの両profileで同じ公開Session APIを使います。
+  メモリ内のcontext協調的な`Terminate`を保持し、短いClose期限、受付と回収の分離、停止の単回所有、join順、後着完了・期限・panic、同じprocessでの最終停止再試行を`testing/synctest`で照合します。自然終了後の停止も別に検査します。
+  仮想時間のcore試験であり、実OSの停止時間、native全回収、実dot・GUI・常駐/単発版の実接続受入の証明ではありません。
 - これらの合格は、native guestの起動、実Windowsの保護、遠隔接続、MCP/relayの動作、配置の成功を示しません。
