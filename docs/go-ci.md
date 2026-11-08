@@ -285,3 +285,7 @@ Darwin / cgo のときだけ owned_darwin.go / run_darwin.go を追加しまし�
 各新fileの欠落・未知launcher、package結果の欠落をhelperで拒否し、fixture / 実producer idle/startup / Rust integration / 評価TLSをproductionや標準試験へ混ぜません。
 source unit は自己所有pipe、専用の無害test child、checkout内の合成保護fileだけです。実producer / 実鍵 / 実policy / ON / 外部 / GUI / OS trustは使いません。
 strict vet / build と runtime unit、cross compile、実機の証拠を分けます。詳細は [source組成](mac-resident-producer-composition.md) を参照してください。
+
+常駐固定操作の保持出力読取は、agentgatewayとmcpadapterの `resident_read_output.go` 各1件だけを追加登録します。
+現inventoryは45 package、cgo有効時Linux356 / Darwin359 / Windows387 production file、Darwinのcgo無効時357 fileです。
+非ackの保持bytes読取と公開schemaの回帰であり、実dot/native/GUI接続や新たな認可を有効化しません。

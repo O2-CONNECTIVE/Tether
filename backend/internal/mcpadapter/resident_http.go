@@ -48,6 +48,9 @@ func residentToolList(b ResidentBackend) []any {
 	if _, ok := b.(ResidentListBackend); ok {
 		list = append(list, residentListTool())
 	}
+	if _, ok := b.(ResidentReadOutputBackend); ok {
+		list = append(list, residentReadOutputTool())
+	}
 	return list
 }
 func (s *HTTPSession) residentToolCall(id *requestID, params json.RawMessage) HTTPReply {
@@ -58,6 +61,8 @@ func (s *HTTPSession) residentToolCall(id *requestID, params json.RawMessage) HT
 	}
 	var invoke func(context.Context, string) map[string]any
 	switch name {
+	case "rescue_fixed_read_output":
+		return s.residentReadOutputCall(id, m["arguments"])
 	case "rescue_fixed_list":
 		return s.residentListCall(id, m["arguments"])
 	case "rescue_fixed_start":
