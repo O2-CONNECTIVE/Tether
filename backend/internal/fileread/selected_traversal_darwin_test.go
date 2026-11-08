@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -112,4 +113,39 @@ func TestSelectedOwnedMissingAcquisitionConsumesRoot(t *testing.T) {
 			t.Fatalf("missing acquisition accepted: %v", err)
 		}
 	}
+}
+
+func TestSelectedOwnedAcceptsMaximumTraversalDepth(t *testing.T) {
+	path, root, req, p := folderFixture(t, nil)
+	req.path = strings.Repeat("level/", maxComponents-1) + "report.txt"
+	p.allowed = req
+	leaf := filepath.Join(path, req.path)
+	if err := os.MkdirAll(filepath.Dir(leaf), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leaf, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	checks, lookups, opens := 0, 0, 0
+	p.recheck = func(_ context.Context, access readAccess) error {
+		if !access.resolved {
+			checks++
+		}
+		return nil
+	}
+	acquire := selectedAcquisition{
+		lookup: func(parent int, name string) (nativeState, error) {
+			lookups++
+			return inspectName(parent, name)
+		},
+		open: func(parent int, name string, flags int, mode uint32) (int, error) {
+			opens++
+			return unix.Openat(parent, name, flags, mode)
+		},
+	}
+	out, err := readSelectedAcquiring(deadline(t), root, p, req, acquire)
+	if err != nil || string(out.data) != "fixture" || checks != maxComponents+1 || lookups != maxComponents || opens != maxComponents {
+		t.Fatalf("bounded traversal: %v checks=%d lookup=%d open=%d", err, checks, lookups, opens)
+	}
+	requireConsumed(t, root)
 }

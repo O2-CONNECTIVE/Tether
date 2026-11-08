@@ -20,7 +20,7 @@ Linux/Windowsは供給されたroot handleをcloseして非対応を返し、she
 - principal / host / connection / selectionはprivateな不透明比較値で、永続grantや公開protocolの形式を決めるものではありません。信頼側が実主体・host・接続世代・本人のroot選択との対応を保証する責任を持ちます。
 - exact relative path、offset、最大bytes、期待versionを同じ要求に固定します。未知path・別range・別bindingは拒否します。
 - 有限のpermission期限、Context deadline、非nilのlive recheckが必須です。既存shell/control権限からの暗黙変換はありません。
-- 子を照会・openする前に要求全体とroot identityをproviderへ渡します。root descriptorの実identityを照合してから辿り、対象取得後は観測identity/version/sizeとrangeを束縛して最初のbyte読取前、読取前後、close後に再確認します。
+- 子を照会・openする前に要求全体とroot identityをproviderへ渡します。そのcallbackから戻るたび、次の子を照会する前に保持root/ancestorのdescriptorと親nameを再照合します。root descriptorの実identityを照合してから辿り、対象取得後は観測identity/version/sizeとrangeを束縛して最初のbyte読取前、読取前後、close後に再確認します。
 - 期限・取消は同期port呼出しの間で協調的に確認します。OS呼出しが止まらなければ時間上限内の復帰を保証せず、timeoutだけ返して裏で処理を残すgoroutineは作りません。
 
 ## 取得・所有・予算
@@ -34,9 +34,13 @@ entry以降の呼出側による再利用・並行操作・dupした別名handle
 1. pathは最大1024 byte・16 component、componentは最大255 byteです。空、絶対path、dot/dot-dot、隠しcomponent、NUL、backslash、colon、非ASCIIや空白等は拒否し、clean/正規化で別pathへ変換しません。
 2. 各componentを親descriptorから `fstatat(AT_SYMLINK_NOFOLLOW)` で事前照会し、`openat(O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)` で取得します。中間には `O_DIRECTORY` も要求します。取得前後のmetadataが不一致なら拒否します。
 3. root/中間directoryは現在実効UIDと一致し、group/world-write modeを拒否します。leafは同じUIDの通常file、link count 1、非負sizeだけです。全componentのdeviceとfilesystem IDをrootと比較します。
-4. rootからleafまでdescriptorを保持し、各checkpointで同じdescriptorのmetadataと親nameからのno-follow照会を照合します。root・祖先のmetadata変化も保守的に拒否し、無関係な兄弟file更新でも拒否する場合があります。
+4. rootからleafまでdescriptorを保持し、各checkpointと次の子の照会前に、同じdescriptorのmetadataと親nameからのno-follow照会を照合します。認可callback中にroot/ancestorの持続変更が起きた場合は、変更前のparent handleから次の子を照会・openする前に拒否します。root・祖先のmetadata変化も保守的に拒否し、無関係な兄弟file更新でも拒否する場合があります。
 5. 既存 `readOwned` を使い、最大48KiB、最大64 read、overflowしないrange計算、途中失敗時の無payload、binary slice、scratchの可能な範囲のclearを維持します。
 6. rootを含む取得済みhandleは失敗経路も逆順に一回closeを試みます。途中取得失敗でも先のhandleを残しません。一つのclose失敗で他のcloseを省略せず、cleanup unknownを独立errorとして保持してbytesを抑止します。自動retryやclose再試行はありません。
+
+次の子の照会前に追加したchain検査は、最大16 componentでdescriptor検査136回・親name検査120回です。
+各検査は最大2回のmetadata syscallを行うため、追加は最大512回です。失敗時は途中で止まり、再試行や別goroutineは追加しません。
+これは呼出数の上限であり、同期syscallの停止時間や要求全体のwall-clock上限ではありません。
 
 ## 秘密情報と名前の限界
 
@@ -50,7 +54,7 @@ exact allowlist以外はdefault denyです。
 
 ## 製品公開を止める残余リスク
 
-- **連続したroot内拘束は未成立:** retained descriptorは対象objectを指し続けますが、そのroot/ancestorが外へmoveされた瞬間や、変更して元へ戻した間を原子的に排除できません。持続するrename・name差替えの検出試験を、全symlink/rename raceの保証へ広げません。
+- **連続したroot内拘束は未成立:** retained descriptorは対象objectを指し続けますが、そのroot/ancestorが外へmoveされた瞬間や、変更して元へ戻した間を原子的に排除できません。次の子の照会前のchain検査後にも競合窓は残り、外へmoveされたparentから照会/openする全事例を排除しません。持続するrename・name差替えの検出試験を、全symlink/rename raceの保証へ広げません。
 - **hardlink/mount:** link count 1や同device/FSIDは観測時点だけです。hardlinkの作成・削除競合、同じfilesystemのmount別名、root取得前の由来を証明しません。実mount操作は試験していません。
 - **ACL:** UIDとmode bitsはDarwin ACLによる書込み許可を排除しません。現在userの実行権限や安全に見えるmodeをsandbox・OS隔離と扱いません。
 - **special fileのopen競合:** no-follow事前照会で特殊fileを拒否しても、直後に差し替えられたdevice等のopen handlerが走る可能性は残ります。`O_NONBLOCK` は副作用なしopenの保証ではありません。「特殊fileを決してopenしない」とは主張しません。
@@ -65,6 +69,8 @@ exact allowlist以外はdefault denyです。
 
 共通試験はexact binding/path/range、欠落provider、取消・期限、未解決/解決後targetの不正を確認します。
 Darwin試験は匿名一時folderだけで有限binary/空file/末尾/上限、symlink、hardlink、FIFO、directory、writable directory、leaf/parent/rootの持続rename、書換え、途中取消・失効、partial lookup、close失敗を確認します。
+次の子の取得前の回帰は、認可callback中のroot/parent移動、親のdirectory/symlink差替え、親mode変更、root直下の別entry追加を対象にします。
+要求内の取得操作seamで、その変更後の**次の子の事前照会/openがともに0回**であることと、既取得handleの回収を検査します。chain自身のmetadata再照会が0回という意味ではありません。
 異UID・別device/FSIDは値によるunit fixtureで、実chown/mountやOS権限分離の試験ではありません。
 fixtureの成功は競合の全interleavingを検証した意味ではありません。
 

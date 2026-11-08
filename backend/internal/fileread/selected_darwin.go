@@ -70,6 +70,12 @@ func readSelectedAcquiring(ctx context.Context, root *os.File, permission readPe
 		if err := permission.check(ctx, access); err != nil {
 			return selectedResult{}, err
 		}
+		// The provider call may outlive a persistent root/ancestor change.
+		// Refuse it before another child lookup/open through a retained fd.
+		// This check is still not atomic with the following lookup or open.
+		if _, err := h.inspect(ctx); err != nil {
+			return selectedResult{}, errChanged
+		}
 		parent := int(h.files[len(h.files)-1].Fd())
 		// The precheck avoids intentionally opening special files. Replacement
 		// between this check and open can still invoke a device's open handler;
