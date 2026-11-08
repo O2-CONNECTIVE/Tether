@@ -45,6 +45,9 @@ func residentToolList(b ResidentBackend) []any {
 	for _, v := range definitions {
 		list = append(list, map[string]any{"name": v[0], "outputSchema": residentOutputSchema(v[0]), "description": v[1] + " Only tether-fixed-command-v1 is supported; no shell arguments are accepted.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"request_id": map[string]any{"type": "string", "pattern": "^[0-9a-f]{32}$"}}, "required": []string{"request_id"}, "additionalProperties": false}})
 	}
+	if _, ok := b.(ResidentListBackend); ok {
+		list = append(list, residentListTool())
+	}
 	return list
 }
 func (s *HTTPSession) residentToolCall(id *requestID, params json.RawMessage) HTTPReply {
@@ -55,6 +58,8 @@ func (s *HTTPSession) residentToolCall(id *requestID, params json.RawMessage) HT
 	}
 	var invoke func(context.Context, string) map[string]any
 	switch name {
+	case "rescue_fixed_list":
+		return s.residentListCall(id, m["arguments"])
 	case "rescue_fixed_start":
 		invoke = s.resident.FixedStart
 	case "rescue_fixed_status":

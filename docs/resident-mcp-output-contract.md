@@ -4,7 +4,9 @@
 
 ## 既存経路との区別
 
-[resident adapter](../backend/internal/mcpadapter/resident_http.go) は `rescue_fixed_start` / `rescue_fixed_status` / `rescue_fixed_cancel` を公開し、明示的なrelease対応backendだけ `rescue_fixed_release` を追加します。入力は32桁lowercase hexのrequest_idだけです。固定routine以外のcommandや任意hostは受け取りません。
+[resident adapter](../backend/internal/mcpadapter/resident_http.go) は `rescue_fixed_start` / `rescue_fixed_status` / `rescue_fixed_cancel` を公開し、明示的なrelease対応backendだけ `rescue_fixed_release` を追加します。これらの入力は32桁lowercase hexのrequest_idだけです。固定routine以外のcommandや任意hostは受け取りません。
+
+一覧対応backendではさらに `rescue_fixed_list` を公開します。入力cursor/limitとsummary出力の契約は[所有実行一覧](resident-execution-list.md)を参照してください。以下のwork結果schemaとは別のversion 1一覧schemaです。
 
 [gateway](../backend/internal/agentgateway/http.go) が認証済みprincipal・明示enrollment・現在のcontrol generationへ束縛した別経路です。旧4本と恒久的unbound discoveryを変更せず、sessionへ後からgrantを付けません。generation切断後の結果保持・再initialize、許可発行、失効の意味も変えません。
 
