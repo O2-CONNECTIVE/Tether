@@ -172,7 +172,7 @@ struct AtomicPipeDriver {
                 let context = Unmanaged.passRetained(spawn).toOpaque()
                 var thread: pthread_t?
                 let created = pthread_create(&thread, nil, { raw in
-                    Unmanaged<SpawnProbe>.fromOpaque(raw!).takeUnretainedValue().run()
+                    Unmanaged<SpawnProbe>.fromOpaque(raw).takeUnretainedValue().run()
                     return nil
                 }, context)
                 guard created == 0, let thread else {
