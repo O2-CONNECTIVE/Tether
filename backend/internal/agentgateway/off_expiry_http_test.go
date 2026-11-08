@@ -133,9 +133,13 @@ func checkOffAndExpiry(t *testing.T, m *mac, do func(string, string, string, str
 	allowRelease.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	beforeRetry := releaseCalls.Load()
 	st, err = m.session.Cleanup(ctx, ref)
 	if err != nil || st.Cleanup != agentexec.CleanupConfirmed || !st.Terminal {
 		t.Fatalf("owner retry: %+v %v", st, err)
+	}
+	if releaseCalls.Load() != beforeRetry+1 {
+		t.Fatal("owner retry did not release the original resource exactly once")
 	}
 	if m.issuer.Snapshot().HasAuthority || m.runtime.startCount() != 1 {
 		t.Fatal("cleanup revived authority or work")
