@@ -2,7 +2,7 @@
 
 [#218 の typed requirement 準備](mac-launch-requirement-preparation.md)と同じ `Process` を C caller から保持し、起動前の匿名 pipe を所有させます。
 通常 Tauri / Rust 起動には link しません。production publisher は未設定のまま、C の create は owner / pipe を作る前に 0 を返します。
-macOS 14.4 未満も拒否します。fixture の compile target 11.0 は製品の最低 OS 宣言ではありません。
+typed requirement は macOS 14.4以上、[原子的な匿名 IO](mac-atomic-preparation-pipes.md)の取得は27以上を要求します。fixture の compile target 11.0 は製品の最低 OS 宣言ではありません。
 
 ## 所有契約
 
@@ -26,15 +26,15 @@ TLS key は process lifetime に一つだけ保持します。[POSIX TLS 契約]
 
 ## IO と終了の区別
 
-2 本の新しい匿名 pipe の 4 端点だけを採用します。部分取得を先に owner へ記録し、その後に CLOEXEC と parent 端点の nonblocking flag を設定します。
+2 本の新しい匿名 pipe の 4 端点だけを採用します。macOS 27以上の `pipe2(O_CLOEXEC)` で各割当と close-on-exec 設定を原子的に行い、部分取得を直ちに owner へ記録します。その後に parent 端点だけへ nonblocking flag を設定します。
 同じ Process の stdin / stdout に child 側の `FileHandle(closeOnDealloc: false)` を保持させます。
 retire は Process の wrapper 参照を外し、weak ref の消失を確認してから、各元 fd を一度だけ close します。
 getter 観測による autorelease 参照も消える前には close しません。
 close の errno を元 record に保持し、失敗は UNKNOWN。再 close や deinit での隠れた cleanup はありません。
 [Apple FileHandle](https://developer.apple.com/documentation/foundation/filehandle/init%28filedescriptor%3Acloseondealloc%3A%29)、[Apple Process input](https://developer.apple.com/documentation/foundation/process/standardinput)、[POSIX close](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/functions/close.html)
 
-`pipe` 後の `fcntl` は atomic CLOEXEC 作成ではありません。この未接続 source は launch-safe transport として使えません。
-実行を接続する前には同時 exec の inheritance 境界も閉じる必要があります。
+同時 spawn / exec に対する close-on-exec は[直接 API と専用 fixture](mac-atomic-preparation-pipes.md)で確認します。旧 OS への非原子的 fallback はありません。
+bare fork の exec 前の継承や sandbox 隔離は保証せず、製品 sealed launch と同一 image の enforcement は未実証です。
 Foundation Process の別 owner を作ったり、既存 Rust `Child` の Wait で証明したことにはしません。
 
 ## 試験と未実証

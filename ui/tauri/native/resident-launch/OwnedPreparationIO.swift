@@ -20,6 +20,8 @@ final class OwnedPreparationIO {
     private var boundTask: ObjectIdentifier?
     var needsRetention: Bool { active && !complete }
     #if RESIDENT_LAUNCH_FIXTURE
+    // Test-only observation, immediately after each atomic acquisition is owned.
+    var fixtureAllocationProbe: (([Int32]) throws -> Void)?
     private var fixtureControlGate: Int32?
     func holdFixtureControlEOF() throws {
         guard !active, !retired, ends.count == 4, fixtureControlGate == nil else { throw PreparationFailure.ioPreparation }
@@ -68,17 +70,19 @@ final class OwnedPreparationIO {
     var loseCloseAcknowledgement = false
     #endif
 
+    static func supportsAtomicPipes(_ version: OperatingSystemVersion) -> Bool {
+        version.majorVersion >= 27 && version.minorVersion >= 0 && version.patchVersion >= 0
+    }
+
     func configure(_ task: Process, partial: Bool) throws {
+        // A typed launch requirement alone (14.4+) does not make pipe acquisition
+        // atomic. Refuse before allocating anything on older kernels. No fallback.
+        guard Self.supportsAtomicPipes(ProcessInfo.processInfo.operatingSystemVersion),
+              #available(macOS 27.0, *) else { throw PreparationFailure.unsupportedOS }
         guard ends.isEmpty, !retired else { throw PreparationFailure.ioPreparation }
         try adoptPipe()
         if partial { throw PreparationFailure.ioPreparation }
         try adoptPipe()
-        for end in ends {
-            let flags = fcntl(end.fd, F_GETFD)
-            guard flags >= 0, fcntl(end.fd, F_SETFD, flags | FD_CLOEXEC) != -1 else {
-                throw PreparationFailure.ioPreparation
-            }
-        }
         // Parent write/read only. There is no read/write operation in normal ABI.
         try nonblocking(ends[1].fd)
         try nonblocking(ends[2].fd)
@@ -93,13 +97,22 @@ final class OwnedPreparationIO {
         task.standardOutput = output
     }
 
+    @available(macOS 27.0, *)
     private func adoptPipe() throws {
         var pair: [Int32] = [-1, -1]
-        guard pipe(&pair) == 0 else { throw PreparationFailure.ioPreparation }
+        guard Darwin.pipe2(&pair, O_CLOEXEC) == 0 else { throw PreparationFailure.ioPreparation }
+        // Adopt both ends before any subsequent check or failure. Their CLOEXEC
+        // state was installed by the allocation syscall, not a later fcntl.
         ends.append(contentsOf: pair.map { End(fd: $0) })
         #if RESIDENT_LAUNCH_FIXTURE
         open += 2
+        try fixtureAllocationProbe?(pair)
         #endif
+        // Verification is not the source of atomicity. Closed stdio must not
+        // let an owned end alias 0/1/2; retain it for the same close-once unwind.
+        guard pair.allSatisfy({ $0 >= 3 && fcntl($0, F_GETFD) >= 0 && fcntl($0, F_GETFD) & FD_CLOEXEC != 0 }) else {
+            throw PreparationFailure.ioPreparation
+        }
     }
 
     private func nonblocking(_ fd: Int32) throws {

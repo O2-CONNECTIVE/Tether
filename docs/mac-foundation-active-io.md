@@ -13,7 +13,7 @@
 
 起動前の `retire` と起動後の `retireActive` は別です。[Apple の standardInput 契約](https://developer.apple.com/documentation/foundation/process/standardinput)では起動後の setter は無効であり、FileHandle を渡した場合の親側 close は Pipe の自動処理とは異なります。active 経路は `standardInput` / `standardOutput` を書き換えず、元 wrapper 自体を閉じます。閉鎖済み wrapper の背後で fd を raw close し、再利用番号を二度閉じる処理はしません。unknown の close は再試行しません。
 
-親 writer は起動前に macOS の `F_SETNOSIGPIPE` を設定・確認し、EPIPE を unknown として保持します。これは open file description に付く設定であり、process 全体の SIGPIPE handler を変更しません（[Apple XNU 実装](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_descrip.c)）。CLOEXEC / nonblocking も元の端点へ設定します。`pipe()` と `fcntl()` の間を atomic にした保証はありません。製品の concurrent-spawn / atomic inheritance 境界は未解決です。
+親 writer は起動前に macOS の `F_SETNOSIGPIPE` を設定・確認し、EPIPE を unknown として保持します。これは open file description に付く設定であり、process 全体の SIGPIPE handler を変更しません（[Apple XNU 実装](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_descrip.c)）。[原子的な pipe 取得](mac-atomic-preparation-pipes.md)では macOS 27以上の `pipe2(O_CLOEXEC)` を直接使い、取得と close-on-exec 設定を同じ syscall にします。nonblocking は親端点だけに設定します。bare fork の exec 前の継承や process 内隔離を保証するものではありません。
 
 Wait 成功や全 fd の物理 close だけでは IO confirmed にしません。実 EOF が未観測、IO fault、close receipt 喪失のいずれかがあれば unknown を保持します。実行中の retire、二度目の移管は拒否します。active IO が未確認なら元 owner を Drop でも解放せず、これは終了時間の上限ではありません。
 

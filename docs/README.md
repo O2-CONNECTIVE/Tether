@@ -71,6 +71,7 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 - [resident library の build record](mac-resident-library-build.md): 固定 source・lock・recipeとcompile-only archiveを結び、起動・配布はblockedのまま記録します。
 - [native enrollment 選択と起動信頼](mac-resident-trusted-preparation.md): OS account 由来の固定 policy 選択を内部準備し、署名・配置・launch-time enforcement の残る条件を分けます。
 - [typed launch requirement の準備](mac-launch-requirement-preparation.md): 未起動 Foundation owner と型付き条件の source fixture。実 publisher 未設定、通常起動・実 enforcement は未接続です。
+- [Mac の原子的な匿名 pipe 取得](mac-atomic-preparation-pipes.md): macOS 27以上の直接 pipe2、取得直後と別 thread の固定 exec 回帰。旧 OS fallback と製品起動は追加しません。
 - [未起動 owner の FFI と匿名 IO](mac-prelaunch-ffi-io.md): 元 thread と同じ Process の保持、匿名 pipe の close-once、unknown 保持の C fixture。実 producer の Wait / joins は後続です。
 - [未起動 native owner の Rust 接続](mac-native-rust-owner.md): 実 C ABI と同じ owner を元 thread に保持し、retire / Drop と unknown を合成 library で検証。通常アプリは未接続です。
 - [同じ native owner の byte IO](mac-native-byte-io.md): fd 所有を移さず、借用 Read / Write と control half-close を接続。raw EOF と起動後の回収証拠を区別します。
