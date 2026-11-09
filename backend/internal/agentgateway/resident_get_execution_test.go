@@ -13,6 +13,7 @@ import (
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentapi"
 )
 
 func TestResidentGetExecutionMatchesSharedSchemaGolden(t *testing.T) {
@@ -28,9 +29,17 @@ func TestResidentGetExecutionMatchesSharedSchemaGolden(t *testing.T) {
 		t.Fatal("bad golden")
 	}
 	seen := map[string]bool{}
+	var reader residentapi.ExecutionReader = s
 	check := func(label string) {
 		t.Helper()
+		observation, err := reader.GetExecution(context.Background(), id)
+		if err != nil {
+			t.Fatal("typed metadata read failed", label, err)
+		}
 		value := s.FixedGetExecution(context.Background(), id)
+		if !reflect.DeepEqual(fixedExecutionValue(observation), value) {
+			t.Fatal("typed and compatibility observations differ", label)
+		}
 		encoded, err := json.Marshal(value)
 		if err != nil {
 			t.Fatal(err)
@@ -211,6 +220,11 @@ func TestResidentGetExecutionConcurrentReleaseAndCollection(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for k := 0; k < 50; k++ {
+				observation, err := s.GetExecution(context.Background(), id)
+				if err != nil || (observation.CollectionEnded && (observation.Phase != "finished" || observation.OwnerCleanup != "confirmed" || observation.GatewayCleanup != "confirmed")) {
+					t.Error("inconsistent typed observation", observation, err)
+				}
+				observation.Exit.Code = 99
 				v := s.FixedGetExecution(context.Background(), id)
 				if v["error"] != nil || (v["collection_ended"] == true && (v["phase"] != "finished" || v["owner_cleanup"] != "confirmed" || v["gateway_cleanup"] != "confirmed")) {
 					t.Error("inconsistent observation", v)

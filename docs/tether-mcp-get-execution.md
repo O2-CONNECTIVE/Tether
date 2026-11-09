@@ -6,6 +6,9 @@
 汎用の `tether_get_execution` や新しい操作contextを実装したものではありません。
 同じ認証主体・登録host・固定されたcontrol世代の保持作業と、明示release後の既存tombstoneだけを返します。
 
+内部のtypedな読取portと認可・adapterの分担は[共通application API](shared-application-api.md)を参照してください。
+この切出しで公開JSONや利用者の権限は変えません。
+
 ## 入出力と互換性
 
 入力は必須の `request_id` 一つだけで、32桁の小文字16進数です。
