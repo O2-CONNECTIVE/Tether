@@ -32,6 +32,18 @@ pub(super) fn identity(event: fn(&'static str)) {
         Err(_) => "executable-layout-unavailable",
     });
 }
+// Fixed Tauri 2.12.5 App(index.html) deliberately uses tauri://localhost,
+// whose non-special URL path is empty. It is the same local root asset.
+pub(super) fn navigation_allowed(url: &tauri::Url) -> bool {
+    url.scheme() == "tauri"
+        && url.host_str() == Some("localhost")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && matches!(url.path(), "" | "/" | "/index.html")
+}
 pub(super) fn is_index(uri: &tauri::http::Uri) -> bool {
     uri.scheme_str() == Some("tauri")
         && uri.authority().is_some_and(|a| a.as_str() == "localhost")
@@ -56,8 +68,37 @@ pub(super) fn response(status: u16, mime: Option<&str>, nonempty: bool) -> &'sta
 mod tests {
     use super::*;
     #[test]
+    fn official_tauri_empty_path_root_is_allowed_without_expanding_origin_or_paths() {
+        let official = tauri::Url::parse("tauri://localhost").unwrap();
+        assert!(official.path().is_empty());
+        assert!(navigation_allowed(&official));
+        for value in ["tauri://localhost/", "tauri://localhost/index.html"] {
+            assert!(navigation_allowed(&value.parse().unwrap()));
+        }
+        for value in [
+            "https://localhost/",
+            "tauri://remote/",
+            "tauri://localhost:42/",
+            "tauri://user@localhost/",
+            "tauri://user:secret@localhost/",
+            "tauri://localhost?",
+            "tauri://localhost#",
+            "tauri://localhost?x=1",
+            "tauri://localhost#x",
+            "tauri://localhost/other",
+            "tauri://localhost/index.html/",
+            "about:blank",
+        ] {
+            assert!(!navigation_allowed(&value.parse().unwrap()));
+        }
+    }
+    #[test]
     fn index_probe_excludes_queries_other_paths_and_origins() {
-        for path in ["tauri://localhost/", "tauri://localhost/index.html"] {
+        for path in [
+            "tauri://localhost",
+            "tauri://localhost/",
+            "tauri://localhost/index.html",
+        ] {
             assert!(is_index(&path.parse().unwrap()));
         }
         for path in [

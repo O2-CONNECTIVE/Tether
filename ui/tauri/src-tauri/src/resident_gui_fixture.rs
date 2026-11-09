@@ -176,19 +176,8 @@ pub(super) fn run() {
             )
             .title("Tether — カレントの検証版（合成CI）")
             .initialization_script(include_str!("../tests/resident-gui/drive.js"))
-            .on_navigation(move |url| {
-                if url.scheme() != "tauri"
-                    || url.host_str() != Some("localhost")
-                    || !url.username().is_empty()
-                    || url.password().is_some()
-                    || url.port().is_some()
-                    || url.query().is_some()
-                    || url.fragment().is_some()
-                {
-                    event("navigation-denied");
-                    return false;
-                }
-                let allowed = matches!(url.path(), "/" | "/index.html");
+            .on_navigation(|url| {
+                let allowed = probe::navigation_allowed(url);
                 event(if allowed {
                     "navigation-root-allowed"
                 } else {

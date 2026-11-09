@@ -39,3 +39,7 @@ driver の段階は専用 CI context の local/main にだけ許可した event 
 helper は regular/no-follow 入力・512MiB 上限・固定 plist・起動前後の元/コピー hash を確認し、既存 output を上書き・再利用しません。元 keeper がコピー先の実ファイルを直接 Popen/Wait します。open / LaunchServices / shell launcher / signing / strip / quarantine / activation / entitlements / install / upload は行いません。失敗や unknown で再試行・fallback・kill をせず、元 owner と同じ60秒/180秒の監視境界を保ちます。
 
 bundle identifier の存在は比較条件の成立であり、成功・署名・製品接続の証明ではありません。元 pipe の ON/OFF、同じ owner の Close/IO/Wait と driver 判定が全て揃う必要があります。過去の裸 binary と別 VM での比較なので、結果だけで単独因果を確定しません。
+
+## 初回 URL の限定修正
+
+固定 Tauri 2.12.5 の `get_app_url` は macOS の local protocol を `tauri://localhost` とし、`WebviewUrl::App(index.html)` では join を省略します。非 special URL の path は空で、同版 `get_asset` は空 path を index.html に対応させます。fixture guard はこの公式 root の空 path も許可し、従来の `/` / `/index.html` と同じ local root として扱います。scheme / host / credentials / port / query / fragment の制約は維持し、about:blank、一般 HTTP、外部 origin、任意 path を許可しません。実際の固定 Tauri Url 型で空 path と拒否条件を回帰検査します。source 上の欠陥修正であり、実 GUI 成功は新 head CI の終端で別に判断します。
