@@ -1,6 +1,6 @@
 # Resident固定操作のMCP出力契約
 
-[#188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) / [#32](https://github.com/O2-CONNECTIVE/rescue-host/issues/32) に向けた、既存実装の契約明示です。新しいhost catalog、context、認可、常駐寿命の設計採用ではありません。
+[#188](https://github.com/O2-CONNECTIVE/Tether/issues/188) / [#32](https://github.com/O2-CONNECTIVE/Tether/issues/32) に向けた、既存実装の契約明示です。新しいhost catalog、context、認可、常駐寿命の設計採用ではありません。
 
 ## 既存経路との区別
 

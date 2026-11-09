@@ -1,6 +1,6 @@
 # 未配線shell v1の共有契約fixture
 
-[既存の通信契約](communication-contract.md) / [shellの確認範囲](tauri-native-shell.md) / [Issue #46](https://github.com/O2-CONNECTIVE/rescue-host/issues/46)
+[既存の通信契約](communication-contract.md) / [shellの確認範囲](tauri-native-shell.md) / [Issue #46](https://github.com/O2-CONNECTIVE/Tether/issues/46)
 
 [共有JSON](../ui/tauri/contracts/shell-status-v1.json)は、現在の`get_shell_status`要求と固定未接続応答だけを表します。
 Go process/stdio/SSHのprotocol案ではなく、認可・期限・失効の権威も追加しません。
@@ -25,4 +25,4 @@ Rust側は同手順の固定toolchainによる`cargo test`へ含まれます。
 
 fixtureを書き換える場合は、現行shell実装との一致と拒否の意味をレビューします。
 新しいGo IPCや権限を採用する変更は、既存の契約・脅威モデルで別途合意します。
-他のCIのgreenで[main native失敗 #45](https://github.com/O2-CONNECTIVE/rescue-host/issues/45)を解消済みにせず、製品接続gate閉鎖を維持します。
+他のCIのgreenで[main native失敗 #45](https://github.com/O2-CONNECTIVE/Tether/issues/45)を解消済みにせず、製品接続gate閉鎖を維持します。

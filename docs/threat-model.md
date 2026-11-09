@@ -5,7 +5,7 @@
 [安全要件](security.md) / [通信契約](communication-contract.md) / [接続再開の条件](SECURITY_BACKEND_CONTRACT.md)
 
 製品の新規接続ゲートは閉鎖しており、本番利用できません。
-対象は[通信契約の固定参照](communication-contract.md#対象版と根拠)と、2026-10-27時点の[受入Issue #1](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)です。
+対象は[通信契約の固定参照](communication-contract.md#対象版と根拠)と、2026-10-27時点の[受入Issue #1](https://github.com/O2-CONNECTIVE/Tether/issues/1)です。
 公開main、未公開評価ソースの限定した観察、将来の製品要件を区別します。
 本書は脅威と残る境界を整理し、既存44条件の定義や合否を変更しません。
 
@@ -65,11 +65,11 @@ Rust/Tauriの採用、GUIの状態見本、モックの成功は、安全境界�
 
 | 継続するリスク | 追跡と製品判定への影響 |
 | --- | --- |
-| 二重停止故障時の物理TCP遮断 | L-R07は **NOT_MET**。[Issue #5](https://github.com/O2-CONNECTIVE/rescue-host/issues/5)。認可状態が失効しても、両close経路故障時のraw canary到達を消さない |
-| Windowsの背圧 | L-R06の当該caseは未検証。[Issue #6](https://github.com/O2-CONNECTIVE/rescue-host/issues/6)。前提未成立の失敗履歴と明示未実施を成功へ置換しない |
-| 保護された独立principalのsupervisor | W全7件が未検証。[Issue #12](https://github.com/O2-CONNECTIVE/rescue-host/issues/12)。同一ユーザーの自己子、自己Job、TTLは代用しない |
-| 固定22番の正例と不在時、専用隔離環境 | L-D01/D06は未検証。[Issue #11](https://github.com/O2-CONNECTIVE/rescue-host/issues/11)。既存sshdに接続して穴埋めしない |
-| 実relayと配布物の統合 | U全5件が未検証。[Issue #13](https://github.com/O2-CONNECTIVE/rescue-host/issues/13)。ネットワーク条件、信頼する版、両端観測が不足 |
+| 二重停止故障時の物理TCP遮断 | L-R07は **NOT_MET**。[Issue #5](https://github.com/O2-CONNECTIVE/Tether/issues/5)。認可状態が失効しても、両close経路故障時のraw canary到達を消さない |
+| Windowsの背圧 | L-R06の当該caseは未検証。[Issue #6](https://github.com/O2-CONNECTIVE/Tether/issues/6)。前提未成立の失敗履歴と明示未実施を成功へ置換しない |
+| 保護された独立principalのsupervisor | W全7件が未検証。[Issue #12](https://github.com/O2-CONNECTIVE/Tether/issues/12)。同一ユーザーの自己子、自己Job、TTLは代用しない |
+| 固定22番の正例と不在時、専用隔離環境 | L-D01/D06は未検証。[Issue #11](https://github.com/O2-CONNECTIVE/Tether/issues/11)。既存sshdに接続して穴埋めしない |
+| 実relayと配布物の統合 | U全5件が未検証。[Issue #13](https://github.com/O2-CONNECTIVE/Tether/issues/13)。ネットワーク条件、信頼する版、両端観測が不足 |
 
 受入44条件は部分達成29、未達1、未検証14、完全達成0です。
 mainへのコード統合、限定評価物の確認、本番利用可能の判定は別々です。

@@ -35,7 +35,7 @@ symlinkを作成できない環境では`test_dangling_state_symlink_not_absent`
 LinuxとmacOSは82件、skip 0件を想定しますが、実際の件数と理由は各jobの結果で確認します。
 失敗したOSがあっても他のOSを続行し、skipを合格件数へ加算しません。
 
-**CI成功は、[親受入Issueの44条件](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)が本番受入に合格したことを意味しません。**
+**CI成功は、[親受入Issueの44条件](https://github.com/O2-CONNECTIVE/Tether/issues/1)が本番受入に合格したことを意味しません。**
 テストはモックと模擬CLIを使用し、GUIの実描画、実SSH、認証と転送の強制、期限切れでの実切断、Windowsの権限境界、配布EXEを検証しません。
 実PC、公開中継、TCPポート22、既存CI VMには接続せず、self-hosted runnerも使いません。
 提供段階と未検証事項は[検証状況](status.md)の区別を維持します。

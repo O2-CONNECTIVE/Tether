@@ -11,7 +11,7 @@
 
 表の WCAG 番号は[参照版](https://www.w3.org/TR/2024/REC-WCAG22-20241212/)の達成基準への索引です。
 AA 目標には A も含まれ、この表以外の適用基準も実装対象ごとに確認します。
-既存受入 ID は[親 Issue #1](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)への関連づけであり、UI の検査で条件全体を満たすものではありません。
+既存受入 ID は[親 Issue #1](https://github.com/O2-CONNECTIVE/Tether/issues/1)への関連づけであり、UI の検査で条件全体を満たすものではありません。
 
 | UI 参照名と WCAG の索引 | 自動確認または自動化候補 | 手動確認と残す証跡 | 既存44条件との関係 |
 | --- | --- | --- | --- |

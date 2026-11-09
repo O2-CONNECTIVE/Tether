@@ -1,6 +1,6 @@
 # 選択folderの非公開Darwin読取候補
 
-[操作辞書 #188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) / [目標5 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189) / [有限読取コア](bounded-file-read-core.md)
+[操作辞書 #188](https://github.com/O2-CONNECTIVE/Tether/issues/188) / [目標5 #189](https://github.com/O2-CONNECTIVE/Tether/issues/189) / [有限読取コア](bounded-file-read-core.md)
 
 ## 段階と実行範囲
 

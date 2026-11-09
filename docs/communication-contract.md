@@ -93,7 +93,7 @@ stdoutを一般ログと混在させず、UIへの表示と公開時の選別を
 
 評価子の独立hard TTLは45秒、親controllerの実行予算は30秒です。
 fixtureは最大12秒、lease 8秒で、更新要求はありません。
-これらは既存[受入Issue #1](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)の最大20秒、lease 3秒と1秒ごとの更新という主受入設定とは別です。
+これらは既存[受入Issue #1](https://github.com/O2-CONNECTIVE/Tether/issues/1)の最大20秒、lease 3秒と1秒ごとの更新という主受入設定とは別です。
 UI timerでGoの期限を延長する経路はありません。
 
 stdinのEOFは、初回要求前なら起動失敗、fixtureの待機段階なら `parent-eof` として失効します。

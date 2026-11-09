@@ -1,6 +1,6 @@
 # 診断要約の純粋fixture境界
 
-[Issue #27](https://github.com/O2-CONNECTIVE/rescue-host/issues/27) の独立小項目。
+[Issue #27](https://github.com/O2-CONNECTIVE/Tether/issues/27) の独立小項目。
 `scripts/diagnostic_boundary.py` は匿名の診断投影だけを検証する純粋関数です。
 producer runtime、既存workflow、keeper/observer、実Mac診断には接続しません。
 任意のrawログを探すscanner、ファイル収集、共有や自動送信の入口はありません。
@@ -53,5 +53,5 @@ immutable verdictの意味を置き換えません。
 実GUI、実接続、完全な漏洩防止、ファイル権限、取得/書込/容量不足/中断/削除の実機挙動は
 この検証からは判断できません。共有用最小要約とローカル原証跡は別扱いとし、
 原証跡の取り込みや公開を追加しません。
-保存先・保持日数・削除・鍵管理は [#36 DEC-03](https://github.com/O2-CONNECTIVE/rescue-host/issues/36)
+保存先・保持日数・削除・鍵管理は [#36 DEC-03](https://github.com/O2-CONNECTIVE/Tether/issues/36)
 の判断待ちです。Issue #27全体の完了にはしません。

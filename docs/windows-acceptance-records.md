@@ -1,6 +1,6 @@
 # 配布版の受入手順と結果記録
 
-[Windows限定評価手順](windows-evaluation-runbook.md) / [配布条件](distribution.md) / [受入 #1](https://github.com/O2-CONNECTIVE/rescue-host/issues/1) / [実機評価 #7](https://github.com/O2-CONNECTIVE/rescue-host/issues/7)
+[Windows限定評価手順](windows-evaluation-runbook.md) / [配布条件](distribution.md) / [受入 #1](https://github.com/O2-CONNECTIVE/Tether/issues/1) / [実機評価 #7](https://github.com/O2-CONNECTIVE/Tether/issues/7)
 
 本書は配布候補ごとの実行計画と記録方法です。
 照合基点はmain `3b4a3ac75c1307071ad6c94f15f6a35330729d53` で、実機試験は未実行です。

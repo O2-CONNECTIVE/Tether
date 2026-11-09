@@ -1,6 +1,6 @@
 # Windows制御client候補の確認範囲
 
-[開発入口](README.md) / [serverの正本](../../docs/windows-local-control.md) / [共通契約](../../docs/adr/0001-control-contract-candidate.md) / [Issue #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25)
+[開発入口](README.md) / [serverの正本](../../docs/windows-local-control.md) / [共通契約](../../docs/adr/0001-control-contract-candidate.md) / [Issue #25](https://github.com/O2-CONNECTIVE/Tether/issues/25)
 
 `src-tauri/src/windows_client` は、既存 `rescue-host-control/1` を使うRust内部の実WinAPI adapterです。
 製品runtimeのbootstrapは未接続で、開始・停止ボタンと接続gateは閉鎖を維持します。

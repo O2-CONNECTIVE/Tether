@@ -1,6 +1,6 @@
 # 固定ソースのCI結果を読み取り照合する
 
-追跡: [CI配線 #9](https://github.com/O2-CONNECTIVE/rescue-host/issues/9) / [品質要件 #23](https://github.com/O2-CONNECTIVE/rescue-host/issues/23)
+追跡: [CI配線 #9](https://github.com/O2-CONNECTIVE/Tether/issues/9) / [品質要件 #23](https://github.com/O2-CONNECTIVE/Tether/issues/23)
 
 `scripts/check_ci_results.py` は保存済みJSONを読むだけの、依存追加のない検査です。
 ネットワーク取得、workflow実行、merge、保護ルール変更は行いません。
