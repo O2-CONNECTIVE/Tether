@@ -158,6 +158,7 @@ fn commands_with_ports<R: tauri::Runtime>(
         ])
 }
 
+#[cfg(not(resident_gui_fixture))]
 pub fn run() {
     #[cfg(any(test, feature = "startup-diagnostics"))]
     let startup = startup_diagnostics::Trace::start();
@@ -480,4 +481,11 @@ mod resident_gui_fixture;
 #[cfg(all(target_os = "macos", resident_gui_fixture))]
 pub fn run_resident_gui_fixture() {
     resident_gui_fixture::run();
+}
+
+// A fixture build has exactly one context/Info.plist, in the explicit example.
+// Its ordinary application entry must never activate that fixture implicitly.
+#[cfg(resident_gui_fixture)]
+pub fn run() {
+    std::process::exit(2);
 }
