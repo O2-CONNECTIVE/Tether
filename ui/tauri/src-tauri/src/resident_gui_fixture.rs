@@ -1,5 +1,6 @@
 //! Disposable CI only: real WebView/IPC/owned pipes, synthetic peer only.
 //! This does not activate the Mac27 sealed native launcher or enroll a host.
+use crate::resident_gui_probe as probe;
 use crate::resident_port::{duplex::owner::Supervisor, ResidentPort};
 use crate::standby_lifecycle::{Outcome, StandbyOwner};
 use std::fs::OpenOptions;
@@ -99,6 +100,7 @@ pub(super) fn run() {
     {
         std::process::exit(2);
     }
+    probe::identity(event);
     let mut command = std::process::Command::new("/usr/bin/python3");
     command
         .args([
@@ -140,6 +142,12 @@ pub(super) fn run() {
         crate::StatusPresentation::default(),
         port,
     );
+    let context = tauri::generate_context!("tests/resident-gui/tauri.conf.json");
+    event(match context.assets().get(&"index.html".into()) {
+        Some(bytes) if !bytes.is_empty() => "embedded-index-present",
+        Some(_) => "embedded-index-empty",
+        None => "embedded-index-missing",
+    });
     let app = builder
         .setup(move |app| {
             let sequence = std::sync::Mutex::new(0_u8);
@@ -180,7 +188,23 @@ pub(super) fn run() {
                     event("navigation-denied");
                     return false;
                 }
-                matches!(url.path(), "/" | "/index.html")
+                let allowed = matches!(url.path(), "/" | "/index.html");
+                if allowed {
+                    event("navigation-root-allowed");
+                }
+                allowed
+            })
+            .on_web_resource_request(|request, response| {
+                if probe::is_index(request.uri()) {
+                    event(probe::response(
+                        response.status().as_u16(),
+                        response
+                            .headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok()),
+                        !response.body().is_empty(),
+                    ));
+                }
             })
             .on_page_load(|_window, payload| match payload.event() {
                 tauri::webview::PageLoadEvent::Started => event("page-started"),
@@ -191,9 +215,7 @@ pub(super) fn run() {
             event("webview-created");
             Ok(())
         })
-        .build(tauri::generate_context!(
-            "tests/resident-gui/tauri.conf.json"
-        ));
+        .build(context);
     let app = match app {
         Ok(app) => app,
         Err(_) => {

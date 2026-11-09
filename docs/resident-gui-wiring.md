@@ -23,3 +23,11 @@ driver の段階は専用 CI context の local/main にだけ許可した event 
 ## 検証版の識別と配布
 
 専用 CI window は「カレントの検証版（合成CI）」と表示します。allowlisted JSON の検証記録には source commit、UTC build 記録時刻、実行 binary SHA-256、確認範囲を含めます。CI は実行後にも binary hash を照合します。正式版の semver を変更せず、.app の生成・upload・Release 公開は行いません。この CI だけではダウンロード可能な接続検証版は提供されません。
+
+## 診断の読み方
+
+固定イベントで、同一 binary の `__info_plist` 区画有無、同一 process の CoreFoundation main bundle / identifier の有無、実行ファイルの `.app` 内配置、同じ generated Context の index asset、許可された root/index navigation、index response の HTTP status / HTML MIME / 非空、document commit / finish、driver 開始を区別します。識別子・path・URL・header値・body は出力しません。asset response の内容や header は変更しません。bundle の存在・配置は署名・真正性・WebView動作保証ではありません。
+
+`page-started` は固定 wry の macOS delegate の didCommitNavigation 通知です。これが無いだけで provisional navigation request 自体が無かったとは断定しません。観測は原因の切分けであり、app wrapper、activation policy、セキュリティ設定、所有権や期限の変更ではありません。
+
+固定 Tauri の resource-response callback は asset lookup 成功後に呼ばれます。callback の欠落だけでは request 自体の不在と判断せず、embedded-index / navigation-root の観測と合わせます。otool 失敗は固定 unavailable を返して停止し、absent に読み替えません。

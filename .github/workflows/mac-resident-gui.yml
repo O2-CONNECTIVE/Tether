@@ -48,7 +48,7 @@ jobs:
           python3 -m unittest discover -s ui/tauri/src-tauri/tests/resident-gui -p test_producer.py -v
           cargo +1.99.1 test --lib --locked --manifest-path ui/tauri/src-tauri/Cargo.toml resident_port::duplex::tracking_tests
           cargo +1.99.1 fetch --locked --manifest-path ui/tauri/src-tauri/Cargo.toml
-          RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 test --lib --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml resident_gui_fixture::tests
+          RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 test --lib --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml resident_gui_
           RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 build --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml --features custom-protocol --example resident_gui_ci
       - name: Run real GUI through original owner keeper
         run: |
@@ -57,6 +57,11 @@ jobs:
           export CI_GUI_SOURCE_SHA="$(git rev-parse HEAD)"
           export CI_GUI_BUILD_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           binary="$GITHUB_WORKSPACE/ui/tauri/src-tauri/target/debug/examples/resident_gui_ci"
+          if ! plist_sections="$(/usr/bin/otool -l "$binary" 2>/dev/null)"; then
+            echo 'GUI_FIXTURE_EVENT=binary-plist-unavailable'
+            exit 1
+          fi
+          printf '%s\n' "$plist_sections" | python3 -c 'import sys; print("GUI_FIXTURE_EVENT=binary-plist-present" if any(line.split() == ["sectname", "__info_plist"] for line in sys.stdin) else "GUI_FIXTURE_EVENT=binary-plist-absent")'
           export CI_GUI_BINARY_SHA256="$(shasum -a 256 "$binary" | awk '{print $1}')"
           run_dir=$(mktemp -d "$RUNNER_TEMP/resident-gui.XXXXXX")
           export CI_PRODUCER_RESULT="$run_dir/result.json"
@@ -66,7 +71,7 @@ jobs:
           observer_status=0
           python3 ci-producer/supervise_ci.py observer --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT" || observer_status=$?
           # Emit only fixed fixture stage names, never raw logs/URLs/content.
-          grep -E '^GUI_FIXTURE_EVENT=(producer-started|source-bound|navigation-denied|page-started|page-finished|initializer-started|on-applied|off-applied|driver-passed|driver-failed|webview-created|app-built|monitor-exit-request|event-loop-start|exit-requested|exit-held|event-loop-returned|owner-joined)$' "$run_dir/owned.log" || true
+          grep -E '^GUI_FIXTURE_EVENT=(main-bundle-present|main-bundle-absent|main-bundle-identifier-present|main-bundle-identifier-absent|executable-in-app|executable-not-in-app|executable-layout-unavailable|embedded-index-present|embedded-index-empty|embedded-index-missing|navigation-root-allowed|index-response-error|index-response-empty|index-response-html|index-response-nonhtml|producer-started|source-bound|navigation-denied|page-started|page-finished|initializer-started|on-applied|off-applied|driver-passed|driver-failed|webview-created|app-built|monitor-exit-request|event-loop-start|exit-requested|exit-held|event-loop-returned|owner-joined)$' "$run_dir/owned.log" || true
           test "$observer_status" -eq 0
           wait "$keeper"
           test "$(shasum -a 256 "$binary" | awk '{print $1}')" = "$CI_GUI_BINARY_SHA256"

@@ -479,6 +479,8 @@ mod status_presentation_tests;
 #[cfg(all(target_os = "macos", resident_gui_fixture))]
 mod resident_gui_fixture;
 #[cfg(all(target_os = "macos", resident_gui_fixture))]
+mod resident_gui_probe;
+#[cfg(all(target_os = "macos", resident_gui_fixture))]
 pub fn run_resident_gui_fixture() {
     resident_gui_fixture::run();
 }
