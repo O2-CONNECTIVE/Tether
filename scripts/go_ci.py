@@ -71,6 +71,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel': {'channel.go', 'server.go', 'client.go', 'conn.go', 'keys.go', 'liveness.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire': {'client.go', 'server.go', 'strict.go', 'wire.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentwork': {'intent.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentapi': {'execution.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac': {'factory.go', 'standby.go', 'standby_types.go', 'wire.go', 'enrollment.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe': {'codec.go', 'mapper.go', 'startup.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/workerowner': {'owner.go', 'run_once.go', 'wait_source.go'},
