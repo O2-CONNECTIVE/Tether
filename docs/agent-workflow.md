@@ -42,6 +42,28 @@ toolchain導入、GUI/native実起動、配布build、外部接続は、各手�
 
 コミットの件名と説明本文は[日本語方針](commit-messages.md)に従い、実merge候補も同じ検査で確認します。
 
+### mergeメッセージの事前確認
+
+PRの件名やsource commitが合格しても、GitHubが生成するmerge commitの件名は別です。
+`gh pr merge --merge`の既定メッセージには依存せず、日本語の件名と本文を明示します。
+以下の変数は確認済みのPR番号、固定head、候補ファイルへ置き換えます。本文には対象、検証、残る制約を記載します。
+
+```sh
+printf '%s\n\n' "$merge_subject" > "$candidate_file" &&
+cat "$body_file" >> "$candidate_file" &&
+python -I scripts/check_commit_messages.py --message-file "$candidate_file" &&
+gh pr merge "$pr_number" --repo O2-CONNECTIVE/Tether --merge \
+  --match-head-commit "$reviewed_head" \
+  --subject "$merge_subject" --body-file "$body_file"
+```
+
+この検査はメッセージだけの確認であり、以下のレビュー・適用CI・競合確認を代替しません。
+実行後は実merge commitの件名・本文・treeと、そのSHAの全適用workflowの終端を確認します。
+まだjobが生成されていないpending workflowは、`gh pr checks`の成功だけで完了扱いしません。
+既存mainの不適合メッセージは追補commitでは修正できません。元の失敗を記録し、履歴の書換え、検査の例外追加、成功目的だけの再実行で隠さないでください。
+
+### 統合前後の確認
+
 - 新しい振る舞いのTDDは、同じ公開境界のredとgreenを固定ソース・入力・期待結果で対応づけます。既存実装への後付け回帰や文書検証は、その種別を明記します。
 - 実行したコマンド、環境、対象SHA、終了値、成功/失敗/skip/未実行を分けます。0件・全skip・timeout・環境準備失敗を成功へ読み替えません。
 - 静的レビュー、ローカル試験、CI、browser fixture、実Rust IPC、native実起動、実通信、配布物の検証は、それぞれ確認できた境界だけを記録します。
