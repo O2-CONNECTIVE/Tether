@@ -107,14 +107,27 @@ func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 		t.Fatal("status did not use original mapper", status)
 	}
 	// Stale revision, then duplicate ID, are rejected by the same mapper.
-	for _, line := range []string{"off 1 0\n", fmt.Sprintf("off 1 %d\n", status.Snapshot.Revision)} {
+	for index, line := range []string{"off 1 0\n", fmt.Sprintf("off 1 %d\n", status.Snapshot.Revision)} {
 		write(line)
+		if index == 0 {
+			previous := status.Snapshot.Revision
+			read(&status) // strict order: refusal evidence must precede stale receipt
+			tr := status.Snapshot.Transition
+			if status.Snapshot.Revision <= previous || tr == nil || tr.RequestID != 1 || tr.Intent != "off" || tr.Outcome != "rejected" {
+				t.Fatal("missing pre-owner refusal observation", status)
+			}
+		}
 		var receipt receiptEnvelope
 		read(&receipt)
 		if receipt.Type != "receipt" || receipt.Receipt.RequestID != 1 || receipt.Receipt.Disposition != "stale" {
 			t.Fatal("stale/duplicate input accepted", receipt)
 		}
-		read(&status)
+		if index != 0 {
+			read(&status)
+			if status.Snapshot.Transition != nil {
+				t.Fatal("duplicate manufactured evidence", status)
+			}
+		}
 	}
 	before := owner.Snapshot()
 	if canceled {

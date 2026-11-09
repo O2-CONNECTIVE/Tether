@@ -203,6 +203,15 @@ func serveLoop(lifetime context.Context, owner *residentmac.Standby, p *ownedPip
 					return e
 				}
 				receipt := m.submit(owner, r, now)
+				// Rust retains an admitted ID until matching terminal evidence.
+				// Publish pre-owner refusal before its stale receipt, so refresh
+				// and an explicit retry cannot race ahead of that evidence.
+				refused := m.refused != nil
+				if refused {
+					if e = publish(); e != nil {
+						return e // no receipt after failed/Unknown observation
+					}
+				}
 				b, e := Encode(receiptEnvelope{1, "receipt", receipt})
 				if e != nil {
 					return e
@@ -210,8 +219,10 @@ func serveLoop(lifetime context.Context, owner *residentmac.Standby, p *ownedPip
 				if e = p.writeLine(b); e != nil {
 					return e
 				}
-				if e = publish(); e != nil {
-					return e
+				if !refused {
+					if e = publish(); e != nil {
+						return e
+					}
 				}
 			}
 		}

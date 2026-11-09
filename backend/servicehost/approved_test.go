@@ -171,6 +171,50 @@ func TestCanceledCloseBudgetStillRevokesTheGrant(t *testing.T) {
 	}
 }
 
+// hostDeadlineObserved keeps the timer and authority clock evidence separate.
+// This helper is a test oracle only, not a product authorization decision.
+func hostDeadlineObserved(runErr error, reason supervisor.Reason, monotonicRemaining, wallRemaining time.Duration) bool {
+	switch runErr {
+	case context.DeadlineExceeded:
+		return monotonicRemaining <= 0
+	case context.Canceled:
+		return reason == supervisor.HardDeadlineReached && wallRemaining <= 0
+	default:
+		return false
+	}
+}
+
+// Synthetic observations fix the test-oracle contract; they do not reproduce
+// clock skew on this machine or change either production clock.
+func TestHostDeadlineObservationKeepsClockPathsSeparate(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		err             error
+		reason          supervisor.Reason
+		monotonic, wall time.Duration
+		want            bool
+	}{
+		{"wall-first-recorded-CI", context.Canceled, supervisor.HardDeadlineReached, 70048 * time.Nanosecond, -180000 * time.Nanosecond, true},
+		{"wall-boundary", context.Canceled, supervisor.HardDeadlineReached, time.Nanosecond, 0, true},
+		{"timer-first", context.DeadlineExceeded, supervisor.ExplicitStop, 0, time.Nanosecond, true},
+		{"both-elapsed", context.DeadlineExceeded, supervisor.HardDeadlineReached, -time.Nanosecond, -time.Nanosecond, true},
+		{"wall-not-reached", context.Canceled, supervisor.HardDeadlineReached, -time.Nanosecond, time.Nanosecond, false},
+		{"timer-not-reached", context.DeadlineExceeded, supervisor.HardDeadlineReached, time.Nanosecond, -time.Nanosecond, false},
+		{"explicit-cancel", context.Canceled, supervisor.ExplicitStop, -time.Nanosecond, -time.Nanosecond, false},
+		{"clock-regression", context.Canceled, supervisor.ClockRegressed, -time.Nanosecond, -time.Nanosecond, false},
+		{"normal-exit", nil, supervisor.HardDeadlineReached, -time.Nanosecond, -time.Nanosecond, false},
+		{"mixed-context-errors", errors.Join(context.Canceled, context.DeadlineExceeded), supervisor.HardDeadlineReached, -time.Nanosecond, -time.Nanosecond, false},
+		{"deadline-plus-cleanup-failure", errors.Join(context.DeadlineExceeded, servicehost.ErrRuntimeUnconfirmed), supervisor.HardDeadlineReached, -time.Nanosecond, -time.Nanosecond, false},
+		{"unrelated-error", servicehost.ErrRuntimeUnconfirmed, supervisor.HardDeadlineReached, -time.Nanosecond, -time.Nanosecond, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hostDeadlineObserved(tc.err, tc.reason, tc.monotonic, tc.wall); got != tc.want {
+				t.Fatalf("deadline observation = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 // coreの期限判定自体のTDDとは別に、Hostの所有process待機へ届く経路を回帰確認する。
 func TestHostHardDeadlineCancelsWaitAndRevokesBeforeProcessCleanup(t *testing.T) {
 	p := provisionedPolicy()
@@ -199,10 +243,12 @@ func TestHostHardDeadlineCancelsWaitAndRevokesBeforeProcessCleanup(t *testing.T)
 		t.Fatal("deadline became normal runtime exit")
 	}
 	observed := time.Now()
-	if observed.Before(p.HardDeadline) || closes != 1 {
+	monotonicRemaining := p.HardDeadline.Sub(observed)
+	wallRemaining := p.HardDeadline.Round(0).Sub(observed.Round(0))
+	if !hostDeadlineObserved(runErr, cleanupSnapshot.Reason, monotonicRemaining, wallRemaining) || closes != 1 {
 		t.Fatalf("deadline/ownership mismatch: closes=%d revoke_reason=%s execution_deadline=%t execution_canceled=%t monotonic_remaining_ns=%d wall_remaining_ns=%d",
 			closes, cleanupSnapshot.Reason, errors.Is(runErr, context.DeadlineExceeded), errors.Is(runErr, context.Canceled),
-			p.HardDeadline.Sub(observed).Nanoseconds(), p.HardDeadline.Round(0).Sub(observed.Round(0)).Nanoseconds())
+			monotonicRemaining.Nanoseconds(), wallRemaining.Nanoseconds())
 	}
 	if s, ok := h.Snapshot(); !ok || s.State != supervisor.Revoked || !s.Grant.HardDeadline.Equal(p.HardDeadline.Round(0)) {
 		t.Fatal("hard deadline changed or grant retained")
