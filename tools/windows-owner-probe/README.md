@@ -57,4 +57,4 @@ parent退出caseには生成元から外側ownerへの実process/thread handle�
 acknowledgment・回収契約が必要です。PIDや通知・boolを渡す方式では代替しません。
 今回の範囲は「生存する固定parentが子の元handleを保持した実Job継承」に限定します。
 MacではC# compile、PowerShell実行、Windows API実行はいずれも未実行です。
-Windows CIでの初回評価・固定headの独立レビューは別途必要で、#319のchild-older根因は不明のままです。
+Windows CIでの初回評価・固定headの独立レビューは別途必要で、追跡Issue #45のchild-older根因は不明のままです（#319はMac変更のPR）。
