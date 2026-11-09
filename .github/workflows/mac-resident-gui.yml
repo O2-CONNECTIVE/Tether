@@ -97,6 +97,7 @@ jobs:
           python3 ci-producer/supervise_ci.py observer --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT" || observer_status=$?
           # Emit only fixed fixture stage names, never raw logs/URLs/content.
           grep -E '^GUI_FIXTURE_EVENT=(main-bundle-present|main-bundle-absent|main-bundle-identifier-present|main-bundle-identifier-absent|executable-in-app|executable-not-in-app|executable-layout-unavailable|embedded-index-present|embedded-index-empty|embedded-index-missing|navigation-root-allowed|index-response-error|index-response-empty|index-response-html|index-response-nonhtml|producer-started|source-bound|navigation-denied|page-started|page-finished|initializer-started|on-applied|off-applied|driver-passed|driver-failed|webview-created|app-built|monitor-exit-request|event-loop-start|exit-requested|exit-held|event-loop-returned|owner-joined)$' "$run_dir/owned.log" || true
+          grep -E '^GUI_FIXTURE_FAILURE=((init|on|auth|off|complete):(identity|receipt|transition|retry-budget|phase-timeout|auth-timeout|bridge-timeout|unexpected)|event:(sequence|lock))$' "$run_dir/owned.log" || true
           # Read-only verification even on unknown; never replace or signal owner.
           python3 ui/tauri/src-tauri/tests/resident-gui/bundle.py verify "$source_binary" "$run_dir"
           test "$observer_status" -eq 0

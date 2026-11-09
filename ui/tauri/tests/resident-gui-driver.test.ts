@@ -56,8 +56,55 @@ void test('GUI driver requires its own ON and OFF accepted/applied identities, n
 void test('GUI driver rejects target-enabled without OFF and mismatched or missing receipt proof', async () => {
   for (const mode of ['spontaneous-off', 'wrong-transition', 'unaccepted', 'rejected-off']) {
     const result = await run(mode);
-    assert.equal(result.events.at(-1), 'failed', mode);
+    assert.match(result.events.at(-1) ?? '', /^failed:off:/, mode);
     assert.equal(result.events.includes('passed'), false, mode);
     assert.equal(result.offClicks, mode === 'spontaneous-off' ? 0 : 1, mode);
   }
+});
+
+async function classify(mode: string) {
+  let now = 0, clicks = 0;
+  const events: string[] = [];
+  const dataset: Record<string, string> = { residentRequestId: '0', residentRevision: mode === 'identity' ? '0' : '1',
+    residentReceipt: 'none', residentStandby: 'off', residentRegistration: 'disconnected',
+    residentTransitionId: '0', residentTransitionIntent: 'none', residentTransitionOutcome: 'none' };
+  const button = { disabled: false, click() {
+    clicks++;
+    if (mode === 'unexpected') throw new Error('https://secret.invalid/private-value');
+    if (mode === 'phase-timeout') { button.disabled = true; return; }
+    dataset.residentRequestId = String(clicks); dataset.residentRevision = String(clicks + 1);
+    dataset.residentReceipt = mode === 'receipt' ? 'unavailable' : mode === 'retry-budget' ? 'stale' : 'accepted';
+    dataset.residentTransitionId = String(clicks); dataset.residentTransitionIntent = 'on';
+    dataset.residentTransitionOutcome = mode === 'transition' ? 'unknown' : 'applied';
+    dataset.residentStandby = 'on';
+    button.disabled = mode !== 'retry-budget';
+  } };
+  await runInNewContext(driver, {
+    performance: { now: () => now }, setTimeout: (f: () => void, ms: number) => { now += ms; queueMicrotask(f); },
+    document: { querySelector: (s: string) => s === '#resident-panel' ? { dataset }
+      : s === '#resident-on' ? button : { disabled: mode !== 'auth-timeout' } },
+    window: { __TAURI__: { event: { emit: (_: string, v: string) => { events.push(v); return Promise.resolve(); } } } },
+  });
+  return { events, clicks };
+}
+void test('GUI driver reports only fixed failure phase and reason without changing the failed verdict', async () => {
+  for (const reason of ['identity', 'receipt', 'transition', 'retry-budget', 'phase-timeout', 'unexpected', 'auth-timeout']) {
+    const r = await classify(reason);
+    assert.equal(r.events.at(-1), `failed:${reason === 'auth-timeout' ? 'auth' : 'on'}:${reason}`);
+    assert.equal(r.events.includes('passed'), false);
+    assert.equal(JSON.stringify(r).includes('secret.invalid'), false);
+    assert.equal(r.clicks, reason === 'identity' ? 0 : reason === 'retry-budget' ? 8 : 1);
+  }
+});
+void test('missing initial bridge reports its fixed timeout only if the bridge later becomes available', async () => {
+  let now = 0; const events: string[] = [];
+  await runInNewContext(driver, {
+    performance: { now: () => now },
+    setTimeout: (f: () => void, ms: number) => { now += ms; queueMicrotask(f); },
+    window: { get __TAURI__() {
+      return now >= 20000 ? { event: { emit: (_: string, v: string) => { events.push(v); return Promise.resolve(); } } } : undefined;
+    } },
+  });
+  assert.deepEqual(events, ['failed:init:bridge-timeout']);
+  assert.equal(now, 20000);
 });
