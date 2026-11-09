@@ -81,3 +81,31 @@ class NativeSessionFailureEvidenceTests(unittest.TestCase):
         result = subprocess.CompletedProcess([], 0, report, 'ignored private stderr')
         with patch.object(tool, 'completed', return_value=result):
             self.assertEqual(tool.execute_mode(Path('/private/fixture'), 'session-confirmed', progress), 26)
+
+
+class GuiStateReportTests(unittest.TestCase):
+    def test_exact_owner_reports_only(self):
+        for mode, count in tool.GUI_CASES.items():
+            child = int(mode != 'gui-state-normal')
+            unknown = int(mode == 'gui-state-unknown')
+            report = f'GUI_STATE_FIXTURE mode={mode} passed={count} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={unknown} producer=0\n'
+            self.assertEqual(tool.validate_gui_report(mode, report), count)
+            for bad in ['', report + report, report + 'raw',
+                        report.replace(f'passed={count}', 'passed=0'),
+                        report.replace('failed=0', 'failed=1'),
+                        report.replace(f'childrenWaited={child}', f'childrenWaited={1-child}'),
+                        report.replace(f'nativeUnknown={unknown}', f'nativeUnknown={1-unknown}'),
+                        report.replace('open=0', 'open=1'),
+                        report.replace('producer=0', 'producer=1')]:
+                with self.assertRaises(ValueError):
+                    tool.validate_gui_report(mode, bad)
+        with self.assertRaises(ValueError):
+            tool.validate_gui_report('other', '')
+
+    def test_failed_gui_state_never_exposes_raw_output(self):
+        progress = {}
+        result = subprocess.CompletedProcess([], 101, 'private payload', 'private path')
+        with patch.object(tool, 'completed', return_value=result), self.assertRaises(ValueError):
+            tool.execute_gui_mode(Path('/private/fixture'), 'gui-state-unknown', progress)
+        self.assertEqual(progress, {'phase':'gui-state', 'mode':'gui-state-unknown',
+                                    'returncode':101, 'condition':None})

@@ -7,6 +7,10 @@ use model::{IntentRequest, Receipt, Status};
 
 mod port;
 pub(crate) use port::ResidentPort;
+mod state;
+#[cfg(not(resident_gui_fixture))]
+pub(crate) use state::ResidentLifetime;
+pub(crate) use state::ResidentState;
 #[cfg(all(target_os = "macos", resident_native_source))]
 pub(crate) mod native_session;
 
@@ -18,20 +22,20 @@ pub(crate) struct StatusRequest {
 #[tauri::command]
 pub(crate) fn get_resident_status(
     request: StatusRequest,
-    port: tauri::State<'_, ResidentPort>,
+    state: tauri::State<'_, std::sync::Arc<ResidentState>>,
 ) -> Result<Status, &'static str> {
     if request.protocol_version != 1 {
         return Err("UNSUPPORTED_RESIDENT_VERSION");
     }
-    Ok(port.current())
+    Ok(state.port().current())
 }
 #[tauri::command]
 pub(crate) async fn request_resident_intent(
     request: IntentRequest,
-    port: tauri::State<'_, ResidentPort>,
+    state: tauri::State<'_, std::sync::Arc<ResidentState>>,
 ) -> Result<Receipt, &'static str> {
     let fallback = request.clone();
-    let response = port.request(request)?;
+    let response = state.port().request(request)?;
     // Wait only on the existing owned receipt channel, never on the UI thread.
     // A disconnected sender does not apply an intent or retry its submission.
     tauri::async_runtime::spawn_blocking(move || {

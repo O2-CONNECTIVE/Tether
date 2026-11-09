@@ -110,10 +110,12 @@ fn get_status_presentation(
     Ok(output.inner().clone())
 }
 
+#[cfg(test)]
 fn commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     commands_with_runtime(builder, ShellRuntime::default())
 }
 
+#[cfg(test)]
 fn commands_with_runtime<R: tauri::Runtime>(
     builder: tauri::Builder<R>,
     runtime: ShellRuntime,
@@ -121,35 +123,36 @@ fn commands_with_runtime<R: tauri::Runtime>(
     commands_with_presentation(builder, runtime, StatusPresentation::default())
 }
 
+#[cfg(test)]
 fn commands_with_presentation<R: tauri::Runtime>(
     builder: tauri::Builder<R>,
     runtime: ShellRuntime,
     output: StatusPresentation,
 ) -> tauri::Builder<R> {
-    commands_with_ports(
+    commands_with_state(
         builder,
         runtime,
         output,
-        resident_port::ResidentPort::default(),
+        std::sync::Arc::new(resident_port::ResidentState::default()),
     )
 }
 
-// All GUI callers use the same commands. Normal startup supplies an unbound
-// port; only a future sealed bootstrap may establish a production source.
+// All GUI callers use the same managed state. A native state retains its entire
+// original session; normal startup remains unbound until release prerequisites.
 #[allow(
     dead_code,
     reason = "resident IPC awaits trusted launch and GUI composition"
 )]
-fn commands_with_ports<R: tauri::Runtime>(
+fn commands_with_state<R: tauri::Runtime>(
     builder: tauri::Builder<R>,
     runtime: ShellRuntime,
     output: StatusPresentation,
-    port: resident_port::ResidentPort,
+    state: std::sync::Arc<resident_port::ResidentState>,
 ) -> tauri::Builder<R> {
     builder
         .manage(runtime)
         .manage(output)
-        .manage(port)
+        .manage(state)
         .invoke_handler(tauri::generate_handler![
             get_shell_status,
             get_status_presentation,
@@ -158,57 +161,102 @@ fn commands_with_ports<R: tauri::Runtime>(
         ])
 }
 
+#[cfg(any(test, resident_gui_fixture))]
+fn commands_with_ports<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+    runtime: ShellRuntime,
+    output: StatusPresentation,
+    port: resident_port::ResidentPort,
+) -> tauri::Builder<R> {
+    commands_with_state(
+        builder,
+        runtime,
+        output,
+        std::sync::Arc::new(resident_port::ResidentState::fixture_port(port)),
+    )
+}
+
 #[cfg(not(resident_gui_fixture))]
 pub fn run() {
     #[cfg(any(test, feature = "startup-diagnostics"))]
     let startup = startup_diagnostics::Trace::start();
-    commands(tauri::Builder::default())
-        .setup(move |app| {
-            #[cfg(any(test, feature = "startup-diagnostics"))]
-            startup.record(startup_diagnostics::Stage::SetupEnter);
-            let builder = tauri::WebviewWindowBuilder::new(
-                app,
-                "main",
-                tauri::WebviewUrl::App("index.html".into()),
-            )
-            .title("Rescue Host（未配線 shell）")
-            .inner_size(900.0, 780.0)
-            .min_inner_size(360.0, 480.0)
-            .on_navigation(|url| {
-                if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
-                    return false;
+    // Established before build/setup. This same-state guard also runs on unwind.
+    // No normal native prepare while the real release identity is unconfigured.
+    let lifetime = resident_port::ResidentLifetime::new(resident_port::ResidentState::default());
+    let app = commands_with_state(
+        tauri::Builder::default(),
+        ShellRuntime::default(),
+        StatusPresentation::default(),
+        lifetime.state(),
+    )
+    .setup(move |app| {
+        #[cfg(any(test, feature = "startup-diagnostics"))]
+        startup.record(startup_diagnostics::Stage::SetupEnter);
+        let builder = tauri::WebviewWindowBuilder::new(
+            app,
+            "main",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("Rescue Host（未配線 shell）")
+        .inner_size(900.0, 780.0)
+        .min_inner_size(360.0, 480.0)
+        .on_navigation(|url| {
+            if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
+                return false;
+            }
+            #[cfg(windows)]
+            let bundled = url.scheme() == "http" && url.host_str() == Some("tauri.localhost");
+            #[cfg(not(windows))]
+            let bundled = url.scheme() == "tauri" && url.host_str() == Some("localhost");
+            bundled
+        });
+        #[cfg(any(test, feature = "startup-diagnostics"))]
+        let builder = {
+            let page_trace = startup.clone();
+            builder.on_page_load(move |_webview, payload| {
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    page_trace.record(startup_diagnostics::Stage::PageFinished);
                 }
-                #[cfg(windows)]
-                let bundled = url.scheme() == "http" && url.host_str() == Some("tauri.localhost");
-                #[cfg(not(windows))]
-                let bundled = url.scheme() == "tauri" && url.host_str() == Some("localhost");
-                bundled
-            });
-            #[cfg(any(test, feature = "startup-diagnostics"))]
-            let builder = {
-                let page_trace = startup.clone();
-                builder.on_page_load(move |_webview, payload| {
-                    if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                        page_trace.record(startup_diagnostics::Stage::PageFinished);
-                    }
-                })
-            };
-            #[cfg(any(test, feature = "startup-diagnostics"))]
-            startup.record(startup_diagnostics::Stage::BuildStart);
-            let result = builder.build();
-            #[cfg(any(test, feature = "startup-diagnostics"))]
-            startup.record(if result.is_ok() {
-                startup_diagnostics::Stage::BuildOk
-            } else {
-                startup_diagnostics::Stage::BuildError
-            });
-            result?;
-            #[cfg(any(test, feature = "startup-diagnostics"))]
-            startup.record(startup_diagnostics::Stage::SetupReturn);
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("failed to run Rescue Host shell");
+            })
+        };
+        #[cfg(any(test, feature = "startup-diagnostics"))]
+        startup.record(startup_diagnostics::Stage::BuildStart);
+        let result = builder.build();
+        #[cfg(any(test, feature = "startup-diagnostics"))]
+        startup.record(if result.is_ok() {
+            startup_diagnostics::Stage::BuildOk
+        } else {
+            startup_diagnostics::Stage::BuildError
+        });
+        result?;
+        #[cfg(any(test, feature = "startup-diagnostics"))]
+        startup.record(startup_diagnostics::Stage::SetupReturn);
+        Ok(())
+    })
+    .build(tauri::generate_context!())
+    .expect("failed to build Rescue Host shell");
+    #[cfg(not(target_os = "macos"))]
+    app.run(|_handle, _event| {}); // Preserve the existing non-Mac runtime path.
+    #[cfg(target_os = "macos")]
+    {
+        let exit_code = app.run_return(|handle, event| {
+            use tauri::Manager;
+            match event {
+                tauri::RunEvent::ExitRequested { api, .. }
+                    if !handle
+                        .state::<std::sync::Arc<resident_port::ResidentState>>()
+                        .request_exit() =>
+                {
+                    api.prevent_exit()
+                }
+                _ => {}
+            }
+        });
+        // run_return avoids process::exit bypassing the outer guard. An unexpected
+        // return (including a nonzero code) still needs this original finish proof.
+        drop(lifetime);
+        std::process::exit(exit_code);
+    }
 }
 
 #[cfg(test)]
