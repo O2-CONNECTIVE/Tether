@@ -8,7 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test tests/controller.test.ts tests/native-contract.test.ts tests/document-contract.test.ts tests/session-observation.test.ts tests/host-status.test.ts tests/windows-observation-adapter.test.ts tests/app-controller.test.ts tests/resident-controller.test.ts tests/resident-gui-driver.test.ts",
+    "test": "node --test tests/controller.test.ts tests/native-contract.test.ts tests/document-contract.test.ts tests/session-observation.test.ts tests/host-status.test.ts tests/windows-observation-adapter.test.ts tests/app-controller.test.ts tests/resident-controller.test.ts tests/resident-gui-driver.test.ts tests/resident-stale-contract.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "knip": "knip",
