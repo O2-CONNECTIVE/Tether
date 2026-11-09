@@ -96,6 +96,9 @@ func TestCIActualProducerConnection(t *testing.T) {
 	}, 10*time.Second); err != nil {
 		diag.fail(t, ciChildFailure(child, err))
 	}
+	if err = child.requestStatus(); err != nil {
+		diag.fail(t, ciChildFailure(child, err))
+	}
 	diag.at("on-submit")
 	on, err := child.request("on")
 	if err != nil {

@@ -23,7 +23,7 @@ class PreparationTests(unittest.TestCase):
             source.write_bytes(raw)
             # Copy source bytes only for the two independently pinned diagnostic seams.
             # This regression executes Python generator logic, never Go/native code.
-            for relative in ('internal/macagent/process.go', 'internal/agentexec/run.go'):
+            for relative in ('internal/macagent/process.go', 'internal/agentexec/run.go', 'cmd/tether-host/entry.go'):
                 target = backend / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes((HERE.parent / 'backend' / relative).read_bytes())
@@ -52,6 +52,34 @@ class PreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, 'Virtual fixture target already exists'):
                 execute()
             self.assertEqual(target.read_text(), 'must not overwrite\n')
+
+    def test_cli_overlay_uses_same_main_and_rejects_changed_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            backend = root / 'backend'
+            for relative in ('internal/residentpipe/run_darwin.go', 'internal/macagent/process.go',
+                             'internal/agentexec/run.go', 'cmd/tether-host/main.go', 'cmd/tether-host/entry.go', 'go.mod'):
+                target = backend / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((HERE.parent / 'backend' / relative).read_bytes())
+            script = root / 'prepare_overlay.py'
+            script.write_bytes((HERE / 'prepare_overlay.py').read_bytes())
+            fixtures = root / 'fixtures'
+            fixtures.mkdir()
+            for source in (HERE / 'fixtures').glob('*.go'):
+                (fixtures / source.name).write_bytes(source.read_bytes())
+            def execute():
+                with patch('sys.argv', [str(script), '--backend', str(backend)]), contextlib.redirect_stdout(io.StringIO()):
+                    runpy.run_path(str(script), run_name='__main__')
+            execute()
+            mapping = json.loads((root / 'OVERLAY.json').read_text())['Replace']
+            self.assertNotIn(str(backend / 'cmd/tether-host/main.go'), mapping)
+            self.assertEqual(mapping[str(backend / 'cmd/tether-host/entry.go')], str(fixtures / 'ci_cli_entry.go'))
+            self.assertNotIn(str(backend / 'internal/residentpipe/foreground.go'), mapping)
+            self.assertNotIn(str(backend / 'internal/residentpipe/foreground_darwin.go'), mapping)
+            (backend / 'cmd/tether-host/entry.go').write_text('// altered composition\n')
+            with self.assertRaisesRegex(SystemExit, 'Production CLI entry changed'):
+                execute()
 
     def test_keeper_refuses_mismatch_and_stale_without_spawning(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -8,6 +8,13 @@ PythonとTauriのworkflowは独立しています。
 
 各stepは`python scripts/go_ci.py prepare / build / test / race`の対応するコマンドを呼びます。
 
+前景host CLIでは `cmd/tether-host` のmain.go / entry.goと、residentpipeの
+共通foreground.go、Darwin/cgoだけのforeground_darwin.goを限定登録します。
+既存JSONLと同じowner loopを使い、通常entryは未構成拒否です。この追加時点の
+inventoryは48 package、Linux365 / Darwin-cgo370 / Darwin-nocgo367 / Windows396 fileです。
+実producerは[専用CI](producer-connection-ci.md)のJSON/CLI別laneで検証し、
+通常buildやparser試験を実接続受入へ読み替えません。
+
 resident source準備の`internal/residentwork`は`intent.go`の1fileだけを製品inventoryへ追加します。
 純粋なtranscript形式で、通常caller・署名検証・認証・grant・通信を有効化しません。
 続く`internal/workerowner`は`owner.go`・`run_once.go`・`wait_source.go`の3fileを限定登録します。
