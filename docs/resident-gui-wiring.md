@@ -12,6 +12,8 @@ React の resident panel は既存の `get_resident_status` と `request_residen
 
 `mac-resident-gui.yml` は固定 source の React を実 WebView で表示し、実 Tauri IPC、既存 BoundDuplex、匿名の synthetic pipe producer、同じ StandbyOwner を通して ON → OFF → Close を確認します。invoke の JavaScript mock は使いません。producer は固定した二つの intent と revision を検査し、元 stdin の EOF 後だけ closed を返します。同じ owner の I/O・Wait・outer monitor の回収まで確認できた場合だけ成功です。失敗や unknown は保持し、強制終了を cleanup 成功と扱いません。
 
+driver の段階は専用 CI context の local/main にだけ許可した event emit で固定 enum として受信します。listener は WebView 作成前に登録し、順序違い・不正・重複は失敗を保持します。この event は観測であり、元 pipe と owner の証明を置き換えません。通常 context の権限は変更しません。
+
 この composition は `resident_gui_fixture` compile cfg と専用 example に限定し、通常入口から選択できません。実行は disposable hosted Mac ARM64 / macOS 27 / Xcode 27.1 のみです。source と所有権の独立レビューを済ませてから CI を実行します。
 
 ## 確認しない境界

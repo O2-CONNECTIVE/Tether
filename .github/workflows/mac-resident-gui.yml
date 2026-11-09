@@ -48,6 +48,7 @@ jobs:
           python3 -m unittest discover -s ui/tauri/src-tauri/tests/resident-gui -p test_producer.py -v
           cargo +1.99.1 test --lib --locked --manifest-path ui/tauri/src-tauri/Cargo.toml resident_port::duplex::tracking_tests
           cargo +1.99.1 fetch --locked --manifest-path ui/tauri/src-tauri/Cargo.toml
+          RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 test --lib --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml resident_gui_fixture::tests
           RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 build --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml --features custom-protocol --example resident_gui_ci
       - name: Run real GUI through original owner keeper
         run: |
@@ -65,7 +66,7 @@ jobs:
           observer_status=0
           python3 ci-producer/supervise_ci.py observer --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT" || observer_status=$?
           # Emit only fixed fixture stage names, never raw logs/URLs/content.
-          grep -E '^GUI_FIXTURE_EVENT=(producer-started|source-bound|navigation-denied|navigation-pass|navigation-fail|webview-created|app-built|monitor-exit-request|event-loop-start|exit-requested|exit-held|event-loop-returned|owner-joined)$' "$run_dir/owned.log" || true
+          grep -E '^GUI_FIXTURE_EVENT=(producer-started|source-bound|navigation-denied|page-started|page-finished|initializer-started|on-applied|off-applied|driver-passed|driver-failed|webview-created|app-built|monitor-exit-request|event-loop-start|exit-requested|exit-held|event-loop-returned|owner-joined)$' "$run_dir/owned.log" || true
           test "$observer_status" -eq 0
           wait "$keeper"
           test "$(shasum -a 256 "$binary" | awk '{print $1}')" = "$CI_GUI_BINARY_SHA256"

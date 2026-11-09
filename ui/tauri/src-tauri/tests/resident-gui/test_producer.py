@@ -9,6 +9,19 @@ frame = source['status_frame']
 
 
 class HeartbeatContract(unittest.TestCase):
+    def test_emit_permission_is_only_in_explicit_fixture_context(self):
+        root = Path(__file__).parents[2]
+        normal = json.loads((root / 'tauri.conf.json').read_text())
+        self.assertEqual(normal['app']['security']['capabilities'], ['shell-local'])
+        shell = json.loads((root / 'capabilities/shell-local.json').read_text())
+        self.assertNotIn('core:event:allow-emit', shell['permissions'])
+        fixture = json.loads(Path(__file__).with_name('tauri.conf.json').read_text())
+        capability, = fixture['app']['security']['capabilities']
+        self.assertEqual(capability['windows'], ['main'])
+        self.assertTrue(capability['local'])
+        self.assertNotIn('remote', capability)
+        self.assertEqual(capability['permissions'], ['allow-shell-status', 'allow-resident-port', 'core:event:allow-emit'])
+
     def test_stale_request_is_not_accepted(self):
         self.assertEqual(source['disposition']({'expectedRevision': 1}, 2), 'stale')
         self.assertEqual(source['disposition']({'expectedRevision': 2}, 2), 'accepted')

@@ -9,10 +9,32 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::Listener;
 
 const TEST: &str = "TestCIResidentGUIWiring";
 fn event(stage: &'static str) {
     eprintln!("GUI_FIXTURE_EVENT={stage}");
+}
+fn advance(state: &mut u8, payload: &str) -> &'static str {
+    let step = if payload.len() <= 64 {
+        match payload {
+            "\"initializer-started\"" => Some((0, 1, "initializer-started")),
+            "\"on-applied\"" => Some((1, 2, "on-applied")),
+            "\"off-applied\"" => Some((2, 3, "off-applied")),
+            "\"passed\"" => Some((3, 4, "driver-passed")),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some((previous, next, label)) = step {
+        if *state == previous {
+            *state = next;
+            return label;
+        }
+    }
+    *state = 5;
+    "driver-failed"
 }
 fn hex(value: &str, count: usize) -> bool {
     value.len() == count
@@ -120,7 +142,25 @@ pub(super) fn run() {
     );
     let app = builder
         .setup(move |app| {
-            let status = observed.clone();
+            let sequence = std::sync::Mutex::new(0_u8);
+            let result = observed.clone();
+            // Only dedicated CI context local/main can emit. Events are not
+            // authority: same pipe ON/OFF and original owner proof remain required.
+            app.listen("resident-gui-fixture", move |message| {
+                let Ok(mut state) = sequence.lock() else {
+                    result.store(2, Ordering::SeqCst);
+                    event("driver-failed");
+                    return;
+                };
+                event(advance(&mut state, message.payload()));
+                if *state == 4 {
+                    result.store(1, Ordering::SeqCst);
+                }
+                if *state == 5 {
+                    result.store(2, Ordering::SeqCst);
+                }
+            });
+
             let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -140,27 +180,20 @@ pub(super) fn run() {
                     event("navigation-denied");
                     return false;
                 }
-                match url.path() {
-                    "/__resident_fixture_pass" => {
-                        event("navigation-pass");
-                        status.store(1, Ordering::SeqCst);
-                        false
-                    }
-                    "/__resident_fixture_fail" => {
-                        event("navigation-fail");
-                        status.store(2, Ordering::SeqCst);
-                        false
-                    }
-                    "/" | "/index.html" => true,
-                    _ => false,
-                }
+                matches!(url.path(), "/" | "/index.html")
+            })
+            .on_page_load(|_window, payload| match payload.event() {
+                tauri::webview::PageLoadEvent::Started => event("page-started"),
+                tauri::webview::PageLoadEvent::Finished => event("page-finished"),
             })
             .build()?;
             window.show()?;
             event("webview-created");
             Ok(())
         })
-        .build(tauri::generate_context!());
+        .build(tauri::generate_context!(
+            "tests/resident-gui/tauri.conf.json"
+        ));
     let app = match app {
         Ok(app) => app,
         Err(_) => {
@@ -216,5 +249,34 @@ pub(super) fn run() {
     if !passed {
         std::hint::black_box(&owner);
         retain();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::advance;
+    #[test]
+    fn fixture_verdict_requires_order_and_rejects_duplicate_or_oversized_events() {
+        let events = [
+            "\"initializer-started\"",
+            "\"on-applied\"",
+            "\"off-applied\"",
+            "\"passed\"",
+        ];
+        let mut state = 0;
+        for message in events {
+            advance(&mut state, message);
+        }
+        assert_eq!(state, 4);
+        advance(&mut state, events[3]);
+        assert_eq!(state, 5);
+        for bad in ["\"passed\"", "\"failed\"", "{}", &"x".repeat(65)] {
+            let mut state = 0;
+            advance(&mut state, bad);
+            for message in events {
+                advance(&mut state, message);
+            }
+            assert_eq!(state, 5);
+        }
     }
 }

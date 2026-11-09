@@ -1,7 +1,18 @@
 (async () => {
+  const emit = async value => {
+    const deadline = performance.now() + 20000;
+    while (performance.now() < deadline) {
+      if (typeof window.__TAURI__?.event?.emit === 'function') {
+        await window.__TAURI__.event.emit('resident-gui-fixture', value); return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw new Error('fixture bridge missing');
+  };
   const phase = async (action, target) => {
     let attempts = 0, sentId = 0, sentRevision = 0;
-    for (let i = 0; i < 400; i++) {
+    const deadline = performance.now() + 20000;
+    while (performance.now() < deadline) {
       if (document.querySelector(target)?.disabled === false) return;
       const panel = document.querySelector('#resident-panel');
       const button = document.querySelector(action);
@@ -24,10 +35,13 @@
     throw new Error('fixture condition missing');
   };
   try {
+    await emit('initializer-started');
     await phase('#resident-on', '#resident-off');
+    await emit('on-applied');
     await phase('#resident-off', '#resident-on');
-    location.href = 'tauri://localhost/__resident_fixture_pass';
+    await emit('off-applied');
+    await emit('passed');
   } catch {
-    location.href = 'tauri://localhost/__resident_fixture_fail';
+    await emit('failed').catch(() => {});
   }
 })();
