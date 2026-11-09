@@ -515,5 +515,66 @@
       "unavailable"
     ]
   },
-  "native_semantics": "Optional exact-command correlated first failed original cleanup-call and final original cleanup-call cached snapshots. Not fresh observations, cleanup proof, or authority to retry. Missing/invalid/drop means unavailable. Private command identity never published."
+  "native_semantics": "Optional exact-command correlated first failed original cleanup-call and final original cleanup-call cached snapshots. Not fresh observations, cleanup proof, or authority to retry. Missing/invalid/drop means unavailable. Private command identity never published.",
+  "producer_fields": {
+    "producer_request_intent": [
+      "unavailable",
+      "on",
+      "off"
+    ],
+    "producer_receipt": [
+      "unavailable",
+      "missing",
+      "accepted",
+      "rejected",
+      "stale",
+      "unknown",
+      "mismatch"
+    ],
+    "producer_snapshot": [
+      "unavailable",
+      "missing",
+      "within-window",
+      "expired",
+      "observation-unknown"
+    ],
+    "producer_standby": [
+      "unavailable",
+      "off",
+      "on",
+      "stopping",
+      "unknown"
+    ],
+    "producer_registration": [
+      "unavailable",
+      "disconnected",
+      "connecting",
+      "authenticated",
+      "unknown"
+    ],
+    "producer_work": [
+      "unavailable",
+      "idle",
+      "preparing",
+      "running",
+      "stopping",
+      "unknown"
+    ],
+    "producer_cleanup": [
+      "unavailable",
+      "confirmed",
+      "pending",
+      "unknown"
+    ],
+    "producer_transition": [
+      "unavailable",
+      "missing",
+      "other-request",
+      "pending",
+      "applied",
+      "rejected",
+      "unknown"
+    ]
+  },
+  "producer_semantics": "Optional failure-only observation of the current fixture request and latest cached producer snapshot under its existing lock. Receipt and transition correlate privately to that request ID and intent; identifiers and revisions are never published. within-window means only the existing 3-second receive-age bound, not fresh producer state, cleanup proof or a history of applied transitions. expired/observation-unknown retains only last observed fixed state enums. A missing request or malformed/unlisted value is unavailable. Existing markers without this group remain valid. No requests, retries, signals or cleanup are added."
 }

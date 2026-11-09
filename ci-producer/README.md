@@ -99,6 +99,34 @@ They are separate actual socket tests, not producer
 execution evidence. They must reject wrong CA/hostname for both transport
 bindings and preserve normal TLS validation and native owned dial tracking.
 
+## Failure-only producer observation diagnostics
+
+The failed marker also copies the current fixture request's receipt and the
+latest cached producer snapshot under the existing reader lock. Only fixed
+`producer_*` enums are published: request intent, receipt, snapshot age/status,
+standby, registration, work, cleanup and latest transition. The request ID and
+intent are compared privately for both receipt and transition; IDs, revisions,
+source times and raw frames never enter public output. A new submission clears
+the previous request correlation before any operation that can fail.
+
+`missing`, `accepted`, `rejected`, `stale`, `unknown` and `mismatch` receipts
+separate what was observed for that request. A matching accepted receipt with a
+latest `pending`, `missing` or `other-request` transition does not prove that no
+applied transition ever existed. `within-window` means only that the latest
+receive age meets the existing three-second bound. `expired` and
+`observation-unknown` still retain last observed fixed state enums; none are
+fresh producer state or cleanup proof, even when cleanup says `confirmed`.
+Missing producer/request/snapshot evidence stays unavailable as appropriate.
+Old markers may omit the entire group; public projection then emits unavailable.
+A partial or malformed group also makes the whole public group unavailable.
+The synthetic validator accepts the group only when complete and allowlisted.
+
+This adds no producer query, retry, timeout change, signal or cleanup action.
+The original 45-second applied-transition wait and failed/unknown owner retention
+remain unchanged. Pure in-memory cases run within the existing exact-selected
+`TestCIProducerObservationValidation`. The workflow output boundary is tested
+separately with synthetic markers; it never starts a producer or native work.
+
 ## Compiler-only native cleanup diagnostics
 
 The generated process.go overlay preserves original return expressions and all
