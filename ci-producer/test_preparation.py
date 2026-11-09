@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 class PreparationTests(unittest.TestCase):
     def test_generator_absent_files_and_targets_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()  # Match generator canonical paths, including macOS /var.
             backend = root / 'backend'
             source = backend / 'internal/residentpipe/run_darwin.go'
             source.parent.mkdir(parents=True)
@@ -55,7 +55,7 @@ class PreparationTests(unittest.TestCase):
 
     def test_cli_overlay_uses_same_main_and_rejects_changed_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()  # Match generator canonical paths, including macOS /var.
             backend = root / 'backend'
             for relative in ('internal/residentpipe/run_darwin.go', 'internal/macagent/process.go',
                              'internal/agentexec/run.go', 'cmd/tether-host/main.go', 'cmd/tether-host/entry.go', 'cmd/tether-work/main.go', 'cmd/tether-work/entry.go', 'go.mod'):
@@ -95,7 +95,7 @@ class PreparationTests(unittest.TestCase):
 
     def test_keeper_refuses_mismatch_and_stale_without_spawning(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()  # Match generator canonical paths, including macOS /var.
             report = root / 'result.json'
             argv = ['supervise_ci.py', 'keeper', '--report', str(report), '--invocation', '1'*32, '--test', str(root/'test'), '--log', str(root/'log')]
             env = {'CI_ACTUAL_PRODUCER':'1','RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'macOS','RUNNER_ARCH':'ARM64','CI_PRODUCER_INVOCATION':'1'*32,'CI_PRODUCER_RESULT':str(root/'wrong')}
