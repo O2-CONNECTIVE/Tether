@@ -87,6 +87,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mac-agent': {'main.go', 'config.go', 'status.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mcp': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-host': {'main.go', 'entry.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/resident-pipe': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent': {'runtime.go', 'process.go', 'cleanup_diagnostic.go', 'groupobserver.go', 'start_diagnostic.go', 'terminal_disposition.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch': {'approval.go', 'resident_policy.go', 'resident_source.go', 'resident_wire.go', 'resident_worker.go', 'startup_policy.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport': {'protocol.go', 'stream.go', 'gateway.go', 'mac.go', 'resident_gateway.go', 'resident_handoff.go', 'resident_intent.go', 'resident_io.go', 'resident_mac.go', 'resident_protocol.go', 'resident_receiver.go', 'resident_rotation.go', 'resident_work.go'},
@@ -221,6 +222,8 @@ def product_files_for(goos, cgo_enabled=True):
             or goos not in GUEST_ACCOUNT_FILES or goos not in MAC_AGENT_FILES):
         raise ValueError('Unsupported Go target for production inventory')
     expected = {package: set(files) for package, files in PRODUCT_FILES.items()}
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/cmd/resident-pipe'].add(
+        'entry_darwin.go' if goos == 'darwin' and cgo_enabled else 'entry_other.go')
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/fileread'].update(
         {'selected_darwin.go', 'selected_observation_darwin.go'} if goos == 'darwin' else {'selected_other.go'})
     if goos == 'darwin' and cgo_enabled:

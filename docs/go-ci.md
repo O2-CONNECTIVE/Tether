@@ -8,6 +8,14 @@ PythonとTauriのworkflowは独立しています。
 
 各stepは`python scripts/go_ci.py prepare / build / test / race`の対応するコマンドを呼びます。
 
+sealed producer の `cmd/resident-pipe` は共通 main.go と Darwin/cgo の entry_darwin.go、
+その他 target の entry_other.go を厳密選択します。追加後の実 inventory は52 package、
+Linux374 / Darwin-cgo379 / Darwin-nocgo376 / Windows405 production fileです。
+任意 argv は exit 1、対応 build のゼロ引数だけが固定 enrollment を選びます。
+この entry の追加は署名・配置・native verified launch・配布を証明せず、通常 CLI / Tauri は未接続です。
+command unit は純粋な argv 判定と拒否だけを実行し、Darwin の実 account / policy / key を読みません。
+[sealed producer entry](mac-sealed-producer-entry.md) を参照してください。
+
 前景host CLIでは `cmd/tether-host` のmain.go / entry.goと、residentpipeの
 共通foreground.go、Darwin/cgoだけのforeground_darwin.goを限定登録します。
 既存JSONLと同じowner loopを使い、通常entryは未構成拒否です。この追加時点の

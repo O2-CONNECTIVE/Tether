@@ -33,9 +33,10 @@ func runInput(lifetime context.Context, protectedPolicy string, dialect inputDia
 	return runBootstrap(lifetime, explicitPolicyBootstrap, protectedPolicy, dialect)
 }
 
-// The sealed composition has no policy/path/credential input and is not called
-// by a normal executable yet. Image trust and native ownership remain separate.
-func runEnrolled() error {
+// RunEnrolled is the closed producer composition. Only the dedicated
+// resident-pipe executable calls it; ordinary CLI and Tauri startup stay unbound.
+// Image trust and native ownership must be established by the future launcher.
+func RunEnrolled() error {
 	return runBootstrap(context.Background(), enrolledBootstrap, "", jsonInput)
 }
 

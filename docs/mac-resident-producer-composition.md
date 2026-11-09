@@ -1,5 +1,8 @@
 # Standby と owned pipe の source 組成
 
+> 以下は最初の source 組成時点の記録です。現在は[固定 enrollment の producer entry](mac-sealed-producer-entry.md)が
+> ゼロ引数の専用 command へ接続しています。旧 `--protected-policy` entry は移さず、通常 CLI / Tauri と配布 gate は閉鎖を維持します。
+
 #210 と先行 #200〜#207 に依存する source 準備です。#200 の Windows 阻害、未統合 stack の CI 未実行、通常 Mac の未接続は解除しません。
 
 ## 具体的な所有と入出力
