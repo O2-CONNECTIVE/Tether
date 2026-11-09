@@ -22,12 +22,20 @@ driver の段階は専用 CI context の local/main にだけ許可した event 
 
 ## 検証版の識別と配布
 
-専用 CI window は「カレントの検証版（合成CI）」と表示します。allowlisted JSON の検証記録には source commit、UTC build 記録時刻、実行 binary SHA-256、確認範囲を含めます。CI は実行後にも binary hash を照合します。正式版の semver を変更せず、.app の生成・upload・Release 公開は行いません。この CI だけではダウンロード可能な接続検証版は提供されません。
+専用 CI window は「カレントの検証版（合成CI）」と表示します。allowlisted JSON の検証記録には source commit、UTC build 記録時刻、実行 binary SHA-256、確認範囲を含めます。CI は実行後にも binary hash を照合します。正式版の semver を変更せず、CI 内だけの一時 .app に同じ binary を配置します。upload・Release 公開は行いません。この CI だけではダウンロード可能な接続検証版は提供されません。
 
 ## 診断の読み方
 
 固定イベントで、同一 binary の `__info_plist` 区画有無、同一 process の CoreFoundation main bundle / identifier の有無、実行ファイルの `.app` 内配置、同じ generated Context の index asset、許可された root/index navigation、index response の HTTP status / HTML MIME / 非空、document commit / finish、driver 開始を区別します。識別子・path・URL・header値・body は出力しません。asset response の内容や header は変更しません。bundle の存在・配置は署名・真正性・WebView動作保証ではありません。
 
-`page-started` は固定 wry の macOS delegate の didCommitNavigation 通知です。これが無いだけで provisional navigation request 自体が無かったとは断定しません。観測は原因の切分けであり、app wrapper、activation policy、セキュリティ設定、所有権や期限の変更ではありません。
+`page-started` は固定 wry の macOS delegate の didCommitNavigation 通知です。これが無いだけで provisional navigation request 自体が無かったとは断定しません。観測は原因の切分けです。activation policy、セキュリティ設定、所有権や期限は変更しません。
 
 固定 Tauri の resource-response callback は asset lookup 成功後に呼ばれます。callback の欠落だけでは request 自体の不在と判断せず、embedded-index / navigation-root の観測と合わせます。otool 失敗は固定 unavailable を返して停止し、absent に読み替えません。
+
+## 同一 binary の一時 bundle 比較
+
+裸 binary の診断では embedded index は存在しましたが、埋込 plist / bundle identifier / .app 内配置はありませんでした。これだけで停止原因とは判断しません。次の比較は同じ build binary の SHA-256 を保った実コピーを、新規 run directory 内の排他的な `TetherCurrentGUIFixture.app/Contents/MacOS/resident_gui_ci` に置く CI 専用手順です。固定 Info.plist は現在の専用 Context の name / identifier / version と一致し、表示は「カレントの検証版（合成CI）」です。必須 version metadata は既存の 0.1.0 を使い、新しい release version を切りません。
+
+helper は regular/no-follow 入力・512MiB 上限・固定 plist・起動前後の元/コピー hash を確認し、既存 output を上書き・再利用しません。元 keeper がコピー先の実ファイルを直接 Popen/Wait します。open / LaunchServices / shell launcher / signing / strip / quarantine / activation / entitlements / install / upload は行いません。失敗や unknown で再試行・fallback・kill をせず、元 owner と同じ60秒/180秒の監視境界を保ちます。
+
+bundle identifier の存在は比較条件の成立であり、成功・署名・製品接続の証明ではありません。元 pipe の ON/OFF、同じ owner の Close/IO/Wait と driver 判定が全て揃う必要があります。過去の裸 binary と別 VM での比較なので、結果だけで単独因果を確定しません。

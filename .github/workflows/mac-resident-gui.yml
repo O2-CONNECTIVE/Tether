@@ -45,7 +45,7 @@ jobs:
         run: |
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --no-self-update
           cargo +1.99.1 fmt --manifest-path ui/tauri/src-tauri/Cargo.toml --check
-          python3 -m unittest discover -s ui/tauri/src-tauri/tests/resident-gui -p test_producer.py -v
+          python3 -m unittest discover -s ui/tauri/src-tauri/tests/resident-gui -p 'test_*.py' -v
           cargo +1.99.1 test --lib --locked --manifest-path ui/tauri/src-tauri/Cargo.toml resident_port::duplex::tracking_tests
           cargo +1.99.1 fetch --locked --manifest-path ui/tauri/src-tauri/Cargo.toml
           RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 test --lib --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml resident_gui_
@@ -64,6 +64,9 @@ jobs:
           printf '%s\n' "$plist_sections" | python3 -c 'import sys; print("GUI_FIXTURE_EVENT=binary-plist-present" if any(line.split() == ["sectname", "__info_plist"] for line in sys.stdin) else "GUI_FIXTURE_EVENT=binary-plist-absent")'
           export CI_GUI_BINARY_SHA256="$(shasum -a 256 "$binary" | awk '{print $1}')"
           run_dir=$(mktemp -d "$RUNNER_TEMP/resident-gui.XXXXXX")
+          source_binary="$binary"
+          python3 ui/tauri/src-tauri/tests/resident-gui/bundle.py create "$source_binary" "$run_dir"
+          binary="$run_dir/TetherCurrentGUIFixture.app/Contents/MacOS/resident_gui_ci"
           export CI_PRODUCER_RESULT="$run_dir/result.json"
           export CI_PRODUCER_INVOCATION="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
           python3 ci-producer/supervise_ci.py keeper --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT" --test "$binary" --log "$run_dir/owned.log" &
@@ -72,9 +75,11 @@ jobs:
           python3 ci-producer/supervise_ci.py observer --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT" || observer_status=$?
           # Emit only fixed fixture stage names, never raw logs/URLs/content.
           grep -E '^GUI_FIXTURE_EVENT=(main-bundle-present|main-bundle-absent|main-bundle-identifier-present|main-bundle-identifier-absent|executable-in-app|executable-not-in-app|executable-layout-unavailable|embedded-index-present|embedded-index-empty|embedded-index-missing|navigation-root-allowed|index-response-error|index-response-empty|index-response-html|index-response-nonhtml|producer-started|source-bound|navigation-denied|page-started|page-finished|initializer-started|on-applied|off-applied|driver-passed|driver-failed|webview-created|app-built|monitor-exit-request|event-loop-start|exit-requested|exit-held|event-loop-returned|owner-joined)$' "$run_dir/owned.log" || true
+          # Read-only verification even on unknown; never replace or signal owner.
+          python3 ui/tauri/src-tauri/tests/resident-gui/bundle.py verify "$source_binary" "$run_dir"
           test "$observer_status" -eq 0
           wait "$keeper"
-          test "$(shasum -a 256 "$binary" | awk '{print $1}')" = "$CI_GUI_BINARY_SHA256"
+          python3 ui/tauri/src-tauri/tests/resident-gui/bundle.py verify "$source_binary" "$run_dir"
           python3 - <<'PY'
           import json, os
           from pathlib import Path

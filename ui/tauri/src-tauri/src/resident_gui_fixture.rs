@@ -189,9 +189,11 @@ pub(super) fn run() {
                     return false;
                 }
                 let allowed = matches!(url.path(), "/" | "/index.html");
-                if allowed {
-                    event("navigation-root-allowed");
-                }
+                event(if allowed {
+                    "navigation-root-allowed"
+                } else {
+                    "navigation-denied"
+                });
                 allowed
             })
             .on_web_resource_request(|request, response| {
