@@ -73,6 +73,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		stage, code := diag.fields()
 		outcome := map[string]any{"stage": stage, "failure_code": code, "outcome": "failed-unknown", "cleanup": "unconfirmed", "test": t.Name(), "invocation": invocation, "helper_sha256": expected, "fixture_retained": true}
 		diag.annotate(outcome)
+		diag.annotateProducer(outcome, child, time.Now())
 		ciAnnotateNative(outcome, child, diag.commandID)
 		data, _ := json.Marshal(outcome)
 		if e := ciWriteExclusive(report, append(data, '\n')); e != nil {
@@ -102,7 +103,9 @@ func TestCIActualProducerConnection(t *testing.T) {
 		diag.fail(t, ciChildFailure(child, err))
 	}
 	diag.at("on-submit")
+	diag.beginProducerRequest("on")
 	on, err := child.request("on")
+	diag.producerRequestID = on
 	if err != nil {
 		diag.fail(t, ciChildFailure(child, err))
 	}
@@ -220,7 +223,9 @@ func TestCIActualProducerConnection(t *testing.T) {
 		if work.finish() != nil { diag.fail(t, "work-cli-join") }
 	}
 	diag.at("off-submit")
+	diag.beginProducerRequest("off")
 	off, err := child.request("off")
+	diag.producerRequestID = off
 	if err != nil {
 		diag.fail(t, ciChildFailure(child, err))
 	}
