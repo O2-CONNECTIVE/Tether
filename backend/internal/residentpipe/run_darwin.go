@@ -30,7 +30,48 @@ func run(protectedPolicy string) error {
 // Both input adapters share this exact lifetime and retained owner. A dialect
 // changes only decoding; it cannot choose enrollment, a key or authentication.
 func runInput(lifetime context.Context, protectedPolicy string, dialect inputDialect) error {
-	if lifetime == nil || lifetime.Err() != nil || (dialect != jsonInput && dialect != foregroundInput) || !filepath.IsAbs(protectedPolicy) {
+	return runBootstrap(lifetime, explicitPolicyBootstrap, protectedPolicy, dialect)
+}
+
+// The sealed composition has no policy/path/credential input and is not called
+// by a normal executable yet. Image trust and native ownership remain separate.
+func runEnrolled() error {
+	return runBootstrap(context.Background(), enrolledBootstrap, "", jsonInput)
+}
+
+type bootstrapKind uint8
+
+const (
+	explicitPolicyBootstrap bootstrapKind = iota + 1
+	enrolledBootstrap
+)
+
+func (kind bootstrapKind) valid(protectedPolicy string) bool {
+	switch kind {
+	case explicitPolicyBootstrap:
+		return filepath.IsAbs(protectedPolicy)
+	case enrolledBootstrap:
+		return protectedPolicy == ""
+	default:
+		return false
+	}
+}
+
+func loadBootstrap(ctx context.Context, kind bootstrapKind, protectedPolicy string) (*residentmac.Standby, error) {
+	if !kind.valid(protectedPolicy) || ctx == nil || ctx.Err() != nil {
+		return nil, ErrProtocol
+	}
+	if _, finite := ctx.Deadline(); !finite {
+		return nil, ErrProtocol
+	}
+	if kind == enrolledBootstrap {
+		return residentmac.LoadEnrolledStandby(ctx)
+	}
+	return residentmac.LoadStandby(ctx, protectedPolicy)
+}
+
+func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy string, dialect inputDialect) error {
+	if lifetime == nil || lifetime.Err() != nil || (dialect != jsonInput && dialect != foregroundInput) || !kind.valid(protectedPolicy) {
 		return ErrProtocol
 	}
 	pipes, e := capturePipes()
@@ -39,7 +80,7 @@ func runInput(lifetime context.Context, protectedPolicy string, dialect inputDia
 	}
 	defer pipes.close()
 	ctx, cancel := context.WithTimeout(lifetime, LoadBudget)
-	owner, e := residentmac.LoadStandby(ctx, protectedPolicy)
+	owner, e := loadBootstrap(ctx, kind, protectedPolicy)
 	cancel()
 	if e != nil {
 		if maclaunch.IsStartupPolicyRejected(e) {
@@ -50,7 +91,12 @@ func runInput(lifetime context.Context, protectedPolicy string, dialect inputDia
 		}
 		return e
 	}
-	e = safeServeInput(lifetime, owner, pipes, dialect)
+	return runOwnedInput(lifetime, owner, pipes, dialect)
+}
+
+// Both bootstraps transfer the same loaded owner here exactly once.
+func runOwnedInput(lifetime context.Context, owner *residentmac.Standby, pipes *ownedPipes, dialect inputDialect) error {
+	e := safeServeInput(lifetime, owner, pipes, dialect)
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), CloseBudget)
 	closeErr := closeOnce(owner, closeCtx)
 	closeCancel() // exactly once

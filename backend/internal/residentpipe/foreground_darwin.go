@@ -16,3 +16,11 @@ func runForeground(protectedPolicy string) error {
 	defer stop() // unknown retention keeps this same signal owner alive as well
 	return runInput(ctx, protectedPolicy, foregroundInput)
 }
+
+// Fixed enrollment variant for a future trusted foreground composition. It is
+// deliberately not registered in the ordinary CLI or selected by a flag.
+func runEnrolledForeground() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	return runBootstrap(ctx, enrolledBootstrap, "", foregroundInput)
+}
