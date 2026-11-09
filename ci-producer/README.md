@@ -167,3 +167,40 @@ TestCINativeCleanupCapture, TestCINativeCleanupPanicPreserved (macagent), and
 TestCINativeEvidenceValidation (residentpipe). Original connection success
 assertions, fixed shell command, native ownership rules and unknown retention
 remain unchanged. All generated overlays and binaries remain excluded.
+
+## Foreground work dictionary coverage
+
+The CLI adapter also builds `tether-work` with only its pinned unavailable
+composition leaf replaced. Its normal main, foreground parser, session client
+and dictionary decoders remain unchanged. On the same actual work child it
+checks `list`, `get_execution` and `read_output`, in addition to the existing
+start/result/cancel/release operations:
+
+- An empty list and explicit unknown-ID read failures before any work.
+- Running metadata and a seven-byte output page after the real first output,
+  before the existing cancellation request. The original five-second command
+  is unchanged; failure to observe this state fails the lane.
+- Finished natural and canceled metadata, finite explicit output pages, an
+  empty final page, cursor-ahead refusal, identical repeated reads, and the
+  unchanged retained full result before release.
+- One-entry list pages across both executions, including released tombstones;
+  released metadata remains readable while output returns `result_released`.
+- One private HTTP session for every work request and its single DELETE.
+  The observer does not consume request bodies or wrap responses. It rejects
+  reinitialization, SID replacement and any request after DELETE. Commands
+  queued after foreground close produce no response or additional request.
+
+The success gate requires a separate dictionary marker for the CLI lane and
+rejects that marker in the JSON-only lane. The marker is written only after
+all existing producer OFF, original Wait/EOF, gateway close and fixture
+removal checks. Pure sequence and synthetic workflow-marker tests validate
+those evidence gates but are not native execution proof. Failure retains the
+same original owners; no retries, signals, new cleanup path or source-pin
+changes are added.
+
+This is regression coverage for the existing dictionary implementation. It
+uses one fixed command and synthetic CI credentials on an isolated hosted
+Mac. It does not exercise dot's real account/session, production credentials,
+GUI actions, signed distribution, arbitrary commands, output gaps/overflow or
+live host-generation rotation. Existing source/unit coverage of those other
+cases is separate, and product connection gates remain closed.

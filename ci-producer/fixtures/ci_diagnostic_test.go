@@ -92,6 +92,12 @@ func (d *ciDiagnostic) beginTool(name string) {
 		d.toolOperation = "cancel"
 	case "rescue_fixed_release":
 		d.toolOperation = "release"
+	case "rescue_fixed_list":
+		d.toolOperation = "list"
+	case "rescue_fixed_get_execution":
+		d.toolOperation = "get_execution"
+	case "rescue_fixed_read_output":
+		d.toolOperation = "read_output"
 	}
 	d.toolResult = nil
 	d.commandID = ""
@@ -105,6 +111,7 @@ func (d *ciDiagnostic) observeTool(result map[string]any) {
 	d.toolResult = make(map[string]string)
 	for output, input := range map[string]string{"result_error": "error", "result_phase": "phase", "command_phase": "command_phase", "result_stop": "stop", "command_cleanup": "command_cleanup", "owner_cleanup": "owner_cleanup", "gateway_cleanup": "gateway_cleanup"} {
 		candidate, ok := value[input].(string)
+		if output == "result_error" && !ok { candidate, ok = value["work_error"].(string) }
 		if !ok {
 			continue
 		}

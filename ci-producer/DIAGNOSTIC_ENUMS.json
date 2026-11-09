@@ -28,7 +28,15 @@
     "on-confirm",
     "on-submit",
     "producer-close",
-    "producer-start"
+    "producer-start",
+    "work-cli-close",
+    "work-cli-dictionary-empty",
+    "work-cli-dictionary-finished",
+    "work-cli-dictionary-list",
+    "work-cli-dictionary-released",
+    "work-cli-dictionary-running",
+    "work-cli-release",
+    "work-cli-start"
   ],
   "failure_codes": [
     "cancel-expectation",
@@ -98,6 +106,7 @@
     "producer-log-close",
     "producer-log-sync",
     "producer-log-write",
+    "producer-native-evidence-join",
     "producer-observation-deadline",
     "producer-operation",
     "producer-output-close",
@@ -113,12 +122,24 @@
     "terminal-missing",
     "uncategorized",
     "work-admission-uncertain",
+    "work-cli-acquisition",
+    "work-cli-dictionary-list",
+    "work-cli-dictionary-metadata",
+    "work-cli-dictionary-missing",
+    "work-cli-dictionary-output",
+    "work-cli-dictionary-released",
+    "work-cli-dictionary-retained",
+    "work-cli-join",
+    "work-cli-release",
+    "work-cli-response",
+    "work-cli-session",
+    "work-cli-tombstone",
+    "work-cli-write",
     "work-other-error",
     "work-output-limit",
     "work-phase-unknown",
     "work-registration-unobserved",
-    "work-start-uncertain",
-    "producer-native-evidence-join"
+    "work-start-uncertain"
   ],
   "semantics": "Producer outcome only; fixed phase and first failure-site classification. No raw errors or observed payload values. Passed outcome is stage complete and failure_code none. Missing enum fields before fixture acquisition remain absent, never inferred.",
   "result_fields": {
@@ -126,7 +147,11 @@
       "unavailable",
       "start",
       "status",
-      "cancel"
+      "cancel",
+      "release",
+      "list",
+      "get_execution",
+      "read_output"
     ],
     "result_error": [
       "unavailable",

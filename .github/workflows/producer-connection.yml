@@ -127,7 +127,7 @@ jobs:
             else
               binary=connection.test
               package=github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe
-              selected='^(TestCIProducerObservationValidation|TestForegroundCommands|TestForegroundCommandsRejectAmbiguity|TestControlDialectsRemainSeparate|TestForegroundIntentKeepsMapperUnknown)$'
+              selected='^(TestCIProducerObservationValidation|TestForegroundCommands|TestForegroundCommandsRejectAmbiguity|TestControlDialectsRemainSeparate|TestForegroundIntentKeepsMapperUnknown|TestCIWorkSessionObservation)$'
             fi
             # These exact tests have no producer, pipe, socket or native runtime.
             # CI_ACTUAL_PRODUCER=0 also refuses accidental live-test selection.
@@ -146,7 +146,7 @@ jobs:
           phase, package, code = sys.argv[1:]
           expected = {'TestCIProducerObservationValidation', 'TestForegroundCommands',
                       'TestForegroundCommandsRejectAmbiguity', 'TestControlDialectsRemainSeparate',
-                      'TestForegroundIntentKeepsMapperUnknown'}
+                      'TestForegroundIntentKeepsMapperUnknown', 'TestCIWorkSessionObservation'}
           if phase == 'unit-trust':
               expected = {'TestCIProducerTrustOwnsCertificateBytes'}
               for test in ('TestCIProducerTrustValidation', 'TestCIProducerTrustInstanceClones'):
@@ -327,6 +327,9 @@ jobs:
               'producer-close',
               'producer-start',
               'work-cli-start', 'work-cli-release', 'work-cli-close',
+              'work-cli-dictionary-empty', 'work-cli-dictionary-list',
+              'work-cli-dictionary-running', 'work-cli-dictionary-finished',
+              'work-cli-dictionary-released',
           }
           failure_codes = {
               'cancel-expectation',
@@ -418,10 +421,13 @@ jobs:
               'work-start-uncertain',
               'work-cli-acquisition', 'work-cli-write', 'work-cli-response',
               'work-cli-release', 'work-cli-tombstone', 'work-cli-join',
+              'work-cli-dictionary-missing', 'work-cli-dictionary-list',
+              'work-cli-dictionary-metadata', 'work-cli-dictionary-output',
+              'work-cli-dictionary-retained', 'work-cli-dictionary-released', 'work-cli-session',
           }
           # Last-tool snapshots are diagnostic enums, never fresh cleanup proof.
           result_fields = {
-              'tool_operation': {'unavailable', 'start', 'status', 'cancel', 'release'},
+              'tool_operation': {'unavailable', 'start', 'status', 'cancel', 'release', 'list', 'get_execution', 'read_output'},
               'result_error': {'unavailable', 'none', 'admission_refused_or_uncertain', 'start_uncertain', 'registration_unobserved', 'result_unobserved_or_uncertain', 'output_limit', 'not_found', 'control_ended', 'request_generation_mismatch', 'busy_or_refused'},
               'result_phase': {'unavailable', 'pending', 'running', 'finished', 'unknown'},
               'command_phase': {'unavailable', 'starting', 'running', 'exited', 'canceled', 'failed', 'start_unknown'},
@@ -652,9 +658,11 @@ jobs:
                       work_sha = os.environ.get('CI_WORK_SHA256', '')
                       valid = (valid and re.fullmatch('[0-9a-f]{64}', work_sha) is not None
                                and outcome.get('work_cli_sha256') == work_sha
-                               and outcome.get('work_cli_session') is True)
+                               and outcome.get('work_cli_session') is True
+                               and outcome.get('work_cli_dictionary') is True)
                   else:
-                      valid = valid and outcome.get('work_cli_session') is False
+                      valid = (valid and outcome.get('work_cli_session') is False
+                               and outcome.get('work_cli_dictionary') is False)
           except (OSError, ValueError, KeyError, TypeError, AttributeError):
               valid = False
           if not valid:
@@ -664,7 +672,8 @@ jobs:
                     'source_revision': os.environ['CI_PRODUCER_SOURCE_SHA'],
                     'helper_sha256': os.environ['CI_PRODUCER_SHA256']}
           if phase == 'connection' and os.environ['CI_PRODUCER_ADAPTER'] == 'cli':
-              public.update(work_cli_sha256=work_sha, work_cli_session='same-session-fixed-operations')
+              public.update(work_cli_sha256=work_sha, work_cli_session='same-session-fixed-operations',
+                            work_cli_dictionary='list-get_execution-read_output')
           summary = json.dumps(public, sort_keys=True)
           print(summary)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:

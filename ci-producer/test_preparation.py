@@ -85,7 +85,9 @@ class PreparationTests(unittest.TestCase):
             self.assertNotIn(str(backend / 'cmd/tether-host/main.go'), mapping)
             self.assertNotIn(str(backend / 'cmd/tether-work/main.go'), mapping)
             self.assertEqual(mapping[str(backend / 'cmd/tether-work/entry.go')], str(fixtures / 'ci_work_entry.go'))
-            for name in ('client.go', 'protocol.go', 'result.go', 'console.go'):
+            for name in ('ci_work_dictionary_test.go', 'ci_work_http_test.go'):
+                self.assertEqual(mapping[str(backend / 'internal/residentpipe' / name)], str(fixtures / name))
+            for name in ('client.go', 'protocol.go', 'result.go', 'console.go', 'dictionary.go', 'dictionary_console.go', 'dictionary_result.go'):
                 self.assertNotIn(str(backend / 'internal/residentclient' / name), mapping)
             self.assertEqual(mapping[str(backend / 'cmd/tether-host/entry.go')], str(fixtures / 'ci_cli_entry.go'))
             self.assertNotIn(str(backend / 'internal/residentpipe/foreground.go'), mapping)
