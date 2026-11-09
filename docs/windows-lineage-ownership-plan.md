@@ -54,3 +54,7 @@ root を tauri-driver とする job には driver と Edge も含まれます。
 native caller へ接続する前に、上記 API 制約に対して具体的な生成経路・runner job の適合を確認し、独立した所有権レビューを通します。その後の hosted Windows 検証は新しい証拠を得る一度の固定実験として設計し、既存の予算・close 条件を維持します。失敗したらその証拠で停止し、同条件の成功拾いはしません。
 
 現時点では実 API producer、nested-job 互換性、breakaway 拒否、native 故障注入、今回の根因と通常 close は未確認です。#45 は open のまま維持します。Mac の実 GUI 成功、実 dot 接続、製品配布の受入とは別です。
+
+## 独立したrunner互換性probe
+
+[固定command probe](../tools/windows-owner-probe/README.md) を別のWindows CI入口に分離しました。現在ユーザーの固定cmdのみを対象に、作成時handleの保持、resume前assignment、実API拒否とresume前取消しの回収を調べます。既存native smokeへの接続、driver/app役割の発行、子孫の完全な所有証明はありません。実行結果の受入は固定ケースと対象SHAに限定し、#45の解消とは扱いません。
