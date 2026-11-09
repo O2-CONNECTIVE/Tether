@@ -71,13 +71,20 @@ class SealedProducerBuildTests(unittest.TestCase):
         return b''
 
     def test_fixed_executable_build_stays_blocked_without_execution_or_signing(self):
-        record = tool.build(self.output)
+        with patch.object(Path, 'chmod', autospec=True, side_effect=Path.chmod) as chmod:
+            record = tool.build(self.output)
         self.assertEqual(len(self.calls), 1)
+        args = self.calls[0][0]
+        chmod.assert_called_once_with(Path(args[args.index('-o') + 1]), 0o600)
         self.assertEqual(record['image']['sha256'], tool.source.digest(self.image))
         self.assertEqual(record['target'], 'darwin-arm64')
-        self.assertEqual(stat.S_IMODE((self.output / 'resident-pipe').stat().st_mode), 0o600)
         self.assertEqual(set(p.name for p in self.output.iterdir()), {'resident-pipe', 'BUILD_RECORD.json'})
         check.validate_result(2, tool.summary(record), record, self.revision, self.tree)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX mode bits are not implemented by Windows chmod')
+    def test_retained_image_is_owner_only_and_non_executable_on_posix(self):
+        tool.build(self.output)
+        self.assertEqual(stat.S_IMODE((self.output / 'resident-pipe').stat().st_mode), 0o600)
 
     def test_environment_cannot_inject_flags_workspace_or_credentials(self):
         with patch.dict(os.environ, {'GOFLAGS': '-tags=evil', 'CGO_CFLAGS': '-D EVIL',
