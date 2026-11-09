@@ -17,6 +17,7 @@ import (
 )
 
 type ciChild struct {
+	foreground                     bool
 	nativeEvidence                 *os.File
 	diagnosticCode                 string
 	lastSource                     uint64
@@ -37,6 +38,13 @@ type ciChild struct {
 
 func startCIChild(binary, root string, b ciBootstrap) (*ciChild, error) {
 	p := &ciChild{waitDone: make(chan struct{}), readDone: make(chan struct{}), receipts: make(map[uint64]Receipt)}
+	switch os.Getenv("CI_PRODUCER_ADAPTER") {
+	case "json":
+	case "cli":
+		p.foreground = true
+	default:
+		return p, errors.New("explicit reviewed input adapter required")
+	}
 	childIn, input, err := os.Pipe()
 	if err != nil {
 		return p, err
@@ -69,6 +77,9 @@ func startCIChild(binary, root string, b ciBootstrap) (*ciChild, error) {
 	p.nativeEvidence = nativeRead
 	p.launch = append(p.launch, nativeWrite)
 	p.cmd = exec.Command(binary)
+	if p.foreground {
+		p.cmd = exec.Command(binary, "foreground")
+	}
 	p.cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
 	p.cmd.Dir = root
 	p.cmd.Stdin = childIn
@@ -322,6 +333,9 @@ func (p *ciChild) request(intent string) (uint64, error) {
 	if e != nil {
 		return id, e
 	}
+	if p.foreground {
+		raw = []byte(fmt.Sprintf("%s %d %d\n", intent, id, s.Revision))
+	}
 	if e = p.input.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
 		return id, e
 	}
@@ -346,9 +360,18 @@ func (p *ciChild) applied(id uint64, intent string) error {
 	return nil
 }
 func (p *ciChild) finish() error {
-	if err := p.input.Close(); err != nil {
+	var inputErr error
+	if p.foreground {
+		// Keep input open until the original child exits: close, not EOF, must
+		// trigger the common Close/terminal/EOF/Wait path. Later same-chunk input
+		// cannot reopen the owner, even if the hypothetical ON were valid.
+		inputErr = p.writeControl("close\non 9007199254740991 0\ninvalid\n")
+	} else {
+		inputErr = p.input.Close()
+	}
+	if inputErr != nil {
 		p.noteDiagnostic("producer-input-close")
-		return err
+		return inputErr
 	}
 	select {
 	case <-p.readDone:
@@ -359,6 +382,11 @@ func (p *ciChild) finish() error {
 	case <-p.waitDone:
 	case <-time.After(5 * time.Second):
 		return errors.New("original child Wait not joined")
+	}
+	if p.foreground {
+		if err := p.input.Close(); err != nil {
+			return err
+		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -385,6 +413,31 @@ func (p *ciChild) finish() error {
 		p.diagnosticCode = "producer-diagnostic-close"
 	}
 	return err
+}
+
+func (p *ciChild) writeControl(text string) error {
+	if err := p.input.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	n, err := io.WriteString(p.input, text)
+	if err != nil || n != len(text) {
+		return errors.New("foreground control write unknown")
+	}
+	return nil
+}
+
+func (p *ciChild) requestStatus() error {
+	if !p.foreground {
+		return nil // JSON adapter already publishes status and has no query verb
+	}
+	s, err := p.state()
+	if err != nil {
+		return err
+	}
+	if err := p.writeControl("status\n"); err != nil {
+		return err
+	}
+	return p.await(func(current Snapshot) bool { return current.Revision > s.Revision }, 3*time.Second)
 }
 
 func (p *ciChild) noteDiagnostic(code string) {

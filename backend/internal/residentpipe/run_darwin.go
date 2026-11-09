@@ -24,7 +24,13 @@ const CloseBudget = 75 * time.Second
 // It is not a CLI/path override or a normal startup entry. Loading the fixed
 // protected policy alone never starts a connection.
 func run(protectedPolicy string) error {
-	if !filepath.IsAbs(protectedPolicy) {
+	return runInput(context.Background(), protectedPolicy, jsonInput)
+}
+
+// Both input adapters share this exact lifetime and retained owner. A dialect
+// changes only decoding; it cannot choose enrollment, a key or authentication.
+func runInput(lifetime context.Context, protectedPolicy string, dialect inputDialect) error {
+	if lifetime == nil || lifetime.Err() != nil || (dialect != jsonInput && dialect != foregroundInput) || !filepath.IsAbs(protectedPolicy) {
 		return ErrProtocol
 	}
 	pipes, e := capturePipes()
@@ -32,7 +38,7 @@ func run(protectedPolicy string) error {
 		return e
 	}
 	defer pipes.close()
-	ctx, cancel := context.WithTimeout(context.Background(), LoadBudget)
+	ctx, cancel := context.WithTimeout(lifetime, LoadBudget)
 	owner, e := residentmac.LoadStandby(ctx, protectedPolicy)
 	cancel()
 	if e != nil {
@@ -44,7 +50,7 @@ func run(protectedPolicy string) error {
 		}
 		return e
 	}
-	e = safeServe(owner, pipes)
+	e = safeServeInput(lifetime, owner, pipes, dialect)
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), CloseBudget)
 	closeErr := closeOnce(owner, closeCtx)
 	closeCancel() // exactly once
@@ -65,6 +71,18 @@ func run(protectedPolicy string) error {
 	return errors.Join(e, closeErr, terminalErr)
 }
 func serve(owner *residentmac.Standby, p *ownedPipes) error {
+	return serveInput(context.Background(), owner, p, jsonInput)
+}
+
+func serveInput(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect) error {
+	heartbeat := time.NewTicker(time.Second)
+	defer heartbeat.Stop()
+	return serveLoop(lifetime, owner, p, dialect, heartbeat.C)
+}
+
+// Scheduling-only private seam: a component test can hold heartbeat delivery
+// to prove that a status command itself publishes. It grants no new authority.
+func serveLoop(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect, heartbeat <-chan time.Time) error {
 	var m mapper
 	publish := func() error {
 		now, e := continuousMS()
@@ -78,17 +96,17 @@ func serve(owner *residentmac.Standby, p *ownedPipes) error {
 	}
 	poll := time.NewTicker(pollInterval)
 	defer poll.Stop()
-	heartbeat := time.NewTicker(time.Second)
-	defer heartbeat.Stop()
 	var buffer []byte
 	var partialAt *uint64
 	for {
 		select {
+		case <-lifetime.Done():
+			return lifetime.Err()
 		case <-owner.Changes():
 			if e := publish(); e != nil {
 				return e
 			}
-		case <-heartbeat.C:
+		case <-heartbeat:
 			if e := publish(); e != nil {
 				return e
 			}
@@ -100,7 +118,7 @@ func serve(owner *residentmac.Standby, p *ownedPipes) error {
 			if assemblyExpired(partialAt, before) {
 				return ErrProtocol
 			}
-			intents, e := p.readAvailable(&buffer)
+			commands, e := p.readCommands(&buffer, dialect)
 			if e != nil {
 				return e
 			}
@@ -119,7 +137,20 @@ func serve(owner *residentmac.Standby, p *ownedPipes) error {
 			} else {
 				partialAt = nil
 			}
-			for _, r := range intents {
+			for _, command := range commands {
+				if lifetime.Err() != nil {
+					return lifetime.Err()
+				}
+				if command.kind == controlClose {
+					return nil // runInput alone closes the original Standby
+				}
+				if command.kind == controlStatus {
+					if e = publish(); e != nil {
+						return e
+					}
+					continue
+				}
+				r := command.intent
 				now, e := continuousMS()
 				if e != nil {
 					return e
@@ -165,12 +196,16 @@ func writeClosed(p *ownedPipes, closeErr error) error {
 
 // Recoverable panics are transport faults, never evidence of cleanup.
 func safeServe(owner *residentmac.Standby, p *ownedPipes) (err error) {
+	return safeServeInput(context.Background(), owner, p, jsonInput)
+}
+
+func safeServeInput(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect) (err error) {
 	defer func() {
 		if recover() != nil {
 			err = ErrProtocol
 		}
 	}()
-	return serve(owner, p)
+	return serveInput(lifetime, owner, p, dialect)
 }
 func closeOnce(owner *residentmac.Standby, ctx context.Context) (err error) {
 	defer func() {

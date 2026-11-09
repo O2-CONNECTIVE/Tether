@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   producer:
-    name: Actual producer (${{ matrix.lane }}, Mac ARM64)
+    name: Actual producer (${{ matrix.adapter }}, ${{ matrix.lane }}, Mac ARM64)
     runs-on: macos-26
     timeout-minutes: 30
     strategy:
@@ -34,8 +34,10 @@ jobs:
       fail-fast: false
       matrix:
         lane: [normal, race]
+        adapter: [json, cli]
     env:
       LANE: ${{ matrix.lane }}
+      CI_PRODUCER_ADAPTER: ${{ matrix.adapter }}
       GOTOOLCHAIN: local
       GOWORK: 'off'
       GOENV: 'off'
@@ -86,7 +88,12 @@ jobs:
           run_dir=$(mktemp -d "$RUNNER_TEMP/producer-$LANE.XXXXXX")
           flags=(-mod=readonly -p=1 -tags=ci_actual_producer "-overlay=$GITHUB_WORKSPACE/ci-producer/OVERLAY.json")
           if [ "$LANE" = race ]; then flags+=(-race); fi
-          go build "${flags[@]}" -o "$run_dir/producer-helper" ./cmd/ci-producer-helper
+          case "$CI_PRODUCER_ADAPTER" in
+            json) helper_package=./cmd/ci-producer-helper ;;
+            cli) helper_package=./cmd/tether-host ;;
+            *) exit 1 ;;
+          esac
+          go build "${flags[@]}" -o "$run_dir/producer-helper" "$helper_package"
           go test -c "${flags[@]}" -o "$run_dir/connection.test" ./internal/residentpipe
           go test -c "${flags[@]}" -o "$run_dir/transport.test" ./internal/agenttransport
           go test -c "${flags[@]}" -o "$run_dir/native.test" ./internal/macagent
@@ -114,7 +121,7 @@ jobs:
             else
               binary=connection.test
               package=github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe
-              selected='^TestCIProducerObservationValidation$'
+              selected='^(TestCIProducerObservationValidation|TestForegroundCommands|TestForegroundCommandsRejectAmbiguity|TestControlDialectsRemainSeparate|TestForegroundIntentKeepsMapperUnknown)$'
             fi
             # These exact tests have no producer, pipe, socket or native runtime.
             # CI_ACTUAL_PRODUCER=0 also refuses accidental live-test selection.
@@ -131,7 +138,9 @@ jobs:
           import sys
 
           phase, package, code = sys.argv[1:]
-          expected = {'TestCIProducerObservationValidation'}
+          expected = {'TestCIProducerObservationValidation', 'TestForegroundCommands',
+                      'TestForegroundCommandsRejectAmbiguity', 'TestControlDialectsRemainSeparate',
+                      'TestForegroundIntentKeepsMapperUnknown'}
           if phase == 'unit-trust':
               expected = {'TestCIProducerTrustOwnsCertificateBytes'}
               for test in ('TestCIProducerTrustValidation', 'TestCIProducerTrustInstanceClones'):
@@ -154,7 +163,7 @@ jobs:
               valid = False
           if not valid:
               raise SystemExit('EXACT_PURE_FIXTURE_TESTS_NOT_VERIFIED: ' + phase)
-          public = {'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
+          public = {'adapter': os.environ['CI_PRODUCER_ADAPTER'], 'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
                     'source_revision': os.environ['CI_PRODUCER_SOURCE_SHA'],
                     'helper_sha256': os.environ['CI_PRODUCER_SHA256']}
           summary = json.dumps(public, sort_keys=True)
@@ -217,7 +226,7 @@ jobs:
               valid = False
           if not valid:
               raise SystemExit('EXACT_NATIVE_FIXTURE_TESTS_NOT_VERIFIED: ' + phase)
-          public = {'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
+          public = {'adapter': os.environ['CI_PRODUCER_ADAPTER'], 'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
                     'source_revision': os.environ['CI_PRODUCER_SOURCE_SHA'],
                     'helper_sha256': os.environ['CI_PRODUCER_SHA256']}
           summary = json.dumps(public, sort_keys=True)
@@ -248,16 +257,18 @@ jobs:
           expected_names = {'connection': 'TestCIActualProducerConnection',
                             'tls-negative': 'TestCIProducerTrustTLSNegative'}
           lane = os.environ.get('LANE', '')
+          adapter = os.environ.get('CI_PRODUCER_ADAPTER', '')
           sha = os.environ.get('CI_PRODUCER_SHA256', '')
           revision = os.environ.get('CI_PRODUCER_SOURCE_SHA', '')
           invocation = os.environ.get('CI_PRODUCER_INVOCATION', '')
           if (expected_names.get(phase) != name or lane not in ('normal', 'race')
+                  or adapter not in ('json', 'cli')
                   or trigger not in ('preflight', 'observer', 'keeper')
                   or re.fullmatch('[0-9a-f]{64}', sha) is None
                   or re.fullmatch('[0-9a-f]{40}', revision) is None
                   or re.fullmatch('[0-9a-f]{32}', invocation) is None):
               raise SystemExit('ALLOWLISTED_DIAGNOSTIC_IDENTITY_UNAVAILABLE')
-          public = {'lane': lane, 'phase': phase, 'outcome': 'failed-unknown',
+          public = {'adapter': adapter, 'lane': lane, 'phase': phase, 'outcome': 'failed-unknown',
                     'source_revision': revision, 'helper_sha256': sha,
                     'stage': 'unavailable', 'failure_code': 'unavailable',
                     'original_test_exit': None, 'observer_verdict': 'unavailable',
@@ -616,7 +627,7 @@ jobs:
           if not valid:
               raise SystemExit('EXACT_TEST_AND_ORIGINAL_JOIN_NOT_VERIFIED: ' + phase)
           # Do not print JSON rows, fixture data, paths or child/keeper logs.
-          public = {'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
+          public = {'adapter': os.environ['CI_PRODUCER_ADAPTER'], 'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
                     'source_revision': os.environ['CI_PRODUCER_SOURCE_SHA'],
                     'helper_sha256': os.environ['CI_PRODUCER_SHA256']}
           summary = json.dumps(public, sort_keys=True)

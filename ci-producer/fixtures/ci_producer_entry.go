@@ -29,6 +29,16 @@ var ciEntered atomic.Bool
 // CIProducerMain is only linked into the separately compiled fixture helper.
 // FD3 is bootstrap only: close it before original capturePipes/run begins.
 func CIProducerMain() int {
+	return ciProducerMain(jsonInput)
+}
+
+// CIForegroundMain is selected only by the reviewed CLI composition overlay.
+// The ordinary CLI main/argument handling is not replaced.
+func CIForegroundMain() int {
+	return ciProducerMain(foregroundInput)
+}
+
+func ciProducerMain(dialect inputDialect) int {
 	if !ciEntered.CompareAndSwap(false, true) {
 		return 1
 	}
@@ -85,7 +95,13 @@ func CIProducerMain() int {
 	if !macagent.CIEnableNativeDiagnosticSink() {
 		return 1
 	}
-	code := ExitCode(run(b.Policy))
+	var result error
+	if dialect == foregroundInput {
+		result = runForeground(b.Policy)
+	} else {
+		result = run(b.Policy)
+	}
+	code := ExitCode(result)
 	macagent.CIDisableNativeDiagnosticSink()
 	if unix.Close(4) != nil {
 		return 1

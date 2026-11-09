@@ -13,9 +13,11 @@ next to the repository's `backend/`. Generated binaries, overlays, private
 notes, manifests from a developer computer and raw logs are not source inputs.
 
 Run `python3 ci-producer/prepare_overlay.py` to generate compiler overlays.
-The script verifies three pinned production sources. It changes one resident
+The script verifies four pinned production sources. It changes one resident
 loader expression, adds cached-state capture defers/fields to native cleanup,
-and adds one optional final-cleanup observation hook in Session.run. The producer lifecycle, unknown-retention branch and
+adds one optional final-cleanup observation hook in Session.run, and replaces
+only tether-host's unavailable composition leaf with fixture bootstrap. The
+CLI main, argument contract and both input parsers remain unmodified. The shared producer lifecycle, unknown-retention branch and
 capturePipes implementation remain unchanged. Any source pin update needs
 independent review, not an automatic replacement of the expected hash.
 
@@ -23,6 +25,8 @@ From backend, compile with Go 1.27.3, cgo enabled, the `ci_actual_producer` tag,
 `-overlay=../ci-producer/OVERLAY.json`, `-mod=readonly` and `-p=1`:
 
 - `go build ... -o ../ci-producer/generated/producer-helper ./cmd/ci-producer-helper`
+- For the CLI lane use the same flags with `./cmd/tether-host` instead. This
+  builds its real foreground entry and only substitutes the pinned composition.
 - `go test -c ... -o ../ci-producer/generated/connection.test ./internal/residentpipe`
 - Repeat BOTH commands with `-race` and distinct outputs. A race test parent
   with a normal helper does not cover producer races.
@@ -31,6 +35,8 @@ From backend, compile with Go 1.27.3, cgo enabled, the `ci_actual_producer` tag,
 No helper or tests run during these commands. Default production builds have
 no fixture exports or trust configuration. Generated cmd directory contains
 no real source file; only the explicit overlay introduces the helper.
+The normal `tether-host foreground` command remains unavailable, not a way to
+launch a synthetic or operational policy. See [the CLI contract](../docs/foreground-host-cli.md).
 
 ## Execution gate
 
@@ -40,7 +46,9 @@ credentials, account policy, endpoint, browser, GUI, OS trust or settings. Do
 not weaken the strict protected reader if runner ancestors are refused.
 
 For each normal/race lane, use the corresponding separately built helper and
-test binary; calculate and set its exact CI_PRODUCER_SHA256. Set absolute paths
+test binary. JSON and CLI adapters also use separate VMs. Set
+CI_PRODUCER_ADAPTER to exactly json or cli and calculate its exact
+CI_PRODUCER_SHA256. Set absolute paths
 for CI_PRODUCER_BINARY and a fresh CI_PRODUCER_RESULT, plus
 CI_ACTUAL_PRODUCER=1. Generate a fresh cryptographically random 32-character
 lowercase hex CI_PRODUCER_INVOCATION for EACH test/lane and pass that same
@@ -57,6 +65,13 @@ must precede closed-confirmed/EOF/child Wait0. Handler and Gateway close
 separately, followed by HTTP shutdown/Serve and owned I/O joins. Fixture files
 are removed only afterward. This proves neither escaped descendant cleanup
 nor unrelated process state.
+
+The CLI lane starts the actual command with its `foreground` argument. It sends
+status, ON/OFF lines with real observed revisions and the same increasing request
+IDs. It ends with `close` while keeping stdin open until child Wait, so EOF cannot
+substitute for close. Commands after close in the same chunk are ignored. The
+original JSON lane continues to close its input as before. Execution, results and
+cancel still use MCP; they are not new CLI verbs.
 
 ## Failed/unknown is not a pass
 

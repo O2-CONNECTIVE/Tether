@@ -15,7 +15,8 @@ parser.add_argument('--backend', type=Path, default=ROOT.parent / 'backend')
 BACKEND = parser.parse_args().backend.resolve()
 if not (BACKEND / 'go.mod').is_file():
     raise SystemExit('Expected repository backend; pass --backend for isolated review copy')
-SOURCE_SHA = 'c8a359098dd8ee6ccd4e8a7eb531d63c459054544af3c6341946072300495ed5'
+SOURCE_SHA = 'b25255151a50c8cdc1116c60a493afdc953d91e95b643a7f173857eb29a14b39'
+CLI_ENTRY_SHA = 'c7420e9cfb1e6a7527b48152a384e9eb33266684bcfea4c509a9120af57aa646'
 source = BACKEND / 'internal/residentpipe/run_darwin.go'
 raw = source.read_bytes()
 if hashlib.sha256(raw).hexdigest() != SOURCE_SHA:
@@ -75,7 +76,16 @@ if (helper / 'main.go').exists() or (helper / 'main.go').is_symlink():
 if not (ROOT / 'fixtures/ci_helper_main.go').is_file():
     raise SystemExit('Required helper fixture missing')
 mapping[str(helper / 'main.go')] = str(ROOT / 'fixtures/ci_helper_main.go')
+# Replace only the unavailable composition leaf. The CLI's main, argument
+# contract, help, parser and shared owned lifecycle are compiled unchanged.
+entry = BACKEND / 'cmd/tether-host/entry.go'
+if not entry.is_file() or hashlib.sha256(entry.read_bytes()).hexdigest() != CLI_ENTRY_SHA:
+    raise SystemExit('Production CLI entry changed: independent review required')
+cli_fixture = ROOT / 'fixtures/ci_cli_entry.go'
+if not cli_fixture.is_file():
+    raise SystemExit('Required CLI composition fixture missing')
+mapping[str(entry)] = str(cli_fixture)
 (ROOT / 'OVERLAY.json').write_text(json.dumps({'Replace': mapping}, indent=2) + '\n')
 manifest = {str(Path(k).relative_to(BACKEND)): hashlib.sha256(Path(v).read_bytes()).hexdigest() for k, v in mapping.items()}
-(out / 'overlay-manifest.json').write_text(json.dumps({'run_source_sha256': SOURCE_SHA, 'files': manifest}, indent=2)+'\n')
+(out / 'overlay-manifest.json').write_text(json.dumps({'run_source_sha256': SOURCE_SHA, 'cli_entry_sha256': CLI_ENTRY_SHA, 'files': manifest}, indent=2)+'\n')
 print('Prepared overlay only; no helper or test executed')

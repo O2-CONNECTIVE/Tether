@@ -2,7 +2,8 @@
 
 The `Actual producer connection` workflow runs the reviewed `ci-producer/`
 fixture on standard GitHub-hosted `macos-26` ARM64 VMs with Go 1.27.3. Normal
-and race are independent matrix jobs with fail-fast disabled. Each compiles
+and race, for each JSON / foreground-CLI adapter, are independent matrix jobs
+with fail-fast disabled. Each compiles
 its own helper, resident test binary, transport test binary and native capture
 test binary. Actions are
 commit-pinned, checkout identity is checked, modules must remain unchanged,
@@ -19,6 +20,11 @@ subtest counts. Live phases also require the original test's confirmed result
 and successful exit. Only then can
 `TestCIActualProducerConnection` launch the hash-pinned producer helper and
 exercise real pipes, resident control, verified TLS and MCP fixed work.
+The CLI lane compiles the actual `tether-host` command, with only its unavailable
+composition leaf replaced by pinned fixture bootstrap. It drives the explicit
+status / ON / OFF / close input contract while reusing the same owner and pipe
+loop. The JSON lane preserves the existing producer input. See the
+[foreground CLI contract](foreground-host-cli.md); normal startup stays refused.
 
 The background keeper and foreground observer run in the same shell step.
 Fresh per-phase invocation IDs bind the result, original-process join and

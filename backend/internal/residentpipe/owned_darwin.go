@@ -30,8 +30,9 @@ func continuousMS() (uint64, error) {
 
 type ownedPipes struct{ in, out int }
 
-// Only the native launcher may supply these inherited anonymous FIFO handles.
-// FIFO metadata is a consistency check, never authentication of a peer.
+// Trusted composition supplies inherited anonymous FIFO handles. The foreground
+// adapter uses the same boundary; a TTY is not accepted. FIFO metadata is a
+// consistency check, never authentication of a peer or startup authority.
 func capturePipes() (p *ownedPipes, err error) {
 	p = &ownedPipes{in: -1, out: -1}
 	owned := p
@@ -98,6 +99,18 @@ func (p *ownedPipes) writeLine(b []byte) error {
 	return nil
 }
 func (p *ownedPipes) readAvailable(buffer *[]byte) ([]Intent, error) {
+	commands, err := p.readCommands(buffer, jsonInput)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Intent, 0, len(commands))
+	for _, command := range commands {
+		out = append(out, command.intent)
+	}
+	return out, nil
+}
+
+func (p *ownedPipes) readCommands(buffer *[]byte, dialect inputDialect) ([]controlCommand, error) {
 	var chunk [MaxLine]byte
 	n, e := unix.Read(p.in, chunk[:])
 	if e == unix.EAGAIN || e == unix.EWOULDBLOCK {
@@ -112,19 +125,24 @@ func (p *ownedPipes) readAvailable(buffer *[]byte) ([]Intent, error) {
 		}
 		return nil, os.ErrClosed
 	}
-	var out []Intent
+	var out []controlCommand
 	for _, b := range chunk[:n] {
 		*buffer = append(*buffer, b)
 		if len(*buffer) > MaxLine {
 			return nil, ErrProtocol
 		}
 		if b == '\n' {
-			r, e := Decode(*buffer)
+			r, e := decodeControl(*buffer, dialect)
 			if e != nil {
 				return nil, e
 			}
 			out = append(out, r)
 			*buffer = (*buffer)[:0]
+			if r.kind == controlClose {
+				// The authoritative owner will be closed by the original run.
+				// Do not even decode subsequent bytes from this same read.
+				return out, nil
+			}
 		}
 	}
 	return out, nil

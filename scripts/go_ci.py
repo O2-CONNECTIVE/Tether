@@ -72,7 +72,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire': {'client.go', 'server.go', 'strict.go', 'wire.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentwork': {'intent.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac': {'factory.go', 'standby.go', 'standby_types.go', 'wire.go', 'enrollment.go'},
-    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe': {'codec.go', 'mapper.go', 'startup.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe': {'codec.go', 'mapper.go', 'startup.go', 'foreground.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/workerowner': {'owner.go', 'run_once.go', 'wait_source.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink': {'host.go', 'client.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter': {'jsonrpc.go', 'server.go', 'tools.go', 'output_schema.go', 'http_bridge.go', 'resident_http.go', 'resident_output_schema.go', 'resident_list.go', 'resident_read_output.go', 'resident_get_execution.go'},
@@ -82,6 +82,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-access-identity': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mac-agent': {'main.go', 'config.go', 'status.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mcp': {'main.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-host': {'main.go', 'entry.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent': {'runtime.go', 'process.go', 'cleanup_diagnostic.go', 'groupobserver.go', 'start_diagnostic.go', 'terminal_disposition.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch': {'approval.go', 'resident_policy.go', 'resident_source.go', 'resident_wire.go', 'resident_worker.go', 'startup_policy.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport': {'protocol.go', 'stream.go', 'gateway.go', 'mac.go', 'resident_gateway.go', 'resident_handoff.go', 'resident_intent.go', 'resident_io.go', 'resident_mac.go', 'resident_protocol.go', 'resident_receiver.go', 'resident_rotation.go', 'resident_work.go'},
@@ -219,7 +220,7 @@ def product_files_for(goos, cgo_enabled=True):
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/fileread'].update(
         {'selected_darwin.go', 'selected_observation_darwin.go'} if goos == 'darwin' else {'selected_other.go'})
     if goos == 'darwin' and cgo_enabled:
-        expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe'].update({'owned_darwin.go', 'run_darwin.go'})
+        expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe'].update({'owned_darwin.go', 'run_darwin.go', 'foreground_darwin.go'})
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent'].update(MAC_AGENT_FILES[goos])
     if goos == 'darwin':
         expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent'].add('groupobserver_darwin.go' if cgo_enabled else 'groupobserver_darwin_nocgo.go')
