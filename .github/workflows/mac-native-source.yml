@@ -92,6 +92,10 @@ jobs:
           python scripts/check_mac_enrollment_lookup.py | tee "$RUNNER_TEMP/native-source-evidence/enrollment.json"
           python scripts/check_mac_library_ci.py "$RUNNER_TEMP/native-source-library" | tee "$RUNNER_TEMP/native-source-evidence/library.json"
           cp "$RUNNER_TEMP/native-source-library/BUILD_RECORD.json" "$RUNNER_TEMP/native-source-evidence/build-record.json"
+      - name: Build fixed sealed producer without execution or signing
+        run: |
+          python scripts/check_mac_sealed_producer_ci.py "$RUNNER_TEMP/native-sealed-producer" | tee "$RUNNER_TEMP/native-source-evidence/sealed-producer.json"
+          cp "$RUNNER_TEMP/native-sealed-producer/BUILD_RECORD.json" "$RUNNER_TEMP/native-source-evidence/sealed-producer-build-record.json"
       - name: Preserve source-only reports, never binary archives
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
