@@ -13,3 +13,5 @@ foreach ($case in $cases) {
 if ($passed -ne 3) { throw 'OWNER_PROBE_INCOMPLETE_TESTS' }
 # No PID, path, absolute time, command line, raw OS error, or production success claim.
 Write-Output 'OWNER_PROBE_FIXED_COMMAND_CASES_PASSED_3'
+# Independent source-built executable retains child handles in the living fixture parent.
+& (Join-Path $PSScriptRoot 'descendant.test.ps1')
