@@ -62,7 +62,11 @@ jobs:
           export CI_PRODUCER_INVOCATION="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
           python3 ci-producer/supervise_ci.py keeper --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT" --test "$binary" --log "$run_dir/owned.log" &
           keeper=$!
-          python3 ci-producer/supervise_ci.py observer --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT"
+          observer_status=0
+          python3 ci-producer/supervise_ci.py observer --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT" || observer_status=$?
+          # Emit only fixed fixture stage names, never raw logs/URLs/content.
+          grep -E '^GUI_FIXTURE_EVENT=(producer-started|source-bound|navigation-denied|navigation-pass|navigation-fail|webview-created|app-built|monitor-exit-request|event-loop-start|exit-requested|exit-held|event-loop-returned|owner-joined)$' "$run_dir/owned.log" || true
+          test "$observer_status" -eq 0
           wait "$keeper"
           test "$(shasum -a 256 "$binary" | awk '{print $1}')" = "$CI_GUI_BINARY_SHA256"
           python3 - <<'PY'

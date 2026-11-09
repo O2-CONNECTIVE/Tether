@@ -9,9 +9,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::Manager;
 
 const TEST: &str = "TestCIResidentGUIWiring";
+fn event(stage: &'static str) {
+    eprintln!("GUI_FIXTURE_EVENT={stage}");
+}
 fn hex(value: &str, count: usize) -> bool {
     value.len() == count
         && value
@@ -91,6 +93,7 @@ pub(super) fn run() {
             retain();
         }
     };
+    event("producer-started");
     let mut owner = match StandbyOwner::start(producer) {
         Ok(owner) => owner,
         Err(_) => {
@@ -106,6 +109,7 @@ pub(super) fn run() {
             retain();
         }
     };
+    event("source-bound");
     let verdict = Arc::new(AtomicU8::new(0));
     let observed = verdict.clone();
     let builder = crate::commands_with_ports(
@@ -133,14 +137,17 @@ pub(super) fn run() {
                     || url.query().is_some()
                     || url.fragment().is_some()
                 {
+                    event("navigation-denied");
                     return false;
                 }
                 match url.path() {
                     "/__resident_fixture_pass" => {
+                        event("navigation-pass");
                         status.store(1, Ordering::SeqCst);
                         false
                     }
                     "/__resident_fixture_fail" => {
+                        event("navigation-fail");
                         status.store(2, Ordering::SeqCst);
                         false
                     }
@@ -150,6 +157,7 @@ pub(super) fn run() {
             })
             .build()?;
             window.show()?;
+            event("webview-created");
             Ok(())
         })
         .build(tauri::generate_context!());
@@ -161,6 +169,7 @@ pub(super) fn run() {
             retain();
         }
     };
+    event("app-built");
     let gate = owner.gate.clone();
     let wake_gate = gate.clone();
     let wake = app.handle().clone();
@@ -181,19 +190,26 @@ pub(super) fn run() {
         while observed.load(Ordering::SeqCst) == 0 && Instant::now() < until {
             thread::sleep(Duration::from_millis(20));
         }
+        event("monitor-exit-request");
         // Even a failed GUI assertion requests the SAME owner close; never kill.
         request.exit(0);
     });
-    app.run(move |_handle, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+    event("event-loop-start");
+    let exit_code = app.run_return(move |_handle, run_event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = run_event {
+            event("exit-requested");
             if !gate.request_exit() {
+                event("exit-held");
                 api.prevent_exit();
             }
         }
     });
+    event("event-loop-returned");
     let monitor_joined = monitor.join().is_ok();
     owner.join(); // exact producer IO/Wait AND original outer monitor
-    let passed = monitor_joined
+    event("owner-joined");
+    let passed = exit_code == 0
+        && monitor_joined
         && verdict.load(Ordering::SeqCst) == 1
         && owner.gate.outcome() == Some(Outcome::Confirmed);
     report(&path, &invocation, passed);
