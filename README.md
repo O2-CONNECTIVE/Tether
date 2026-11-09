@@ -33,6 +33,8 @@ Tetherの共通サービスにCLI・GUI・MCPを接続し、認可・失効・�
 
 [製品体系と受入 #189](https://github.com/O2-CONNECTIVE/Tether/issues/189) / [共通サービス #32](https://github.com/O2-CONNECTIVE/Tether/issues/32) / [操作辞書 #188](https://github.com/O2-CONNECTIVE/Tether/issues/188) / [単発版 #22](https://github.com/O2-CONNECTIVE/Tether/issues/22)
 
+検証版は正式なversion numberingを使わず「カレントの検証版」と表記する方針です。source commit・build日時・artifact hashなどの追跡識別を記録し、更新前後の検証結果を取り違えないようにします。この表記方針は評価appの作成・配布・実接続完了を意味しません。
+
 ## 現在地
 
 進捗確認: 2026-11-09、source基点 `37ac66ea`（[#293](https://github.com/O2-CONNECTIVE/Tether/pull/293)）。この基点のCI結果は[#189の固定merge SHA記録](https://github.com/O2-CONNECTIVE/Tether/issues/189)と[実producerのpostmerge検証](https://github.com/O2-CONNECTIVE/Tether/actions/runs/42550692970)で確認してください。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
