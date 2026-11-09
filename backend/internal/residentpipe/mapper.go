@@ -43,6 +43,7 @@ type mapper struct {
 	raw                          residentmac.StandbyObservation
 	view                         Snapshot
 	pending                      *Intent
+	refused                      *Transition
 	poisoned                     bool
 	cleanupUnknown               bool
 }
@@ -136,6 +137,15 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 			s.Transition.Outcome = "unknown"
 		}
 	}
+	// Only a new command refused here before owner dispatch earns correlated
+	// rejection evidence. Refresh the owner first: never hide pending, Unknown,
+	// late cleanup failure, or a newer owner identity with a local refusal.
+	if t := m.refused; t != nil {
+		if !m.poisoned && m.pending == nil && (o.Transition == nil || o.Transition.RequestID < t.RequestID) {
+			s.Transition = t
+		}
+		m.refused = nil // one ordered publication, not retained owner evidence
+	}
 	s.CanRequestOn = off && o.CanRequestOn && !m.poisoned && m.pending == nil
 	s.CanRequestOff = on && o.CanRequestOff && !m.poisoned && m.pending == nil
 	m.raw = o
@@ -159,6 +169,7 @@ func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receip
 	}
 	if m.revision == 0 || now < m.observedAt || now-m.observedAt >= m.view.ValidForMS || r.ExpectedRevision != m.revision || !reflect.DeepEqual(owner.Snapshot(), m.raw) {
 		out.Disposition = "stale"
+		m.refused = &Transition{r.RequestID, r.Intent, "rejected"}
 		return out
 	}
 	if (r.Intent == "on" && !m.view.CanRequestOn) || (r.Intent == "off" && !m.view.CanRequestOff) {

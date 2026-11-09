@@ -172,3 +172,41 @@ fn stale_receipt_needs_matching_rejected_observation_before_resubmission() {
     feed(&mut t, &status(3, 300, transition(1, "rejected")), 300).unwrap();
     assert!(t.begin(&request(3, 3), 300).is_ok());
 }
+
+#[test]
+fn pre_owner_stale_evidence_clears_pending_but_not_awaiting_receipt() {
+    let mut t = Tracking::default();
+    feed(&mut t, &status(1, 100, json!(null)), 100).unwrap();
+    t.begin(&request(1, 1), 100).unwrap();
+    feed(&mut t, &status(2, 100, json!(null)), 100).unwrap(); // producer heartbeat
+    feed(&mut t, &status(3, 100, transition(1, "rejected")), 100).unwrap();
+    // Matching terminal evidence alone cannot admit another command while the
+    // original response is outstanding on the same ordered pipe.
+    assert_eq!(t.begin(&request(2, 3), 100), Err(Disposition::Rejected));
+    let receipt = br#"{"protocolVersion":1,"type":"receipt","receipt":{"protocolVersion":1,"requestId":1,"intent":"on","disposition":"stale"}}"#;
+    assert!(t
+        .event(Event::parse(receipt).unwrap(), 100)
+        .unwrap()
+        .is_some());
+    assert!(t.begin(&request(3, 3), 100).is_ok());
+}
+
+#[test]
+fn no_receipt_disposition_releases_pending_without_matching_evidence() {
+    for disposition in ["accepted", "unknown", "stale", "rejected"] {
+        let mut t = Tracking::default();
+        feed(&mut t, &status(1, 100, json!(null)), 100).unwrap();
+        t.begin(&request(1, 1), 100).unwrap();
+        let receipt = json!({"protocolVersion":1,"type":"receipt","receipt":{
+            "protocolVersion":1,"requestId":1,"intent":"on","disposition":disposition}});
+        assert!(t
+            .event(
+                Event::parse(&serde_json::to_vec(&receipt).unwrap()).unwrap(),
+                100
+            )
+            .unwrap()
+            .is_some());
+        feed(&mut t, &status(2, 100, transition(9, "rejected")), 100).unwrap();
+        assert_eq!(t.begin(&request(10, 2), 100), Err(Disposition::Rejected));
+    }
+}
