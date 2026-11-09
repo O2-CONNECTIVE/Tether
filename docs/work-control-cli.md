@@ -76,3 +76,36 @@ source追加と試験定義は実行成功ではありません。固定headのC
 新しい実credentialの扱い、本番認証・publisher / enrollment trust、署名配布、GUI、実dot接続は
 この変更の受入に含みません。host準備の制約は[前景host CLI](foreground-host-cli.md)、
 実producerの所有境界は[CI手順](producer-connection-ci.md)を参照してください。
+
+## 保持結果の専用読取
+
+同じsessionに対し、次の明示操作を追加しています。
+
+```text
+list <-|cursor> <limit>
+get_execution <request_id>
+read_output <request_id> <cursor> <max_bytes>
+```
+
+`list`の`-`は空cursorだけを表し、全hostや全世代の指定ではありません。limitは1〜32、
+継続cursorは応答のnext_cursorをそのまま使います。liveな辞書順一覧でありsnapshotではなく、
+後から追加された小さいIDは空cursorから読み直す必要があります。空/欠落は未実行証拠ではありません。
+list結果frameには単一request_idを付けません。各entryに固有IDがあります。
+
+`get_execution`は出力payloadなしのmetadata照会です。`work_error`は作業の結果であり、
+照会失敗の`error`と別です。`result_released`のtombstoneでも終了・実行成功を推測しません。
+
+`read_output`のcursorは0〜9007199254740991、max_bytesは1〜4096です。整数は符号・先頭zero・
+指数・小数なしの十進表記です。応答のcursor相関、chunk順序/重複、decoded総量、
+next_cursorの進みとgap_bytes、has_moreとの一致を検査します。base64は未信頼bytesのままで、
+読み取りはacknowledgementやreleaseを発生させません。source側のuint64 countersは丸めません。
+collection_ended、terminal、各cleanupは独立した事実で、gapや空chunksから終了成功を推測しません。
+
+最初の追加操作の前だけ元SIDでtools/listを一回実行し、そのsessionの対応toolを確認します。
+未対応は固定の`{"error":"unsupported"}`を返し、tools/callせず旧操作は利用可能なままです。
+旧start/result/cancel/releaseだけを使う場合のstartupとrequest順は変わりません。
+自動page取得、poll、retry、再initialize、認証更新、host/世代切替は追加していません。
+追加portを持たない組成では拒否して元sessionをcloseします。
+
+検証は匿名TLS fixtureとsource契約の試験です。通常foreground入口の閉鎖、実credentialと
+production trustの未決、実dot・GUI・配布の未受入は変えていません。

@@ -10,7 +10,9 @@ PythonとTauriのworkflowは独立しています。
 
 sealed producer の `cmd/resident-pipe` は共通 main.go と Darwin/cgo の entry_darwin.go、
 その他 target の entry_other.go を厳密選択します。追加後の実 inventory は52 package、
-Linux374 / Darwin-cgo379 / Darwin-nocgo376 / Windows405 production fileです。
+Linux374 / Darwin-cgo379 / Darwin-nocgo376 / Windows405 production fileでした。
+同じsessionの辞書読取clientに3fileを追加した現在は52 package、
+Linux377 / Darwin-cgo382 / Darwin-nocgo379 / Windows408 production fileです。
 任意 argv は exit 1、対応 build のゼロ引数だけが固定 enrollment を選びます。
 この entry の追加は署名・配置・native verified launch・配布を証明せず、通常 CLI / Tauri は未接続です。
 command unit は純粋な argv 判定と拒否だけを実行し、Darwin の実 account / policy / key を読みません。
