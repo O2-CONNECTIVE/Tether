@@ -133,3 +133,44 @@ void test('stale receipt identity survives fresh observation without resending a
   await r.controller.refresh(); assert.equal(calls, 1); assert.equal(r.last()?.lastRequestId, 1);
   r.controller.dispose();
 });
+
+void test('real mapper pending ON remains disabled until same request is authenticated and applied', async () => {
+  let observation = sample(); const requests: unknown[] = [];
+  const r = capture((command, args) => {
+    if (command === 'get_resident_status') return Promise.resolve(observation);
+    requests.push(args.request);
+    observation = sample({ revision: 2, standby: 'unknown', registration: 'connecting', canRequestOn: false,
+      transition: { requestId: 1, intent: 'on', outcome: 'pending' } });
+    return Promise.resolve({ protocolVersion: 1, requestId: 1, intent: 'on', disposition: 'accepted' });
+  });
+  try {
+    await r.controller.refresh(); await r.controller.request('on');
+    assert.equal(r.last()?.diagnostic, 'RESIDENT_INTENT_PENDING');
+    assert.equal(r.last()?.canOn, false); assert.equal(r.last()?.canOff, false);
+    await r.controller.request('on'); await r.controller.request('off'); assert.equal(requests.length, 1);
+    observation = sample({ revision: 3, standby: 'on', registration: 'authenticated', canRequestOn: false, canRequestOff: true,
+      transition: { requestId: 1, intent: 'on', outcome: 'applied' } });
+    await r.controller.refresh(); assert.equal(r.last()?.pending, false); assert.equal(r.last()?.canOff, true);
+  } finally { r.controller.dispose(); }
+});
+void test('unknown outside exact mapper pending ON stays sealed, including mismatched pending identities', async () => {
+  for (const changes of [{ cleanup: 'unknown' }, { registration: 'unknown' }, { work: 'unknown' }, { cleanup: 'pending' },
+    { transition: null }, { transition: { requestId: 1, intent: 'on', outcome: 'unknown' } },
+    { transition: { requestId: 2, intent: 'on', outcome: 'pending' } },
+    { transition: { requestId: 1, intent: 'off', outcome: 'pending' } }]) {
+    let observation = sample(); let calls = 0;
+    const r = capture((command, args) => {
+      calls++;
+      if (command === 'get_resident_status') return Promise.resolve(observation);
+      observation = sample({ revision: 2, standby: 'unknown', registration: 'connecting', canRequestOn: false,
+        transition: { requestId: 1, intent: 'on', outcome: 'pending' }, ...changes });
+      return Promise.resolve({ protocolVersion: 1, requestId: args.request.requestId, intent: args.request.intent, disposition: 'accepted' });
+    });
+    try {
+      await r.controller.refresh(); await r.controller.request('on');
+      assert.equal(r.last()?.canOff, false); assert.equal(r.last()?.observation, null);
+      const before = calls; observation = sample({ revision: 3 }); await r.controller.refresh();
+      assert.equal(calls, before); assert.equal(r.last()?.canOn, false);
+    } finally { r.controller.dispose(); }
+  }
+});

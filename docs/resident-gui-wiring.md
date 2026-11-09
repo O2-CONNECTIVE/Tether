@@ -6,11 +6,15 @@
 
 React の resident panel は既存の `get_resident_status` と `request_resident_intent` のみを呼ぶ薄い adapter です。通常の Tauri 入口にもこの二つの IPC を登録しますが、ResidentPort は unbound のままです。Mac の通常起動は source-unavailable、他 OS は unsupported を返し、起動・binding・policy・credential の IPC は追加しません。
 
-受付 receipt と適用 observation は別に扱い、対応する request ID、revision、鮮度を確認します。unknown、期限超過、矛盾した応答では操作を閉じ、後着応答で安全な状態へ戻しません。CLI や GUI が独自に host の認可・状態を所有する構成にはしません。
+受付 receipt と適用 observation は別に扱い、対応する request ID、revision、鮮度を確認します。実 Go mapper が初回認証中に返す厳密な ON pending（standby unknown / registration connecting / work idle / cleanup confirmed / 両操作不可）は操作を閉じたまま観測を続けます。cleanup unknown や transition unknown、対応しない pending はこの例外に含めません。unknown、期限超過、矛盾した応答では操作を閉じ、後着応答で安全な状態へ戻しません。CLI や GUI が独自に host の認可・状態を所有する構成にはしません。
 
 ## CI が確認する境界
 
-`mac-resident-gui.yml` は固定 source の React を実 WebView で表示し、実 Tauri IPC、既存 BoundDuplex、匿名の synthetic pipe producer、同じ StandbyOwner を通して ON → OFF → Close を確認します。invoke の JavaScript mock は使いません。producer は固定した二つの intent と revision を検査し、元 stdin の EOF 後だけ closed を返します。同じ owner の I/O・Wait・outer monitor の回収まで確認できた場合だけ成功です。失敗や unknown は保持し、強制終了を cleanup 成功と扱いません。
+`mac-resident-gui.yml` の次段階は、固定 source の React、実 WebView/Tauri IPC、既存 BoundDuplex/StandbyOwner と実 Go `residentpipe.run` / `residentmac.Standby` を接続します。従来の Python 合成 status producer は live lane では使用しません。Go の source-pin overlay と既存の自己所有 loopback TLS gateway fixture だけが合成 policy/key/CA を供給し、通常 enrollment / publisher trust は変更しません。製品の同じ loader 後の処理、mapper、JSONL、Close を使います。
+
+driver は自分が実際にクリックした操作について、新しく受けた accepted receipt と同じ request ID / intent の applied observation を必要とします。対象ボタンの有効化だけや自然 OFF を成功にせず、request ID は推測せず実際の receipt から読み取ります。stale と新しい revision を確認した場合だけ既存の有限再試行を許し、rejected / unknown / 未確定の再試行はしません。WebView は ON の適用後、同じ status の registration が authenticated になるまで待ってから OFF を操作します。元 stdin EOF で Go の同じ Standby が Close され、その後 fixture gateway の Close / HTTP serve join が終わって初めて producer process が退出します。Rust の同じ owner の I/O・Wait・outer monitor まで確認した場合だけ成功です。失敗・unknown は元 owner を保持し、kill や timeout を cleanup 成功にしません。Go test runner の出力は stderr に分離し、JSONL stdout を汚染しません。
+
+これは real Go producer と合成 enrollment の接続試験です。実利用者の認証、実 dot、native work 実行、通常起動、製品 Quit、署名配布は未受入です。新しい構成の成功は最終 source の hosted CI 終端で別途判定し、過去の合成 pipe 成功を引き継ぎません。
 
 driver の段階は専用 CI context の local/main にだけ許可した event emit で固定 enum として受信します。listener は WebView 作成前に登録し、順序違い・不正・重複は失敗を保持します。この event は観測であり、元 pipe と owner の証明を置き換えません。通常 context の権限は変更しません。
 
@@ -22,7 +26,7 @@ driver の段階は専用 CI context の local/main にだけ許可した event 
 
 ## 検証版の識別と配布
 
-専用 CI window は「カレントの検証版（合成CI）」と表示します。allowlisted JSON の検証記録には source commit、UTC build 記録時刻、実行 binary SHA-256、確認範囲を含めます。CI は実行後にも binary hash を照合します。正式版の semver を変更せず、CI 内だけの一時 .app に同じ binary を配置します。upload・Release 公開は行いません。この CI だけではダウンロード可能な接続検証版は提供されません。
+専用 CI window は「カレントの検証版（合成CI）」と表示します。allowlisted JSON の検証記録には source commit、UTC build 記録時刻、GUI と Go producer の binary SHA-256、確認範囲を含めます。CI は実行後にも binary hash を照合します。正式版の semver を変更せず、CI 内だけの一時 .app に同じ binary を配置します。upload・Release 公開は行いません。この CI だけではダウンロード可能な接続検証版は提供されません。
 
 ## 診断の読み方
 
