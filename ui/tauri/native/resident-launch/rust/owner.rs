@@ -1,5 +1,5 @@
 //! Concrete client of ResidentPreparation.h. Not linked into normal Tauri.
-//! Every native operation uses the same non-transferable owner; no launch API.
+//! Every native operation uses the same non-transferable owner and fixed launch.
 use std::{marker::PhantomData, num::NonZeroU64, rc::Rc};
 
 #[cfg(resident_launch_fixture)]
@@ -22,6 +22,7 @@ pub use byte_io::PreparedIo;
 unsafe extern "C" {
     fn rh_resident_preparation_create() -> u64;
     fn rh_resident_preparation_state(handle: u64) -> u32;
+    fn rh_resident_preparation_launch(handle: u64) -> u32;
     fn rh_resident_preparation_retire(handle: u64) -> u32;
 }
 
@@ -92,6 +93,29 @@ impl NativePreparation {
         if unsafe { rh_resident_preparation_state(self.handle.get()) } != expected {
             self.state = State::Unknown;
         }
+        self.state
+    }
+
+    /// Fixed nested producer only. An attempted run failure retains active
+    /// uncertainty; a preflight refusal still needs original IO retirement.
+    #[must_use]
+    pub fn launch(&mut self) -> State {
+        if self.state() != State::OwnedUnlaunched {
+            return self.state;
+        }
+        // SAFETY: private original handle, same !Send/!Sync worker, no inputs.
+        let result = unsafe { rh_resident_preparation_launch(self.handle.get()) };
+        self.state = match result {
+            1 => State::OwnedUnlaunched,
+            5 => {
+                self.active = true;
+                State::Active
+            }
+            _ => {
+                self.active = true;
+                State::Unknown
+            }
+        };
         self.state
     }
 

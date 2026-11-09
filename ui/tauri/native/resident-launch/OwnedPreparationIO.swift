@@ -141,6 +141,18 @@ final class OwnedPreparationIO {
         return complete
     }
 
+    // The actual same-Process bindings, before any launch attempt. This is IO
+    // consistency only; publisher enforcement remains Process.launchRequirement.
+    func readyToLaunch(_ task: Process) -> Bool {
+        guard !active, !retired, !fault, ends.count == 4,
+              boundTask == ObjectIdentifier(task),
+              let input = inputWrapper, let output = outputWrapper,
+              let taskInput = task.standardInput as? FileHandle,
+              let taskOutput = task.standardOutput as? FileHandle else { return false }
+        return taskInput === input && taskOutput === output &&
+            ends.allSatisfy { !$0.attempted && !$0.confirmed && $0.fd >= 3 }
+    }
+
     // Called only by the same owner after its actual Process.run succeeded.
     // FileHandle inputs are not auto-closed by Process, unlike Pipe inputs.
     func didLaunch(_ task: Process) -> Bool {

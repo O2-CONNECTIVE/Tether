@@ -24,6 +24,17 @@ fn owned(mode: resident_preparation::FixedFixture) -> NativePreparation {
 fn fixture(mode: &str, checks: &mut Checks) {
     use resident_preparation::{Counts, FixedFixture as F, State as S};
     match mode {
+        "launch-refusal" => {
+            let mut owner = owned(F::Normal);
+            checks.check(owner.launch() == S::OwnedUnlaunched);
+            checks.check(owner.state() == S::OwnedUnlaunched);
+            checks.check(owner.fixture_probe());
+            checks.check(owner.poll_exit() == resident_preparation::ExitObservation::Unavailable);
+            checks.check(owner.launch() == S::OwnedUnlaunched);
+            checks.check(owner.retire() == S::RetiredUnlaunched);
+            checks.check(owner.launch() == S::RetiredUnlaunched);
+            checks.check(NativePreparation::fixture_counts().closes == 4);
+        }
         "lifetime" => {
             let mut owner = owned(F::Normal);
             checks.check(owner.state() == S::OwnedUnlaunched);
