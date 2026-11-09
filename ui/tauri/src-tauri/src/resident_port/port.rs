@@ -13,7 +13,7 @@ impl ResidentPort {
     // Concrete and private: future sealed launcher must establish provenance
     // before using this path. No normal caller, arbitrary factory or rebind.
     #[cfg(target_os = "macos")]
-    pub(super) fn bound(source: duplex::owner::BoundDuplex) -> std::io::Result<Self> {
+    pub(crate) fn bound(source: duplex::owner::BoundDuplex) -> std::io::Result<Self> {
         source.first()?; // off UI thread, before publishing this same source
         Ok(Self {
             bound: Some(source),

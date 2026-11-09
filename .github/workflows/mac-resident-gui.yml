@@ -1,0 +1,77 @@
+name: Mac resident GUI wiring
+on:
+  pull_request:
+    branches: [main]
+    paths: ['ui/tauri/**', 'ci-producer/supervise_ci.py', '.github/workflows/mac-resident-gui.yml']
+  push:
+    branches: [main]
+    paths: ['ui/tauri/**', 'ci-producer/supervise_ci.py', '.github/workflows/mac-resident-gui.yml']
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  gui:
+    name: Real WebView, IPC and synthetic owned pipe (Mac ARM64)
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Require exact source and disposable Mac
+        run: |
+          python3 scripts/check_ci_checkout.py
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+          test "$(sw_vers -productVersion | cut -d. -f1)" -ge 27
+          test "$(xcodebuild -version | head -n 1)" = 'Xcode 27.1'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+      - name: Build reviewed frontend
+        working-directory: ui/tauri
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Select pinned Rust and build explicit CI composition
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --no-self-update
+          cargo +1.99.1 fmt --manifest-path ui/tauri/src-tauri/Cargo.toml --check
+          python3 -m unittest discover -s ui/tauri/src-tauri/tests/resident-gui -p test_producer.py -v
+          cargo +1.99.1 test --locked --manifest-path ui/tauri/src-tauri/Cargo.toml resident_port::duplex::tracking_tests
+          cargo +1.99.1 fetch --locked --manifest-path ui/tauri/src-tauri/Cargo.toml
+          RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 build --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml --features custom-protocol --example resident_gui_ci
+      - name: Run real GUI through original owner keeper
+        run: |
+          umask 077
+          export CI_ACTUAL_PRODUCER=1
+          export CI_GUI_SOURCE_SHA="$(git rev-parse HEAD)"
+          export CI_GUI_BUILD_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          binary="$GITHUB_WORKSPACE/ui/tauri/src-tauri/target/debug/examples/resident_gui_ci"
+          export CI_GUI_BINARY_SHA256="$(shasum -a 256 "$binary" | awk '{print $1}')"
+          run_dir=$(mktemp -d "$RUNNER_TEMP/resident-gui.XXXXXX")
+          export CI_PRODUCER_RESULT="$run_dir/result.json"
+          export CI_PRODUCER_INVOCATION="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+          python3 ci-producer/supervise_ci.py keeper --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT" --test "$binary" --log "$run_dir/owned.log" &
+          keeper=$!
+          python3 ci-producer/supervise_ci.py observer --test-name TestCIResidentGUIWiring --invocation "$CI_PRODUCER_INVOCATION" --report "$CI_PRODUCER_RESULT"
+          wait "$keeper"
+          test "$(shasum -a 256 "$binary" | awk '{print $1}')" = "$CI_GUI_BINARY_SHA256"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          r = json.loads(Path(os.environ['CI_PRODUCER_RESULT']).read_text())
+          assert r['outcome'] == 'passed' and r['cleanup'] == 'confirmed'
+          assert r['source'] == os.environ['CI_GUI_SOURCE_SHA']
+          assert r['binary_sha256'] == os.environ['CI_GUI_BINARY_SHA256']
+          assert r['scope'] == 'real-webview-ipc-synthetic-pipe'
+          print(json.dumps(r, ensure_ascii=False))
+          PY

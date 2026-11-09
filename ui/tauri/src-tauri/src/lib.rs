@@ -126,17 +126,16 @@ fn commands_with_presentation<R: tauri::Runtime>(
     runtime: ShellRuntime,
     output: StatusPresentation,
 ) -> tauri::Builder<R> {
-    builder
-        .manage(runtime)
-        .manage(output)
-        .invoke_handler(tauri::generate_handler![
-            get_shell_status,
-            get_status_presentation
-        ])
+    commands_with_ports(
+        builder,
+        runtime,
+        output,
+        resident_port::ResidentPort::default(),
+    )
 }
 
-// Explicit source composition only. Normal commands()/run() never calls this.
-// A future caller must supply a port from the sealed trusted bootstrap.
+// All GUI callers use the same commands. Normal startup supplies an unbound
+// port; only a future sealed bootstrap may establish a production source.
 #[allow(
     dead_code,
     reason = "resident IPC awaits trusted launch and GUI composition"
@@ -475,3 +474,10 @@ mod tests {
 
 #[cfg(test)]
 mod status_presentation_tests;
+
+#[cfg(all(target_os = "macos", resident_gui_fixture))]
+mod resident_gui_fixture;
+#[cfg(all(target_os = "macos", resident_gui_fixture))]
+pub fn run_resident_gui_fixture() {
+    resident_gui_fixture::run();
+}

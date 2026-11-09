@@ -8,6 +8,7 @@ void test('通常AppはbackendのMac経路を読み、実入力未接続を表�
   const page = await browser.newPage();
   await page.addInitScript(() => {
     window.__TAURI__ = { core: { invoke: (command, args) => {
+      if (command === 'get_resident_status') return Promise.resolve({ protocolVersion: 1, source: 'unsupported' });
       document.documentElement.dataset.command = command;
       document.documentElement.dataset.request = JSON.stringify(args);
       return Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' });
@@ -29,6 +30,7 @@ void test('合成の通常App表示は明示ラベルを持ち、期限後と再
   await page.addInitScript(() => {
     let calls = 0;
     window.__TAURI__ = { core: { invoke: command => {
+      if (command === 'get_resident_status') return Promise.resolve({ protocolVersion: 1, source: 'unsupported' });
       document.documentElement.dataset.calls = String(++calls);
       document.documentElement.dataset.command = command;
       return Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'synthetic-observation',
@@ -57,7 +59,7 @@ void test('合成のunknown警告とEOF履歴は狭幅拡大でも現在の回�
   for (const unknown of [true, false]) {
     const page = await browser.newPage({ viewport: { width: 320, height: 1000 } });
     await page.addInitScript(unknown => {
-      window.__TAURI__ = { core: { invoke: () => Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'synthetic-observation',
+      window.__TAURI__ = { core: { invoke: command => command === 'get_resident_status' ? Promise.resolve({ protocolVersion: 1, source: 'unsupported' }) : Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'synthetic-observation',
         view: unknown ? { heading: '回収を確認できません', detail: '操作が終わっていても、安全に回収されたとは限りません。', icon: 'warning' }
           : { heading: '状態配信終了・最終報告の履歴', detail: '最終報告：回収確認済み。現在の接続や OS 全体の回収を独立に確認したものではありません。', icon: 'neutral' },
         validForMs: 0, cleanupUnknown: unknown, terminalHistory: !unknown }) } };
@@ -89,7 +91,7 @@ void test('合成のunknown警告とEOF履歴は狭幅拡大でも現在の回�
 void test('画面ライフサイクル無効化後の古い成功は通常Appへ届かない', async () => {
   const page = await browser.newPage();
   await page.addInitScript(() => {
-    window.__TAURI__ = { core: { invoke: () => new Promise(resolve => {
+    window.__TAURI__ = { core: { invoke: command => command === 'get_resident_status' ? Promise.resolve({ protocolVersion: 1, source: 'unsupported' }) : new Promise(resolve => {
       setTimeout(() => resolve({ protocolVersion: 1, source: 'mac-status', state: 'synthetic-observation',
         view: { heading: '接続を確認中', detail: 'late fixture', icon: 'checking' },
         validForMs: 3000, cleanupUnknown: false, terminalHistory: false }), 500);
@@ -108,7 +110,7 @@ void test('画面ライフサイクル無効化後の古い成功は通常Appへ
 void test('pagehide後の復帰でもfixtureの進行表示を停止したままにする', async () => {
   const page = await browser.newPage();
   await page.addInitScript(() => {
-    window.__TAURI__ = { core: { invoke: () => Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'synthetic-observation',
+    window.__TAURI__ = { core: { invoke: command => command === 'get_resident_status' ? Promise.resolve({ protocolVersion: 1, source: 'unsupported' }) : Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'synthetic-observation',
       view: { heading: '接続を確認中', detail: '閉じた表示試験です。', icon: 'checking' },
       validForMs: 3000, cleanupUnknown: false, terminalHistory: false }) } };
   });

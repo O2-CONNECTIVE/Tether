@@ -70,7 +70,7 @@ fn serialized_request_has_no_binding_path_command_or_credential_override() {
 }
 
 #[test]
-fn ordinary_shell_has_no_allowed_resident_or_binding_commands() {
+fn ordinary_shell_resident_commands_remain_unbound_and_binding_is_absent() {
     let app = crate::commands(tauri::test::mock_builder())
         .build(tauri::generate_context!(test = true))
         .unwrap();
@@ -81,18 +81,41 @@ fn ordinary_shell_has_no_allowed_resident_or_binding_commands() {
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
+    for (command, request, expected) in [
+        (
+            "get_resident_status",
+            json!({"protocolVersion":1}),
+            serde_json::to_value(model::Status::unbound()).unwrap(),
+        ),
+        (
+            "request_resident_intent",
+            intent(),
+            json!({"protocolVersion":1,"requestId":1,"intent":"on","disposition":"unavailable"}),
+        ),
+    ] {
+        let response = tauri::test::get_ipc_response(
+            &window,
+            tauri::webview::InvokeRequest {
+                cmd: command.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: crate::LOCAL_TEST_ORIGIN.parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(json!({"request":request})),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.into(),
+            },
+        )
+        .unwrap()
+        .deserialize::<Value>()
+        .unwrap();
+        assert_eq!(response, expected);
+    }
     for command in [
-        "get_resident_status",
-        "request_resident_intent",
         "bind_resident_source",
         "launch_resident",
         "set_resident_policy",
     ] {
-        let request = if command == "get_resident_status" {
-            json!({"protocolVersion":1})
-        } else {
-            intent()
-        };
+        let request = intent();
         let response = tauri::test::get_ipc_response(
             &window,
             tauri::webview::InvokeRequest {
@@ -105,13 +128,7 @@ fn ordinary_shell_has_no_allowed_resident_or_binding_commands() {
                 invoke_key: tauri::test::INVOKE_KEY.into(),
             },
         );
-        let reason = if matches!(command, "get_resident_status" | "request_resident_intent") {
-            // Metadata now describes the explicit profile, but this normal
-            // capability grants none of it. Keep the exact denial assertion.
-            format!("{command} not allowed. Permissions associated with this command: allow-{}, allow-resident-port", command.replace('_', "-"))
-        } else {
-            format!("{command} not allowed. Command not found")
-        };
+        let reason = format!("{command} not allowed. Command not found");
         assert_eq!(response.err(), Some(json!(reason)));
     }
 }

@@ -156,3 +156,19 @@ fn applied_on_is_historical_admission_not_current_connection() {
     let mut t = Tracking::default();
     assert!(feed(&mut t, &line.replace("disconnected", "unknown"), 100).is_err());
 }
+
+#[test]
+fn stale_receipt_needs_matching_rejected_observation_before_resubmission() {
+    let mut t = Tracking::default();
+    feed(&mut t, &status(1, 100, json!(null)), 100).unwrap();
+    t.begin(&request(1, 1), 100).unwrap();
+    feed(&mut t, &status(2, 300, json!(null)), 300).unwrap();
+    let receipt = br#"{"protocolVersion":1,"type":"receipt","receipt":{"protocolVersion":1,"requestId":1,"intent":"on","disposition":"stale"}}"#;
+    assert!(t
+        .event(Event::parse(receipt).unwrap(), 300)
+        .unwrap()
+        .is_some());
+    assert_eq!(t.begin(&request(2, 2), 300), Err(Disposition::Rejected));
+    feed(&mut t, &status(3, 300, transition(1, "rejected")), 300).unwrap();
+    assert!(t.begin(&request(3, 3), 300).is_ok());
+}
