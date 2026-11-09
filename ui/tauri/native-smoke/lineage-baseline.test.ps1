@@ -89,3 +89,52 @@ if ($json.Contains('PRIVATE_') -or $json.Contains('2026-11-03') -or $json.Contai
 $checks += 1
 if ($checks -ne 35) { throw 'BASELINE_FIXTURE_COUNT_MISMATCH' }
 Write-Output "LINEAGE_BASELINE_RELEASE_FIXTURE_PASS checks=11 total=$checks (synthetic only; no Windows root cause proof)"
+
+# Separate objects model separate snapshots. Never mutate the current row through
+# a shared baseline reference. Only the anonymous relation changes, not the verdict.
+$edgeCurrent = Row 25 24 'PRIVATE_EDGE_CHILD.exe' 0
+$edgeBefore = Row 25 24 'PRIVATE_EDGE_CHILD.exe' 0
+Equal (Get-LineageBaselineParentRelation $edgeCurrent @($edgeBefore)) 'same'
+$edgeBefore.ParentProcessId = 99
+Equal (Get-LineageBaselineParentRelation $edgeCurrent @($edgeBefore)) 'different'
+Equal $edgeCurrent.ParentProcessId 24
+$edgeBefore.CreationDate = $edgeBefore.CreationDate.AddSeconds(1)
+Equal (Get-LineageBaselineParentRelation $edgeCurrent @($edgeBefore)) 'unavailable'
+$edgeBefore.CreationDate = $edgeCurrent.CreationDate
+Equal (Get-LineageBaselineParentRelation $edgeCurrent @($edgeBefore, $edgeBefore)) 'ambiguous'
+Equal (Get-LineageBaselineParentRelation $edgeCurrent @()) 'unavailable'
+Equal (Get-LineageBaselineParentRelation $edgeCurrent $null) 'unavailable'
+Equal (Get-LineageBaselineParentRelation $edgeCurrent (@($edgeBefore) * 4097)) 'unavailable'
+foreach ($bad in @($null, -1, 4294967296L, '24', $true, 24.5)) {
+    $edgeBefore.ParentProcessId = $bad
+    Equal (Get-LineageBaselineParentRelation $edgeCurrent @($edgeBefore)) 'unavailable'
+}
+$edgeBefore.PSObject.Properties.Remove('ParentProcessId')
+Equal (Get-LineageBaselineParentRelation $edgeCurrent @($edgeBefore)) 'unavailable'
+$edgeBefore = Row 25 24 'PRIVATE_EDGE_CHILD.exe' 0
+$edgeCurrent.ParentProcessId = '24'
+Equal (Get-LineageBaselineParentRelation $edgeCurrent @($edgeBefore)) 'unavailable'
+$edgeCurrent.ParentProcessId = 24
+$edgeCurrent.PSObject.Properties.Remove('ParentProcessId')
+Equal (Get-LineageBaselineParentRelation $edgeCurrent @($edgeBefore)) 'unavailable'
+
+# Exercise the real rejection boundary, once for each meaningful old edge.
+# The old child matches PID+CreationDate; candidate parent is absent from baseline.
+foreach ($oldParent in @(14, 99)) {
+    $oldChild = Row 15 $oldParent 'PRIVATE_CHILD.exe' 0
+    $oldChild.CreationDate = $child.CreationDate
+    $facts = @(); $caught = 'none'
+    try { Get-OwnedApp $driver $edge 'app.exe' $graph ([ref]$facts) @($oldChild) | Out-Null }
+    catch { $caught = $_.Exception.Message }
+    Equal $caught 'NATIVE_LINEAGE_OWNER_UNCONFIRMED'
+    Equal $facts.Count 1
+    Equal $facts[0].reason 'child-older'
+    Equal $facts[0].parentBeforeDriverIdentity 'absent'
+    Equal $facts[0].childBeforeDriverIdentity 'same'
+    Equal $facts[0].childBaselineParentPidRelation $(if ($oldParent -eq 14) { 'same' } else { 'different' })
+    $json = $facts | ConvertTo-Json -Depth 6
+    if ($json.Contains('PRIVATE_') -or $json.Contains('2026-11-03') -or $json.Contains('ProcessId')) { throw 'BASELINE_FIXTURE_PRIVATE_DATA_LEAK' }
+    $checks += 1
+}
+if ($checks -ne 66) { throw 'BASELINE_FIXTURE_COUNT_MISMATCH' }
+Write-Output 'LINEAGE_BASELINE_PARENT_EDGE_FIXTURE_PASS checks=31 total=66 (synthetic only; no ancestry proof)'

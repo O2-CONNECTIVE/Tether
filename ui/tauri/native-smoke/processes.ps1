@@ -44,6 +44,24 @@ function Get-LineageBaselineIdentity($Entry, $Snapshot) {
         return 'different'
     } catch { return 'unavailable' }
 }
+# Diagnostic only: the old child's recorded parent-PID relation is not ancestry proof.
+function Get-LineageBaselineParentRelation($Entry, $Snapshot) {
+    try {
+        $identity = Get-LineageBaselineIdentity $Entry $Snapshot
+        if ($identity -eq 'ambiguous') { return 'ambiguous' }
+        if ($identity -ne 'same') { return 'unavailable' }
+        $previous = @($Snapshot | Where-Object ProcessId -eq $Entry.ProcessId)[0]
+        foreach ($row in @($Entry, $previous)) {
+            if ($null -eq $row.PSObject.Properties['ParentProcessId']) { return 'unavailable' }
+            $value = $row.ParentProcessId
+            # CIM uses uint32. Accept integral fixture values, never strings/bools/fractions.
+            if (-not ($value -is [int] -or $value -is [uint32] -or $value -is [long] -or $value -is [uint64])) { return 'unavailable' }
+            if ([decimal]$value -lt 0 -or [decimal]$value -gt [uint32]::MaxValue) { return 'unavailable' }
+        }
+        if ($Entry.ParentProcessId -eq $previous.ParentProcessId) { return 'same' }
+        return 'different'
+    } catch { return 'unavailable' }
+}
 function Stop-UnconfirmedLineage($Evidence, [string]$Reason, $Parent, $Child, $Snapshot, $ParentDepth, $Context, [string]$SearchRoot) {
     if ($null -ne $Evidence) {
         $parentKnown = Test-LineageCreation $Parent
@@ -68,6 +86,7 @@ function Stop-UnconfirmedLineage($Evidence, [string]$Reason, $Parent, $Child, $S
             timeOrder = $order
             parentBeforeDriverIdentity = Get-LineageBaselineIdentity $Parent $baseline
             childBeforeDriverIdentity = Get-LineageBaselineIdentity $Child $baseline
+            childBaselineParentPidRelation = Get-LineageBaselineParentRelation $Child $baseline
         }
     }
     throw 'NATIVE_LINEAGE_OWNER_UNCONFIRMED'
