@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tether Current GUI CI",
+  "version": "0.1.0",
+  "identifier": "com.o2connective.rescue-host.shell",
+  "build": {
+    "frontendDist": "../../../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "resident-gui-ci",
+          "description": "Disposable GUI fixture observation only, never selected by normal run.",
+          "local": true,
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "allow-shell-status",
+            "allow-resident-port",
+            "core:event:allow-emit"
+          ]
+        }
+      ],
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'"
+    },
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "../../icons/icon.png",
+      "../../icons/icon.ico"
+    ]
+  }
+}

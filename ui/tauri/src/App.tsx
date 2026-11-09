@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronRight, Square } from 'lucide-react';
 import { createAppController, initialAppState, type AppInvoke, type AppState } from './app-controller.ts';
+import { ResidentPanel } from './resident/ResidentPanel.tsx';
+import type { ResidentInvoke } from './resident/model.ts';
 import { StatusContent } from './host-status/StatusContent.tsx';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './components/ui/collapsible.tsx';
 
-export function App({ invoke }: { invoke: AppInvoke | undefined }) {
+export function App({ invoke, residentInvoke }: { invoke: AppInvoke | undefined; residentInvoke?: ResidentInvoke }) {
   const [state, setState] = useState<AppState>(initialAppState);
   const controller = useRef<ReturnType<typeof createAppController> | null>(null);
   useEffect(() => {
@@ -48,6 +50,7 @@ export function App({ invoke }: { invoke: AppInvoke | undefined }) {
         <p id="diagnostic" className="shell-code">{state.diagnostic}</p><Button id="refresh" aria-disabled={state.kind === 'checking'} aria-busy={state.kind === 'checking'} onClick={refresh}>状態を再確認</Button>
         <p className="caption">再確認は shell の状態を読み取るだけです。接続、停止、資格情報の保存は行いません。</p>
       </CollapsibleContent></Card></Collapsible>
+    <ResidentPanel invoke={residentInvoke} />
     <footer className="caption">画面を閉じる操作は、通信が終了した証明にはなりません。認可、期限、失効の判断は、この画面の表示には依存しません。</footer>
   </main>;
 }

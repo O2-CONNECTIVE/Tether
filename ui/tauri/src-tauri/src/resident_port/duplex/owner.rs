@@ -246,3 +246,13 @@ mod proof;
 #[cfg(resident_native_source)]
 #[path = "native_supervisor.rs"]
 pub(crate) mod native;
+
+// Explicit disposable-CI composition, never a normal startup path.
+#[cfg(all(target_os = "macos", resident_gui_fixture))]
+impl Supervisor {
+    pub(crate) fn gui_fixture(
+        command: std::process::Command,
+    ) -> io::Result<(Self, io::Result<BoundDuplex>)> {
+        Self::start(command, true, launcher::Attachment::Normal)
+    }
+}

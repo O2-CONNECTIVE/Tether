@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(resident_gui_fixture)");
     // Recognize, never enable, the isolated native Pump source variant.
     println!("cargo:rustc-check-cfg=cfg(resident_native_source)");
     println!("cargo:rustc-check-cfg=cfg(resident_launch_fixture)");

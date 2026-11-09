@@ -19,7 +19,7 @@ p.add_argument('role', choices=['keeper', 'observer'])
 p.add_argument('--report', type=Path, required=True)
 p.add_argument('--invocation', required=True)
 p.add_argument('--test', type=Path)
-p.add_argument('--test-name', choices=['TestCIActualProducerConnection', 'TestCIProducerTrustTLSNegative'], default='TestCIActualProducerConnection')
+p.add_argument('--test-name', choices=['TestCIActualProducerConnection', 'TestCIProducerTrustTLSNegative', 'TestCIResidentGUIWiring'], default='TestCIActualProducerConnection')
 p.add_argument('--log', type=Path)
 a = p.parse_args()
 if (os.environ.get('CI_ACTUAL_PRODUCER'), os.environ.get('RUNNER_ENVIRONMENT'),

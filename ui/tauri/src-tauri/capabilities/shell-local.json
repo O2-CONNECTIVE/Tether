@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "shell-local",
-  "description": "Read only the unwired shell status from bundled main content.",
+  "description": "Read local status and submit bounded resident intents; no source binding or launch.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["allow-shell-status"]
+  "permissions": ["allow-shell-status", "allow-resident-port"]
 }
