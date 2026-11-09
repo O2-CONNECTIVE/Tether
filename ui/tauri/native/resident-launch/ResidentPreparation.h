@@ -2,7 +2,7 @@
 #define RESIDENT_PREPARATION_H
 #include <stdint.h>
 
-/* Internal, unlinked preparation ABI. No launch or exit permission. */
+/* Internal, unlinked native owner ABI. No caller-selected launch or exit permission. */
 enum {
     RH_PREPARATION_INVALID = 0,
     RH_PREPARATION_OWNED_UNLAUNCHED = 1,
@@ -18,6 +18,10 @@ enum {
  * UNKNOWN retains the same owner and blocks replacement. Never retry close.
  * These are process-local ownership handles, not authorization credentials. */
 uint64_t rh_resident_preparation_create(void);
+/* Same original worker/Process only; fixed nested producer, zero argv, empty
+ * environment. OWNED_UNLAUNCHED means no attempt, not retirement. Run/handoff
+ * failure retains active UNKNOWN. No replacement or retry after an attempt. */
+uint32_t rh_resident_preparation_launch(uint64_t handle);
 uint32_t rh_resident_preparation_state(uint64_t handle);
 uint32_t rh_resident_preparation_retire(uint64_t handle);
 /* Borrowed bytes only; owner retains every fd. Null/zero/excessive counts are
@@ -29,7 +33,7 @@ uint64_t rh_resident_preparation_read(uint64_t handle, uint8_t * _Nullable bytes
 uint64_t rh_resident_preparation_write(uint64_t handle, const uint8_t * _Nullable bytes, uint32_t count);
 uint64_t rh_resident_preparation_half_close(uint64_t handle);
 
-/* No launch API. Same-worker completion observation: high32 tag unavailable0,
+/* Same-worker completion observation: high32 tag unavailable0,
  * pending1, exit2, signal3, unknown4, wrong-thread5; low32 signed status bits
  * only for exit/signal. Not EOF, IO cleanup or full joins. */
 uint64_t rh_resident_preparation_exit(uint64_t handle);

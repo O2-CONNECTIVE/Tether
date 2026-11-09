@@ -29,19 +29,29 @@ class NativeRustOwnerCheckerTests(unittest.TestCase):
         tool.validate_exports(normal, False)
         tool.validate_exports(normal + '\n' + '\n'.join(tool.FIXTURE_EXPORTS), True)
         for output in ['', normal.replace('_rh_resident_preparation_create', '_other'),
-                       normal + '\n_rh_fixture_preparation_create']:
+                       normal + '\n_rh_fixture_preparation_create',
+                       '\n'.join(tool.NORMAL_EXPORTS - {'_rh_resident_preparation_launch'}),
+                       normal + '\n_rh_resident_preparation_launch_path']:
             with self.subTest(output=output), self.assertRaises(ValueError):
                 tool.validate_exports(output, False)
 
-    def test_active_exports_are_observations_without_normal_fixture_creation(self):
-        self.assertEqual(len(tool.NORMAL_EXPORTS), 12)
+    def test_fixed_launch_and_observations_exclude_normal_fixture_creation(self):
+        self.assertEqual(len(tool.NORMAL_EXPORTS), 13)
         self.assertEqual(len(tool.FIXTURE_EXPORTS), 15)
-        self.assertTrue({'_rh_resident_preparation_exit', '_rh_resident_preparation_retire_active_io',
+        self.assertTrue({'_rh_resident_preparation_launch', '_rh_resident_preparation_exit', '_rh_resident_preparation_retire_active_io',
                          '_rh_resident_preparation_abandon_active',
                          '_rh_resident_preparation_request_active_close',
                          '_rh_resident_preparation_discard_observation'} <= tool.NORMAL_EXPORTS)
         self.assertNotIn('_rh_fixture_preparation_create_active', tool.NORMAL_EXPORTS)
         self.assertIn('_rh_fixture_preparation_create_active', tool.FIXTURE_EXPORTS)
+
+    def test_synthetic_launch_refusal_requires_retired_original_io_without_child(self):
+        self.assertEqual(tool.CASES['launch-refusal'], 10)
+        self.assertEqual(tool.validate_report(
+            'launch-refusal', 'NATIVE_RUST_OWNER mode=launch-refusal passed=10 failed=0 launched=0\n'), 10)
+        with self.assertRaises(ValueError):
+            tool.validate_report('launch-refusal',
+                                 'NATIVE_RUST_OWNER mode=launch-refusal passed=10 failed=0 launched=1\n')
 
     def test_compile_failure_must_be_the_specific_trait_rejection(self):
         diagnostic = {'level': 'error', 'code': {'code': 'E0277'}, 'message': 'Rc<()> cannot be sent between threads safely'}

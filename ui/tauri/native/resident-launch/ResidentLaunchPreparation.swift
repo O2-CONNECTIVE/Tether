@@ -36,15 +36,18 @@ struct ObservedProcessExit: Equatable {
 enum ProcessCompletionObservation {
     case unavailable, pending, observed(ObservedProcessExit), unknown
 }
+enum ProducerLaunchResult { case notAttempted, active, unknown }
+
 private enum ProcessCompletionPhase {
     case unlaunched, running, waited(ObservedProcessExit), unknown
 }
 
 // Partial native owner preparation only. Not linked into normal Tauri startup.
-// No production executableURL, argv, launch/run, PID, signal or readiness API.
+// Fixed native launch only; no caller path/argv/env, PID or readiness override.
 // This object is not Sendable: later FFI must retain it on its original worker.
 final class ResidentLaunchPreparation {
     private let task: Process
+    private let productionRelease: Bool
     private let io = OwnedPreparationIO()
     private var completion: ProcessCompletionPhase = .unlaunched
     #if RESIDENT_LAUNCH_FIXTURE
@@ -68,11 +71,11 @@ final class ResidentLaunchPreparation {
         guard let release = ApprovedRelease.production else {
             throw PreparationFailure.publisherUnconfigured
         }
-        return try ResidentLaunchPreparation(release: release)
+        return try ResidentLaunchPreparation(release: release, production: true)
     }
 
     @available(macOS 14.4, *)
-    private init(release: ApprovedRelease) throws {
+    private init(release: ApprovedRelease, production: Bool) throws {
         try release.validate()
         let requirement = try LaunchCodeRequirement.allOf {
             TeamIdentifier(release.team)
@@ -86,14 +89,49 @@ final class ResidentLaunchPreparation {
             throw PreparationFailure.requirementNotRetained
         }
         task = process
+        productionRelease = production
         #if RESIDENT_LAUNCH_FIXTURE
         expectedStructure = try Self.structure(requirement)
         isCompletionFixture = false
         #endif
     }
 
-    // Never infer exit from !isRunning before actual run succeeded. The only
-    // current run call is the fixed test-only self-child below, not a producer.
+    // Uses the same prepared Process and original pipe owner. Preparation still
+    // stops at nil ApprovedRelease.production; fixtures cannot activate this path.
+    func launchEnrolledProducer() -> ProducerLaunchResult {
+        guard productionRelease, case .unlaunched = completion,
+              #available(macOS 14.4, *), task.launchRequirement != nil,
+              io.readyToLaunch(task) else { return .notAttempted }
+        let bundle = Bundle.main
+        guard bundle.bundleIdentifier == "com.o2connective.rescue-host.shell",
+              bundle.bundleURL.isFileURL, bundle.bundleURL.pathExtension == "app",
+              let executable = bundle.executableURL,
+              executable.deletingLastPathComponent().standardizedFileURL ==
+                bundle.bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true).standardizedFileURL else {
+            return .notAttempted
+        }
+        task.executableURL = bundle.bundleURL.appendingPathComponent("Contents/Helpers/resident-pipe", isDirectory: false)
+        task.arguments = []
+        task.environment = [:]
+        task.currentDirectoryURL = URL(fileURLWithPath: "/", isDirectory: true)
+        task.standardError = FileHandle.nullDevice
+        do { return try startConfiguredProcess() ? .active : .unknown }
+        catch { return .unknown } // No failed run can become a NotSpawned receipt.
+    }
+
+    // Shared by production and finite untrusted self-child IO fixtures. It never
+    // alters launchRequirement or executable inputs and never replaces task/io.
+    private func startConfiguredProcess() throws -> Bool {
+        guard case .unlaunched = completion, io.readyToLaunch(task) else {
+            throw PreparationFailure.ioPreparation
+        }
+        completion = .unknown
+        try task.run()
+        completion = .running
+        return transferOwnedIO()
+    }
+
+    // Never infer exit from !isRunning before actual run succeeded.
     func processExit() -> ObservedProcessExit? {
         if case let .waited(result) = completion { return result }
         guard case .running = completion, !task.isRunning else { return nil }
@@ -161,6 +199,7 @@ final class ResidentLaunchPreparation {
     enum CompletionFixtureMode: String { case exitZero = "exit-zero", exitTwo = "exit-two", signal, held }
     private init(completionFixture: Void) {
         task = Process() // Separate untrusted test actor; no requirement override.
+        productionRelease = false
         expectedStructure = Data()
         isCompletionFixture = true
     }
@@ -213,14 +252,11 @@ final class ResidentLaunchPreparation {
         if mode == .lost { io.loseCloseAcknowledgement = true }
         task.environment = [:]
         task.standardError = FileHandle.nullDevice
-        completion = .unknown
-        do { try task.run() }
+        do { return try startConfiguredProcess() }
         catch {
             if mode == .finiteHeld { _ = io.releaseFixtureControlEOF() }
             throw error
         }
-        completion = .running
-        return transferOwnedIO()
     }
     func releaseFixtureControlEOF() -> Bool { io.releaseFixtureControlEOF() }
     func fixtureOwnedDescriptors() -> [Int32] { io.fixtureDescriptors() }
@@ -245,7 +281,7 @@ final class ResidentLaunchPreparation {
         guard supports(version), #available(macOS 14.4, *) else {
             throw PreparationFailure.unsupportedOS
         }
-        return try ResidentLaunchPreparation(release: ApprovedRelease(team: team, hashes: hashes))
+        return try ResidentLaunchPreparation(release: ApprovedRelease(team: team, hashes: hashes), production: false)
     }
 
     struct Snapshot {
