@@ -2,15 +2,20 @@
 
 package residentpipe
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // Fixed public enums only. Never include errors, paths, payloads or identities.
 // The stage is set before an operation; failure records the first failing site.
 type ciDiagnostic struct {
-	stage, failure string
-	toolOperation  string
-	commandID      string
-	toolResult     map[string]string
+	stage, failure    string
+	toolOperation     string
+	commandID         string
+	toolResult        map[string]string
+	producerRequestID uint64 // private correlation only, never published
+	producerIntent    string
 }
 
 func (d *ciDiagnostic) at(stage string) { d.stage = stage }
@@ -126,5 +131,91 @@ func (d *ciDiagnostic) annotate(outcome map[string]any) {
 			value = "unavailable"
 		}
 		outcome[field] = value
+	}
+}
+
+// The ID and intent identify the one request attempted by this fixture. Clearing
+// before submission prevents an OFF submission failure from reusing ON evidence.
+func (d *ciDiagnostic) beginProducerRequest(intent string) {
+	d.producerRequestID = 0
+	d.producerIntent = intent
+}
+
+var ciProducerEnums = map[string][]string{
+	"producer_request_intent": {"on", "off"},
+	"producer_receipt":        {"missing", "accepted", "rejected", "stale", "unknown", "mismatch"},
+	"producer_snapshot":       {"missing", "within-window", "expired", "observation-unknown"},
+	"producer_standby":        {"off", "on", "stopping", "unknown"},
+	"producer_registration":   {"disconnected", "connecting", "authenticated", "unknown"},
+	"producer_work":           {"idle", "preparing", "running", "stopping", "unknown"},
+	"producer_cleanup":        {"confirmed", "pending", "unknown"},
+	"producer_transition":     {"missing", "other-request", "pending", "applied", "rejected", "unknown"},
+}
+
+func ciProducerEnum(field, value string) string {
+	for _, allowed := range ciProducerEnums[field] {
+		if value == allowed {
+			return allowed
+		}
+	}
+	return "unavailable"
+}
+
+// Copy only the latest cached state under the existing lock. Receive age is not
+// a new producer observation, complete transition history, or cleanup proof.
+// No status request, wait, retry, native query or owner intervention is added.
+func (d *ciDiagnostic) annotateProducer(outcome map[string]any, p *ciChild, now time.Time) {
+	for field := range ciProducerEnums {
+		outcome[field] = "unavailable"
+	}
+	intent := ciProducerEnum("producer_request_intent", d.producerIntent)
+	outcome["producer_request_intent"] = intent
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	requestKnown := d.producerRequestID != 0 && d.producerRequestID <= MaxInteger && intent != "unavailable"
+	if requestKnown {
+		outcome["producer_receipt"] = "missing"
+		if r, ok := p.receipts[d.producerRequestID]; ok {
+			outcome["producer_receipt"] = "mismatch"
+			if r.RequestID == d.producerRequestID && r.Intent == intent {
+				outcome["producer_receipt"] = ciProducerEnum("producer_receipt", r.Disposition)
+			}
+		}
+	}
+	outcome["producer_snapshot"] = "missing"
+	if p.unknown || p.readErr != nil {
+		outcome["producer_snapshot"] = "observation-unknown"
+	} else if !p.observed.IsZero() {
+		age := now.Sub(p.observed)
+		switch {
+		case age < 0:
+			outcome["producer_snapshot"] = "unavailable"
+		case age > 3*time.Second:
+			outcome["producer_snapshot"] = "expired"
+		default:
+			outcome["producer_snapshot"] = "within-window"
+		}
+	}
+	if p.observed.IsZero() {
+		return
+	}
+	s := p.snapshot
+	for field, value := range map[string]string{
+		"producer_standby": s.Standby, "producer_registration": s.Registration,
+		"producer_work": s.Work, "producer_cleanup": s.Cleanup,
+	} {
+		outcome[field] = ciProducerEnum(field, value)
+	}
+	if requestKnown {
+		outcome["producer_transition"] = "missing"
+		if tr := s.Transition; tr != nil {
+			outcome["producer_transition"] = "other-request"
+			if tr.RequestID == d.producerRequestID && tr.Intent == intent {
+				outcome["producer_transition"] = ciProducerEnum("producer_transition", tr.Outcome)
+			}
+		}
 	}
 }

@@ -4,8 +4,8 @@ from pathlib import Path
 
 MAX_BYTES = 16384
 _ENUMS = json.loads((Path(__file__).resolve().parents[1] / 'ci-producer/DIAGNOSTIC_ENUMS.json').read_text())
-GROUPS = (_ENUMS['result_fields'], _ENUMS['native_fields'])
-ALLOWED = {'stage': _ENUMS['stages'], 'failure_code': _ENUMS['failure_codes'], **GROUPS[0], **GROUPS[1]}
+GROUPS = (_ENUMS['result_fields'], _ENUMS['native_fields'], _ENUMS['producer_fields'])
+ALLOWED = {'stage': _ENUMS['stages'], 'failure_code': _ENUMS['failure_codes'], **GROUPS[0], **GROUPS[1], **GROUPS[2]}
 
 
 def _reject(reason):

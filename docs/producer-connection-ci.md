@@ -45,6 +45,18 @@ each new tool call clears the preceding snapshot. Missing, malformed or
 unrecognized data becomes `unavailable` or `null`. They never change the failed
 result or supersede the immutable observer verdict.
 
+Failure summaries also carry fixed `producer_*` fields for the current fixture
+request's same-ID/intent receipt and latest cached producer snapshot. These can
+distinguish stale/rejected/missing/accepted receipts at OFF without changing the
+original timeout. Snapshot `within-window` is only the existing receive-age
+bound, not a new producer observation. The latest transition is not complete
+history; an accepted receipt without a latest matching applied transition does
+not establish why application was unobserved. Expired or unknown observations
+retain only cached state enums, never cleanup proof. No request ID, revision,
+raw frame, retry or additional producer/native operation is introduced.
+Missing older-marker fields are unavailable. See the
+[diagnostic contract](../ci-producer/DIAGNOSTIC_ENUMS.json).
+
 Optional native first/final cleanup fields are fixed enums from the original
 cleanup calls, correlated privately to the exact command. An unavailable or
 invalid capture leaves all snapshot fields unavailable; diagnostic flags also
