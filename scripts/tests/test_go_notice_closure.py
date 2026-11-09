@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import build_mac_sealed_producer as builder
@@ -47,7 +48,7 @@ class GoNoticeClosureTests(unittest.TestCase):
         self.image = (struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 1, 24, 0, 0)
                       + struct.pack('<6I', 0x32, 24, 1, 27 << 16, 27 << 16, 0))
         (self.producer / 'resident-pipe').write_bytes(self.image)
-        files = {'backend/' + package[len(builder.source.PROJECT):].lstrip('/') + '/' + name: 'c'*64
+        files = {package.replace(builder.source.PROJECT, 'backend', 1) + '/' + name: 'c'*64
                  for package, names in product_files_for('darwin', True).items() for name in names}
         self.record = {
             'schema': 'tether-mac-sealed-producer-build/1', 'repository': 'O2-CONNECTIVE/Tether',
@@ -104,6 +105,43 @@ class GoNoticeClosureTests(unittest.TestCase):
         self.assertIs(value['noticeCompletenessVerified'], False)
         self.assertIn('stdlib-vendored-notices', value['unverifiedScopes'])
         self.assertIn('source-and-recipe-correspondence', value['unverifiedScopes'])
+
+    def test_real_snapshot_function_emits_canonical_record_paths(self):
+        # Exercise the producer's real snapshot function, not a second copy of
+        # the checker mapping. Only Git blob reads and recipe source are fake.
+        recipe_root = self.root / 'recipe-source'
+        blobs = {'backend/' + name: data for name, data in self.locks.items()}
+        for relative in builder.RECIPE:
+            path = recipe_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'# anonymous recipe fixture\n')
+            blobs[relative] = path.read_bytes()
+        with patch.object(builder.source, 'ROOT', recipe_root), patch.object(
+                builder.source, 'source_blob', side_effect=lambda revision, name:
+                blobs.get(name, b'package fixture\n')):
+            files, locks, recipe = builder.source.snapshot(SOURCE, self.root / 'snapshot', builder.RECIPE)
+        self.assertEqual({path for path in files if path.count('/') == 1},
+                         {'backend/activity.go', 'backend/session.go', 'backend/transport.go'})
+        self.assertIn('backend/cmd/resident-pipe/main.go', files)
+        self.assertTrue(all('//' not in path and '/./' not in path for path in files))
+        self.record.update(snapshotGoFiles=files, locks=locks, recipe=recipe)
+        self.save()
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIs(json.loads(result.stdout)['selectedModuleNoticesMatched'], True)
+
+    def test_noncanonical_snapshot_path_keys_are_refused(self):
+        original = copy.deepcopy(self.record['snapshotGoFiles'])
+        for valid, invalid in [('backend/activity.go', 'backend//activity.go'),
+                               ('backend/activity.go', 'backend/./activity.go'),
+                               ('backend/activity.go', 'backend/../backend/activity.go'),
+                               ('backend/cmd/resident-pipe/main.go',
+                                'backend/cmd//resident-pipe/main.go')]:
+            with self.subTest(invalid=invalid):
+                self.record['snapshotGoFiles'] = original.copy()
+                self.record['snapshotGoFiles'][invalid] = self.record['snapshotGoFiles'].pop(valid)
+                self.save()
+                self.rejected('GO_NOTICE_BUILD_SCHEMA_INVALID')
 
     def test_selected_subset_is_not_confused_with_all_locked_modules(self):
         self.record['modules'] = self.record['modules'][:1]

@@ -29,6 +29,7 @@ python scripts/verify_go_notice_closure.py \
 
 同じ入力からhashを取り出して渡すだけでは独立した来歴の根拠になりません。source SHAも対応宣言として照合し、Git checkout・sourceTree・source/recipeの実bytesや署名を認証しません。
 
+- snapshotのpathはbuilderと同じPOSIX形式で照合します。root packageは `backend/activity.go` のように区切りを1個にし、record内の二重slash・dot・親参照を正規化して受け入れません。
 - producer-rootは `BUILD_RECORD.json` と `resident-pipe` の2 filesだけです。現在のsealed producer schema、固定role/target/settings/flags、全blocked/false境界、snapshot/recipeのpath集合・hash形式、repository package宣言を検査します。
 - imageの実bytesを外部期待hashとrecordのhash/sizeへ照合し、既存Mach-O parserでexecutable/CPU/modern macOS header宣言を確認します。loader検証・署名検証・source対応証明ではありません。
 - module-rootの `go.mod` / `go.sum` を既存collectorの固定lock規則に照合し、その実bytesのhashをrecordとinventoryへ対応づけます。他のsource fileは読みません。
@@ -56,5 +57,7 @@ recordは256KiB、inventoryは64KiB、各lock/本文は16KiB、imageは64MiBが�
 python -m unittest scripts.tests.test_go_notice_closure -v
 python -OO -m unittest scripts.tests.test_go_notice_closure -v
 ```
+
+root packageのpath回帰は、Git blob読取とrecipe用sourceをfixtureへ置き換えた実snapshot関数の出力をCLIへ渡し、修正前のexit1から同じ入力のexit2を確認します。固定のroot3 pathとnested pathを明示し、二重slash・dot・親参照の拒否も検査します。合成fixture自身はcheckerと別のpath組立てを使います。
 
 匿名Mach-O bytesと既存固定license fixtureだけを使い、実compiler/cache/native/networkを使いません。既存Python offline CIの全helper discoveryがこのtestを収集します。POSIX symlink/FIFO試験はWindowsで明示skipとし、Windows reparseを実証済みにしません。合成試験の成功は実producer artifact・完全なGo graph・Mac notice閉包の証拠ではありません。

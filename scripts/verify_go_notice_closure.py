@@ -8,7 +8,7 @@ import argparse
 from datetime import datetime
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 
 import build_mac_sealed_producer as builder
@@ -92,7 +92,7 @@ def check_record(record, source, locks, image, image_sha):
     require(same(record['locks'], {'backend/' + name: mac.sha(data) for name, data in locks.items()}),
             'GO_NOTICE_LOCK_MISMATCH')
     packages = product_files_for('darwin', True)
-    files = {'backend/' + path[len(builder.source.PROJECT):].lstrip('/') + '/' + name
+    files = {str(PurePosixPath('backend') / path[len(builder.source.PROJECT):].lstrip('/') / name)
              for path, names in packages.items() for name in names}
     require(hash_map(record['snapshotGoFiles'], files) and hash_map(record['recipe'], builder.RECIPE),
             'GO_NOTICE_BUILD_SCHEMA_INVALID')
