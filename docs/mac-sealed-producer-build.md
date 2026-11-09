@@ -32,3 +32,5 @@ schemaは `tether-mac-sealed-producer-build/1`。source SHA/tree、UTC build時�
 5. 配布許可、署名/notarization、受領者Macと実dot接続で評価します。材料recordやCI合格だけでは「ダウンロードして接続できる版」になりません。
 
 sealed commandと固定enrollment loaderはsourceとして存在しますが、従来archiveの `PRODUCER_ENTRYPOINT_UNBOUND` / `POLICY_SELECTION_UNBOUND` はそのarchiveに対するtrusted native binding未構成を指します。今回recordは実commandを明記し、未構成release/enrollmentを個別blockerとして残します。
+
+GUI 側の次段の入口として、[固定 GUI/Swift link-layout 照合](mac-gui-link-layout.md)を追加しました。任意の一時 build directory への rpath を受理せず、同梱する native library の固定位置と参照を読み取ります。実 GUI build、三 image の材料契約や署名済み組立が完了したことは意味しません。
