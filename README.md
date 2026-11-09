@@ -35,7 +35,7 @@ Tetherの共通サービスにCLI・GUI・MCPを接続し、認可・失効・�
 
 ## 現在地
 
-進捗確認: 2026-11-08、source基点 `18d78c4e`（[#291](https://github.com/O2-CONNECTIVE/Tether/pull/291)）。この基点のCI結果は同PRの固定SHA記録で確認してください。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
+進捗確認: 2026-11-09、source基点 `18d78c4e`（[#291](https://github.com/O2-CONNECTIVE/Tether/pull/291)）。この基点のCI結果は[#189の固定merge SHA記録](https://github.com/O2-CONNECTIVE/Tether/issues/189)と[実producerのpostmerge検証](https://github.com/O2-CONNECTIVE/Tether/actions/runs/42542537888)で確認してください。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
 
 - **接続の隔離検証:** [#252](https://github.com/O2-CONNECTIVE/rescue-host/pull/252)の実loopback TCP/TLSと、[#253](https://github.com/O2-CONNECTIVE/rescue-host/pull/253)のMac実producer・固定command・OFF・元所有者終了確認を統合。合成認証と試験用CA/overlayを使い、実dotや通常製品認証は未受入です。#253初回のfailed-unknownは原因未解明のまま保持します。
 - **共通所有と停止:** [#267](https://github.com/O2-CONNECTIVE/rescue-host/pull/267)のMac公開stack、[#269](https://github.com/O2-CONNECTIVE/rescue-host/pull/269)の故障後有限出力回収、[#270](https://github.com/O2-CONNECTIVE/rescue-host/pull/270)のHTTP失効・OFF回帰、[#271](https://github.com/O2-CONNECTIVE/rescue-host/pull/271)の原子的pipe取得を統合。実GUI/dot・署名済みlaunch・製品全回収/Quitの完了ではありません。
