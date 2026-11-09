@@ -1,4 +1,4 @@
-//! Disposable CI only: real WebView/IPC/owned pipes, synthetic peer only.
+//! Disposable CI only: real WebView/IPC/owned pipes, real Go Standby with synthetic loopback trust only.
 //! This does not activate the Mac27 sealed native launcher or enroll a host.
 use crate::resident_gui_probe as probe;
 use crate::resident_port::{duplex::owner::Supervisor, ResidentPort};
@@ -53,11 +53,12 @@ fn report(path: &PathBuf, invocation: &str, passed: bool) {
         "test": TEST, "invocation": invocation,
         "outcome": if passed {"passed"} else {"failed-unknown"},
         "cleanup": if passed {"confirmed"} else {"unconfirmed"},
-        "scope": "real-webview-ipc-synthetic-pipe",
+        "scope": "real-webview-ipc-go-standby-loopback",
         "native27_launch": "not-tested", "product_connection": "not-tested",
         "source": std::env::var("CI_GUI_SOURCE_SHA").unwrap_or_default(),
         "build_utc": std::env::var("CI_GUI_BUILD_UTC").unwrap_or_default(),
         "binary_sha256": std::env::var("CI_GUI_BINARY_SHA256").unwrap_or_default(),
+        "producer_sha256": std::env::var("CI_GUI_PRODUCER_SHA256").unwrap_or_default(),
         "label": "カレントの検証版"
     });
     let bytes = serde_json::to_vec(&value).unwrap();
@@ -101,15 +102,21 @@ pub(super) fn run() {
         std::process::exit(2);
     }
     probe::identity(event);
-    let mut command = std::process::Command::new("/usr/bin/python3");
+    let binary = PathBuf::from(std::env::var("CI_GUI_PRODUCER_BINARY").unwrap_or_default());
+    if !binary.is_absolute() || !binary.is_file() {
+        std::process::exit(2);
+    }
+    let mut command = std::process::Command::new(binary);
     command
         .args([
-            "-I",
-            "-u",
-            "-c",
-            include_str!("../tests/resident-gui/producer.py"),
+            "-test.run=^TestCIResidentGUIProducer$",
+            "-test.count=1",
+            "-test.timeout=0",
         ])
         .env_clear();
+    for (key, value) in expected {
+        command.env(key, value);
+    }
     let (producer, source) = match Supervisor::gui_fixture(command) {
         Ok(parts) => parts,
         Err(_) => {

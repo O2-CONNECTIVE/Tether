@@ -2,10 +2,10 @@ name: Mac resident GUI wiring
 on:
   pull_request:
     branches: [main]
-    paths: ['ui/tauri/**', 'ci-producer/supervise_ci.py', '.github/workflows/mac-resident-gui.yml']
+    paths: ['ui/tauri/**', 'ci-producer/**', 'backend/**', '.github/workflows/mac-resident-gui.yml']
   push:
     branches: [main]
-    paths: ['ui/tauri/**', 'ci-producer/supervise_ci.py', '.github/workflows/mac-resident-gui.yml']
+    paths: ['ui/tauri/**', 'ci-producer/**', 'backend/**', '.github/workflows/mac-resident-gui.yml']
 permissions:
   contents: read
 concurrency:
@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   gui:
-    name: Real WebView, IPC and synthetic owned pipe (Mac ARM64)
+    name: Real WebView, IPC and Go Standby (Mac ARM64)
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -31,6 +31,27 @@ jobs:
           test "$(uname -m)" = arm64
           test "$(sw_vers -productVersion | cut -d. -f1)" -ge 27
           test "$(xcodebuild -version | head -n 1)" = 'Xcode 27.1'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          architecture: arm64
+          cache: false
+      - name: Build source-pinned Go producer composition
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: 'off'
+          GOENV: 'off'
+          GOFLAGS: ''
+          CGO_ENABLED: '1'
+        run: |
+          (cd backend && go mod download && go mod verify)
+          python3 -m unittest discover -s ci-producer -p 'test_*.py' -v
+          python3 ci-producer/prepare_overlay.py
+          producer="$RUNNER_TEMP/resident-gui-producer.test"
+          (cd backend && GOPROXY=off GOSUMDB=off go test -c -mod=readonly -p=1 -tags=ci_actual_producer "-overlay=$GITHUB_WORKSPACE/ci-producer/OVERLAY.json" -o "$producer" ./internal/residentpipe)
+          git diff --exit-code -- backend/go.mod backend/go.sum
+          echo "CI_GUI_PRODUCER_BINARY=$producer" >> "$GITHUB_ENV"
+          echo "CI_GUI_PRODUCER_SHA256=$(shasum -a 256 "$producer" | awk '{print $1}')" >> "$GITHUB_ENV"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.1'
@@ -53,6 +74,7 @@ jobs:
       - name: Run real GUI through original owner keeper
         run: |
           umask 077
+          test "$(shasum -a 256 "$CI_GUI_PRODUCER_BINARY" | awk '{print $1}')" = "$CI_GUI_PRODUCER_SHA256"
           export CI_ACTUAL_PRODUCER=1
           export CI_GUI_SOURCE_SHA="$(git rev-parse HEAD)"
           export CI_GUI_BUILD_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -80,6 +102,7 @@ jobs:
           test "$observer_status" -eq 0
           wait "$keeper"
           python3 ui/tauri/src-tauri/tests/resident-gui/bundle.py verify "$source_binary" "$run_dir"
+          test "$(shasum -a 256 "$CI_GUI_PRODUCER_BINARY" | awk '{print $1}')" = "$CI_GUI_PRODUCER_SHA256"
           python3 - <<'PY'
           import json, os
           from pathlib import Path
@@ -87,6 +110,7 @@ jobs:
           assert r['outcome'] == 'passed' and r['cleanup'] == 'confirmed'
           assert r['source'] == os.environ['CI_GUI_SOURCE_SHA']
           assert r['binary_sha256'] == os.environ['CI_GUI_BINARY_SHA256']
-          assert r['scope'] == 'real-webview-ipc-synthetic-pipe'
+          assert r['scope'] == 'real-webview-ipc-go-standby-loopback'
+          assert r['producer_sha256'] == os.environ['CI_GUI_PRODUCER_SHA256']
           print(json.dumps(r, ensure_ascii=False))
           PY

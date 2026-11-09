@@ -5,17 +5,20 @@ void test('resident controls use shared IPC and wait for applied observations', 
   const page = await browser.newPage({ viewport: { width: 900, height: 1000 } });
   await page.addInitScript(() => {
     let revision = 1, on = false;
+    let registration = 'disconnected';
     let transition: { requestId: number; intent: 'on' | 'off'; outcome: 'applied' } | null = null;
     window.__TAURI__ = { core: { invoke: (command, args) => {
       if (command === 'get_status_presentation') return Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' });
       if (command === 'get_resident_status') return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation',
-        revision, validForMs: 3000, standby: on ? 'on' : 'off', registration: on ? 'authenticated' : 'disconnected', caller: null,
+        revision, validForMs: 3000, standby: on ? 'on' : 'off', registration, caller: null,
         work: 'idle', cleanup: 'confirmed', canRequestOn: !on, canRequestOff: on, transition });
       if (command !== 'request_resident_intent') return Promise.reject(new Error('unexpected operation'));
       const request = args.request as { requestId: number; expectedRevision: number; intent: 'on' | 'off' };
-      if (request.expectedRevision !== revision || request.requestId !== revision) return Promise.reject(new Error('invalid request'));
+      if (request.expectedRevision !== revision || request.requestId !== (on ? 2 : 1)) return Promise.reject(new Error('invalid request'));
       document.documentElement.dataset.residentCalls = String(request.requestId);
-      setTimeout(() => { on = request.intent === 'on'; revision++; transition = { requestId: request.requestId, intent: request.intent, outcome: 'applied' }; }, 300);
+      setTimeout(() => { on = request.intent === 'on'; registration = on ? 'connecting' : 'disconnected';
+        if (on) setTimeout(() => { registration = 'authenticated'; revision++; }, 800);
+        revision++; transition = { requestId: request.requestId, intent: request.intent, outcome: 'applied' }; }, 300);
       return Promise.resolve({ protocolVersion: 1, requestId: request.requestId, intent: request.intent, disposition: 'accepted' });
     } } };
   });
@@ -26,9 +29,13 @@ void test('resident controls use shared IPC and wait for applied observations', 
   assert.match(await page.locator('#resident-heading').innerText(), /変更を確認中/);
   await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('#resident-off')?.disabled === false);
   assert.match(await page.locator('#resident-heading').innerText(), /ONを確認/);
+  assert.match(await page.locator('#resident-state').innerText(), /接続: connecting/);
+  await page.waitForFunction(() => document.querySelector('#resident-panel')?.getAttribute('data-resident-registration') === 'authenticated');
+  assert.match(await page.locator('#resident-state').innerText(), /接続: authenticated/);
   await page.locator('#resident-off').click();
   await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('#resident-on')?.disabled === false);
   assert.match(await page.locator('#resident-heading').innerText(), /OFFを確認/);
+  assert.match(await page.locator('#resident-state').innerText(), /接続: disconnected/);
   assert.equal(await page.locator('html').getAttribute('data-resident-calls'), '2');
   await page.setViewportSize({ width: 320, height: 1000 });
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });

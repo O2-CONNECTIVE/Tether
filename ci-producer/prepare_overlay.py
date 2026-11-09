@@ -62,7 +62,7 @@ packages = {'ci_native_capture.go': 'macagent', 'ci_native_capture_test.go': 'ma
             'ci_producer_entry.go': 'residentpipe', 'ci_gateway_test.go': 'residentpipe',
             'ci_work_bootstrap.go': 'residentclient', 'ci_work_child_test.go': 'residentpipe',
             'ci_mcp_test.go': 'residentpipe', 'ci_child_test.go': 'residentpipe',
-            'ci_connection_test.go': 'residentpipe', 'ci_observation_test.go': 'residentpipe', 'ci_diagnostic_test.go': 'residentpipe'}
+            'ci_gui_producer_test.go': 'residentpipe', 'ci_connection_test.go': 'residentpipe', 'ci_observation_test.go': 'residentpipe', 'ci_diagnostic_test.go': 'residentpipe'}
 for name, package in packages.items():
     fixture = ROOT / 'fixtures' / name
     if not fixture.is_file():

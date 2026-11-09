@@ -73,6 +73,8 @@ class PreparationTests(unittest.TestCase):
                     runpy.run_path(str(script), run_name='__main__')
             execute()
             mapping = json.loads((root / 'OVERLAY.json').read_text())['Replace']
+            self.assertEqual(mapping[str(backend / 'internal/residentpipe/ci_gui_producer_test.go')], str(fixtures / 'ci_gui_producer_test.go'))
+            self.assertNotIn(str(backend / 'internal/residentmac/standby.go'), mapping)
             self.assertNotIn(str(backend / 'cmd/tether-host/main.go'), mapping)
             self.assertNotIn(str(backend / 'cmd/tether-work/main.go'), mapping)
             self.assertEqual(mapping[str(backend / 'cmd/tether-work/entry.go')], str(fixtures / 'ci_work_entry.go'))

@@ -63,7 +63,12 @@ export function createResidentController({ invoke, onChange, now = () => perform
         if (pending && (pending.id !== t.requestId || pending.intent !== t.intent)) return fail('RESIDENT_INTENT_UNCONFIRMED');
         pending ??= { id: t.requestId, intent: t.intent };
       }
-      if (next.cleanup === 'unknown' || next.standby === 'unknown' || t?.outcome === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN');
+      // The Go mapper deliberately withholds ON while initial authentication is pending.
+      // This exact nonterminal shape grants no action and cannot excuse cleanup uncertainty.
+      const pendingOn = t?.intent === 'on' && t.outcome === 'pending' && pending?.id === t.requestId
+        && next.registration === 'connecting' && next.work === 'idle' && next.cleanup === 'confirmed'
+        && !next.canRequestOn && !next.canRequestOff;
+      if (next.cleanup === 'unknown' || (next.standby === 'unknown' && !pendingOn) || t?.outcome === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN');
       if (pending && t?.requestId === pending.id && t.intent === pending.intent && (t.outcome === 'applied' || t.outcome === 'rejected')) pending = undefined;
       clearTimeout(expiry);
       expiry = setTimeout(() => fail('RESIDENT_OBSERVATION_EXPIRED'), Math.max(0, until - received));
