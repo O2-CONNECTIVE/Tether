@@ -34,7 +34,18 @@ func TestCIResidentGUIProducer(t *testing.T) {
 			runtime.KeepAlive(gateway)
 		}
 	})
-	root, err := os.MkdirTemp("", "tether-gui-producer-")
+	// Match the existing actual-producer fixture: policy and key must be below
+	// the canonical checkout, not the default world-writable /tmp ancestor.
+	// The unchanged protected reader still validates every held path component.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal("fixture working directory unavailable")
+	}
+	cwd, err = filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatal("fixture working directory unresolved")
+	}
+	root, err := os.MkdirTemp(cwd, ".ci-gui-producer-")
 	if err != nil {
 		t.Fatal("fixture root unavailable")
 	}
