@@ -64,7 +64,16 @@ enum Bootstrap {
 impl Bootstrap {
     fn open(self) -> (Preparation, bool, bool) {
         match self {
-            Self::Preparation => (NativePreparation::prepare(), false, false),
+            Self::Preparation => {
+                let preparation = match NativePreparation::prepare() {
+                    Preparation::Owned(mut owner) => {
+                        let _ = owner.launch();
+                        Preparation::Owned(owner)
+                    }
+                    other => other,
+                };
+                (preparation, false, false)
+            }
             #[cfg(resident_launch_fixture)]
             Self::PreparedFixture => (
                 NativePreparation::fixture(crate::native_preparation::FixedFixture::Normal),
@@ -83,7 +92,7 @@ impl Bootstrap {
     }
 }
 impl NativeIoSupervisor {
-    // Concrete closed preparation only. No signed active launcher exists yet.
+    // Closed launch composition; missing real release identity still refuses.
     pub(crate) fn prepare() -> io::Result<(Self, io::Result<BoundDuplex>)> {
         Self::start(Bootstrap::Preparation)
     }
