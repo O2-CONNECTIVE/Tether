@@ -431,6 +431,18 @@ jobs:
               'gateway_cleanup': {'unavailable', 'pending', 'confirmed', 'unknown'},
           }
           public.update({field: 'unavailable' for field in result_fields})
+          # Cached producer observation only; receive age is not cleanup proof.
+          producer_fields = {
+              'producer_request_intent': {'unavailable', 'on', 'off'},
+              'producer_receipt': {'unavailable', 'missing', 'accepted', 'rejected', 'stale', 'unknown', 'mismatch'},
+              'producer_snapshot': {'unavailable', 'missing', 'within-window', 'expired', 'observation-unknown'},
+              'producer_standby': {'unavailable', 'off', 'on', 'stopping', 'unknown'},
+              'producer_registration': {'unavailable', 'disconnected', 'connecting', 'authenticated', 'unknown'},
+              'producer_work': {'unavailable', 'idle', 'preparing', 'running', 'stopping', 'unknown'},
+              'producer_cleanup': {'unavailable', 'confirmed', 'pending', 'unknown'},
+              'producer_transition': {'unavailable', 'missing', 'other-request', 'pending', 'applied', 'rejected', 'unknown'},
+          }
+          public.update({field: 'unavailable' for field in producer_fields})
           # Correlated original-call snapshots only; private identities are absent.
           native_fields = {
               'native_capture': {'matched', 'unavailable', 'invalid'},
@@ -502,6 +514,11 @@ jobs:
                   candidate = result.get(field)
                   if isinstance(candidate, str) and candidate in allowed:
                       public[field] = candidate
+              # A partial, malformed or older group supplies no correlated evidence.
+              if all(isinstance(result.get(field), str) and result[field] in allowed
+                     for field, allowed in producer_fields.items()):
+                  public.update({field: next(value for value in allowed if value == result[field])
+                                 for field, allowed in producer_fields.items()})
               capture = result.get('native_capture')
               if isinstance(capture, str) and capture in native_fields['native_capture']:
                   public['native_capture'] = capture
