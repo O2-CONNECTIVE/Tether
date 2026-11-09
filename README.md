@@ -37,8 +37,9 @@ Tetherの共通サービスにCLI・GUI・MCPを接続し、認可・失効・�
 
 ## 現在地
 
-進捗確認: 2026-11-09、source基点 `37ac66ea`（[#293](https://github.com/O2-CONNECTIVE/Tether/pull/293)）。この基点のCI結果は[#189の固定merge SHA記録](https://github.com/O2-CONNECTIVE/Tether/issues/189)と[実producerのpostmerge検証](https://github.com/O2-CONNECTIVE/Tether/actions/runs/42550692970)で確認してください。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/Tether/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
+進捗確認: 2026-11-09、source基点 `af5f5a2b`（[#303](https://github.com/O2-CONNECTIVE/Tether/pull/303)）。この基点のCI結果は[#189の固定merge SHA記録](https://github.com/O2-CONNECTIVE/Tether/issues/189)と[Mac GUIと実Goのpostmerge検証](https://github.com/O2-CONNECTIVE/Tether/actions/runs/42591908911)で確認してください。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/Tether/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
 
+- **Mac GUIと実Goの限定CI縦断:** [#301](https://github.com/O2-CONNECTIVE/Tether/pull/301)で実WebView / Tauri IPCから実Go Standby・匿名loopback TLS gatewayへ接続。上記#303 mergeの専用CIではON/OFF適用と元owner回収を確認し、対象10 workflowは全attempt 1成功です。ただし[#301のpostmerge失敗](https://github.com/O2-CONNECTIVE/Tether/actions/runs/42585463422)は原因未確定で、#303は診断分類の追加であり原因修正ではありません。通常ResidentPortはunbound、通常信頼起動・実利用者認証・実dot・native作業実行・製品Quit・署名配布は未受入です。[配線と限定受入](docs/resident-gui-wiring.md)を参照してください。
 - **接続の隔離検証:** [#252](https://github.com/O2-CONNECTIVE/Tether/pull/252)の実loopback TCP/TLSと、[#253](https://github.com/O2-CONNECTIVE/Tether/pull/253)のMac実producer・固定command・OFF・元所有者終了確認を統合。合成認証と試験用CA/overlayを使い、実dotや通常製品認証は未受入です。#253初回のfailed-unknownは原因未解明のまま保持します。
 - **共通所有と停止:** [#267](https://github.com/O2-CONNECTIVE/Tether/pull/267)のMac公開stack、[#269](https://github.com/O2-CONNECTIVE/Tether/pull/269)の故障後有限出力回収、[#270](https://github.com/O2-CONNECTIVE/Tether/pull/270)のHTTP失効・OFF回帰、[#271](https://github.com/O2-CONNECTIVE/Tether/pull/271)の原子的pipe取得を統合。実GUI/dot・署名済みlaunch・製品全回収/Quitの完了ではありません。
 - **両プロファイルの共通契約:** [#274](https://github.com/O2-CONNECTIVE/Tether/pull/274)でMac current-user / Windows guestの同じ実行coreとmemory通信を照合する回帰を追加。取消受付と回収、unknown時の新規拒否、失効した単発許可の非復活、別grantの分離を検査します。実OS・GUI・認証通信の受入ではありません。
@@ -84,7 +85,7 @@ gateway は呼出主体と登録済みホストを照合しますが、Mac の�
 | Mac command target | 現在ユーザー権限、昇格なし・sandboxなし。旧pilot agent build宣言はmacOS **26.0**。#271のnative pipe取得は**27以上**を要求し、旧方式へfallbackしない。製品セット全体の互換性は未受入 |
 | Mac status viewer | macOS **13.0**以上を宣言。ただし13実機未検証で、agent全体の対応下限ではない |
 | Linux / Windows | gatewayの配置候補とsource/build検証をcommand target対応と区別。製品目標はMac先行、その後Windows。Windows製品の実接続受入は未完 |
-| 旧 Windows Tauri / Python | 履歴として保持。現在のMac実行基盤へ接続されたGUIではない |
+| Tauri resident GUI / 旧 Python | TauriはMac専用CIで実Go Standbyへ接続してON/OFFを検証。通常起動・実dot・配布は未受入。旧Pythonは履歴として保持 |
 
 ## ローカル開発の最短入口
 
@@ -108,7 +109,7 @@ Go の入口は `backend/cmd/rescue-gateway`、`backend/cmd/rescue-mac-agent`、
 
 - Macの実行は現在ユーザーと同じ権限です。そのユーザーがアクセスできるファイル・ネットワークへ届き、同一ユーザーからの干渉も防げません。Windowsの隔離guestと同等ではありません。
 - 期限・取消・通信断で失効し、同じownerが所有process群とI/Oの回収を試みます。実行済み変更は戻らず、群を離れた子孫の停止は保証しません。
-- cleanup unknownは非成功です。GUIの閉鎖・EOF・残時間0だけでは停止確認になりません。GUIは承認・開始・取消を行いません。
+- cleanup unknownは非成功です。GUIの閉鎖・EOF・残時間0だけでは停止確認になりません。読取専用SwiftUI viewerは承認・開始・取消を行いません。Tauri resident GUIのON/OFFは専用CIでの限定検証で、通常起動の認可gateを解除しません。
 - packageに鍵・token・同意を入れません。license/依存閉包、配布署名・notarization、一般受領者の受入は未完です。評価 `.app` のlinker ad-hoc署名は配布identityの署名ではありません。
 
 [文書索引と現行安全契約](docs/README.md) / [Mac runtime](docs/mac-agent-runtime.md) / [旧設計の安全要件](docs/security.md)
