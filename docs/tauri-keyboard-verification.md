@@ -1,6 +1,6 @@
 # 未接続 UI のキー操作と focus の回帰
 
-[Issue #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25) / [native 起動の証拠](tauri-native-smoke.md) / [UI 確認項目](design-accessibility-verification.md)
+[Issue #25](https://github.com/O2-CONNECTIVE/Tether/issues/25) / [native 起動の証拠](tauri-native-smoke.md) / [UI 確認項目](design-accessibility-verification.md)
 
 ## 意図と境界
 

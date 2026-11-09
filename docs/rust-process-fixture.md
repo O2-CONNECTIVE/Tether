@@ -2,7 +2,7 @@
 
 [通信契約](communication-contract.md) / [未配線 shell](tauri-native-shell.md)
 
-Issue [#25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25) / [#9](https://github.com/O2-CONNECTIVE/rescue-host/issues/9) の GUI と子プロセス間の試験準備です。
+Issue [#25](https://github.com/O2-CONNECTIVE/Tether/issues/25) / [#9](https://github.com/O2-CONNECTIVE/Tether/issues/9) の GUI と子プロセス間の試験準備です。
 製品から参照しない Cargo の `harness = false` integration test で、自分自身の既知の有限モードだけを子として起動します。
 UI、Tauri command、capability、製品 gate、Go/SSH は変更しません。
 任意実行 path、引数、shell、listener、鍵、ネットワーク、子孫プロセスは対象外です。
@@ -35,8 +35,8 @@ reader は1件の boot 通知だけを非 blocking の有限 channel に送り�
 
 自己生成の無害な有限子が起動し、停止要求を受け、最終応答と正常終了を確認する1件から赤→緑を進めました。
 ローカル Rust はないため、既存 Windows hosted CI の Cargo test が実行証跡です。
-[赤の CI](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40594741980) では既存 Rust IPC 6件成功後、新試験が `FIXTURE_LAUNCH_UNIMPLEMENTED` で失敗しました。
-[最初の緑](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40595733689) では同じ新試験1件と既存 IPC 6件が成功しました。
+[赤の CI](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40594741980) では既存 Rust IPC 6件成功後、新試験が `FIXTURE_LAUNCH_UNIMPLEMENTED` で失敗しました。
+[最初の緑](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40595733689) では同じ新試験1件と既存 IPC 6件が成功しました。
 途中の run 40595409950 は rustfmt で停止し、機能の赤/緑には数えていません。
 
 その後、実装済み拒否条件に対する回帰 fixture を加えています。

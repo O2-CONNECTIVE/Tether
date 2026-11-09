@@ -1,5 +1,11 @@
 # 変更履歴
 
+## リポジトリ名の変更（2026-11-09、日本時間）
+
+- 公開リポジトリを `O2-CONNECTIVE/rescue-host` から [O2-CONNECTIVE/Tether](https://github.com/O2-CONNECTIVE/Tether) へ変更。既存のIssue・PR・commit履歴は同じリポジトリに保持しました。
+- 文書のGitHubリンクを新しいURLへ統一。Go module、実行名、app ID、protocol名、配布物の来歴契約は変更していません。
+- 未確認の外部連携と後続の移行判断は[配置方針 Issue #8](https://github.com/O2-CONNECTIVE/Tether/issues/8)で追跡します。改名は機能の完成・配布・実接続受入を意味しません。
+
 ## 0.2.1-dev（2026-10-26、承認済みソース公開）
 - 回復応答の名前欠落を拒否し、旧記録の同一性未確認状態では自動整理を停止。
 - 設定のJSON型・スキーマを検証し、設定破損と回復処理を分離。

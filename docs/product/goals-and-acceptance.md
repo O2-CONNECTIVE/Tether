@@ -1,6 +1,6 @@
 # 常駐ホストの製品目標と完了条件
 
-[製品文書索引](README.md) / [製品目標 Issue #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)
+[製品文書索引](README.md) / [製品目標 Issue #189](https://github.com/O2-CONNECTIVE/Tether/issues/189)
 
 更新: 2026-11-05。
 これは #189 に対応する製品目標と受入の読み方です。
@@ -22,19 +22,19 @@
 
 | 機能 | 完了時の振る舞い | 追跡先 |
 | --- | --- | --- |
-| 待機 ON/OFF | 利用者が待機を切り替え、OFF 後の新規受付を止める。所有作業の停止中、回収済み、回収未確認を区別する | [#189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)、[GUI #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25) |
-| MCP 接続と対象確認 | 認可された対象を取り違えず接続し、到達不能や権限不足を成功扱いしない | [#189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)、[API #32](https://github.com/O2-CONNECTIVE/rescue-host/issues/32) |
-| 簡単な仕事と結果 | 有限の仕事1件を開始し、同じ実行の状態、出力、終了結果を取得する。不確定応答から盲目的に二重実行しない | [#189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)、[command 契約](../agent-command-contract.md) |
-| 普段使いの常駐 | 待機、端末状態、再接続、作業状態を一連の体験にする。再接続で旧許可を自動復活させない | [#189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)、[詳細 PRD #188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) |
-| 操作辞書の拡張 | 端末一覧、実行管理、ファイル一覧と読取、検索、対話入力、限定編集を段階的に追加する | [#188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) |
-| 共通ロジック | MCP と両 OS の GUI が同じ認可、状態、所有、停止と回収の契約を使う | [#32](https://github.com/O2-CONNECTIVE/rescue-host/issues/32)、[#189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189) |
-| 単発派遣 | 必要なときだけ接続する用途の開始、終了、回収、配布受入を維持する | [単発版 #22](https://github.com/O2-CONNECTIVE/rescue-host/issues/22) |
+| 待機 ON/OFF | 利用者が待機を切り替え、OFF 後の新規受付を止める。所有作業の停止中、回収済み、回収未確認を区別する | [#189](https://github.com/O2-CONNECTIVE/Tether/issues/189)、[GUI #25](https://github.com/O2-CONNECTIVE/Tether/issues/25) |
+| MCP 接続と対象確認 | 認可された対象を取り違えず接続し、到達不能や権限不足を成功扱いしない | [#189](https://github.com/O2-CONNECTIVE/Tether/issues/189)、[API #32](https://github.com/O2-CONNECTIVE/Tether/issues/32) |
+| 簡単な仕事と結果 | 有限の仕事1件を開始し、同じ実行の状態、出力、終了結果を取得する。不確定応答から盲目的に二重実行しない | [#189](https://github.com/O2-CONNECTIVE/Tether/issues/189)、[command 契約](../agent-command-contract.md) |
+| 普段使いの常駐 | 待機、端末状態、再接続、作業状態を一連の体験にする。再接続で旧許可を自動復活させない | [#189](https://github.com/O2-CONNECTIVE/Tether/issues/189)、[詳細 PRD #188](https://github.com/O2-CONNECTIVE/Tether/issues/188) |
+| 操作辞書の拡張 | 端末一覧、実行管理、ファイル一覧と読取、検索、対話入力、限定編集を段階的に追加する | [#188](https://github.com/O2-CONNECTIVE/Tether/issues/188) |
+| 共通ロジック | MCP と両 OS の GUI が同じ認可、状態、所有、停止と回収の契約を使う | [#32](https://github.com/O2-CONNECTIVE/Tether/issues/32)、[#189](https://github.com/O2-CONNECTIVE/Tether/issues/189) |
+| 単発派遣 | 必要なときだけ接続する用途の開始、終了、回収、配布受入を維持する | [単発版 #22](https://github.com/O2-CONNECTIVE/Tether/issues/22) |
 
 ## 優先順位と3系統の完了判定
 
 最初の完成対象は、利用者の開発 PC である Mac です。
 検証は次の順で進めます。
-接続構成の詳細な検証条件は [接続検証 #190](https://github.com/O2-CONNECTIVE/rescue-host/issues/190) で追跡します。
+接続構成の詳細な検証条件は [接続検証 #190](https://github.com/O2-CONNECTIVE/Tether/issues/190) で追跡します。
 
 1. Mac 内で MCP サーバーをセルフホストし、接続、ツール一覧、有限作業、結果受領、停止と回収を確認する。
 2. 外部の実 MCP クライアントから同じ Mac へ安全に届く経路を追加し、Mac GUI と一連の実接続を確認する。
@@ -80,7 +80,7 @@ source 試験、CI、実クライアント接続、実 OS 実行、GUI 操作、
 ## 共通処理を置く境界
 
 採用する構成方針はヘキサゴナル構成です。
-具体的な package 名や移動先は [#32](https://github.com/O2-CONNECTIVE/rescue-host/issues/32) と [#188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) の設計で確定します。
+具体的な package 名や移動先は [#32](https://github.com/O2-CONNECTIVE/Tether/issues/32) と [#188](https://github.com/O2-CONNECTIVE/Tether/issues/188) の設計で確定します。
 
 | 境界 | 担当する責務 |
 | --- | --- |
@@ -107,12 +107,12 @@ Windows の保護方式と同じ保証を持つとは扱わず、停止できる
 
 無承認の登録、自動的な権限拡大、MCP による本人同意の代行、人向け SSH 互換、任意 OS process の停止、無制限の常駐作業は、この最小縦断の対象外です。
 一般配布、署名、初回登録、配布先での起動は別の受入であり、接続成功で完了にしません。
-[既存安全受入 #1](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)、[二重停止故障 #5](https://github.com/O2-CONNECTIVE/rescue-host/issues/5)、[Windows 背圧 #6](https://github.com/O2-CONNECTIVE/rescue-host/issues/6) の未達と未検証を維持します。
+[既存安全受入 #1](https://github.com/O2-CONNECTIVE/Tether/issues/1)、[二重停止故障 #5](https://github.com/O2-CONNECTIVE/Tether/issues/5)、[Windows 背圧 #6](https://github.com/O2-CONNECTIVE/Tether/issues/6) の未達と未検証を維持します。
 
 ## 未決事項
 
 以下は #189 の製品方向の合意だけでは確定しません。
-各実装の着手時に必要な項目を解決し、[Decision #36](https://github.com/O2-CONNECTIVE/rescue-host/issues/36) と詳細設計へ対応づけます。
+各実装の着手時に必要な項目を解決し、[Decision #36](https://github.com/O2-CONNECTIVE/Tether/issues/36) と詳細設計へ対応づけます。
 
 - 初回登録、同意導線、認証情報の保存、更新、失効。
 - 作業許可の粒度と寿命、常駐制御接続との関係、ファイル操作の許可範囲。

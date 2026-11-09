@@ -1,6 +1,6 @@
 # Go制御契約adapterの純粋な接続
 
-[採用候補ADR](adr/0001-control-contract-candidate.md) / [正本schema](../contracts/control-v1/schema.json) / [共通vector](../contracts/control-v1/vectors.json) / [Issue #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25)
+[採用候補ADR](adr/0001-control-contract-candidate.md) / [正本schema](../contracts/control-v1/schema.json) / [共通vector](../contracts/control-v1/vectors.json) / [Issue #25](https://github.com/O2-CONNECTIVE/Tether/issues/25)
 
 固定正本は公開head `ef556a26a410d23cb383410e37e0db77cdf7c9e0` です。
 正本6ファイルを変更せず、既存 `internal/control` にcodecとstdio.Service adapterを追加します。

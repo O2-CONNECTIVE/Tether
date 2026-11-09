@@ -1,6 +1,6 @@
 # Windowsローカル制御IPCの認可境界候補
 
-[Issue #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25) / [共通契約](adr/0001-control-contract-candidate.md) / [安全要件](security.md)
+[Issue #25](https://github.com/O2-CONNECTIVE/Tether/issues/25) / [共通契約](adr/0001-control-contract-candidate.md) / [安全要件](security.md)
 
 `backend/internal/localcontrol` は設定検査・kernel token照合・既存dispatcherへの権限境界です。
 public Openは常に拒否し、configや環境変数の解除flagはありません。

@@ -4,7 +4,7 @@
 
 ## 目的と非目標
 
-Issue [#25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25) と [#9](https://github.com/O2-CONNECTIVE/rescue-host/issues/9) に関連する、Windows hosted runner 上の限定した実起動検証です。
+Issue [#25](https://github.com/O2-CONNECTIVE/Tether/issues/25) と [#9](https://github.com/O2-CONNECTIVE/Tether/issues/9) に関連する、Windows hosted runner 上の限定した実起動検証です。
 実 WebView2 と実 Rust IPC から未接続・開始停止不可・終了未確認を読み、診断を開き、通常 close 後に所有プロセスの終了を確認します。
 画面、tokens、Lucide 規則、製品 Rust、CSP、capability、Go/SSH/sidecar は変更しません。
 新 PC、配布 installer、署名、更新、OS のアクセシビリティ設定と支援技術は別の未検証です。
@@ -58,14 +58,14 @@ CI の最終結果と native の実測は、実行後の PR に head ととも�
 
 ## Windows hosted CI の限定した実測
 
-head `35c5bb37504fdc90503144b52e2435e825b36322` の [native CI](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40515180926) で1件実行・1件成功しました。
+head `35c5bb37504fdc90503144b52e2435e825b36322` の [native CI](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40515180926) で1件実行・1件成功しました。
 Windows Server 2022 runner image `20261022.344.1`、WebView2/EdgeDriver `131.0.2903.86`、tauri-driver `2.1.0`、Rust `1.99.1`、Node `24.22.1` の組合せです。
 未接続表示、開始停止 disabled、許可条件と終了未確認、診断 `SHELL_UNWIRED`、生の Rust IPC の厳密な未配線応答を観測しました。
 通常 close の要求後、app exit code 0 と観測済み WebView 子6件の終了を、両 driver が同じ identity で生存し cleanup を開始する前に確認しました。
 artifact の `normalCloseVerified`、`closeObservedBeforeCleanup`、`driverStableThroughClose` は true、失敗 phase は null です。
 その後で試験用 driver を cleanup しています。
 
-先行した [CI 40514392703](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40514392703) は listener 検査で app 起動前に停止し、native0件の環境/harness 失敗でした。
+先行した [CI 40514392703](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40514392703) は listener 検査で app 起動前に停止し、native0件の環境/harness 失敗でした。
 単一 IPv4 行という前提を修正し、成功した CI で native driver に IPv4/IPv6 の loopback2行、intermediary に IPv4 の1行、全行の所有一致を観測しました。
 広い bind や所有外を許容した修正ではなく、PS 契約12 checks で wildcard、所有外、欠落の拒否も確認しました。
 試験の再実行で成功を拾う設定はなく、根拠を伴う source 修正後の別 head として記録します。
@@ -78,7 +78,7 @@ artifact の `normalCloseVerified`、`closeObservedBeforeCleanup`、`driverStabl
 
 ## 失敗段階の観測
 
-main `68ed17f2686e0ac4ae3c8976e944e047c7e7d389` の [run 40590119432](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40590119432) は、Node の一般エラーで native 成功0件になりました。
+main `68ed17f2686e0ac4ae3c8976e944e047c7e7d389` の [run 40590119432](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40590119432) は、Node の一般エラーで native 成功0件になりました。
 listener の loopback と所有一致、cleanup 済みは確認できましたが、主画面 PNG と WebView 結果 JSON がありません。
 これは最初の撮影完了前に失敗した証拠であり、keyboard や refresh で失敗したと断定する材料ではありません。
 旧 artifact には内側の例外や段階がなく、原因は未確定です。
@@ -114,9 +114,9 @@ HTTPSや証明書警告、security設定の変更を許可する条件は追加�
 
 ## 観測子の終了timeoutの診断と未確定事項
 
-PR #55 head `8bab44f848edb45d723a8410e7bedeaeb0567bde` の通常native [run40619463105](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40619463105) / job122589680885 / artifact12786596829は、`NATIVE_OBSERVED_CHILD_CLOSE_TIMEOUT` で失敗しました。
+PR #55 head `8bab44f848edb45d723a8410e7bedeaeb0567bde` の通常native [run40619463105](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40619463105) / job122589680885 / artifact12786596829は、`NATIVE_OBSERVED_CHILD_CLOSE_TIMEOUT` で失敗しました。
 UI・実Rust IPC・keyboardは通過し、失敗phaseはnormal-close、WebView子の観測数は6です。
-同headのrelease配布 [run40619462988](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40619462988) / artifact12786887402は通常終了まで成功しています。
+同headのrelease配布 [run40619462988](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40619462988) / artifact12786887402は通常終了まで成功しています。
 この成功で通常nativeの失敗を取り消しません。初期originの失敗とは別件です。
 
 コードの到達経路ではapp本人のhandleによる通常close・exit code 0の確認を通過した後、元の観測子と同じPID/CreationDateを持つsnapshot行が10秒以内に消えなかったと判定しています。

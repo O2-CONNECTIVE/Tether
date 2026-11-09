@@ -1,6 +1,6 @@
 # Tauri デザイントークン案の確認範囲
 
-[設計仕様](tauri-design-tokens.md) / [Issue #16](https://github.com/O2-CONNECTIVE/rescue-host/issues/16)
+[設計仕様](tauri-design-tokens.md) / [Issue #16](https://github.com/O2-CONNECTIVE/Tether/issues/16)
 
 対象は同じ PR のライトテーマ tokens と静的 HTML/CSS 状態見本です。
 2026-10-27、macOS の Chrome 156.0.8078.48 で実際に描画し、広幅・狭幅・forced colors の画像を目視確認しました。

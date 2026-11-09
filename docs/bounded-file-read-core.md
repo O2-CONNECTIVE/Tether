@@ -1,6 +1,6 @@
 # 非公開の有限ファイル読取コア
 
-[操作辞書の設計 #188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) / [目標5 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189) / [共通権威 #32](https://github.com/O2-CONNECTIVE/rescue-host/issues/32)
+[操作辞書の設計 #188](https://github.com/O2-CONNECTIVE/Tether/issues/188) / [目標5 #189](https://github.com/O2-CONNECTIVE/Tether/issues/189) / [共通権威 #32](https://github.com/O2-CONNECTIVE/Tether/issues/32)
 
 ## 提供段階
 
