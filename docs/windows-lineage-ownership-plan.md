@@ -43,6 +43,10 @@ PR #295 の merge `089e75f3540fc0f559f2a525f7110d204d256c8b` に対する [start
 
 root を tauri-driver とする job には driver と Edge も含まれます。現行の合格条件は両 driver が app/子の通常 close 中も同一性を保って生存することなので、その段階で job 全体が空になることは要求できません。後続設計では、元 handle で特定した両 driver と app の役割、その他の所属 process の完了集合を分ける必要があります。PID/name の除外だけでこの集合を作ったり、driver を先に終了して空の job を合格にしたりしません。これは現行コードと API 仕様から導く設計上の制約で、実装や実機確認ではありません。
 
+## 既存実装との境界
+
+[childjob](../backend/internal/childjob/README.md) には既に suspended 作成・Job 割当・resume・所有保持の実装と有限試験があります。単に同じ順序モデルを新設せず、まず差分を整理します。ただし既存 module は承認済み primary token、保護 artifact、限定 pipe、空 environment を要求する保護所有者用で、CI driver の token や環境を取得する API ではありません。`Wait` の leader終了/Job空条件と `Close` の停止操作も、driver を生存させたまま app を通常 close する今回の判定へ直接置換できません。既存 module の権限条件を緩めたり、現在ユーザー token の取得を黙って追加したりしません。
+
 ## 次の単位の受入と停止条件
 
 最初の source-only 単位では、create → assign → resume の順序、assign 失敗、resume 前取消、子の追加と終了通知の競合、同一 handle の保持、部分失敗後の回収、通常終了と強制 cleanup の非同一性を有限モデルで検査します。モデル成功だけで native 所有証明が完成したとは扱いません。
