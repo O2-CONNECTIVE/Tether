@@ -31,15 +31,17 @@ def build(output):
             built = support.compile_images(stage, env, swift, sdk)
             app = output / support.APP
             images = {}
+            minima = []
             for role, relative in layout.IMAGES.items():
                 data = layout.files.read_regular(built[role], layout.LIMIT)
-                layout.inspect(data, 'darwin-arm64', role)
+                minima.append(layout.inspect(data, 'darwin-arm64', role))
                 destination = app / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(data)
                 destination.chmod(0o600)  # Inert build products, not an installed app.
                 images[role] = {'path': relative, 'sha256': source.digest(data), 'bytes': len(data)}
-            plist = plistlib.dumps(support.plist_config(stage), sort_keys=True)
+            minimum = layout.files.version_string(max(minima))
+            plist = plistlib.dumps(support.plist_config(stage, minimum), sort_keys=True)
             (app / 'Contents/Info.plist').write_bytes(plist)
             matched = layout.verify(app, 'darwin-arm64', {r: v['sha256'] for r, v in images.items()})
             for name, expected in files.items():

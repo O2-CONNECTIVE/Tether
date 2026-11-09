@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import plistlib
 import stat
 import subprocess
 import sys
@@ -89,6 +90,13 @@ class GuiCandidateBuildTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o700)
         for path in tool.layout.IMAGES.values():
             self.assertEqual(stat.S_IMODE((self.output / tool.support.APP / path).stat().st_mode), 0o600)
+
+    def test_plist_tracks_highest_actual_image_minimum(self):
+        self.images['gui'] = image('gui', minimum=14 << 16 | 4 << 8)
+        record = tool.build(self.output)
+        plist = plistlib.loads((self.output / tool.support.APP / 'Contents/Info.plist').read_bytes())
+        self.assertEqual(plist['LSMinimumSystemVersion'], record['linkLayout']['minimumMacOSDeclared'])
+        self.assertEqual(plist['LSMinimumSystemVersion'], '27.0.0')
 
     def test_environment_cannot_inject_fixture_flags_or_credentials(self):
         with patch.dict(os.environ, {'RUSTFLAGS': '--cfg resident_gui_fixture',
@@ -176,6 +184,36 @@ class GuiCandidateBuildTests(unittest.TestCase):
 
 
 class FixedCompilerRecipeTests(unittest.TestCase):
+    def test_cargo_ancestor_and_home_configs_are_refused_before_tools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            stage = root / 'output/stage'
+            stage.mkdir(parents=True)
+            env = {'HOME': str(root / 'home'), 'CARGO_HOME': str(root / 'cache')}
+            for parent in (stage, stage.parent, root, Path(env['CARGO_HOME'])):
+                folder = parent if parent == Path(env['CARGO_HOME']) else parent / '.cargo'
+                folder.mkdir(exist_ok=True)
+                for name in ('config', 'config.toml'):
+                    config = folder / name
+                    config.write_text('[build]\nrustc-wrapper = "PRIVATE"\n')
+                    with patch.object(tool.source, 'command', side_effect=AssertionError('compiler called')):
+                        with self.subTest(parent=parent, name=name), self.assertRaisesRegex(tool.source.BuildError, 'GUI_CARGO_CONFIG_UNSUPPORTED'):
+                            tool.support.toolchain(stage, env)
+                    config.unlink()
+
+    @unittest.skipUnless(os.name == 'posix', 'symlink fixture requires POSIX')
+    def test_dangling_cargo_config_symlink_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            stage = root / 'stage'
+            stage.mkdir()
+            folder = root / '.cargo'
+            folder.mkdir()
+            (folder / 'config.toml').symlink_to(root / 'missing')
+            with patch.object(tool.source, 'command', side_effect=AssertionError('compiler called')):
+                with self.assertRaisesRegex(tool.source.BuildError, 'GUI_CARGO_CONFIG_UNSUPPORTED'):
+                    tool.support.toolchain(stage, {'HOME': str(root / 'home')})
+
     def test_compiler_commands_are_offline_normal_and_fixed_relative_link(self):
         with tempfile.TemporaryDirectory() as temporary:
             stage = Path(temporary)

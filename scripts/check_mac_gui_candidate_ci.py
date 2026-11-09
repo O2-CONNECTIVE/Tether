@@ -1,6 +1,7 @@
 """Verify the fixed nonexecuting GUI build and its actual assembled bytes."""
 import json
 from pathlib import Path
+import plistlib
 import sys
 
 import build_mac_gui_candidate as builder
@@ -49,6 +50,9 @@ def run():
     matched = builder.layout.verify(app, 'darwin-arm64', builder.summary(record)['imageHashes'])
     if matched != record['linkLayout']:
         raise ValueError('actual GUI link layout mismatch')
+    plist = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+    if plist['LSMinimumSystemVersion'] != matched['minimumMacOSDeclared']:
+        raise ValueError('actual GUI minimum OS mismatch')
     print(json.dumps({'check': 'mac-gui-candidate-build', **builder.summary(record),
                       'appAssembled': True, 'imageExecuted': False, 'producerIncluded': False,
                       'productionGateClosed': True}))

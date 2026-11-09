@@ -77,6 +77,12 @@ def environment(stage):
 
 
 def toolchain(stage, env):
+    # Cargo searches cwd ancestors as well as CARGO_HOME, not just the manifest.
+    cargo_home = Path(env.get('CARGO_HOME', str(Path(env['HOME']) / '.cargo')))
+    folders = {cargo_home, *(parent / '.cargo' for parent in (stage, *stage.parents))}
+    source.require(not any(folder.is_symlink() or any(os.path.lexists(folder / name)
+                   for name in ('config', 'config.toml')) for folder in folders),
+                   'GUI_CARGO_CONFIG_UNSUPPORTED')
     def run(args):
         return source.command(args, stage, env).decode('utf-8').strip()
     source.require(run(['node', '--version']) == 'v24.22.1', 'GUI_TOOLCHAIN_MISMATCH')
@@ -89,9 +95,6 @@ def toolchain(stage, env):
     source.require(Path(swift).is_file() and Path(sdk).is_dir(), 'GUI_TOOLCHAIN_MISSING')
     sdk_version = run(['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-version'])
     source.require(re.fullmatch(r'27(?:\.\d+){1,2}', sdk_version), 'GUI_TOOLCHAIN_MISMATCH')
-    cargo_home = Path(env.get('CARGO_HOME', str(Path(env['HOME']) / '.cargo')))
-    source.require(not any((cargo_home / name).exists() for name in ('config', 'config.toml')),
-                   'GUI_CARGO_CONFIG_UNSUPPORTED')
     env['SDKROOT'] = sdk
     return swift, sdk, {'node': '24.22.1', 'rust': rust, 'xcode': xcode,
                         'swift': run([swift, '--version']), 'sdk': sdk_version,
@@ -136,7 +139,7 @@ def compile_images(stage, env, swift, sdk):
             'native': library}
 
 
-def plist_config(stage):
+def plist_config(stage, minimum):
     config = json.loads((stage / 'ui/tauri/src-tauri/tauri.conf.json').read_text())
     source.require(config['identifier'] == 'com.o2connective.rescue-host.shell' and
                    config['version'] == '0.1.0' and config['bundle']['active'] is False,
@@ -144,4 +147,4 @@ def plist_config(stage):
     return {'CFBundleExecutable': 'rescue-host-shell', 'CFBundleIdentifier': config['identifier'],
             'CFBundleName': 'Tether CI Candidate', 'CFBundlePackageType': 'APPL',
             'CFBundleShortVersionString': config['version'], 'CFBundleVersion': config['version'],
-            'LSMinimumSystemVersion': MINIMUM, 'NSHighResolutionCapable': True}
+            'LSMinimumSystemVersion': minimum, 'NSHighResolutionCapable': True}

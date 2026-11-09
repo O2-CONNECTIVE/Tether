@@ -15,7 +15,7 @@ python scripts/build_mac_gui_candidate.py --output <新しいcheckout外director
 - frontendはoffline `npm ci --ignore-scripts` と通常の `npm run build`、生成notice再照合です。任意のpath/flags/target/credential/fixture設定を受け付けません。
 - Swift 6言語mode、固定4 sourceとheader、`arm64-apple-macosx14.4`、通常ABI export集合を使います。native install nameは `@rpath/libResidentPreparation.dylib`。toolchainのstdlib rpathを抑止し、`/usr/lib/swift` を明示します。
 - Rustは `--locked --offline --release --target aarch64-apple-darwin --bin rescue-host-shell --features custom-protocol`。追加cfgは `resident_native_source` のみです。`-needed_library` で通常起動がunboundでも必須native loadを保持し、GUI rpathは `@executable_path/../Frameworks` に固定します。絶対stage pathはlink時の入力にだけ使い、runtime rpathへ残しません。
-- deployment target 14.4はこのbuildの宣言で、実互換性の保証ではありません。通常GUIの `ResidentState::default()` とSwiftの `ApprovedRelease.production=nil` は変更しません。
+- deployment target 14.4はcompilerへの指定です。組立plistの最低OSは二imageが実際に宣言した値の最大値から作り、記録と再照合します。実互換性の保証ではありません。通常GUIの `ResidentState::default()` とSwiftの `ApprovedRelease.production=nil` は変更しません。
 
 新規outputには `Tether-CI-Candidate.app` と `BUILD_RECORD.json` だけを保持します。appは `Contents/MacOS/rescue-host-shell`、`Contents/Frameworks/libResidentPreparation.dylib`、固定 `Contents/Info.plist` の3 files。imageはmode0600、outputはmode0700とし、一度もlaunch/loadしません。既存outputは置換せず、失敗時は自分の新規outputだけを除去します。
 
