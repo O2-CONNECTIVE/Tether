@@ -46,7 +46,7 @@ jobs:
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --no-self-update
           cargo +1.99.1 fmt --manifest-path ui/tauri/src-tauri/Cargo.toml --check
           python3 -m unittest discover -s ui/tauri/src-tauri/tests/resident-gui -p test_producer.py -v
-          cargo +1.99.1 test --locked --manifest-path ui/tauri/src-tauri/Cargo.toml resident_port::duplex::tracking_tests
+          cargo +1.99.1 test --lib --locked --manifest-path ui/tauri/src-tauri/Cargo.toml resident_port::duplex::tracking_tests
           cargo +1.99.1 fetch --locked --manifest-path ui/tauri/src-tauri/Cargo.toml
           RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 build --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml --features custom-protocol --example resident_gui_ci
       - name: Run real GUI through original owner keeper
