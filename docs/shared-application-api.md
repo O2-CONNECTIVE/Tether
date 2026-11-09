@@ -18,7 +18,7 @@ CLI・GUIからこのportへの製品bindingは未実装。共通API全体の完
 
 | 責務 | 現在の正本・実装 | 今回と後続 |
 |---|---|---|
-| host待機ON/OFF・状態 | `residentmac.Standby`、`residentpipe`、所有したnative pipe | 今回変更しない。CLIとGUIは同じmapper/ownerを使い、別の承認フラグを作らない |
+| host待機ON/OFF・状態 | `residentmac.Standby`、`residentpipe`、所有したnative pipe | 今回変更しない。CLIとGUIは同じmapper/ownerを使う方針とし、別の承認フラグを作らない |
 | HTTP認証・MCP session所有 | `agentgateway.authorize`、principal別session lookup | 今回変更しない。未認証のlocal呼出しを同等の主体とはしない |
 | 有限作業の認可・実行・停止 | `residentwork`、`agenttransport`、正規`agentexec.Session` | 既存固定operation、grant、epoch/policy、失効、元ownerを維持 |
 | 保持実行メタデータ | 今回のtyped `ExecutionReader`と既存`FixedGetExecution`変換 | 最初の共有契約。別adapterに渡す際も同じ認証済みscopeの供給が必要 |
