@@ -5,7 +5,7 @@
 ## 今回の意図と受入範囲
 
 tokens → 共通部品 → 画面の最初の縦断として、Rust の狭い IPC から「バックエンド未接続、開始不可」を読み取ります。
-既存[Issue #16](https://github.com/O2-CONNECTIVE/rescue-host/issues/16)と[操作性 #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25)の native shell 段階で、実通信を提供する変更ではありません。
+既存[Issue #16](https://github.com/O2-CONNECTIVE/Tether/issues/16)と[操作性 #25](https://github.com/O2-CONNECTIVE/Tether/issues/25)の native shell 段階で、実通信を提供する変更ではありません。
 視覚上は既存のライト tokens と部品を使い、主状態、許可相手と範囲と期限、目立つ停止、独立して開ける診断の順に読み取れる画面にします。
 
 表示状態は「状態を確認中」「バックエンド未接続」「状態を取得できません」の三つです。
@@ -58,11 +58,11 @@ GUI controller の5件は、未配線の応答、不正な成功風応答、IPC 
 Chrome の3件は実 HTML/CSS を描画し、keyboard、focus、320 CSS px、文字200%、診断の独立開閉、HTML風応答の拒否、待機中の画面破棄を確認しました。
 reduced motion と forced colors はブラウザー模擬の確認であり、実 OS 設定の確認ではありません。
 
-Windows CI の[最初の失敗](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40494752899)は、試験 EXE の `STATUS_ENTRYPOINT_NOT_FOUND` で、TDD の赤には数えません。
-[再現と import 診断](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40495893299)では同じ失敗を再現し、直接 import の欠落はありませんでした。
+Windows CI の[最初の失敗](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40494752899)は、試験 EXE の `STATUS_ENTRYPOINT_NOT_FOUND` で、TDD の赤には数えません。
+[再現と import 診断](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40495893299)では同じ失敗を再現し、直接 import の欠落はありませんでした。
 [Tauri の既知問題](https://github.com/tauri-apps/tauri/issues/13419)に沿い、試験 EXE にも Common Controls v6 の manifest を埋め込むことで起動できました。
 manifest は所有するアプリと試験に対する `asInvoker` の設定で、OS やサービスの設定は変更していません。
-その後、[公開IPC試験の赤](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40496623565)で `SHELL_NOT_IMPLEMENTED` を観測し、[最小応答の緑](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40497095768)へ進めました。
+その後、[公開IPC試験の赤](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40496623565)で `SHELL_NOT_IMPLEMENTED` を観測し、[最小応答の緑](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40497095768)へ進めました。
 Windows の6件は Tauri mock runtime と実際の command handler と capability を通る試験であり、WebView2 の操作試験ではありません。
 同じ CI で Windows の debug native executable の build も成功しました。
 installer や配布用 Release は生成していません。

@@ -10,6 +10,15 @@
 この方針は配置上の区別を定めるもので、機能の提供段階や検証済み範囲を変更しません。
 提供状況は[実装と検証の状態](status.md)を参照してください。
 
+## 改名後のリポジトリ参照
+
+正規のリポジトリURLは [O2-CONNECTIVE/Tether](https://github.com/O2-CONNECTIVE/Tether) です。
+新しいclone・文書・監視設定には新URLを使います。既存checkoutのremote変更は、利用中のセッションと所有者を確認してから行い、作業ディレクトリは移動しません。
+
+[GitHubの改名仕様](https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository)では旧git/Web URLはredirectされますが、GitHub Pagesのproject URLと改名したリポジトリが公開するActionの呼出しには例外があります。redirectを失わないよう、旧名 `rescue-host` を別リポジトリに再利用しません。
+
+Go module・import・CIのpackage期待値、配布manifestのrepository名とvalidator、実行名・app ID・protocol名は、それぞれ整合性や互換性を確認する別の変更です。リンクの更新に合わせた一括置換はしません。外部連携の確認範囲と残件は[Issue #8](https://github.com/O2-CONNECTIVE/Tether/issues/8)、CIは[Issue #23](https://github.com/O2-CONNECTIVE/Tether/issues/23)、配布は[Issue #24](https://github.com/O2-CONNECTIVE/Tether/issues/24)を参照してください。
+
 ## 維持する配置
 
 | 場所 | 用途 | 配置のルール |

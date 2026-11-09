@@ -1,6 +1,6 @@
 # Windows実機の限定評価手順
 
-[README](../README.md) / [現在の実装と検証状況](status.md) / [実機評価 #7](https://github.com/O2-CONNECTIVE/rescue-host/issues/7) / [保護監督 #12](https://github.com/O2-CONNECTIVE/rescue-host/issues/12)
+[README](../README.md) / [現在の実装と検証状況](status.md) / [実機評価 #7](https://github.com/O2-CONNECTIVE/Tether/issues/7) / [保護監督 #12](https://github.com/O2-CONNECTIVE/Tether/issues/12)
 
 ## 対象と現在できること
 
@@ -128,7 +128,7 @@ UIやOSの保護を回避して先へ進む手順は作りません。
 | 再起動と清掃 | PCと監督serviceの再起動を別々に承認し、旧許可拒否、再承認、今回資源の撤去を確認 | 許可0、旧grant拒否、削除前の失効、再承認、資源と待受の残存を別記録 | 旧許可の復活、所有不明、削除・回収の確認不能 |
 | 失敗時のUI | 確定した対象版で失敗、取得不能、終了確認不能を観測する | 未接続、停止要求済み、終了未確認を区別し、受付だけで終了済みにしない | 表示の根拠が確認不能 |
 
-受入の定義は[親Issue #1](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)を正本とし、この表は実施準備の分類にとどめます。
+受入の定義は[親Issue #1](https://github.com/O2-CONNECTIVE/Tether/issues/1)を正本とし、この表は実施準備の分類にとどめます。
 初回の限定実SSH評価 #7 と、既存44条件の達成やGAは別判定です。
 全44条件の達成を初回評価の一律の前提に追加せず、対象経路で必要な保護と実証、実行承認の不足を個別に判定します。
 実relayを通さない試験は、そのrelay経路の成立証明にはしません。

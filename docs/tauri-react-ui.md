@@ -5,7 +5,7 @@
 ## 意図と受入
 
 承認済みの React + TypeScript + Vite、shadcn/ui、Lucide を画面層へ採用します。
-既存 Issue [#16](https://github.com/O2-CONNECTIVE/rescue-host/issues/16) と [#25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25) の次段階です。
+既存 Issue [#16](https://github.com/O2-CONNECTIVE/Tether/issues/16) と [#25](https://github.com/O2-CONNECTIVE/Tether/issues/25) の次段階です。
 ライトの既存 tokens を正本とし、主状態、許可条件、停止、独立した診断の順に読める画面を維持します。
 状態は確認中、バックエンド未接続、取得不能だけで、開始と停止は無効、通信終了は未確認です。
 Go、SSH、sidecar、認可、TTL、保存、dark theme、配布更新は非目標です。

@@ -42,7 +42,7 @@ source commit、アプリの版表示、配布物hash、実画面の確認環境
 
 実装・契約を変える担当は該当する正本とこの索引を照合し、検証担当は対象版と実行範囲を記録します。
 実画面・配布物・対応OSが変わった場合は利用手順をその版で見直します。恒常的な運用責任者・脆弱性受付窓口はこの索引では設定しません。
-貢献規約・templateは[#8](https://github.com/O2-CONNECTIVE/rescue-host/issues/8)、読者別手順の版確定と実機確認は[#31](https://github.com/O2-CONNECTIVE/rescue-host/issues/31)に残し、[LICENSE](../LICENSE)・[CHANGELOG](../CHANGELOG.md)の存在を窓口運用や最新配布版の保証にしません。
+貢献規約・templateは[#8](https://github.com/O2-CONNECTIVE/Tether/issues/8)、読者別手順の版確定と実機確認は[#31](https://github.com/O2-CONNECTIVE/Tether/issues/31)に残し、[LICENSE](../LICENSE)・[CHANGELOG](../CHANGELOG.md)の存在を窓口運用や最新配布版の保証にしません。
 
 ## 現行構成と責任
 

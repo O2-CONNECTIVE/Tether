@@ -1,6 +1,6 @@
 # Go基盤のCI
 
-[Python CI](ci.md) / [Go基盤](../backend/README.md) / [Issue #9](https://github.com/O2-CONNECTIVE/rescue-host/issues/9)
+[Python CI](ci.md) / [Go基盤](../backend/README.md) / [Issue #9](https://github.com/O2-CONNECTIVE/Tether/issues/9)
 
 公開Go基盤の専用workflowは[go-offline.yml](../.github/workflows/go-offline.yml)です。
 Go 1.27.3と公式setup-go v7.0.0の照合済commitを固定し、標準3 OSで依存取得、vet、製品build境界、通常試験、race試験を実行します。

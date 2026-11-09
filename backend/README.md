@@ -4,7 +4,7 @@
 
 現行Goの入口は `cmd/rescue-gateway`、`cmd/rescue-mac-agent`、`cmd/rescue-mcp` です。以下は旧forward-only SSH基盤の説明であり、Go module全体にCLIやlistenerが存在しないという現在の宣言ではありません。
 
-一時非管理者guestの単発ライフサイクルは[設計文書](../docs/temporary-guest-account.md)と[PR #131](https://github.com/O2-CONNECTIVE/rescue-host/pull/131)を参照してください。
+一時非管理者guestの単発ライフサイクルは[設計文書](../docs/temporary-guest-account.md)と[PR #131](https://github.com/O2-CONNECTIVE/Tether/pull/131)を参照してください。
 作成・保護journal・SID指定清掃と[限定権限検査](../docs/guest-limited-inspection.md)には内部source候補と合成試験があります。
 正規provisioningとの接続と実Windowsでの保護成立は未検証で、公開入口は未設定拒否を維持します。
 [固定配置adapterの接続範囲](../docs/guest-staging-adapter.md)は、実行時token gateと実機操作の残件を分けて説明します。

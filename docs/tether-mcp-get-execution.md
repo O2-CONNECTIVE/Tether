@@ -1,6 +1,6 @@
 # 固定作業のメタデータ照会
 
-[操作辞書案 #188](https://github.com/O2-CONNECTIVE/rescue-host/issues/188) / [段階目標 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189) / [保持出力の読取](resident-read-output.md)
+[操作辞書案 #188](https://github.com/O2-CONNECTIVE/Tether/issues/188) / [段階目標 #189](https://github.com/O2-CONNECTIVE/Tether/issues/189) / [保持出力の読取](resident-read-output.md)
 
 `rescue_fixed_get_execution` は、既存の常駐固定作業について出力本文を取得せずに状態を確認する追加の読取操作です。
 汎用の `tether_get_execution` や新しい操作contextを実装したものではありません。

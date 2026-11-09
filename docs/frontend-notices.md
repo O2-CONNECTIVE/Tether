@@ -1,6 +1,6 @@
 # frontend runtime noticeの生成と照合
 
-[配布条件](distribution.md) / [開発手順](development.md) / [追跡Issue #40](https://github.com/O2-CONNECTIVE/rescue-host/issues/40)
+[配布条件](distribution.md) / [開発手順](development.md) / [追跡Issue #40](https://github.com/O2-CONNECTIVE/Tether/issues/40)
 
 対象は公開済みfrontendのruntime npm依存とowned shadcnのlicense/notice本文です。
 Rust、Go、Python、WebView2、OS、配布EXE全体の部品一覧や法的適否の判定は含みません。

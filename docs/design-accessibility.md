@@ -5,12 +5,12 @@
 救援される人が許可相手、操作範囲、期限、接続状態を読み取り、必要なときに停止できる UI を目指します。
 この文書は、既存の[トークン案](tauri-design-tokens.md)から共通部品と画面へ進む際の設計とレビューの基準案です。
 新しい画面、Tauri 配線、システム導入は含みません。
-追跡は[操作性 #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25)、[tokens #16](https://github.com/O2-CONNECTIVE/rescue-host/issues/16)、[基盤ロードマップ #22](https://github.com/O2-CONNECTIVE/rescue-host/issues/22)を再利用します。
+追跡は[操作性 #25](https://github.com/O2-CONNECTIVE/Tether/issues/25)、[tokens #16](https://github.com/O2-CONNECTIVE/Tether/issues/16)、[基盤ロードマップ #22](https://github.com/O2-CONNECTIVE/Tether/issues/22)を再利用します。
 
 WCAG 2.2 の A と AA を WebView 内 UI の目標基準案にします。
 対象フローに適用する達成基準の洗い出しと、ネイティブ実機の確認は未完了であり、AA 達成は宣言しません。
 下表の頻出項目だけで全達成基準を網羅したとは扱いません。
-既存[受入44条件](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)の定義と合否は変更しません。
+既存[受入44条件](https://github.com/O2-CONNECTIVE/Tether/issues/1)の定義と合否は変更しません。
 
 ## 基準の採用範囲
 

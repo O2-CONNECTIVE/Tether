@@ -1,6 +1,6 @@
 # 操作側プロトタイプの確認範囲
 
-[仕様と起動方法](README.md) / [UI基準](../../../docs/design-accessibility.md) / [追跡 #25](https://github.com/O2-CONNECTIVE/rescue-host/issues/25)
+[仕様と起動方法](README.md) / [UI基準](../../../docs/design-accessibility.md) / [追跡 #25](https://github.com/O2-CONNECTIVE/Tether/issues/25)
 
 ## 実行環境と限界
 

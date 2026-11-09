@@ -1,6 +1,6 @@
 # 共通エージェント開発手順
 
-[開発手順](development.md) / [配置方針](repository-layout.md) / [追跡Issue #43](https://github.com/O2-CONNECTIVE/rescue-host/issues/43)
+[開発手順](development.md) / [配置方針](repository-layout.md) / [追跡Issue #43](https://github.com/O2-CONNECTIVE/Tether/issues/43)
 
 Claude CodeとCodexで共有する、公開リポジトリ内の作業手順です。
 AGENTS.mdとCLAUDE.mdはこの文書への入口にとどめ、仕様・コマンド・版・件数・最新の成功状態は参照先を正本とします。
@@ -61,7 +61,7 @@ timeout・中断時は、自己所有の処理と未終了プロセスの有無�
 ## 未決と確認範囲
 
 これは共通の手順文書です。hook、設定、権限の強制、自動承認、agentの起動は追加しません。
-[ハーネス #28](https://github.com/O2-CONNECTIVE/rescue-host/issues/28)と[Decision #36 DEC-05](https://github.com/O2-CONNECTIVE/rescue-host/issues/36)の固定完了契約、handoff形式・サイズ・保管期限等は未決です。
+[ハーネス #28](https://github.com/O2-CONNECTIVE/Tether/issues/28)と[Decision #36 DEC-05](https://github.com/O2-CONNECTIVE/Tether/issues/36)の固定完了契約、handoff形式・サイズ・保管期限等は未決です。
 製品固有の設定や自動読み込みは、採用時に公式資料と実環境で別途確認します。
 
 2026-10-27に[OpenAI公式AGENTS.md資料](https://learn.chatgpt.com/docs/agent-configuration/agents-md)と[Claude Code公式memory資料](https://code.claude.com/docs/en/memory)を確認しました。

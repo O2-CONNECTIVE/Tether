@@ -1,6 +1,6 @@
 # Tauri UI のデザイントークン案
 
-[開発へ戻る](development.md) / [追跡 Issue #16](https://github.com/O2-CONNECTIVE/rescue-host/issues/16) / [親受入 #1](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)
+[開発へ戻る](development.md) / [追跡 Issue #16](https://github.com/O2-CONNECTIVE/Tether/issues/16) / [親受入 #1](https://github.com/O2-CONNECTIVE/Tether/issues/1)
 
 ## 制作前の意図と範囲
 

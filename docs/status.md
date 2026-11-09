@@ -4,11 +4,11 @@
 
 [READMEへ戻る](../README.md)
 
-2026-10-28に公開main `f0c41be394fe138ce1052a005b26f562bfe54809` へ[#72](https://github.com/O2-CONNECTIVE/rescue-host/pull/72)を統合した時点の記録です。
+2026-10-28に公開main `f0c41be394fe138ce1052a005b26f562bfe54809` へ[#72](https://github.com/O2-CONNECTIVE/Tether/pull/72)を統合した時点の記録です。
 統合元sourceは `abc12d6b5dcf3715e9e4d04ed197e83c0b115261` です。
 **新規接続ゲートは閉鎖中で、本番利用できません。**
 コードのmain統合、未接続GUIの評価、製品の遠隔接続とOS保護は別々に判定します。
-変化するCI結果は[Actions](https://github.com/O2-CONNECTIVE/rescue-host/actions)と各PRの固定headで確認してください。
+変化するCI結果は[Actions](https://github.com/O2-CONNECTIVE/Tether/actions)と各PRの固定headで確認してください。
 
 ## 2026-10-30の設計採用と開発範囲
 
@@ -23,10 +23,10 @@ NETWORK用の既存設定とは別にBATCH用の保護runtime設定を明示し�
 
 ## 2026-10-29のsource統合追記
 
-[#147](https://github.com/O2-CONNECTIVE/rescue-host/pull/147)は、固定guest設定の保護Root読取と同じ要求Endpointの検査leaseを追加しました。
-[#148](https://github.com/O2-CONNECTIVE/rescue-host/pull/148)は、実Confirm/codec/issuerを通すsource/fakeの単回発行と回収順序を追加しました。
-[#149](https://github.com/O2-CONNECTIVE/rescue-host/pull/149)は、同Endpointで検査leaseを保持してから入力を分離するAPIを追加しました。
-統合main `d4cb12009cdd80786b26ca18c666a84e6b1f3f3e` の[Go 3OS](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40927998417)、[Python 3OS](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40927998519)、[日本語検査](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40927998372)は全7ジョブ成功です。
+[#147](https://github.com/O2-CONNECTIVE/Tether/pull/147)は、固定guest設定の保護Root読取と同じ要求Endpointの検査leaseを追加しました。
+[#148](https://github.com/O2-CONNECTIVE/Tether/pull/148)は、実Confirm/codec/issuerを通すsource/fakeの単回発行と回収順序を追加しました。
+[#149](https://github.com/O2-CONNECTIVE/Tether/pull/149)は、同Endpointで検査leaseを保持してから入力を分離するAPIを追加しました。
+統合main `d4cb12009cdd80786b26ca18c666a84e6b1f3f3e` の[Go 3OS](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40927998417)、[Python 3OS](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40927998519)、[日本語検査](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40927998372)は全7ジョブ成功です。
 正例の認証・Record再検査・OS来歴にはmemory modelを使い、製品runtime sourceは未登録です。保持ChallengeからのLaunchや実SSHを実装済みとは判定しません。
 未起動専用の明示入口では、固定guest bundle→同Endpointの検査lease→元Execution owner→実stager factoryのsource呼出しを接続しました。
 private OS/owner memory seamによる各層の正例と、製品の同一caller正例は別です。固定SID policyは元ownerが保持Recordから供給しますが、実message認証用helperの起動資源は未構成で、実Windowsの入口は拒否を維持します。
@@ -74,11 +74,11 @@ Go基盤の詳細は[backend](../backend/README.md)、[stdio準備](go-stdio-pre
 
 | 準備コード | 統合時の確認範囲と限界 |
 | --- | --- |
-| [Rust所有境界 #55](https://github.com/O2-CONNECTIVE/rescue-host/pull/55)、[Rust codec #60](https://github.com/O2-CONNECTIVE/rescue-host/pull/60)、[Rust coordinator #64](https://github.com/O2-CONNECTIVE/rescue-host/pull/64) | 限定CIと独立レビューを確認済み。実Goとの制御交換や製品配線は未確認 |
-| [Windows service host #61](https://github.com/O2-CONNECTIVE/rescue-host/pull/61) | 未設定時の起動拒否と模擬制御を確認済み。実SCM登録、サービス稼働、tokenやACLの証明ではない |
-| [Go codec #62](https://github.com/O2-CONNECTIVE/rescue-host/pull/62) | 統合元head `8087c942` は[fixture修正 #68](https://github.com/O2-CONNECTIVE/rescue-host/pull/68)を取り込み、[3 OSの通常/race CI](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40625636120)成功。実Go起動や製品接続の証拠ではない |
-| [再起動後に許可を復元しないissuer #69](https://github.com/O2-CONNECTIVE/rescue-host/pull/69) | 統合元head `1286e398` は取消競合を修正し、[3 OSの通常/race CI](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40626031570)成功。OS上の承認、保護、実停止は未実証 |
-| [ローカル制御境界 #71](https://github.com/O2-CONNECTIVE/rescue-host/pull/71) | 公開Openは常時拒否。実pipe、token、ACL、peer identityの確認と製品IPCの認証は未実証 |
+| [Rust所有境界 #55](https://github.com/O2-CONNECTIVE/Tether/pull/55)、[Rust codec #60](https://github.com/O2-CONNECTIVE/Tether/pull/60)、[Rust coordinator #64](https://github.com/O2-CONNECTIVE/Tether/pull/64) | 限定CIと独立レビューを確認済み。実Goとの制御交換や製品配線は未確認 |
+| [Windows service host #61](https://github.com/O2-CONNECTIVE/Tether/pull/61) | 未設定時の起動拒否と模擬制御を確認済み。実SCM登録、サービス稼働、tokenやACLの証明ではない |
+| [Go codec #62](https://github.com/O2-CONNECTIVE/Tether/pull/62) | 統合元head `8087c942` は[fixture修正 #68](https://github.com/O2-CONNECTIVE/Tether/pull/68)を取り込み、[3 OSの通常/race CI](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40625636120)成功。実Go起動や製品接続の証拠ではない |
+| [再起動後に許可を復元しないissuer #69](https://github.com/O2-CONNECTIVE/Tether/pull/69) | 統合元head `1286e398` は取消競合を修正し、[3 OSの通常/race CI](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40626031570)成功。OS上の承認、保護、実停止は未実証 |
+| [ローカル制御境界 #71](https://github.com/O2-CONNECTIVE/Tether/pull/71) | 公開Openは常時拒否。実pipe、token、ACL、peer identityの確認と製品IPCの認証は未実証 |
 
 ## OSと役割ごとの範囲
 
@@ -98,14 +98,14 @@ CIのOSとCPU、toolchainは[Python CI](ci.md)、[Go CI](go-ci.md)、[Tauri手�
 
 ## 公開証跡と終了観測
 
-旧main `d84f2ccac36c276c48ac7db3d80ebc9e85205a47` では[Python](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40621486881)、[Go](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40621486949)、[Tauri品質](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40621486956)、[Windows native](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40621486964)のCIが成功しています。
-一方、同じmainの[配布CI](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40621486976)は展開release EXEの終了確認で失敗しました。
+旧main `d84f2ccac36c276c48ac7db3d80ebc9e85205a47` では[Python](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40621486881)、[Go](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40621486949)、[Tauri品質](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40621486956)、[Windows native](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40621486964)のCIが成功しています。
+一方、同じmainの[配布CI](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40621486976)は展開release EXEの終了確認で失敗しました。
 buildとhash照合の成功を配布検証全体の成功へ読み替えず、子プロセスの終了観測を調査中です。
 この旧失敗や他候補のgreenから、統合後mainの配布検証の合否は推定しません。
 
-#72では[#66](https://github.com/O2-CONNECTIVE/rescue-host/pull/66)のfail-closedな終了観測契約を取り込みました。
+#72では[#66](https://github.com/O2-CONNECTIVE/Tether/pull/66)のfail-closedな終了観測契約を取り込みました。
 統合後main `f0c41be394fe138ce1052a005b26f562bfe54809` に対応する6 workflow / 10 jobが終端successであることを照合しました。
-固定証跡は[Go](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40632153874)、[Python](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40632153904)、[日本語commit](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40632153905)、[Tauri品質](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40632154039)、[Windows native](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40632153861)、[配布](https://github.com/O2-CONNECTIVE/rescue-host/actions/runs/40632153953)です。
+固定証跡は[Go](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40632153874)、[Python](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40632153904)、[日本語commit](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40632153905)、[Tauri品質](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40632154039)、[Windows native](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40632153861)、[配布](https://github.com/O2-CONNECTIVE/Tether/actions/runs/40632153953)です。
 通常nativeと展開release EXEの両方で、実Rust IPC、通常close、観測対象プロセスの終了を確認しました。
 この成功は旧失敗の原因解明や、実Go/Rust間の製品配線、OS保護の実証ではありません。
 
@@ -127,6 +127,6 @@ host操作ユーザーまたは管理者が既に侵害された環境と、管�
 二重停止故障時の物理遮断はNOT_MET、Windows背圧の製品受入はUNVERIFIEDのままで、P2専用runtimeは未実証です。
 実relayと内側操作、実service / ACL / Job / 認証付きIPC / 実SSHの統合検証は残ります。
 
-[受入Issue #1](https://github.com/O2-CONNECTIVE/rescue-host/issues/1)、[安全要件](security.md)、[脅威モデル](threat-model.md)、[バックエンド契約](SECURITY_BACKEND_CONTRACT.md)を参照してください。
+[受入Issue #1](https://github.com/O2-CONNECTIVE/Tether/issues/1)、[安全要件](security.md)、[脅威モデル](threat-model.md)、[バックエンド契約](SECURITY_BACKEND_CONTRACT.md)を参照してください。
 既存受入44条件の定義や合否をこの文書更新で変更しません。
 接続を閉じても、既実行の変更や所有外のプロセスを取り消す保証はありません。
