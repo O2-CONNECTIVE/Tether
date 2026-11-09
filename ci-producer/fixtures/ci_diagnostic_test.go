@@ -85,6 +85,8 @@ func (d *ciDiagnostic) beginTool(name string) {
 		d.toolOperation = "status"
 	case "rescue_fixed_cancel":
 		d.toolOperation = "cancel"
+	case "rescue_fixed_release":
+		d.toolOperation = "release"
 	}
 	d.toolResult = nil
 	d.commandID = ""

@@ -94,6 +94,12 @@ jobs:
             *) exit 1 ;;
           esac
           go build "${flags[@]}" -o "$run_dir/producer-helper" "$helper_package"
+          if [ "$CI_PRODUCER_ADAPTER" = cli ]; then
+            go build "${flags[@]}" -o "$run_dir/tether-work" ./cmd/tether-work
+            work_sha=$(shasum -a 256 "$run_dir/tether-work" | awk '{print $1}')
+            printf 'CI_WORK_BINARY=%s\n' "$run_dir/tether-work" >> "$GITHUB_ENV"
+            printf 'CI_WORK_SHA256=%s\n' "$work_sha" >> "$GITHUB_ENV"
+          fi
           go test -c "${flags[@]}" -o "$run_dir/connection.test" ./internal/residentpipe
           go test -c "${flags[@]}" -o "$run_dir/transport.test" ./internal/agenttransport
           go test -c "${flags[@]}" -o "$run_dir/native.test" ./internal/macagent
@@ -320,6 +326,7 @@ jobs:
               'on-submit',
               'producer-close',
               'producer-start',
+              'work-cli-start', 'work-cli-release', 'work-cli-close',
           }
           failure_codes = {
               'cancel-expectation',
@@ -409,10 +416,12 @@ jobs:
               'work-phase-unknown',
               'work-registration-unobserved',
               'work-start-uncertain',
+              'work-cli-acquisition', 'work-cli-write', 'work-cli-response',
+              'work-cli-release', 'work-cli-tombstone', 'work-cli-join',
           }
           # Last-tool snapshots are diagnostic enums, never fresh cleanup proof.
           result_fields = {
-              'tool_operation': {'unavailable', 'start', 'status', 'cancel'},
+              'tool_operation': {'unavailable', 'start', 'status', 'cancel', 'release'},
               'result_error': {'unavailable', 'none', 'admission_refused_or_uncertain', 'start_uncertain', 'registration_unobserved', 'result_unobserved_or_uncertain', 'output_limit', 'not_found', 'control_ended', 'request_generation_mismatch', 'busy_or_refused'},
               'result_phase': {'unavailable', 'pending', 'running', 'finished', 'unknown'},
               'command_phase': {'unavailable', 'starting', 'running', 'exited', 'canceled', 'failed', 'start_unknown'},
@@ -622,6 +631,13 @@ jobs:
               )
               if phase == 'connection':
                   valid = valid and outcome.get('helper_sha256') == sha and outcome.get('fixture_retained') is False
+                  if os.environ['CI_PRODUCER_ADAPTER'] == 'cli':
+                      work_sha = os.environ.get('CI_WORK_SHA256', '')
+                      valid = (valid and re.fullmatch('[0-9a-f]{64}', work_sha) is not None
+                               and outcome.get('work_cli_sha256') == work_sha
+                               and outcome.get('work_cli_session') is True)
+                  else:
+                      valid = valid and outcome.get('work_cli_session') is False
           except (OSError, ValueError, KeyError, TypeError, AttributeError):
               valid = False
           if not valid:
@@ -630,6 +646,8 @@ jobs:
           public = {'adapter': os.environ['CI_PRODUCER_ADAPTER'], 'lane': os.environ['LANE'], 'phase': phase, 'outcome': 'passed',
                     'source_revision': os.environ['CI_PRODUCER_SOURCE_SHA'],
                     'helper_sha256': os.environ['CI_PRODUCER_SHA256']}
+          if phase == 'connection' and os.environ['CI_PRODUCER_ADAPTER'] == 'cli':
+              public.update(work_cli_sha256=work_sha, work_cli_session='same-session-fixed-operations')
           summary = json.dumps(public, sort_keys=True)
           print(summary)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
