@@ -1,12 +1,12 @@
 //! End-to-end native close admission; assert negatives only after owner cleanup.
-use super::{join, report, status, NativeSession};
+use super::{NativeSession, join, report, status};
 use crate::native_preparation::{
     ExitObservation, FixedActiveFixture, NativePreparation, Preparation, State,
 };
 use crate::resident_port::duplex::owner::native::NativeOutcome;
 use crate::resident_port::model::Receipt;
 use crate::standby_lifecycle::Outcome;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 fn submit(session: &NativeSession, id: u64, revision: u64) -> Receiver<Receipt> {
@@ -57,7 +57,15 @@ pub(super) fn run(mode: &str) {
         "wait-not-yet",
         NativePreparation::fixture_active_stats().waits == 0,
     ));
-    checks.push(("quit-denied", !session.owner().request_exit()));
+    let immediate = session.owner().request_exit();
+    checks.push((
+        "quit-requires-join",
+        !immediate
+            || (session.owner().outcome() == Some(Outcome::Confirmed)
+                && session.owner().poll_join().is_some_and(|joined| {
+                    joined.native().terminal_confirmed() && joined.wire_close_confirmed()
+                })),
+    ));
     let first = pending.as_ref().map(receive);
     if let Some(receipt) = &first {
         checks.push((
@@ -90,12 +98,15 @@ pub(super) fn run(mode: &str) {
                 unwound: false,
             },
     ));
-    checks.push(("wire-component-only", joined.wire_close_confirmed()));
     checks.push((
-        "native-unknown",
-        session.owner().outcome() == Some(Outcome::Unknown),
+        "wire-and-native-terminal",
+        joined.wire_close_confirmed() && joined.native().terminal_confirmed(),
     ));
-    checks.push(("no-quit-after-join", !session.owner().finish_requested()));
+    checks.push((
+        "native-confirmed",
+        session.owner().outcome() == Some(Outcome::Confirmed),
+    ));
+    checks.push(("quit-after-join", session.owner().finish_requested()));
     checks.push((
         "same-outer-proof",
         session.owner().poll_join() == Some(joined),
@@ -129,8 +140,9 @@ pub(super) fn run(mode: &str) {
         NativePreparation::fixture_counts().closes == 4,
     ));
     checks.push((
-        "unknown-record-retained",
-        NativePreparation::fixture_retained_state() == 3,
+        "terminal-tombstone-retained",
+        NativePreparation::fixture_retained_state() == 7
+            && NativePreparation::fixture_active_stats().abandons == 0,
     ));
     checks.push((
         "no-replacement",

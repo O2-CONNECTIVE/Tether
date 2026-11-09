@@ -34,7 +34,7 @@ class NativeRustOwnerCheckerTests(unittest.TestCase):
                 tool.validate_exports(output, False)
 
     def test_active_exports_are_observations_without_normal_fixture_creation(self):
-        self.assertEqual(len(tool.NORMAL_EXPORTS), 11)
+        self.assertEqual(len(tool.NORMAL_EXPORTS), 12)
         self.assertEqual(len(tool.FIXTURE_EXPORTS), 15)
         self.assertTrue({'_rh_resident_preparation_exit', '_rh_resident_preparation_retire_active_io',
                          '_rh_resident_preparation_abandon_active',

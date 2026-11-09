@@ -29,7 +29,7 @@ pub(crate) fn run(mode: &str) {
         check(supervisor.joined().is_none());
         check(!supervisor.wire_close_confirmed());
         let actual = join(&mut supervisor);
-        check(actual.outcome() == NativeOutcome::Refused);
+        check(actual.outcome() == NativeOutcome::Refused && !actual.terminal_confirmed());
         check(supervisor.joined() == Some(actual));
         check(supervisor.poll_join().is_none());
         check(!supervisor.wire_close_confirmed());
@@ -64,7 +64,10 @@ fn active(mode: &str) {
         check(supervisor.joined().is_none());
         check(!supervisor.wire_close_confirmed());
         let actual = join(&mut supervisor);
-        check(actual.outcome() == NativeOutcome::Prepared(State::RetiredUnlaunched));
+        check(
+            actual.outcome() == NativeOutcome::Prepared(State::RetiredUnlaunched)
+                && !actual.terminal_confirmed(),
+        );
         check(supervisor.joined() == Some(actual));
         check(supervisor.poll_join().is_none());
         check(!supervisor.wire_close_confirmed());
@@ -80,6 +83,10 @@ fn active(mode: &str) {
         );
         return;
     }
+    let terminal = matches!(
+        mode,
+        "supervisor-confirmed" | "supervisor-rejected" | "supervisor-drop"
+    );
     let (fixture, id) = match mode {
         "supervisor-finite-coalesced" => (FixedActiveFixture::FiniteCoalesced, None),
         "supervisor-finite-malformed" => (FixedActiveFixture::FiniteMalformed, None),
@@ -91,6 +98,7 @@ fn active(mode: &str) {
         "supervisor-malformed" => (FixedActiveFixture::Echo, Some(4)),
         "supervisor-invalid" => (FixedActiveFixture::Early, None),
         "supervisor-rejected" => (FixedActiveFixture::ExitTwo, None),
+        "supervisor-unproven-exit-two" => (FixedActiveFixture::UnprovenExitTwo, None),
         "supervisor-signal" => (FixedActiveFixture::Signal, None),
         "supervisor-lost-receipt" => (FixedActiveFixture::LostCloseReceipt, None),
         "supervisor-unwind" | "supervisor-drop" => (FixedActiveFixture::Echo, None),
@@ -142,7 +150,10 @@ fn active(mode: &str) {
         supervisor.request_close_transport();
         if mode == "supervisor-confirmed" {
             // Completion/TLS receipts alone cannot mint the parent join proof.
-            while NativePreparation::fixture_active_stats().abandons < 2 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while NativePreparation::fixture_retained_state() != 7
+                && std::time::Instant::now() < deadline
+            {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             check(supervisor.joined().is_none());
@@ -159,7 +170,7 @@ fn active(mode: &str) {
             }
         }
         let expected_exit = match mode {
-            "supervisor-rejected" => ExitObservation::Exit(2),
+            "supervisor-rejected" | "supervisor-unproven-exit-two" => ExitObservation::Exit(2),
             "supervisor-signal" => ExitObservation::Signal(15),
             _ => ExitObservation::Exit(0),
         };
@@ -185,7 +196,7 @@ fn active(mode: &str) {
                     unwound: matches!(mode, "supervisor-unwind" | "supervisor-finite-unwind"),
                 },
         );
-        check(supervisor.joined() == Some(actual));
+        check(supervisor.joined() == Some(actual) && actual.terminal_confirmed() == terminal);
         check(supervisor.poll_join().is_none()); // No second join or new owner.
         check(supervisor.wire_close_confirmed() == (mode == "supervisor-confirmed"));
         drop(supervisor);
@@ -195,7 +206,9 @@ fn active(mode: &str) {
     check(NativePreparation::fixture_counts().closes == 4);
     check(NativePreparation::fixture_counts().retire_calls == 0);
     check(NativePreparation::fixture_active_stats().waits == 1);
-    let abandons = if matches!(
+    let abandons = if terminal {
+        0
+    } else if matches!(
         mode,
         "supervisor-invalid"
             | "supervisor-unwind"
@@ -210,13 +223,14 @@ fn active(mode: &str) {
         2
     };
     check(NativePreparation::fixture_active_stats().abandons == abandons);
-    check(NativePreparation::fixture_retained_state() == 3);
+    check(NativePreparation::fixture_retained_state() == if terminal { 7 } else { 3 });
     check(matches!(
         NativePreparation::fixture_active(FixedActiveFixture::Early),
         crate::native_preparation::Preparation::Refused
     ));
     check(NativePreparation::fixture_collect_retained_active() == ExitObservation::Unavailable);
+    let unknown = u8::from(!terminal);
     println!(
-        "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=1 producer=0"
+        "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown={unknown} producer=0"
     );
 }

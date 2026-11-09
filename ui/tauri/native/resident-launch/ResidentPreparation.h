@@ -10,7 +10,8 @@ enum {
     RH_PREPARATION_UNKNOWN = 3,
     RH_PREPARATION_WRONG_THREAD = 4,
     RH_PREPARATION_OWNED_ACTIVE = 5,
-    RH_PREPARATION_ACTIVE_IO_RETIRED = 6
+    RH_PREPARATION_ACTIVE_IO_RETIRED = 6,
+    RH_PREPARATION_TERMINAL = 7
 };
 
 /* 0: refused, no returned ownership. Nonzero: inspect state, retain handle.
@@ -36,6 +37,10 @@ uint64_t rh_resident_preparation_exit(uint64_t handle);
  * EOF, every original close receipt, no IO fault. Retains native record even
  * on ACTIVE_IO_RETIRED; no replacement/full-join permission. */
 uint32_t rh_resident_preparation_retire_active_io(uint64_t handle);
+/* Same-worker one-shot native finalization: exact Wait, EOF, all original IO
+ * receipts and no UNKNOWN history. Returns TERMINAL only once; keeps a used
+ * tombstone blocking replacement. Not authoritative Close or Rust join proof. */
+uint32_t rh_resident_preparation_finish_active(uint64_t handle);
 /* Controller abandonment keeps original record UNKNOWN. Only original writer
  * half-close and nonblocking same-owner collection; no kill or close retry. */
 uint32_t rh_resident_preparation_abandon_active(uint64_t handle);
@@ -51,7 +56,7 @@ uint32_t rh_resident_preparation_discard_observation(uint64_t handle);
 /* Separate untrusted self-child owner. mode0 echo,1 early exit,2 early lost ack,3 exit2,4 self SIGTERM,
  * 5/6 finite malformed output,7 finite output with lost close receipt,
  * 8 finite output after a fixture-only held control EOF,9 finite output
- * with a source supervisor timer-coalescing fixture.
+ * with a source supervisor timer-coalescing fixture;10 exit2 without rejection proof.
  * Not callable from a requirement-bearing production preparation. */
 uint64_t rh_fixture_preparation_create_active(uint32_t mode);
 /* Same original worker/record collection after incomplete fixture Drop only. */

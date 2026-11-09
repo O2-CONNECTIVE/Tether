@@ -17,14 +17,18 @@ class NativeSessionReportTests(unittest.TestCase):
     def test_every_mode_requires_exact_complete_report(self):
         for mode, count in {'session-normal': 8, **tool.CASES}.items():
             child = int(mode not in tool.NO_CHILD)
-            report = f'NATIVE_SESSION_FIXTURE mode={mode} passed={count} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={child} producer=0\n'
+            unknown = int(mode not in tool.NO_CHILD and mode not in tool.TERMINAL)
+            report = f'NATIVE_SESSION_FIXTURE mode={mode} passed={count} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={unknown} producer=0\n'
             self.assertEqual(tool.validate_report(mode, report), count)
             for bad in ['', report + report, report + 'extra', report.replace(f'passed={count}', 'passed=0'),
                         report.replace('failed=0', 'failed=1'), report.replace(f'childrenStarted={child}', f'childrenStarted={child+1}'),
                         report.replace(f'childrenWaited={child}', f'childrenWaited={1-child}'), report.replace('open=0', 'open=1'),
-                        report.replace(f'nativeUnknown={child}', f'nativeUnknown={1-child}'), report.replace('producer=0', 'producer=1')]:
+                        report.replace(f'nativeUnknown={unknown}', f'nativeUnknown={1-unknown}'), report.replace('producer=0', 'producer=1')]:
                 with self.subTest(mode=mode, output=bad), self.assertRaises(ValueError):
                     tool.validate_report(mode, bad)
+
+    def test_terminal_modes_are_explicit(self):
+        self.assertEqual(tool.TERMINAL, {'session-confirmed', 'session-rejected', 'session-close-idle', 'session-close-pending', 'session-drop'})
 
     def test_unknown_mode_is_not_success(self):
         with self.assertRaises(ValueError):
@@ -73,7 +77,7 @@ class NativeSessionFailureEvidenceTests(unittest.TestCase):
 
     def test_completed_report_still_requires_original_counts(self):
         progress = {}
-        report = 'NATIVE_SESSION_FIXTURE mode=session-confirmed passed=26 failed=0 childrenStarted=1 childrenWaited=1 open=0 nativeUnknown=1 producer=0\n'
+        report = 'NATIVE_SESSION_FIXTURE mode=session-confirmed passed=26 failed=0 childrenStarted=1 childrenWaited=1 open=0 nativeUnknown=0 producer=0\n'
         result = subprocess.CompletedProcess([], 0, report, 'ignored private stderr')
         with patch.object(tool, 'completed', return_value=result):
             self.assertEqual(tool.execute_mode(Path('/private/fixture'), 'session-confirmed', progress), 26)

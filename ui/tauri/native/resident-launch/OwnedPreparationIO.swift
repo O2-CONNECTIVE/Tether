@@ -19,6 +19,11 @@ final class OwnedPreparationIO {
     private var sawEOF = false
     private var boundTask: ObjectIdentifier?
     var needsRetention: Bool { active && !complete }
+    func terminalReady(_ task: Process) -> Bool {
+        active && retired && complete && !fault && sawEOF && ends.count == 4
+            && ends.allSatisfy { $0.attempted && $0.confirmed }
+            && boundTask == ObjectIdentifier(task)
+    }
     #if RESIDENT_LAUNCH_FIXTURE
     // Test-only observation, immediately after each atomic acquisition is owned.
     var fixtureAllocationProbe: (([Int32]) throws -> Void)?

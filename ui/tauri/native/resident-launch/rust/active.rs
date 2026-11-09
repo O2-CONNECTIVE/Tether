@@ -5,6 +5,7 @@ unsafe extern "C" {
     pub(super) fn rh_resident_preparation_discard_observation(handle: u64) -> u32;
     pub(super) fn rh_resident_preparation_exit(handle: u64) -> u64;
     pub(super) fn rh_resident_preparation_retire_active_io(handle: u64) -> u32;
+    pub(super) fn rh_resident_preparation_finish_active(handle: u64) -> u32;
     pub(super) fn rh_resident_preparation_abandon_active(handle: u64) -> u32;
 }
 
@@ -49,7 +50,30 @@ impl DiscardObservation {
     }
 }
 
+/// Affine native component, created only by the original owner after finalization.
+/// Moving it out of its worker is not proof that that worker actually joined.
+#[must_use]
+pub struct NativeTerminal {
+    _private: (),
+}
+
 impl NativePreparation {
+    /// One-shot native terminalization. Wire proof and actual joins are separate.
+    pub fn finish_active(&mut self) -> Option<NativeTerminal> {
+        if !self.active || self.state() != State::ActiveIoRetired {
+            return None;
+        }
+        // SAFETY: private handle and original affine owner; native rechecks TLS,
+        // exact completion, all IO receipts and the absence of UNKNOWN history.
+        if unsafe { rh_resident_preparation_finish_active(self.handle.get()) } != 7 {
+            self.state = State::Unknown;
+            return None;
+        }
+        self.state = State::Terminal;
+        self.active = false; // Only this receipt disarms abandonment on Drop.
+        Some(NativeTerminal { _private: () })
+    }
+
     pub fn discard_observation(&mut self) -> DiscardObservation {
         if !self.active || self.state != State::Unknown {
             return DiscardObservation::Rejected;

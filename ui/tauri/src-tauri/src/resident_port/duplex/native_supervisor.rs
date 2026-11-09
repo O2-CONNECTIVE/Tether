@@ -1,6 +1,8 @@
 //! Concrete native IO worker only; no full cleanup or application Quit permit.
 use super::*;
-use crate::native_preparation::{ExitObservation, NativePreparation, Preparation, State};
+use crate::native_preparation::{
+    ExitObservation, NativePreparation, NativeTerminal, Preparation, State,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NativeOutcome {
@@ -16,8 +18,32 @@ pub(crate) enum NativeOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NativeJoined {
     outcome: NativeOutcome,
+    terminal: bool,
+    startup_rejected: bool,
+}
+// Only the worker can produce the affine native component; only actual join
+// below can turn it into durable read-only completion evidence.
+struct NativeWorkerEnd {
+    outcome: NativeOutcome,
+    terminal: Option<NativeTerminal>,
+    startup_rejected: bool,
+}
+impl NativeWorkerEnd {
+    fn incomplete(outcome: NativeOutcome) -> Self {
+        Self {
+            outcome,
+            terminal: None,
+            startup_rejected: false,
+        }
+    }
 }
 impl NativeJoined {
+    pub(crate) fn terminal_confirmed(self) -> bool {
+        self.terminal
+    }
+    pub(crate) fn startup_rejected(self) -> bool {
+        self.startup_rejected
+    }
     pub(crate) fn outcome(self) -> NativeOutcome {
         self.outcome
     }
@@ -25,7 +51,7 @@ impl NativeJoined {
 
 pub(crate) struct NativeIoSupervisor {
     shared: Arc<Mutex<Shared>>,
-    worker: Option<JoinHandle<NativeOutcome>>,
+    worker: Option<JoinHandle<NativeWorkerEnd>>,
     joined: Option<NativeJoined>,
 }
 enum Bootstrap {
@@ -109,8 +135,12 @@ impl NativeIoSupervisor {
             .take()
             .unwrap()
             .join()
-            .unwrap_or(NativeOutcome::Unknown);
-        let joined = NativeJoined { outcome }; // Only after the actual join.
+            .unwrap_or_else(|_| NativeWorkerEnd::incomplete(NativeOutcome::Unknown));
+        let joined = NativeJoined {
+            outcome: outcome.outcome,
+            terminal: outcome.terminal.is_some(),
+            startup_rejected: outcome.startup_rejected,
+        }; // Only after the actual join, including TLS destructor completion.
         self.joined = Some(joined);
         joined
     }
@@ -131,31 +161,31 @@ impl Drop for NativeIoSupervisor {
             self.request_close_transport();
             let _ = self.join_worker(); // Never detach a pending original worker.
         }
-        // No release notification: native retains its original UNKNOWN record.
+        // Terminal records remain tombstoned; uncertain original records remain UNKNOWN.
     }
 }
 fn run(
     bootstrap: Bootstrap,
     shared: Arc<Mutex<Shared>>,
     send: std::sync::mpsc::SyncSender<io::Result<BoundDuplex>>,
-) -> NativeOutcome {
+) -> NativeWorkerEnd {
     let (preparation, _unwind, _coalesced) = bootstrap.open();
     let mut original = match preparation {
         Preparation::Refused => {
             let _ = send.try_send(Err(unavailable()));
-            return NativeOutcome::Refused;
+            return NativeWorkerEnd::incomplete(NativeOutcome::Refused);
         }
         Preparation::Owned(owner) | Preparation::Unknown(owner) => owner,
     };
     if original.state() == State::OwnedUnlaunched {
         let _ = send.try_send(Err(unavailable()));
-        return NativeOutcome::Prepared(original.retire());
+        return NativeWorkerEnd::incomplete(NativeOutcome::Prepared(original.retire()));
     }
     // Inactive unknown preparation has no Process to Wait. Active uncertainty
     // instead retains the same affine guard through exact completion below.
     if original.poll_exit() == ExitObservation::Unavailable {
         let _ = send.try_send(Err(unavailable()));
-        return NativeOutcome::Prepared(State::Unknown);
+        return NativeWorkerEnd::incomplete(NativeOutcome::Prepared(State::Unknown));
     }
     let mut clean_eof = false;
     let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -227,9 +257,28 @@ fn run(
         thread::sleep(Duration::from_millis(5));
     };
     let io = original.retire_active_io();
-    NativeOutcome::Active {
-        exit,
-        io,
-        unwound: execution.is_err(),
+    // IO retirement alone cannot erase malformed/missing authoritative evidence.
+    // The same worker reads the original Shared proof before consuming its owner.
+    let (wire, startup) = {
+        let state = shared.lock().unwrap_or_else(|e| e.into_inner());
+        (state.closure.confirmed(), state.startup.confirmed())
+    };
+    let eligible = clean_eof
+        && matches!(execution, Ok(Ok(())))
+        && ((exit == ExitObservation::Exit(0) && wire)
+            || (exit == ExitObservation::Exit(2) && startup));
+    let terminal = if eligible {
+        original.finish_active()
+    } else {
+        None
+    };
+    NativeWorkerEnd {
+        outcome: NativeOutcome::Active {
+            exit,
+            io,
+            unwound: execution.is_err(),
+        },
+        startup_rejected: terminal.is_some() && exit == ExitObservation::Exit(2) && startup,
+        terminal,
     }
 }

@@ -36,6 +36,10 @@ pub(crate) fn run(arguments: &[String]) {
             println!("{{not-json");
             return;
         }
+        "unproven-exit-two" => {
+            emit(test_frames::status(now()));
+            std::process::exit(2); // Exit code alone is not startup-rejection proof.
+        }
         "exit-two" => {
             emit(
                 json!({"protocolVersion":1,"type":"startupRejected","sourceContinuousMs":now(),"code":"policy-rejected"}),

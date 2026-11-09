@@ -13,13 +13,15 @@ CASES = {'session-confirmed': 26, 'session-unknown': 26,
          'session-unwind': 18, 'session-drop': 18,
          'session-close-pending': 28, 'session-close-idle': 21}
 NO_CHILD = {'session-normal'}
+TERMINAL = {'session-confirmed', 'session-rejected', 'session-close-idle', 'session-close-pending', 'session-drop'}
 
 
 def validate_report(mode, output):
     expected = 8 if mode == 'session-normal' else CASES.get(mode)
     child = int(mode not in NO_CHILD)
+    unknown = int(mode not in NO_CHILD and mode not in TERMINAL)
     match = re.fullmatch(r'NATIVE_SESSION_FIXTURE mode=([a-z-]+) passed=(\d+) failed=(\d+) childrenStarted=(\d+) childrenWaited=(\d+) open=(\d+) nativeUnknown=(\d+) producer=(\d+)\n?', output)
-    if expected is None or not match or match.group(1) != mode or tuple(map(int, match.groups()[1:])) != (expected, 0, child, child, 0, child, 0):
+    if expected is None or not match or match.group(1) != mode or tuple(map(int, match.groups()[1:])) != (expected, 0, child, child, 0, unknown, 0):
         raise ValueError('incomplete or uncollected native session fixture')
     return expected
 
@@ -67,12 +69,12 @@ def run(progress=None):
     print(json.dumps({'fixture': 'native-session-source', 'passed': passed,
                       'normalModes': 1, 'fixtureModes': 11,
                       'fixtureChildrenStarted': 11, 'fixtureChildrenWaited': 11,
-                      'physicalActiveEndpointsClosed': 44, 'retainedNativeUnknownRecords': 11,
+                      'physicalActiveEndpointsClosed': 44, 'retainedNativeUnknownRecords': 6, 'retainedTerminalRecords': 5,
                       'explicitOuterJoins': 10, 'sessionDropJoins': 1,
-                      'replacementRefusals': 11, 'quitPermits': 0,
+                      'replacementRefusals': 11, 'quitPermits': 4,
                       'lockedOffline': True, 'existingDependencyPackages': 11,
                       'clippyVariants': 2, 'compileRefusals': 1, 'producerLaunches': 0,
-                      'scope': 'same native owner and borrowed typed status/intent port; no normal startup / IPC / auth / Quit permission'}))
+                      'scope': 'same native owner and borrowed typed status/intent port; fixture terminal Quit proof only; no normal startup / IPC / auth'}))
 
 
 if __name__ == '__main__':

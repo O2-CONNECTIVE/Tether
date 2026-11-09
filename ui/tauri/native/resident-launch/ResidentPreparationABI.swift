@@ -3,7 +3,7 @@ import Foundation
 
 private final class WorkerIdentity {}
 private enum PreparationState: UInt32 {
-    case invalid = 0, ownedUnlaunched = 1, retiredUnlaunched = 2, unknown = 3, wrongThread = 4, ownedActive = 5, activeIORetired = 6
+    case invalid = 0, ownedUnlaunched = 1, retiredUnlaunched = 2, unknown = 3, wrongThread = 4, ownedActive = 5, activeIORetired = 6, terminal = 7
 }
 
 // The only unchecked sharing is this bounded slot. Every field access is under
@@ -17,6 +17,7 @@ private final class PreparationSlot: @unchecked Sendable {
         var active = false
         var activeIORetired = false
         var shuttingDown = false
+        var terminal = false
     }
     private let lock = NSLock()
     private let key: pthread_key_t?
@@ -91,6 +92,7 @@ private final class PreparationSlot: @unchecked Sendable {
         guard let record, handle != 0, record.handle == handle else { return .invalid }
         if record.unknown { return .unknown }
         guard worker(create: false) === record.worker else { return .wrongThread }
+        if record.terminal { return .terminal }
         if record.active { return record.activeIORetired ? .activeIORetired : .ownedActive }
         return .ownedUnlaunched
     }
@@ -134,6 +136,7 @@ private final class PreparationSlot: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard record?.worker === identity else { return }
+        if record?.terminal == true { return } // Completed on this original worker; keep tombstone.
         // Destructor still runs on the original thread. Never touch another
         // thread's owner. Loss of its controller remains unknown even if these
         // unlaunched pipes close; never discard/replace the Process record.
@@ -149,7 +152,7 @@ private final class PreparationSlot: @unchecked Sendable {
         defer { lock.unlock() }
         guard let record, handle != 0, record.handle == handle else { return 0 }
         guard worker(create: false) === record.worker else { return 5 << 32 }
-        guard record.active else { return 0 }
+        guard record.active, !record.terminal else { return 0 }
         let observation = record.owner.pollCompletion()
         if case .unknown = observation { self.record?.unknown = true }
         if case .unavailable = observation { self.record?.unknown = true; return 4 << 32 }
@@ -167,12 +170,24 @@ private final class PreparationSlot: @unchecked Sendable {
         }
     }
 
+    func finishActive(_ handle: UInt64) -> PreparationState {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, handle != 0, record.handle == handle else { return .invalid }
+        guard worker(create: false) === record.worker else { return .wrongThread }
+        guard !record.terminal, !record.unknown, record.active, record.activeIORetired,
+              record.owner.terminalReady() else { return .invalid }
+        self.record?.terminal = true
+        // Retain the same record permanently: terminal does not permit replacement.
+        return .terminal
+    }
+
     func retireActiveIO(_ handle: UInt64) -> PreparationState {
         lock.lock()
         defer { lock.unlock() }
         guard let record, handle != 0, record.handle == handle else { return .invalid }
         guard worker(create: false) === record.worker else { return .wrongThread }
-        guard record.active else { return stateLocked(handle) }
+        guard record.active, !record.terminal else { return stateLocked(handle) }
         guard record.owner.hasObservedExit else { return stateLocked(handle) }
         if record.owner.retireIO() { self.record?.activeIORetired = true }
         else { self.record?.unknown = true }
@@ -186,7 +201,7 @@ private final class PreparationSlot: @unchecked Sendable {
         defer { lock.unlock() }
         guard let record, handle != 0, record.handle == handle else { return .invalid }
         guard worker(create: false) === record.worker else { return .wrongThread }
-        guard record.active, !record.activeIORetired else { return stateLocked(handle) }
+        guard record.active, !record.terminal, !record.activeIORetired else { return stateLocked(handle) }
         #if RESIDENT_LAUNCH_FIXTURE
         activeAbandons += 1
         #endif
@@ -211,11 +226,12 @@ private final class PreparationSlot: @unchecked Sendable {
         defer { lock.unlock() }
         guard let record, handle != 0, record.handle == handle else { return .invalid }
         guard worker(create: false) === record.worker else { return .wrongThread }
-        guard record.active else { return stateLocked(handle) }
+        guard record.active, !record.terminal else { return stateLocked(handle) }
         return abandonActiveLocked()
     }
 
     private func abandonActiveLocked() -> PreparationState {
+        if record?.terminal == true { return .terminal }
         guard let owner = record?.owner else { return .invalid }
         #if RESIDENT_LAUNCH_FIXTURE
         activeAbandons += 1
@@ -230,14 +246,14 @@ private final class PreparationSlot: @unchecked Sendable {
     func createActive(_ mode: UInt32) -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        guard mode <= 9, record == nil, issued < UInt64.max,
+        guard mode <= 10, record == nil, issued < UInt64.max,
               let identity = worker(create: true) else { return 0 }
         let owner = ResidentLaunchPreparation.completionFixture()
         issued += 1
         record = Record(handle: issued, worker: identity, owner: owner, active: true)
         if mode == 2 || mode == 7 || mode == 8 { owner.loseCloseAcknowledgement() }
         do {
-            if try !owner.runOwnedIOFixture(mode == 8 ? .finiteHeld : mode >= 5 ? .finite : mode == 0 ? .echo : mode == 3 ? .exitTwo : mode == 4 ? .signal : .early) { record?.unknown = true }
+            if try !owner.runOwnedIOFixture(mode == 10 ? .unprovenExitTwo : mode == 8 ? .finiteHeld : mode >= 5 ? .finite : mode == 0 ? .echo : mode == 3 ? .exitTwo : mode == 4 ? .signal : .early) { record?.unknown = true }
         } catch { record?.unknown = true }
         return issued
     }
@@ -261,7 +277,7 @@ private final class PreparationSlot: @unchecked Sendable {
     func retainedState() -> UInt32 {
         lock.lock()
         defer { lock.unlock() }
-        return record.map { stateLocked($0.handle).rawValue } ?? 0
+        return record.map { $0.terminal ? PreparationState.terminal.rawValue : stateLocked($0.handle).rawValue } ?? 0
     }
     func activeStats() -> UInt64 {
         lock.lock()
@@ -344,6 +360,9 @@ private let preparationSlot = PreparationSlot()
 
 @c @implementation public func rh_resident_preparation_exit(_ handle: UInt64) -> UInt64 {
     autoreleasepool { preparationSlot.completion(handle) }
+}
+@c @implementation public func rh_resident_preparation_finish_active(_ handle: UInt64) -> UInt32 {
+    autoreleasepool { preparationSlot.finishActive(handle).rawValue }
 }
 @c @implementation public func rh_resident_preparation_retire_active_io(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.retireActiveIO(handle).rawValue }
