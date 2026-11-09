@@ -15,7 +15,7 @@ func TestEnrolledPolicyUnsupportedBuildNeverSelectsLocation(t *testing.T) {
 	if path, err := currentEnrolledPolicy(ctx); path != "" || !errors.Is(err, ErrStandbyUnavailable) {
 		t.Fatal("unsupported account source selected enrollment")
 	}
-	if owner, err := loadEnrolledStandby(ctx); owner != nil || !errors.Is(err, ErrStandbyUnavailable) {
+	if owner, err := LoadEnrolledStandby(ctx); owner != nil || !errors.Is(err, ErrStandbyUnavailable) {
 		t.Fatal("unsupported account source loaded owner")
 	}
 }

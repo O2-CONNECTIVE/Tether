@@ -73,6 +73,13 @@ class PreparationTests(unittest.TestCase):
                     runpy.run_path(str(script), run_name='__main__')
             execute()
             mapping = json.loads((root / 'OVERLAY.json').read_text())['Replace']
+            # The explicit-policy seam moves behind a closed discriminator.
+            # Fixture substitution must not replace the real enrolled loader.
+            original_run = (backend / 'internal/residentpipe/run_darwin.go').read_bytes()
+            transformed_run = (root / 'generated/run_darwin.go').read_bytes()
+            self.assertEqual(transformed_run.count(b'residentmac.LoadEnrolledStandby(ctx)'), 1)
+            self.assertEqual(transformed_run.replace(b'ciLoadStandby(ctx, protectedPolicy)',
+                                                     b'residentmac.LoadStandby(ctx, protectedPolicy)'), original_run)
             self.assertEqual(mapping[str(backend / 'internal/residentpipe/ci_gui_producer_test.go')], str(fixtures / 'ci_gui_producer_test.go'))
             self.assertNotIn(str(backend / 'internal/residentmac/standby.go'), mapping)
             self.assertNotIn(str(backend / 'cmd/tether-host/main.go'), mapping)

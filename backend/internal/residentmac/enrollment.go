@@ -35,10 +35,11 @@ func selectEnrolledPolicy(ctx context.Context, a enrollmentAccount) (string, err
 	return a.home + "/" + enrolledPolicyRelative, nil
 }
 
-// Source-only composition for the future sealed entrypoint. No ordinary caller
-// invokes this. The selected location still needs every existing protected
-// read, fixed-scope, key and digest check; selection alone proves no enrollment.
-func loadEnrolledStandby(ctx context.Context) (*Standby, error) {
+// LoadEnrolledStandby selects only the current OS account's fixed enrollment.
+// This internal-package composition accepts no caller-selected path or trust.
+// Selection still needs the existing protected read, fixed scope, key and digest
+// checks, and does not start a connection. Normal startup remains unbound.
+func LoadEnrolledStandby(ctx context.Context) (*Standby, error) {
 	selected, err := currentEnrolledPolicy(ctx)
 	if err != nil {
 		return nil, err

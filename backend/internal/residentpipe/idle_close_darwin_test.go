@@ -26,7 +26,7 @@ import (
 
 // Load only self-created fixed-seed policy/key files through the real protected
 // reader. No run/CLI/producer child, ON, handshake, work, network, or OS setting.
-func idleProtectedOwner(t *testing.T) *residentmac.Standby {
+func idleProtectedPolicy(t *testing.T) string {
 	t.Helper()
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -82,9 +82,15 @@ func idleProtectedOwner(t *testing.T) *residentmac.Standby {
 	if err = os.WriteFile(policyPath, policy, 0600); err != nil {
 		t.Fatal(err)
 	}
+	return policyPath
+}
+
+func idleProtectedOwner(t *testing.T) *residentmac.Standby {
+	t.Helper()
+	policyPath := idleProtectedPolicy(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	owner, err := residentmac.LoadStandby(ctx, policyPath)
+	owner, err := loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
 	if err != nil {
 		t.Fatal("self-created protected policy refused", err)
 	}

@@ -94,8 +94,22 @@ func TestEnrolledPolicyNeverUsesHomeOrConfigEnvironment(t *testing.T) {
 func TestEnrolledStandbyPreflightNeverReadsWithoutFiniteContext(t *testing.T) {
 	// This rejects before account lookup, policy/key reads or any owner exists.
 	for _, ctx := range []context.Context{nil, context.Background()} {
-		if got, err := loadEnrolledStandby(ctx); got != nil || !errors.Is(err, ErrStandbyUnavailable) {
+		if got, err := LoadEnrolledStandby(ctx); got != nil || !errors.Is(err, ErrStandbyUnavailable) {
 			t.Fatal("non-finite preparation admitted")
+		}
+	}
+}
+
+// Invalid contexts are rejected before native account lookup or protected reads.
+func TestEnrolledStandbyRejectsInvalidContextBeforeLookup(t *testing.T) {
+	canceled, cancel := context.WithTimeout(context.Background(), time.Minute)
+	cancel()
+	expired, stop := context.WithDeadline(context.Background(), time.Unix(1, 0))
+	defer stop()
+	for _, ctx := range []context.Context{nil, context.Background(), canceled, expired} {
+		owner, err := LoadEnrolledStandby(ctx)
+		if owner != nil || !errors.Is(err, ErrStandbyUnavailable) {
+			t.Fatal("invalid context reached enrolled standby", err)
 		}
 	}
 }
