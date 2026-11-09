@@ -27,6 +27,11 @@ fn main() {
         native_preparation::Preparation::Refused
     ));
     #[cfg(resident_native_source)]
+    if arguments[1].starts_with("gui-state-") {
+        resident_port::gui_state_checks::run(&arguments[1]);
+        return;
+    }
+    #[cfg(resident_native_source)]
     if arguments[1].starts_with("session-") {
         resident_port::session_checks::run(&arguments[1]);
         return;

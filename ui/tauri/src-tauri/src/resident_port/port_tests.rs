@@ -78,6 +78,9 @@ fn ordinary_shell_resident_commands_remain_unbound_and_binding_is_absent() {
         serde_json::to_value(&app.config().app.security.capabilities).unwrap(),
         json!(["shell-local"])
     );
+    use tauri::Manager;
+    assert!(app.try_state::<std::sync::Arc<ResidentState>>().is_some());
+    assert!(app.try_state::<ResidentPort>().is_none());
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();

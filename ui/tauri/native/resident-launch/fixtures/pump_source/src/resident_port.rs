@@ -17,3 +17,10 @@ pub(crate) mod session_checks;
 mod port;
 #[cfg(resident_native_source)]
 pub(crate) use port::ResidentPort;
+
+#[cfg(resident_native_source)]
+#[path = "../../../../../src-tauri/src/resident_port/state.rs"]
+pub(crate) mod state;
+#[cfg(resident_native_source)]
+#[path = "gui_state_checks.rs"]
+pub(crate) mod gui_state_checks;
