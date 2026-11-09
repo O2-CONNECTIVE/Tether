@@ -23,11 +23,11 @@
 
 Tetherの共通サービスにCLI・GUI・MCPを接続し、認可・失効・実行所有・結果・停止回収のルールを入口ごとに複製しない構成を目指します。
 
-- **CLI:** 最初の候補は単一process・単一ownerの前景adapterで、FIFO入出力によるstatus/on/off/closeを扱う計画です。TTY対話や別process操作、新IPCは未採用。実行・結果・cancelは既存MCP経由で検証する予定で、今回のCLI操作として提供したとは扱いません。
+- **CLI:** 単一process・単一ownerの前景adapterとして、FIFO入出力によるstatus/on/off/closeを[#291](https://github.com/O2-CONNECTIVE/Tether/pull/291)で統合しました。TTY対話や別process操作、新IPCは未採用。実行・結果・cancelは既存MCP経由で、今回のCLI操作として提供したとは扱いません。
 - **GUI:** 共通サービスの状態と作業結果を表示・操作する入口。画面閉鎖、待機OFF、個別取消、ホスト終了を区別します。画面を閉じた後の常駐継続など、寿命の未決事項は実装時に明示します。
 - **MCP:** 認証済みエージェントの要求を同じサービスへつなぐ入口。接続できることや待機ONを作業許可と同一視しません。
 
-**CLI先行・Mac CIでの再現を優先**します。CLI契約試験と、実OS producerを結ぶ有限作業・結果・取消/OFF・回収の検証を分け、対象OS・版・許可fixture・観測範囲を固定します。利用者個人のMacを必須環境とせず、実GUI、署名・OS権限、実利用dot接続は別の受入として残します。これは実施方針であり、CLI完成の宣言ではありません。通常起動のenrollment/publisher gateも維持します。
+**CLI先行・Mac CIでの再現を優先**します。CLI契約試験と、実OS producerを結ぶ有限作業・結果・取消/OFF・回収の検証を分け、対象OS・版・許可fixture・観測範囲を固定します。利用者個人のMacを必須環境とせず、実GUI、署名・OS権限、実利用dot接続は別の受入として残します。[#291](https://github.com/O2-CONNECTIVE/Tether/pull/291)ではCI限定overlayの実producerをJSON/CLI×normal/raceの4laneで検証し、同じ版の結果と元Close/EOF/Wait0を確認しました。製品CLI全体の完成ではなく、実signal配送も未受入です。通常起動のenrollment/publisher gateも維持します。
 
 常駐ホストを主用途とし、その都度許可する単発派遣も維持します。常駐/単発は入口とは別の利用モードで、常駐だけで許可を永続化・復活させません。操作は実行管理、選択folderの限定読取/検索、その後の入力/限定編集へ段階的に進めます。非公開準備と提供済み操作は以下の現在地で区別します。
 
@@ -35,7 +35,7 @@ Tetherの共通サービスにCLI・GUI・MCPを接続し、認可・失効・�
 
 ## 現在地
 
-進捗確認: 2026-11-08、source基点 `edd4c28f`（[#286](https://github.com/O2-CONNECTIVE/rescue-host/pull/286)）。この基点のCI結果は同PRの固定SHA記録で確認してください。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
+進捗確認: 2026-11-08、source基点 `18d78c4e`（[#291](https://github.com/O2-CONNECTIVE/Tether/pull/291)）。この基点のCI結果は同PRの固定SHA記録で確認してください。最新の統合・失敗履歴・機能別残件は[進捗と完了条件 #189](https://github.com/O2-CONNECTIVE/rescue-host/issues/189)を参照してください。CI成功は実利用dot接続・実GUI受入・一般配布を意味しません。
 
 - **接続の隔離検証:** [#252](https://github.com/O2-CONNECTIVE/rescue-host/pull/252)の実loopback TCP/TLSと、[#253](https://github.com/O2-CONNECTIVE/rescue-host/pull/253)のMac実producer・固定command・OFF・元所有者終了確認を統合。合成認証と試験用CA/overlayを使い、実dotや通常製品認証は未受入です。#253初回のfailed-unknownは原因未解明のまま保持します。
 - **共通所有と停止:** [#267](https://github.com/O2-CONNECTIVE/rescue-host/pull/267)のMac公開stack、[#269](https://github.com/O2-CONNECTIVE/rescue-host/pull/269)の故障後有限出力回収、[#270](https://github.com/O2-CONNECTIVE/rescue-host/pull/270)のHTTP失効・OFF回帰、[#271](https://github.com/O2-CONNECTIVE/rescue-host/pull/271)の原子的pipe取得を統合。実GUI/dot・署名済みlaunch・製品全回収/Quitの完了ではありません。
