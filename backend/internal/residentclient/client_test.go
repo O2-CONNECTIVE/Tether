@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -83,7 +84,10 @@ func TestInitializeBodyFailureRetainsSIDAndClosesWithIndependentContext(t *testi
 			posts,deletes:=0,0
 			wrong:=false
 			bodyDone:=make(chan struct{})
-			s:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+			releaseBody:=make(chan struct{})
+			var releaseOnce sync.Once
+			releaseFixture:=func(){releaseOnce.Do(func(){close(releaseBody)})}
+			s:=httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
 				mu.Lock()
 				if r.Header.Get("Authorization")!="Bearer anonymous-fixture" {wrong=true}
 				if r.Method==http.MethodDelete {
@@ -95,20 +99,38 @@ func TestInitializeBodyFailureRetainsSIDAndClosesWithIndependentContext(t *testi
 				if r.Method!=http.MethodPost {wrong=true}
 				mu.Unlock()
 				defer close(bodyDone)
+				// Consume this fixture request before waiting for a disconnect.
+				// Unread HTTP/1 bodies can prevent background cancellation reads.
+				body,readErr:=io.ReadAll(io.LimitReader(r.Body,4097))
+				closeErr:=r.Body.Close()
+				if readErr!=nil || closeErr!=nil || len(body)>4096 {
+					mu.Lock();wrong=true;mu.Unlock();w.WriteHeader(http.StatusBadRequest);return
+				}
 				w.Header().Set("Content-Type","application/json")
 				w.Header().Set(agentgateway.HeaderSession,testSID)
 				w.Header().Set("Content-Length","256")
 				w.WriteHeader(http.StatusOK)
 				_,_=w.Write([]byte(`{"jsonrpc":`))
 				w.(http.Flusher).Flush()
-				if mode=="deadline" {<-r.Context().Done()}
-			}));defer s.Close()
+				if mode=="deadline" {
+					select {case <-r.Context().Done():case <-releaseBody:}
+				}
+			}))
+			s.Config.ReadTimeout=2*time.Second
+			s.StartTLS()
+			defer s.Close()
+			// Fixture-only escape also runs on Fatal, before Server.Close joins.
+			// It is never evidence that the remote client cancelled the handler.
+			defer releaseFixture()
 			roots:=x509.NewCertPool();roots.AddCert(s.Certificate())
 			c,e:=newClient(s.URL,[]byte("anonymous-fixture"),roots)
 			if e!=nil {t.Fatal("construction")}
 			ctx,cancel:=context.WithTimeout(context.Background(),time.Second)
 			defer cancel()
-			if c.open(ctx)==nil || c.sid!=testSID {t.Fatal("body uncertainty lost valid SID")}
+			e=c.open(ctx)
+			// Release only AFTER the original client call has actually ended.
+			releaseFixture()
+			if e==nil || c.sid!=testSID {t.Fatal("body uncertainty lost valid SID")}
 			if mode=="deadline" && ctx.Err()!=context.DeadlineExceeded {t.Fatal("body deadline not exercised")}
 			if _,e=c.Invoke(context.Background(),"start",testID);e==nil {t.Fatal("continued after body failure")}
 			if c.open(context.Background())==nil {t.Fatal("reinitialized after body failure")}
