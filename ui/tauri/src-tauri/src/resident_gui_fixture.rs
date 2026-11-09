@@ -37,6 +37,41 @@ fn advance(state: &mut u8, payload: &str) -> &'static str {
     *state = 5;
     "driver-failed"
 }
+// Only closed enums are projected; payloads, exceptions and runtime values never leave CI.
+fn failure_class(payload: &str) -> (&'static str, &'static str) {
+    let Some(value) = payload
+        .strip_prefix("\"failed:")
+        .and_then(|v| v.strip_suffix('"'))
+    else {
+        return ("event", "sequence");
+    };
+    let Some((phase, reason)) = value.split_once(':') else {
+        return ("event", "sequence");
+    };
+    let phase = match phase {
+        "init" => "init",
+        "on" => "on",
+        "auth" => "auth",
+        "off" => "off",
+        "complete" => "complete",
+        _ => return ("event", "sequence"),
+    };
+    let reason = match reason {
+        "identity" => "identity",
+        "receipt" => "receipt",
+        "transition" => "transition",
+        "retry-budget" => "retry-budget",
+        "phase-timeout" => "phase-timeout",
+        "auth-timeout" => "auth-timeout",
+        "bridge-timeout" => "bridge-timeout",
+        "unexpected" => "unexpected",
+        _ => return ("event", "sequence"),
+    };
+    (phase, reason)
+}
+fn failure_event(phase: &'static str, reason: &'static str) {
+    eprintln!("GUI_FIXTURE_FAILURE={phase}:{reason}");
+}
 fn hex(value: &str, count: usize) -> bool {
     value.len() == count
         && value
@@ -165,9 +200,15 @@ pub(super) fn run() {
                 let Ok(mut state) = sequence.lock() else {
                     result.store(2, Ordering::SeqCst);
                     event("driver-failed");
+                    failure_event("event", "lock");
                     return;
                 };
-                event(advance(&mut state, message.payload()));
+                let stage = advance(&mut state, message.payload());
+                event(stage);
+                if stage == "driver-failed" {
+                    let (phase, reason) = failure_class(message.payload());
+                    failure_event(phase, reason);
+                }
                 if *state == 4 {
                     result.store(1, Ordering::SeqCst);
                 }
@@ -274,7 +315,40 @@ pub(super) fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::advance;
+    use super::{advance, failure_class};
+    #[test]
+    fn fixed_failure_classes_never_accept_payload_values_or_restore_success() {
+        for phase in ["init", "on", "auth", "off", "complete"] {
+            for reason in [
+                "identity",
+                "receipt",
+                "transition",
+                "retry-budget",
+                "phase-timeout",
+                "auth-timeout",
+                "bridge-timeout",
+                "unexpected",
+            ] {
+                let payload = format!("\"failed:{phase}:{reason}\"");
+                assert_eq!(failure_class(&payload), (phase, reason));
+                let mut state = 1;
+                assert_eq!(advance(&mut state, &payload), "driver-failed");
+                assert_eq!(state, 5);
+                advance(&mut state, "\"on-applied\"");
+                assert_eq!(state, 5);
+            }
+        }
+        for payload in [
+            "\"failed:on:https://secret.invalid\"",
+            "\"failed:private:identity\"",
+            "{}",
+            "\"passed\"",
+            "\"failed:on:identity:extra\"",
+            "\"failed:on:identity\\n\"",
+        ] {
+            assert_eq!(failure_class(payload), ("event", "sequence"));
+        }
+    }
     #[test]
     fn fixture_verdict_requires_order_and_rejects_duplicate_or_oversized_events() {
         let events = [
