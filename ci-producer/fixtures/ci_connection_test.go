@@ -59,6 +59,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		t.Fatal("fixture operation refused")
 	}
 	var child *ciChild
+	var work *ciWorkChild
 	var gateway *ciGateway
 	confirmed := false
 	diag := &ciDiagnostic{stage: "gateway-setup"}
@@ -81,6 +82,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		for {
 			time.Sleep(time.Hour)
 			runtime.KeepAlive(child)
+			runtime.KeepAlive(work)
 			runtime.KeepAlive(gateway)
 		}
 	})
@@ -116,16 +118,26 @@ func TestCIActualProducerConnection(t *testing.T) {
 	if generation == "" {
 		diag.fail(t, "generation-missing")
 	}
+	tool := gateway.tool
+	if child.foreground {
+		diag.at("work-cli-start")
+		// Keep existing authenticated/principal-isolation negatives. The real
+		// CLI then owns one different SID for both work requests and retained reads.
+		gateway.initialize()
+		work, err = startCIWork(gateway, root)
+		if err != nil { diag.fail(t, "work-cli-acquisition") }
+		tool = func(name, id string) map[string]any { return work.tool(gateway, name, id) }
+	}
 	for n, mode := range []string{"natural", "cancel"} {
 		diag.at(mode + "-generation")
 		if gateway.handler.ResidentGeneration(ciHost, ciPrincipal) != generation {
 			diag.fail(t, "generation-changed")
 		}
 		diag.at(mode + "-initialize")
-		gateway.initialize()
+		if work == nil { gateway.initialize() }
 		id := fmt.Sprintf("%032x", n+1)
 		diag.at(mode + "-start")
-		start := gateway.tool("rescue_fixed_start", id)
+		start := tool("rescue_fixed_start", id)
 		if start["request_id"] != id {
 			diag.fail(t, "request-correlation")
 		}
@@ -137,7 +149,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		deadline := time.Now().Add(60 * time.Second)
 		var value map[string]any
 		for time.Now().Before(deadline) {
-			value = gateway.tool("rescue_fixed_status", id)
+			value = tool("rescue_fixed_status", id)
 			for _, field := range []string{"phase", "command_cleanup", "owner_cleanup", "gateway_cleanup"} {
 				if value[field] == "unknown" {
 					diag.fail(t, map[string]string{"phase": "work-phase-unknown", "command_cleanup": "command-cleanup-unknown", "owner_cleanup": "owner-cleanup-unknown", "gateway_cleanup": "gateway-cleanup-unknown"}[field])
@@ -160,7 +172,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 			output := ciOutput(t, value, diag)
 			if mode == "cancel" && !canceled && output == "TETHER_MCP_GUI_BEGIN\n" {
 				diag.at("cancel-submit")
-				gateway.tool("rescue_fixed_cancel", id)
+				tool("rescue_fixed_cancel", id)
 				diag.at("cancel-poll")
 				canceled = true
 			}
@@ -193,6 +205,19 @@ func TestCIActualProducerConnection(t *testing.T) {
 		if ciOutput(t, value, diag) != expectedOutput {
 			diag.fail(t, "output-mismatch")
 		}
+		if work != nil {
+			diag.at("work-cli-release")
+			released := tool("rescue_fixed_release", id)
+			if released["result_released"] != true || released["phase"] != "finished" || released["owner_cleanup"] != "confirmed" || released["gateway_cleanup"] != "confirmed" || ciOutput(t, released, diag) != "" {
+				diag.fail(t, "work-cli-release")
+			}
+			// Same SID observes its tombstone, never a reset/new generation.
+			if tool("rescue_fixed_status", id)["result_released"] != true { diag.fail(t, "work-cli-tombstone") }
+		}
+	}
+	if work != nil {
+		diag.at("work-cli-close")
+		if work.finish() != nil { diag.fail(t, "work-cli-join") }
 	}
 	diag.at("off-submit")
 	off, err := child.request("off")
@@ -230,7 +255,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		diag.fail(t, "fixture-remains")
 	}
 	diag.at("complete")
-	data, _ := json.Marshal(map[string]any{"stage": "complete", "failure_code": "none", "outcome": "passed", "cleanup": "confirmed", "test": t.Name(), "invocation": invocation, "helper_sha256": expected, "fixture_retained": false})
+	data, _ := json.Marshal(map[string]any{"stage": "complete", "failure_code": "none", "outcome": "passed", "cleanup": "confirmed", "test": t.Name(), "invocation": invocation, "helper_sha256": expected, "fixture_retained": false, "work_cli_sha256": os.Getenv("CI_WORK_SHA256"), "work_cli_session": work != nil})
 	if err = ciWriteExclusive(report, append(data, '\n')); err != nil {
 		diag.fail(t, "outcome-persist")
 	}

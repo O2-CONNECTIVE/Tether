@@ -16,6 +16,7 @@ BACKEND = parser.parse_args().backend.resolve()
 if not (BACKEND / 'go.mod').is_file():
     raise SystemExit('Expected repository backend; pass --backend for isolated review copy')
 SOURCE_SHA = 'b25255151a50c8cdc1116c60a493afdc953d91e95b643a7f173857eb29a14b39'
+WORK_ENTRY_SHA = '2fd42dda65cdad708632c7d65ce12bc11819c88732b694e2d3d51f0ee2567dfd'
 CLI_ENTRY_SHA = 'c7420e9cfb1e6a7527b48152a384e9eb33266684bcfea4c509a9120af57aa646'
 source = BACKEND / 'internal/residentpipe/run_darwin.go'
 raw = source.read_bytes()
@@ -59,6 +60,7 @@ native_overlay('internal/agentexec/run.go', '91794c8ef9a00cf2b33d30d25633ae3a0af
 
 packages = {'ci_native_capture.go': 'macagent', 'ci_native_capture_test.go': 'macagent', 'ci_native_observation_test.go': 'residentpipe', 'ci_producer_transport.go': 'agenttransport', 'ci_producer_transport_test.go': 'agenttransport', 'ci_producer_factory.go': 'residentmac',
             'ci_producer_entry.go': 'residentpipe', 'ci_gateway_test.go': 'residentpipe',
+            'ci_work_bootstrap.go': 'residentclient', 'ci_work_child_test.go': 'residentpipe',
             'ci_mcp_test.go': 'residentpipe', 'ci_child_test.go': 'residentpipe',
             'ci_connection_test.go': 'residentpipe', 'ci_observation_test.go': 'residentpipe', 'ci_diagnostic_test.go': 'residentpipe'}
 for name, package in packages.items():
@@ -85,7 +87,14 @@ cli_fixture = ROOT / 'fixtures/ci_cli_entry.go'
 if not cli_fixture.is_file():
     raise SystemExit('Required CLI composition fixture missing')
 mapping[str(entry)] = str(cli_fixture)
+work_entry = BACKEND / 'cmd/tether-work/entry.go'
+if not work_entry.is_file() or hashlib.sha256(work_entry.read_bytes()).hexdigest() != WORK_ENTRY_SHA:
+    raise SystemExit('Production work CLI entry changed: independent review required')
+work_fixture = ROOT / 'fixtures/ci_work_entry.go'
+if not work_fixture.is_file():
+    raise SystemExit('Required work CLI composition fixture missing')
+mapping[str(work_entry)] = str(work_fixture)
 (ROOT / 'OVERLAY.json').write_text(json.dumps({'Replace': mapping}, indent=2) + '\n')
 manifest = {str(Path(k).relative_to(BACKEND)): hashlib.sha256(Path(v).read_bytes()).hexdigest() for k, v in mapping.items()}
-(out / 'overlay-manifest.json').write_text(json.dumps({'run_source_sha256': SOURCE_SHA, 'cli_entry_sha256': CLI_ENTRY_SHA, 'files': manifest}, indent=2)+'\n')
+(out / 'overlay-manifest.json').write_text(json.dumps({'run_source_sha256': SOURCE_SHA, 'cli_entry_sha256': CLI_ENTRY_SHA, 'work_entry_sha256': WORK_ENTRY_SHA, 'files': manifest}, indent=2)+'\n')
 print('Prepared overlay only; no helper or test executed')
