@@ -190,3 +190,5 @@ snapshotが4096行を超える場合や生成時刻を取得できない場合�
 この比較は所有認可・子の除外・close・cleanup・成功条件には使わず、従来と同じ `NATIVE_LINEAGE_OWNER_UNCONFIRMED` を保持します。
 `process-contract.test.ps1` から呼ぶ独立scopeの `lineage-baseline.test.ps1` は、匿名分類、depth4の二つの逆順時刻、baseline未取得時の拒否、正当なother子の保持、情報非公開を合成行で検査します。
 合成fixtureの成功と実Windowsの原因特定・通常close成功は別の証拠です。
+
+2026-11-09 の #295 merge 後も debug 診断は ownership-confirmation で拒否されました。固定 artifact の事実と、未採用の作成時 owner producer 案は[Windows lineage の証拠と次の所有契約](windows-lineage-ownership-plan.md)を参照してください。PID 再利用や既存失敗の解消は断定しません。
