@@ -20,11 +20,22 @@ type selectedHandle struct {
 	names  []string
 }
 
+// Per-call acquisition operations keep fault-injection local to a fixture.
+// Chain reinspection always uses the native operations, not these callbacks.
+type selectedAcquisition struct {
+	lookup func(int, string) (nativeState, error)
+	open   func(int, string, int, uint32) (int, error)
+}
+
 // readSelectedOwned consumes root even on refusal. The root must already be a
 // separately approved owned directory handle, never a path from a tool call.
 // No production caller or root-selection/permission provider exists. Retained
 // descriptors plus observational checks are NOT atomic pathname containment.
 func readSelectedOwned(ctx context.Context, root *os.File, permission readPermission, req selectedRequest) (out selectedResult, err error) {
+	return readSelectedAcquiring(ctx, root, permission, req, selectedAcquisition{inspectName, unix.Openat})
+}
+
+func readSelectedAcquiring(ctx context.Context, root *os.File, permission readPermission, req selectedRequest, acquire selectedAcquisition) (out selectedResult, err error) {
 	if root == nil {
 		return selectedResult{}, errInvalid
 	}
@@ -39,6 +50,9 @@ func readSelectedOwned(ctx context.Context, root *os.File, permission readPermis
 			out = selectedResult{}
 		}
 	}()
+	if acquire.lookup == nil || acquire.open == nil {
+		return selectedResult{}, errInvalid
+	}
 	access := readAccess{request: req, rootIdentity: permission.rootIdentity}
 	if err := permission.check(ctx, access); err != nil {
 		return selectedResult{}, err
@@ -56,12 +70,18 @@ func readSelectedOwned(ctx context.Context, root *os.File, permission readPermis
 		if err := permission.check(ctx, access); err != nil {
 			return selectedResult{}, err
 		}
+		// The provider call may outlive a persistent root/ancestor change.
+		// Reject observed changes before another lookup/open via a retained fd.
+		// This check is still not atomic with the following lookup or open.
+		if _, err := h.inspect(ctx); err != nil {
+			return selectedResult{}, errChanged
+		}
 		parent := int(h.files[len(h.files)-1].Fd())
 		// The precheck avoids intentionally opening special files. Replacement
 		// between this check and open can still invoke a device's open handler;
 		// O_NONBLOCK is not a side-effect-free-open guarantee. This is one of
 		// the unresolved reasons this candidate has no production caller.
-		before, err := inspectName(parent, name)
+		before, err := acquire.lookup(parent, name)
 		if err != nil || !before.safeChild(initial, i == len(parts)-1) {
 			return selectedResult{}, errUnsafe
 		}
@@ -69,7 +89,7 @@ func readSelectedOwned(ctx context.Context, root *os.File, permission readPermis
 		if i < len(parts)-1 {
 			flags |= unix.O_DIRECTORY
 		}
-		fd, err := unix.Openat(parent, name, flags, 0)
+		fd, err := acquire.open(parent, name, flags, 0)
 		if err != nil {
 			return selectedResult{}, errRead
 		}
