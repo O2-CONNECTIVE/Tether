@@ -94,7 +94,7 @@ def source_blob(revision, name):
     return data
 
 
-def snapshot(revision, destination):
+def snapshot(revision, destination, recipe_paths=RECIPE):
     """Only the reviewed Darwin/cgo Go inventory, from exact Git blobs."""
     inventory = product_files_for('darwin', True)
     files = {}
@@ -116,7 +116,7 @@ def snapshot(revision, destination):
         data = source_blob(revision, relative)
         (destination / relative).write_bytes(data)
         locks[relative] = digest(data)
-    recipe = {name: digest(source_blob(revision, name)) for name in RECIPE}
+    recipe = {name: digest(source_blob(revision, name)) for name in recipe_paths}
     # Imported inventory and executing recipe must be the pinned checked-out ones.
     for name, expected in recipe.items():
         require(digest((ROOT / name).read_bytes()) == expected, 'RECIPE_CHANGED')
@@ -180,12 +180,12 @@ def source_inventory(env):
     require(actual == product_files_for('darwin', True), 'INVENTORY_INVALID')
 
 
-def closure(module, env):
+def closure(module, env, role=ROLE):
     """Confirm the fixed package really uses the reviewed snapshot selections."""
     selected = []
     paths = set()
     expected = product_files_for('darwin', True)
-    raw = command(['go', 'list', '-mod=readonly', '-deps', '-json', ROLE], module, env)
+    raw = command(['go', 'list', '-mod=readonly', '-deps', '-json', role], module, env)
     for package in json_objects(raw.decode()):
         path = package.get('ImportPath', '')
         info = package.get('Module', {})
@@ -206,7 +206,7 @@ def closure(module, env):
         require(Path(package['Dir']).resolve() ==
                 (module / path[len(PROJECT):].lstrip('/')).resolve(), 'SOURCE_ROOT_INVALID')
         selected.append(path)
-    require(ROLE in selected, 'INVENTORY_INVALID')
+    require(role in selected, 'INVENTORY_INVALID')
     return sorted(selected), sorted(paths)
 
 
