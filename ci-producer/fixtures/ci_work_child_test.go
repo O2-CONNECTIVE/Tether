@@ -97,7 +97,7 @@ func (p *ciWorkChild) tool(g *ciGateway,name,id string) map[string]any {
 
 func (p *ciWorkChild) finish() error {
 	// Later bytes in the same actual pipe write must not run after close.
-	if p.send("close\nstart ffffffffffffffffffffffffffffffff\n")!=nil{return errCIWork}
+	if p.send("close\nstart ffffffffffffffffffffffffffffffff\nlist - 1\nget_execution ffffffffffffffffffffffffffffffff\nread_output ffffffffffffffffffffffffffffffff 0 7\n")!=nil{return errCIWork}
 	v,e:=p.read()
 	if e!=nil || len(v)!=3 || v["type"]!="closed" || v["session"]!="confirmed" || v["work_cleanup"]!="not_observed" {return errCIWork}
 	if p.input.Close()!=nil || p.output.SetReadDeadline(time.Now().Add(10*time.Second))!=nil{return errCIWork}

@@ -127,10 +127,13 @@ func TestCIActualProducerConnection(t *testing.T) {
 		// Keep existing authenticated/principal-isolation negatives. The real
 		// CLI then owns one different SID for both work requests and retained reads.
 		gateway.initialize()
+		gateway.workHTTP.enable()
 		work, err = startCIWork(gateway, root)
 		if err != nil { diag.fail(t, "work-cli-acquisition") }
 		tool = func(name, id string) map[string]any { return work.tool(gateway, name, id) }
+		work.dictionaryMissing(gateway)
 	}
+	var dictionaryResults []map[string]any
 	for n, mode := range []string{"natural", "cancel"} {
 		diag.at(mode + "-generation")
 		if gateway.handler.ResidentGeneration(ciHost, ciPrincipal) != generation {
@@ -174,6 +177,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 			}
 			output := ciOutput(t, value, diag)
 			if mode == "cancel" && !canceled && output == "TETHER_MCP_GUI_BEGIN\n" {
+				if work != nil { work.dictionaryRunning(gateway, value) }
 				diag.at("cancel-submit")
 				tool("rescue_fixed_cancel", id)
 				diag.at("cancel-poll")
@@ -209,6 +213,9 @@ func TestCIActualProducerConnection(t *testing.T) {
 			diag.fail(t, "output-mismatch")
 		}
 		if work != nil {
+			work.dictionaryFinished(gateway, value, expectedOutput)
+			dictionaryResults = append(dictionaryResults, value)
+			work.checkList(gateway, dictionaryResults)
 			diag.at("work-cli-release")
 			released := tool("rescue_fixed_release", id)
 			if released["result_released"] != true || released["phase"] != "finished" || released["owner_cleanup"] != "confirmed" || released["gateway_cleanup"] != "confirmed" || ciOutput(t, released, diag) != "" {
@@ -216,11 +223,15 @@ func TestCIActualProducerConnection(t *testing.T) {
 			}
 			// Same SID observes its tombstone, never a reset/new generation.
 			if tool("rescue_fixed_status", id)["result_released"] != true { diag.fail(t, "work-cli-tombstone") }
+			work.dictionaryReleased(gateway, released)
+			dictionaryResults[n] = released
+			work.checkList(gateway, dictionaryResults)
 		}
 	}
 	if work != nil {
 		diag.at("work-cli-close")
 		if work.finish() != nil { diag.fail(t, "work-cli-join") }
+		if !gateway.workHTTP.confirmed(gateway.sid) { diag.fail(t, "work-cli-session") }
 	}
 	diag.at("off-submit")
 	diag.beginProducerRequest("off")
@@ -260,7 +271,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		diag.fail(t, "fixture-remains")
 	}
 	diag.at("complete")
-	data, _ := json.Marshal(map[string]any{"stage": "complete", "failure_code": "none", "outcome": "passed", "cleanup": "confirmed", "test": t.Name(), "invocation": invocation, "helper_sha256": expected, "fixture_retained": false, "work_cli_sha256": os.Getenv("CI_WORK_SHA256"), "work_cli_session": work != nil})
+	data, _ := json.Marshal(map[string]any{"stage": "complete", "failure_code": "none", "outcome": "passed", "cleanup": "confirmed", "test": t.Name(), "invocation": invocation, "helper_sha256": expected, "fixture_retained": false, "work_cli_sha256": os.Getenv("CI_WORK_SHA256"), "work_cli_session": work != nil, "work_cli_dictionary": work != nil})
 	if err = ciWriteExclusive(report, append(data, '\n')); err != nil {
 		diag.fail(t, "outcome-persist")
 	}

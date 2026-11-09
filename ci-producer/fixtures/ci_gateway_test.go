@@ -59,6 +59,7 @@ type ciGateway struct {
 	sequence             int
 	closeOnce            sync.Once
 	closeErr             error
+	workHTTP             ciWorkHTTP
 }
 
 func newCIGateway(t *testing.T, root string, diag *ciDiagnostic) *ciGateway {
@@ -137,7 +138,7 @@ func newCIGateway(t *testing.T, root string, diag *ciDiagnostic) *ciGateway {
 	checked(ciWriteExclusive(g.policyPath, policy))
 	mux := http.NewServeMux()
 	mux.Handle("/agent/register", g.handler)
-	mux.Handle("/mcp", g.gateway)
+	mux.HandleFunc("/mcp", g.observeWorkHTTP)
 	g.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	g.served = make(chan error, 1)
 	secured := tls.NewListener(g.listener, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{{Certificate: [][]byte{der, g.caDER}, PrivateKey: serverKey}}})
