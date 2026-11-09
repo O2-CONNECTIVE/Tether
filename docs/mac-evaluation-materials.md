@@ -64,7 +64,7 @@ schema は `tether-mac-evaluation-materials/1`、repository は `O2-CONNECTIVE/T
 - `images` は `gui` と `producer` だけで、固定の相対 path と外部期待 hash を照合します。追加 role や arbitrary executable path は拒否します。
 - `files` は manifest 以外の全 file の相対 path と SHA-256、`notices` は同梱を宣言する本文の path 一覧です。固定材料と notice の和以外の file、欠落、重複、case alias、空 directory、symlink/reparse point、特殊 file を拒否します。
 - Go 固定7本文は collector の既知 hash と実 bytes を照合します。GUI の frontend と Rust toolchain 2本文、少なくとも1個の crate notice を要求しますが、実 crate graph との一致や内容の法的十分性は確認しません。
-- 任意追加の本文は所定の Rust crate / Go stdlib-vendor prefix と license 等の basename に限ります。本文が非空 UTF-8 で hash に一致することと、対象の全依存を網羅することは別です。
+- 任意追加の本文は所定の Rust crate / Go stdlib-vendor prefix、その下の少なくとも1段の対象 directory と license 等の basename に限ります。prefix 直下の本文だけで crate / 対象の宣言を代用しません。本文が非空 UTF-8 で hash に一致することと、対象の全依存を網羅することは別です。
 - 未知 field、重複 JSON key、偽の配布可・署名済・検証完了の主張を拒否します。`productionGateClosed=true`、`distributionStatus=blocked`、`signingStatus=unverified` と全ての未検証 flag / scope を保持します。
 
 未検証 scope は binary-source 対応、linked dependency 閉包、stdlib vendored / platform notice、build tool 依存、toolchain / SDK 来歴、binary 秘密監査、publisher / 署名、notarization、verify-to-exec、実 runtime / cleanup です。宣言に本文を追加してもこの未検証集合を減らしません。
@@ -82,7 +82,7 @@ source manifest と各 file の hash / 型検査は取得した同じ bytes に�
 
 ## 検証と次の工程
 
-有限 fixture は実装後の回帰試験です。正常材料、全 file の改変・欠落、source / hash 不一致、不正 role、notice 不足、偽の完了 flag、不正 UTC、特殊 file、symlink、未知 file、サイズ上限、診断への私的入力非表示を確認します。native / cache / network / build / 署名 / upload は使いません。
+初回の有限 fixture は実装後の回帰試験です。独立review後の追補では、不正 XML、未知 encoding、plist root の key、不正 integer、壊れた binary plist の5負例について、正しい file / manifest hash を付けた同じ CLI 入力で red から green を確認します。例外は parser 呼出しの境界で固定 `CANDIDATE_PLIST_INVALID` に変換し、stderr に traceback や入力値を出しません。notice prefix 直下の本文2負例も red から green を確認します。正常材料、全 file の改変・欠落、source / hash 不一致、不正 role、notice 不足、偽の完了 flag、不正 UTC、特殊 file、symlink、未知 file、サイズ上限、診断への私的入力非表示を確認します。native / cache / network / build / 署名 / upload は使いません。
 
 ```sh
 python -m unittest scripts.tests.test_mac_evaluation_candidate -v

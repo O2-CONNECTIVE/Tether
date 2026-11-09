@@ -214,6 +214,43 @@ class CandidateTests(unittest.TestCase):
             self.fixture.save()
             self.refuse('CANDIDATE_PLIST_MISMATCH')
 
+    def test_malformed_plist_cli_refuses_with_one_fixed_json_and_no_traceback(self):
+        name = self.fixture.record['appDirectory'] + '/Contents/Info.plist'
+        payloads = (
+            b'<?xml version="1.0"?><plist><dict><key>PRIVATE',
+            b'<?xml version="1.0" encoding="PRIVATE_ENCODING"?><plist><dict/></plist>',
+            b'<?xml version="1.0"?><plist><key>PRIVATE_ROOT_KEY</key></plist>',
+            b'<?xml version="1.0"?><plist><dict><key>PRIVATE</key><integer>bad</integer></dict></plist>',
+            b'bplist00PRIVATE',
+        )
+        for index, value in enumerate(payloads):
+            with self.subTest(index=index):
+                (self.root / name).write_bytes(value)
+                self.fixture.record['files'][name] = candidate.digest(value)
+                self.fixture.save()
+                run = self.fixture.cli()
+                self.assertEqual(run.returncode, 1)
+                self.assertEqual(run.stderr, '')
+                self.assertEqual(json.loads(run.stdout), {
+                    'check': 'mac-evaluation-materials', 'status': 'refused',
+                    'code': 'CANDIDATE_PLIST_INVALID'})
+                self.assertNotIn('PRIVATE', run.stdout)
+                self.assertNotIn(str(self.root), run.stdout)
+
+    def test_notice_prefix_needs_a_component_directory(self):
+        for name in ('notices/gui/rust/LICENSE', 'notices/go/stdlib-vendor/NOTICE'):
+            with self.subTest(name=name):
+                path = self.root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'finite fixture')
+                self.fixture.record['notices'].append(name)
+                self.fixture.record['files'][name] = candidate.digest(path.read_bytes())
+                self.fixture.save()
+                self.refuse('CANDIDATE_NOTICE_SET_INVALID')
+                self.fixture.record['notices'].remove(name)
+                del self.fixture.record['files'][name]
+                path.unlink()
+
     def test_text_is_nonempty_utf8_even_when_declared_hash_matches(self):
         for value in (b' ', b'\xff\xfe', b''):
             (self.root / 'LICENSE').write_bytes(value)

@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import plistlib
 import re
 import stat
+from xml.parsers.expat import ExpatError
 
 try:
     from scripts import package_mac_agent as mac
@@ -112,8 +113,8 @@ def manifest_record(data, source, hashes):
             and len(notices) == len(set(notices)), 'CANDIDATE_NOTICE_SET_INVALID')
     require(set(GO_NOTICES) | GUI_NOTICES <= set(notices), 'CANDIDATE_NOTICE_MISSING')
     for path in set(notices) - set(GO_NOTICES) - GUI_NOTICES:
-        require(path.startswith('notices/gui/rust/') or path.startswith('notices/go/stdlib-vendor/'),
-                'CANDIDATE_NOTICE_SET_INVALID')
+        require((path.startswith('notices/gui/rust/') or path.startswith('notices/go/stdlib-vendor/'))
+                and len(PurePosixPath(path).parts) >= 5, 'CANDIDATE_NOTICE_SET_INVALID')
         require(PurePosixPath(path).name.lower().split('.')[0] in
                 {'license', 'licence', 'copying', 'notice', 'notices', 'copyright'},
                 'CANDIDATE_NOTICE_SET_INVALID')
@@ -178,7 +179,12 @@ def verify(root, source, manifest_sha256, hashes):
             role = next(role for role, name in images.items() if name == path)
             declarations[role] = mac.macho(value, record['target'])
         elif path.endswith('/Contents/Info.plist'):
-            plist = plistlib.loads(value)
+            try:
+                plist = plistlib.loads(value)
+            except (ExpatError, LookupError, ValueError, TypeError, OverflowError, RecursionError):
+                # plistlib can expose XML parser, codec lookup or malformed-root
+                # errors outside ValueError. Never echo their private input.
+                raise CandidateError('CANDIDATE_PLIST_INVALID') from None
             require(isinstance(plist, dict) and plist.get('CFBundleExecutable') == 'rescue-host-shell'
                     and plist.get('CFBundleDisplayName') == LABEL and plist.get('CFBundlePackageType') == 'APPL',
                     'CANDIDATE_PLIST_MISMATCH')

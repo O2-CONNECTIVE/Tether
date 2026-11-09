@@ -88,6 +88,24 @@ private final class PreparationSlot: @unchecked Sendable {
         }
     }
 
+    func launch(_ handle: UInt64) -> PreparationState {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let record, handle != 0, record.handle == handle else { return .invalid }
+        guard worker(create: false) === record.worker else { return .wrongThread }
+        guard !record.unknown, !record.active, !record.terminal else { return stateLocked(handle) }
+        switch record.owner.launchEnrolledProducer() {
+        case .notAttempted: return .ownedUnlaunched // Caller must still retire original IO.
+        case .active:
+            self.record?.active = true
+            return .ownedActive
+        case .unknown:
+            self.record?.active = true // Attempted launch is never unlaunched retirement.
+            self.record?.unknown = true
+            return .unknown
+        }
+    }
+
     private func stateLocked(_ handle: UInt64) -> PreparationState {
         guard let record, handle != 0, record.handle == handle else { return .invalid }
         if record.unknown { return .unknown }
@@ -341,6 +359,9 @@ private let preparationSlot = PreparationSlot()
 
 @c @implementation public func rh_resident_preparation_create() -> UInt64 {
     autoreleasepool { preparationSlot.create(fixtureMode: nil) }
+}
+@c @implementation public func rh_resident_preparation_launch(_ handle: UInt64) -> UInt32 {
+    autoreleasepool { preparationSlot.launch(handle).rawValue }
 }
 @c @implementation public func rh_resident_preparation_state(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.state(handle, retire: false).rawValue }
