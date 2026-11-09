@@ -9,6 +9,7 @@ pub use fixture::{Counts, FixedFixture};
 mod active;
 pub type DiscardObservation = active::DiscardObservation;
 pub type ExitObservation = active::ExitObservation;
+pub type NativeTerminal = active::NativeTerminal;
 #[cfg(resident_launch_fixture)]
 mod active_fixture;
 #[cfg(resident_launch_fixture)]
@@ -30,6 +31,7 @@ pub enum State {
     RetiredUnlaunched,
     Active,
     ActiveIoRetired,
+    Terminal,
     Unknown,
 }
 
@@ -83,6 +85,7 @@ impl NativePreparation {
             State::OwnedUnlaunched => 1,
             State::Active => 5,
             State::ActiveIoRetired => 6,
+            State::Terminal => 7,
             _ => return self.state,
         };
         // SAFETY: private handle, same thread enforced by !Send/!Sync and TLS.

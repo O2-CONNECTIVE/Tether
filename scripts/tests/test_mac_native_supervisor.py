@@ -17,14 +17,25 @@ class NativeSupervisorReportTests(unittest.TestCase):
     def test_every_mode_requires_exact_complete_report(self):
         for mode, count in {'supervisor-normal': 7, **tool.CASES}.items():
             child = int(mode not in tool.NO_CHILD)
-            report = f'NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={count} failed=0 childrenStarted={child} childrenWaited={child} open=0 unknown={child} producer=0\n'
+            unknown = int(mode not in tool.NO_CHILD and mode not in tool.TERMINAL)
+            report = f'NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={count} failed=0 childrenStarted={child} childrenWaited={child} open=0 unknown={unknown} producer=0\n'
             self.assertEqual(tool.validate_report(mode, report), count)
             for bad in ['', report + report, report + 'extra', report.replace(f'passed={count}', 'passed=0'),
                         report.replace('failed=0', 'failed=1'), report.replace(f'childrenStarted={child}', f'childrenStarted={child+1}'),
                         report.replace(f'childrenWaited={child}', f'childrenWaited={1-child}'), report.replace('open=0', 'open=1'),
-                        report.replace(f'unknown={child}', f'unknown={1-child}'), report.replace('producer=0', 'producer=1')]:
+                        report.replace(f'unknown={unknown}', f'unknown={1-unknown}'), report.replace('producer=0', 'producer=1')]:
                 with self.subTest(mode=mode, output=bad), self.assertRaises(ValueError):
                     tool.validate_report(mode, bad)
+
+    def test_terminal_modes_are_explicit(self):
+        self.assertEqual(tool.TERMINAL, {'supervisor-rejected', 'supervisor-confirmed', 'supervisor-drop'})
+
+    def test_exit_two_without_startup_proof_stays_unknown(self):
+        mode = 'supervisor-unproven-exit-two'
+        report = f'NATIVE_SUPERVISOR_FIXTURE mode={mode} passed=14 failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=1 producer=0\n'
+        self.assertEqual(tool.validate_report(mode, report), 14)
+        with self.assertRaises(ValueError):
+            tool.validate_report(mode, report.replace('unknown=1', 'unknown=0'))
 
     def test_unknown_mode_is_not_success(self):
         with self.assertRaises(ValueError):
@@ -80,7 +91,7 @@ class NativeSupervisorDiagnosticTests(unittest.TestCase):
 
     def test_success_still_requires_complete_original_counts(self):
         progress = {}
-        report = 'NATIVE_SUPERVISOR_FIXTURE mode=supervisor-confirmed passed=20 failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=1 producer=0\n'
+        report = 'NATIVE_SUPERVISOR_FIXTURE mode=supervisor-confirmed passed=20 failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown=0 producer=0\n'
         result = subprocess.CompletedProcess([], 0, report, 'ignored stderr')
         with patch.object(tool, 'completed', return_value=result):
             self.assertEqual(tool.execute_mode(Path('/private/fixture'), 'supervisor-confirmed', progress), 20)

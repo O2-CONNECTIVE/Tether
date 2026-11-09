@@ -5,6 +5,7 @@ fn main() {
         fn rh_resident_preparation_exit(handle: u64) -> u64;
         fn rh_resident_preparation_retire_active_io(handle: u64) -> u32;
         fn rh_resident_preparation_abandon_active(handle: u64) -> u32;
+        fn rh_resident_preparation_finish_active(handle: u64) -> u32;
     }
     let mut passed = 0;
     macro_rules! check {
@@ -19,6 +20,7 @@ fn main() {
         check!(rh_resident_preparation_exit(0) == 0);
         check!(rh_resident_preparation_retire_active_io(0) == 0);
         check!(rh_resident_preparation_abandon_active(0) == 0);
+        check!(rh_resident_preparation_finish_active(0) == 0);
     }
     println!(
         "NATIVE_ACTIVE_BRIDGE mode=normal passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 unknown=0 producer=0"
@@ -154,6 +156,7 @@ mod exercised {
             S::Active
         };
         c.check(owner.state() == expected);
+        c.check(owner.fixture_finish_rejected());
         c.check(owner.retire() == expected); // Never the prelaunch retire syscall.
         c.check(owner.retire_active_io() == expected); // No observed Wait yet.
         c.check(N::fixture_counts().open == 2 && N::fixture_counts().closes == 2);
@@ -194,6 +197,9 @@ mod exercised {
             S::Unknown
         };
         c.check(owner.retire_active_io() == retired);
+        if retired == S::Unknown {
+            c.check(owner.finish_active().is_none());
+        }
         c.check(owner.state() == retired);
         c.check(owner.poll_exit() == exit); // Exit never clears IO/owner unknown.
         c.check(owner.state() == retired);
@@ -204,6 +210,47 @@ mod exercised {
         c.check(matches!(N::fixture_active(F::Echo), P::Refused)); // Even success retains native record.
         drop(owner);
         collected(c);
+    }
+    fn terminal(c: &mut Checks) {
+        // Join includes TLS destruction. The original owner terminalizes on its
+        // worker; no owner/Process migrates to this observing parent.
+        let count = std::thread::spawn(|| {
+            let mut c = Checks::default();
+            let mut owner = owned(F::Echo);
+            c.check(owner.fixture_finish_rejected());
+            c.check(owner.finish_active().is_none());
+            c.check(read(&mut owner, true) == b"inherit-ok\n");
+            owner.io().write_all(b"ctl\n").unwrap();
+            c.check(owner.io().half_close_control().is_ok());
+            c.check(read(&mut owner, false) == b"obs\n");
+            c.check(owner.fixture_finish_rejected()); // EOF without exact Wait.
+            c.check(wait(&mut owner) == E::Exit(0));
+            c.check(owner.fixture_finish_rejected()); // Wait without IO retirement.
+            c.check(owner.retire_active_io() == S::ActiveIoRetired);
+            c.check(owner.fixture_foreign_active_calls()); // Includes finalization.
+            let proof = owner.finish_active();
+            c.check(proof.is_some());
+            c.check(owner.state() == S::Terminal);
+            c.check(owner.finish_active().is_none());
+            c.check(owner.fixture_finish_rejected()); // Native one-shot, not just Rust.
+            c.check(owner.io().read(&mut [0]).unwrap_err().kind() == ErrorKind::NotConnected);
+            c.check(matches!(N::fixture_active(F::Early), P::Refused));
+            drop(owner);
+            c.check(N::fixture_retained_state() == 7);
+            c.check(N::fixture_active_stats().abandons == 0);
+            c.check(N::fixture_active_stats().waits == 1);
+            c.0
+        })
+        .join()
+        .unwrap();
+        c.0 += count;
+        c.check(N::fixture_retained_state() == 7); // TLS did not poison terminal.
+        c.check(N::fixture_active_stats().abandons == 0);
+        c.check(N::fixture_counts().open == 0);
+        c.check(N::fixture_counts().closes == 4);
+        c.check(matches!(N::prepare(), P::Refused));
+        c.check(matches!(N::fixture_active(F::Early), P::Refused));
+        c.check(N::fixture_collect_retained_active() == E::Unavailable);
     }
     fn incomplete(mode: &str, c: &mut Checks) {
         if mode == "thread-exit" {
@@ -298,6 +345,10 @@ mod exercised {
                 decoder(&mut checks);
                 0
             }
+            "terminal" => {
+                terminal(&mut checks);
+                1
+            }
             "drop" | "unwind" | "thread-exit" => {
                 incomplete(mode, &mut checks);
                 1
@@ -322,8 +373,9 @@ mod exercised {
                 std::process::exit(1);
             }
         };
+        let unknown = if mode == "terminal" { 0 } else { child };
         println!(
-            "NATIVE_ACTIVE_BRIDGE mode={mode} passed={} failed=0 childrenStarted={child} childrenWaited={child} open=0 unknown={child} producer=0",
+            "NATIVE_ACTIVE_BRIDGE mode={mode} passed={} failed=0 childrenStarted={child} childrenWaited={child} open=0 unknown={unknown} producer=0",
             checks.0
         );
     }

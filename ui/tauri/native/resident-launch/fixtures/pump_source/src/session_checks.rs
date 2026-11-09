@@ -1,7 +1,9 @@
 //! Exact native owner + actual typed port; synthetic status is not auth proof.
 use super::native_session::NativeSession;
 #[cfg(resident_launch_fixture)]
-use crate::native_preparation::{FixedActiveFixture, NativePreparation, Preparation};
+use crate::native_preparation::{
+    ExitObservation, FixedActiveFixture, NativePreparation, Preparation, State,
+};
 use crate::resident_port::duplex::owner::native::NativeOutcome;
 use crate::standby_lifecycle::{Outcome, native::NativeOuterJoined};
 use serde_json::{Value, json};
@@ -50,7 +52,10 @@ pub(crate) fn run(mode: &str) {
         check(receipt(&session, 1)["disposition"] == "unavailable");
         check(!session.owner().request_exit());
         let joined = join(&session);
-        check(joined.native().outcome() == NativeOutcome::Refused);
+        check(
+            joined.native().outcome() == NativeOutcome::Refused
+                && !joined.native().terminal_confirmed(),
+        );
         check(!joined.wire_close_confirmed());
         check(session.owner().outcome() == Some(Outcome::Unknown));
         check(!session.owner().finish_requested());
@@ -70,6 +75,15 @@ fn active(mode: &str) {
     let mut check = |v: bool| {
         assert!(v, "session condition {}", passed + 1);
         passed += 1;
+    };
+    let terminal = matches!(
+        mode,
+        "session-confirmed" | "session-rejected" | "session-drop"
+    );
+    let expected = match mode {
+        "session-confirmed" => Outcome::Confirmed,
+        "session-rejected" => Outcome::StartupRejected,
+        _ => Outcome::Unknown,
     };
     let (fixture, id, unavailable) = match mode {
         "session-confirmed" => (FixedActiveFixture::Echo, 1, false),
@@ -93,7 +107,24 @@ fn active(mode: &str) {
                 "source-observation"
             },
     );
-    check(!session.owner().finish_requested());
+    // Attachment failure already requests Close. ExitTwo may have completed
+    // before this first check; accept only its complete original join proof.
+    let initially_finished = session.owner().finish_requested();
+    check(
+        !initially_finished
+            || (mode == "session-rejected"
+                && session.owner().outcome() == Some(Outcome::StartupRejected)
+                && session.owner().poll_join().is_some_and(|joined| {
+                    joined.native().terminal_confirmed()
+                        && joined.native().startup_rejected()
+                        && joined.native().outcome()
+                            == NativeOutcome::Active {
+                                exit: ExitObservation::Exit(2),
+                                io: State::ActiveIoRetired,
+                                unwound: false,
+                            }
+                })),
+    );
     check(session.owner().poll_join().is_none() || unavailable);
     if unavailable {
         check(receipt(&session, id)["disposition"] == "unavailable");
@@ -132,16 +163,25 @@ fn active(mode: &str) {
         check(NativePreparation::fixture_active_stats().waits == 0);
     }
     if mode != "session-drop" {
-        check(!session.owner().request_exit());
+        let immediate = session.owner().request_exit();
+        check(
+            !immediate
+                || (session.owner().poll_join().is_some()
+                    && session.owner().outcome() == Some(expected)
+                    && expected != Outcome::Unknown),
+        );
         let joined = join(&session);
         check(matches!(
             joined.native().outcome(),
             NativeOutcome::Active { .. }
         ));
         check(joined.wire_close_confirmed() == matches!(mode, "session-confirmed"));
-        check(session.owner().outcome() == Some(Outcome::Unknown));
-        check(!session.owner().finish_requested());
-        check(session.owner().poll_join() == Some(joined));
+        check(session.owner().outcome() == Some(expected));
+        check(session.owner().finish_requested() == (expected != Outcome::Unknown));
+        check(
+            session.owner().poll_join() == Some(joined)
+                && joined.native().terminal_confirmed() == terminal,
+        );
         check(
             status(&session)["state"] == "source-unavailable"
                 || status(&session)["validForMs"] == 0,
@@ -159,8 +199,19 @@ fn active(mode: &str) {
     check(NativePreparation::fixture_active_stats().waits == 1);
     check(NativePreparation::fixture_counts().open == 0);
     check(NativePreparation::fixture_counts().closes == 4);
-    check(NativePreparation::fixture_retained_state() == 3);
-    // Actual native record remains occupied after all visible component joins.
+    let retained = if terminal { 7 } else { 3 };
+    let abandons = if terminal {
+        0
+    } else if matches!(mode, "session-lost" | "session-invalid" | "session-unwind") {
+        3
+    } else {
+        2
+    };
+    check(
+        NativePreparation::fixture_retained_state() == retained
+            && NativePreparation::fixture_active_stats().abandons == abandons,
+    );
+    // Terminal tombstones and unknown records both prevent replacement.
     check(matches!(
         NativePreparation::fixture_active(FixedActiveFixture::Echo),
         Preparation::Refused
@@ -169,8 +220,19 @@ fn active(mode: &str) {
     report(mode, passed, true);
 }
 fn report(mode: &str, passed: usize, child: bool) {
+    let unknown = u8::from(
+        child
+            && !matches!(
+                mode,
+                "session-confirmed"
+                    | "session-rejected"
+                    | "session-drop"
+                    | "session-close-pending"
+                    | "session-close-idle"
+            ),
+    );
     let child = u8::from(child);
     println!(
-        "NATIVE_SESSION_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={child} producer=0"
+        "NATIVE_SESSION_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={unknown} producer=0"
     );
 }

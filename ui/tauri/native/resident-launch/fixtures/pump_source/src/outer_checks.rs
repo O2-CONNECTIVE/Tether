@@ -1,8 +1,8 @@
-//! Real native IO → original outer monitor; no full cleanup/Quit permit.
+//! Real native IO → original outer monitor; terminal proof requires both joins.
 use super::owner::native::{NativeIoSupervisor, NativeOutcome};
 use crate::standby_lifecycle::{
-    native::{NativeOuterJoined, NativeOuterOwner},
     Outcome,
+    native::{NativeOuterJoined, NativeOuterOwner},
 };
 #[cfg(resident_launch_fixture)]
 use crate::{
@@ -37,7 +37,10 @@ pub(crate) fn run(mode: &str) {
         check(source.is_err());
         check(!owner.request_exit());
         let joined = join(&owner);
-        check(joined.native().outcome() == NativeOutcome::Refused);
+        check(
+            joined.native().outcome() == NativeOutcome::Refused
+                && !joined.native().terminal_confirmed(),
+        );
         check(!joined.wire_close_confirmed());
         check(owner.outcome() == Some(Outcome::Unknown));
         check(!owner.finish_requested());
@@ -45,7 +48,9 @@ pub(crate) fn run(mode: &str) {
         check(owner.poll_join() == Some(joined));
         drop(owner);
         drop(source);
-        println!("NATIVE_OUTER_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 nativeUnknown=0 producer=0");
+        println!(
+            "NATIVE_OUTER_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 nativeUnknown=0 producer=0"
+        );
         return;
     }
     #[cfg(resident_launch_fixture)]
@@ -64,13 +69,21 @@ fn active(mode: &str) {
             passed += 1;
         };
         check(source.is_err());
-        check(!owner.request_exit());
+        let immediate = owner.request_exit();
+        check(
+            !immediate
+                || (owner.outcome() == Some(Outcome::NotSpawned)
+                    && owner.poll_join().is_some_and(|joined| {
+                        joined.native().outcome()
+                            == NativeOutcome::Prepared(State::RetiredUnlaunched)
+                    })),
+        );
         let joined = join(&owner);
         check(joined.native().outcome() == NativeOutcome::Prepared(State::RetiredUnlaunched));
-        check(!joined.wire_close_confirmed());
-        check(owner.outcome() == Some(Outcome::Unknown));
-        check(!owner.finish_requested());
-        check(!owner.request_exit());
+        check(!joined.wire_close_confirmed() && !joined.native().terminal_confirmed());
+        check(owner.outcome() == Some(Outcome::NotSpawned));
+        check(owner.finish_requested());
+        check(owner.request_exit());
         check(owner.poll_join() == Some(joined));
         drop(owner);
         drop(source);
@@ -79,9 +92,25 @@ fn active(mode: &str) {
         check(NativePreparation::fixture_counts().retire_calls == 1);
         check(NativePreparation::fixture_active_stats().waits == 0);
         check(NativePreparation::fixture_retained_state() == 0);
-        println!("NATIVE_OUTER_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 nativeUnknown=0 producer=0");
+        println!(
+            "NATIVE_OUTER_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 nativeUnknown=0 producer=0"
+        );
         return;
     }
+    let terminal = matches!(
+        mode,
+        "outer-confirmed"
+            | "outer-rejected"
+            | "outer-held"
+            | "outer-prejoined"
+            | "outer-drop"
+            | "outer-panic"
+    );
+    let expected = match mode {
+        "outer-confirmed" | "outer-held" | "outer-prejoined" => Outcome::Confirmed,
+        "outer-rejected" => Outcome::StartupRejected,
+        _ => Outcome::Unknown,
+    };
     let (fixture, id) = match mode {
         "outer-finite-malformed" => (FixedActiveFixture::FiniteMalformed, None),
         "outer-finite-unwind" => (FixedActiveFixture::FiniteUnwind, None),
@@ -92,6 +121,7 @@ fn active(mode: &str) {
         "outer-malformed" => (FixedActiveFixture::Echo, Some(4)),
         "outer-invalid" => (FixedActiveFixture::Early, None),
         "outer-rejected" => (FixedActiveFixture::ExitTwo, None),
+        "outer-unproven-exit-two" => (FixedActiveFixture::UnprovenExitTwo, None),
         "outer-signal" => (FixedActiveFixture::Signal, None),
         "outer-lost-receipt" => (FixedActiveFixture::LostCloseReceipt, None),
         "outer-unwind" | "outer-drop" | "outer-held" | "outer-panic" | "outer-prejoined" => {
@@ -151,7 +181,7 @@ fn active(mode: &str) {
         check(first.is_some());
         check(!exit_before);
         check(no_early_proof);
-        check(contended);
+        check(contended && NativePreparation::fixture_retained_state() == 7);
         check(no_proof);
         check(verdict == Some(Outcome::Unknown));
         check(!exit_after);
@@ -182,20 +212,26 @@ fn active(mode: &str) {
                     .is_some_and(|s| s.valid_for_ms == 0),
             );
         } else {
-            check(!owner.request_exit());
+            let immediate = owner.request_exit();
+            check(
+                !immediate
+                    || (owner.poll_join().is_some()
+                        && owner.outcome() == Some(expected)
+                        && expected != Outcome::Unknown),
+            );
             if let Some(f) = finish {
                 while !f.ready() {
                     pause();
                 }
                 check(owner.poll_join().is_none());
                 check(owner.outcome() == Some(Outcome::Unknown));
-                check(!owner.finish_requested());
+                check(!owner.finish_requested() && !owner.request_exit());
                 check(owner.fixture_contended_join_refuses());
                 f.release();
             }
             let joined = join(&owner);
             let exit = match mode {
-                "outer-rejected" => ExitObservation::Exit(2),
+                "outer-rejected" | "outer-unproven-exit-two" => ExitObservation::Exit(2),
                 "outer-signal" => ExitObservation::Signal(15),
                 _ => ExitObservation::Exit(0),
             };
@@ -224,10 +260,13 @@ fn active(mode: &str) {
                 joined.wire_close_confirmed()
                     == matches!(mode, "outer-confirmed" | "outer-held" | "outer-prejoined"),
             );
-            check(owner.outcome() == Some(Outcome::Unknown));
-            check(!owner.finish_requested());
-            check(!owner.request_exit());
-            check(owner.poll_join() == Some(joined));
+            check(owner.outcome() == Some(expected));
+            check(owner.finish_requested() == (expected != Outcome::Unknown));
+            check(owner.request_exit() == (expected != Outcome::Unknown));
+            check(
+                owner.poll_join() == Some(joined)
+                    && joined.native().terminal_confirmed() == terminal,
+            );
             drop(owner);
         }
         drop(source);
@@ -238,7 +277,9 @@ fn active(mode: &str) {
     check(NativePreparation::fixture_active_stats().waits == 1);
     check(
         NativePreparation::fixture_active_stats().abandons
-            == if matches!(
+            == if terminal {
+                0
+            } else if matches!(
                 mode,
                 "outer-lost-receipt"
                     | "outer-invalid"
@@ -252,11 +293,14 @@ fn active(mode: &str) {
                 2
             },
     );
-    check(NativePreparation::fixture_retained_state() == 3);
+    check(NativePreparation::fixture_retained_state() == if terminal { 7 } else { 3 });
     check(matches!(
         NativePreparation::fixture_active(FixedActiveFixture::Early),
         crate::native_preparation::Preparation::Refused
     ));
     check(NativePreparation::fixture_collect_retained_active() == ExitObservation::Unavailable);
-    println!("NATIVE_OUTER_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 nativeUnknown=1 producer=0");
+    let unknown = u8::from(!terminal);
+    println!(
+        "NATIVE_OUTER_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 nativeUnknown={unknown} producer=0"
+    );
 }

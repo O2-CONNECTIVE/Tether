@@ -1,6 +1,8 @@
-//! Actual native outer monitor join; UNKNOWN never permits application Quit.
+//! Native terminal proof plus actual worker and monitor joins gate application Quit.
 use super::*;
-use crate::resident_port::duplex::owner::native::{NativeIoSupervisor, NativeJoined};
+use crate::resident_port::duplex::owner::native::{
+    NativeIoSupervisor, NativeJoined, NativeOutcome,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Observed {
@@ -42,8 +44,8 @@ impl NativeOuterOwner {
                 loop {
                     if let Some(observed) = observe_join(&mut producer) {
                         *output.lock().unwrap_or_else(|e| e.into_inner()) = Some(observed);
-                        // Even Exit(0) + EOF/close + IO join cannot release the
-                        // retained UNKNOWN native record or authorize full Quit.
+                        // Publish no success before this very monitor actually joins.
+                        // A later panic must leave the native evidence insufficient.
                         state.complete(Outcome::Unknown);
                         finish.wait(&state);
                         return;
@@ -68,9 +70,11 @@ impl NativeOuterOwner {
         })
     }
     pub(crate) fn request_exit(&self) -> bool {
+        let _ = self.poll_join();
         self.gate.request_exit()
     }
     pub(crate) fn finish_requested(&self) -> bool {
+        let _ = self.poll_join();
         self.gate.finish_requested()
     }
     pub(crate) fn outcome(&self) -> Option<Outcome> {
@@ -90,10 +94,12 @@ impl NativeOuterOwner {
         }
         // Neither published IO evidence nor a finished/taken monitor handle is
         // this proof: construct it only after the existing actual join guard.
-        self.observed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .map(|observed| NativeOuterJoined { observed })
+        let observed = *self.observed.lock().unwrap_or_else(|e| e.into_inner());
+        observed.map(|observed| {
+            // Only this successful actual outer join can publish a safe outcome.
+            self.gate.complete(classify(observed));
+            NativeOuterJoined { observed }
+        })
     }
 }
 impl Drop for NativeOuterOwner {
@@ -106,8 +112,29 @@ impl Drop for NativeOuterOwner {
         while !self.gate.join_monitor() {
             thread::park_timeout(Duration::from_secs(1));
         }
-        // Component monitor ownership only. ExitGate remains UNKNOWN/false;
-        // the original native record is retained, with no full cleanup permit.
+        // Drop alone does not mint a success outcome. Terminal native records
+        // remain tombstoned; unknown original records are never replaced.
+    }
+}
+fn classify(observed: Observed) -> Outcome {
+    use crate::native_preparation::{ExitObservation, State};
+    match observed.native.outcome() {
+        NativeOutcome::Prepared(State::RetiredUnlaunched) => Outcome::NotSpawned,
+        NativeOutcome::Active {
+            exit: ExitObservation::Exit(0),
+            io: State::ActiveIoRetired,
+            unwound: false,
+        } if observed.native.terminal_confirmed() && observed.wire => Outcome::Confirmed,
+        NativeOutcome::Active {
+            exit: ExitObservation::Exit(2),
+            io: State::ActiveIoRetired,
+            unwound: false,
+        } if observed.native.terminal_confirmed() && observed.native.startup_rejected() => {
+            Outcome::StartupRejected
+        }
+        // Refused is ambiguous (including an already retained native record),
+        // not a positively proven NotSpawned. Never promote exit status alone.
+        _ => Outcome::Unknown,
     }
 }
 fn observe_join(producer: &mut NativeIoSupervisor) -> Option<Observed> {

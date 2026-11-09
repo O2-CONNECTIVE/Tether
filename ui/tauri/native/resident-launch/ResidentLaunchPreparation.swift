@@ -152,6 +152,8 @@ final class ResidentLaunchPreparation {
         guard case .running = completion else { return false }
         return io.didLaunch(task)
     }
+    // A native component only. Authoritative wire proof and Rust joins remain separate.
+    func terminalReady() -> Bool { hasObservedExit && io.terminalReady(task) }
     func discardObservation() -> UInt32 { io.discardObservation() }
     func bytes(_ operation: PreparedByteOperation) -> PreparedByteResult { io.perform(operation) }
 
@@ -183,7 +185,7 @@ final class ResidentLaunchPreparation {
         try task.run()
         completion = .running
     }
-    enum OwnedIOFixtureMode: String { case echo, early, lost, missing, finite, finiteHeld = "finite-held", exitTwo = "exit-two", signal }
+    enum OwnedIOFixtureMode: String { case echo, early, lost, missing, finite, finiteHeld = "finite-held", exitTwo = "exit-two", unprovenExitTwo = "unproven-exit-two", signal }
     func runOwnedIOFixture(_ mode: OwnedIOFixtureMode) throws -> Bool {
         guard isCompletionFixture, case .unlaunched = completion else { throw PreparationFailure.invalidRelease }
         let description: String
@@ -200,6 +202,7 @@ final class ResidentLaunchPreparation {
         switch mode {
         case .early, .missing: childMode = "early"
         case .exitTwo: childMode = "exit-two"
+        case .unprovenExitTwo: childMode = "unproven-exit-two"
         case .signal: childMode = "signal"
         case .finite: childMode = "finite"
         case .finiteHeld: childMode = "finite-held"

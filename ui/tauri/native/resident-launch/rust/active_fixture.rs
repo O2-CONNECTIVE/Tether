@@ -21,6 +21,7 @@ pub enum FixedActiveFixture {
     FiniteUnknown = 7,
     FiniteHeldUnknown = 8,
     FiniteCoalesced = 9,
+    UnprovenExitTwo = 10,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -86,6 +87,7 @@ impl NativePreparation {
             unsafe {
                 super::active::rh_resident_preparation_exit(handle) == 5_u64 << 32
                     && super::active::rh_resident_preparation_retire_active_io(handle) == 4
+                    && super::active::rh_resident_preparation_finish_active(handle) == 4
                     && super::active::rh_resident_preparation_abandon_active(handle) == 4
                     && super::active::rh_resident_preparation_request_active_close(handle) == 4
                     && super::active::rh_resident_preparation_discard_observation(handle) == 0
@@ -100,6 +102,7 @@ impl NativePreparation {
             super::active::rh_resident_preparation_discard_observation(self.handle.get()) == 0
                 && super::active::rh_resident_preparation_request_active_close(self.handle.get())
                     == 1
+                && super::active::rh_resident_preparation_finish_active(self.handle.get()) == 0
                 && super::active::rh_resident_preparation_exit(self.handle.get()) == 0
                 && super::active::rh_resident_preparation_retire_active_io(self.handle.get()) == 1
                 && super::active::rh_resident_preparation_abandon_active(self.handle.get()) == 1
@@ -133,5 +136,13 @@ impl NativePreparation {
                 && super::active::rh_resident_preparation_discard_observation(0) == 0
                 && super::active::rh_resident_preparation_request_active_close(0) == 0
         }
+    }
+}
+
+impl NativePreparation {
+    pub fn fixture_finish_rejected(&self) -> bool {
+        // SAFETY: same original handle, deliberately before/after valid one-shot
+        // finalization. A rejected call must not alter the native record.
+        unsafe { super::active::rh_resident_preparation_finish_active(self.handle.get()) == 0 }
     }
 }

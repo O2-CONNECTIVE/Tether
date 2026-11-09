@@ -11,16 +11,17 @@ import tempfile
 from check_mac_enrollment_lookup import command, completed
 from check_mac_rust_owner import NATIVE, build_swift, validate_rejection
 
-CASES = {'echo': 32, 'epipe': 32, 'missing': 29, 'lost': 28, 'exit-two': 31,
-         'signal': 31, 'drop': 9, 'unwind': 10, 'thread-exit': 9, 'guards': 10, 'decoder': 15}
+CASES = {'echo': 33, 'epipe': 34, 'missing': 31, 'lost': 30, 'exit-two': 32,
+         'signal': 32, 'terminal': 26, 'drop': 9, 'unwind': 10, 'thread-exit': 9, 'guards': 10, 'decoder': 15}
 NO_CHILD = {'normal', 'guards', 'decoder'}
 
 
 def validate_report(mode, output):
-    expected = 4 if mode == 'normal' else CASES.get(mode)
+    expected = 5 if mode == 'normal' else CASES.get(mode)
     child = int(mode not in NO_CHILD)
+    unknown = int(child and mode != "terminal")
     match = re.fullmatch(r'NATIVE_ACTIVE_BRIDGE mode=([a-z-]+) passed=(\d+) failed=(\d+) childrenStarted=(\d+) childrenWaited=(\d+) open=(\d+) unknown=(\d+) producer=(\d+)\n?', output)
-    if expected is None or not match or match.group(1) != mode or tuple(map(int, match.groups()[1:])) != (expected, 0, child, child, 0, child, 0):
+    if expected is None or not match or match.group(1) != mode or tuple(map(int, match.groups()[1:])) != (expected, 0, child, child, 0, unknown, 0):
         raise ValueError('incomplete or uncollected active owner fixture')
     return expected
 
@@ -42,7 +43,9 @@ def active_variant(rust, directory, fixture, env, target=None, execute=True):
             passed += validate_report(mode, command([str(executable), mode], {'PATH': '/usr/bin:/bin', 'LANG': 'C'}))
     negatives = [('BorrowActiveRetire', 'E0499', 'more than once'), ('BorrowActivePoll', 'E0499', 'more than once'),
                  ('BorrowActiveClose', 'E0499', 'more than once'),
-                 ('BorrowActiveDiscard', 'E0499', 'more than once')]
+                 ('BorrowActiveDiscard', 'E0499', 'more than once'),
+                 ('BorrowActiveFinish', 'E0499', 'more than once'),
+                 ('NoCopyTerminal', 'E0277', 'Copy')]
     if not fixture:
         negatives += [('NoNormalActiveFixture', 'E0599', 'fixture_active')]
     for name, code, message in negatives:
@@ -92,7 +95,7 @@ def run():
                     passed += count
                     refused += negatives
     print(json.dumps({'fixture': 'native-active-component-bridge', 'passed': passed,
-                      'fixtureChildrenStarted': 9, 'fixtureChildrenWaited': 9, 'physicalOriginalEndpointsClosed': 36,
+                      'fixtureChildrenStarted': 10, 'fixtureChildrenWaited': 10, 'physicalOriginalEndpointsClosed': 40,
                       'compileRefusals': refused, 'embeddedMetadataVariants': 4, 'swiftCompileTargets': 2, 'rustCompileTargets': 1,
                       'foreignExecution': False, 'producerLaunches': 0,
                       'scope': 'same native record exit/IO components; no signed launch / full joins / replacement permission'}))

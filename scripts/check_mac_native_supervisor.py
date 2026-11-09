@@ -1,4 +1,4 @@
-"""Own the concrete native IO worker; joined components never grant Quit."""
+"""Own the concrete native IO worker and validate native terminal receipts."""
 import json
 import os
 from pathlib import Path
@@ -12,19 +12,21 @@ from check_mac_enrollment_lookup import command, completed
 from check_mac_native_pump import CRATE, validate_dependencies
 from check_mac_rust_owner import build_swift
 
-CASES = {'supervisor-finite-coalesced': 14, 'supervisor-discard-pending': 23, 'supervisor-discard-trailing': 23, 'supervisor-finite-malformed': 14, 'supervisor-finite-unwind': 14,
+CASES = {'supervisor-unproven-exit-two': 14, 'supervisor-finite-coalesced': 14, 'supervisor-discard-pending': 23, 'supervisor-discard-trailing': 23, 'supervisor-finite-malformed': 14, 'supervisor-finite-unwind': 14,
          'supervisor-finite-unknown': 14, 'supervisor-prepared': 13, 'supervisor-confirmed': 20,
          'supervisor-unknown': 18, 'supervisor-missing': 18, 'supervisor-malformed': 18,
          'supervisor-invalid': 14, 'supervisor-rejected': 14, 'supervisor-signal': 14,
          'supervisor-lost-receipt': 14, 'supervisor-unwind': 14, 'supervisor-drop': 13}
 NO_CHILD = {'supervisor-normal', 'supervisor-prepared'}
+TERMINAL = {'supervisor-rejected', 'supervisor-confirmed', 'supervisor-drop'}
 
 
 def validate_report(mode, output):
     expected = 7 if mode == 'supervisor-normal' else CASES.get(mode)
     child = int(mode not in NO_CHILD)
+    unknown = int(mode not in NO_CHILD and mode not in TERMINAL)
     match = re.fullmatch(r'NATIVE_SUPERVISOR_FIXTURE mode=([a-z-]+) passed=(\d+) failed=(\d+) childrenStarted=(\d+) childrenWaited=(\d+) open=(\d+) unknown=(\d+) producer=(\d+)\n?', output)
-    if expected is None or not match or match.group(1) != mode or tuple(map(int, match.groups()[1:])) != (expected, 0, child, child, 0, child, 0):
+    if expected is None or not match or match.group(1) != mode or tuple(map(int, match.groups()[1:])) != (expected, 0, child, child, 0, unknown, 0):
         raise ValueError('incomplete or uncollected native supervisor fixture')
     return expected
 
@@ -100,12 +102,12 @@ def run(progress=None):
             for mode in CASES if fixture else ('supervisor-normal',):
                 passed += execute_mode(executable, mode, progress)
     print(json.dumps({'fixture': 'native-io-supervisor-source', 'passed': passed,
-                      'normalModes': 1, 'fixtureModes': 17, 'activeModes': 16,
-                      'fixtureChildrenStarted': 16, 'fixtureChildrenWaited': 16,
-                      'physicalActiveEndpointsClosed': 64, 'unlaunchedEndpointsClosed': 4,
-                      'actualActiveIoWorkerJoins': 14, 'directDiscardWorkerJoins': 2,
+                      'normalModes': 1, 'fixtureModes': 18, 'activeModes': 17,
+                      'fixtureChildrenStarted': 17, 'fixtureChildrenWaited': 17,
+                      'physicalActiveEndpointsClosed': 68, 'unlaunchedEndpointsClosed': 4,
+                      'actualActiveIoWorkerJoins': 15, 'directDiscardWorkerJoins': 2,
                       'fixtureControlGatesClosed': 1, 'preparationWorkerJoins': 2,
-                      'retainedUnknownRecords': 16, 'lockedOffline': True,
+                      'retainedUnknownRecords': 14, 'retainedTerminalRecords': 3, 'lockedOffline': True,
                       'existingDependencyPackages': 11, 'clippyVariants': 2,
                       'producerLaunches': 0, 'hostOnly': True,
                       'scope': 'same affine native IO worker / Wait / component receipts; no outer joins / Quit permit'}))
