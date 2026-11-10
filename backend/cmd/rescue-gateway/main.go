@@ -75,9 +75,14 @@ func main() {
 // and exits 1. Diagnostics are fixed messages; no
 // token, header, subject, label, fingerprint or path is printed.
 func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) int {
+	// Select before requiring a signer loader. No mixed or extra flags can
+	// enter this branch, and the discovery parser never falls back.
+	if len(args) == 2 && args[0] == "-discovery-pilot-config" {
+		return executeDiscovery(ctx, args[1], diagnostic, d)
+	}
 	if ctx == nil || d.readTrust == nil || d.loadKey == nil || d.listen == nil || len(args) != 2 ||
 		(args[0] != "-config" && args[0] != "-pilot-config") || args[1] == "" {
-		report(diagnostic, "使い方: rescue-gateway -config <path> | -pilot-config <path>")
+		report(diagnostic, "使い方: rescue-gateway -config <path> | -pilot-config <path> | -discovery-pilot-config <path>")
 		return 2
 	}
 	pilot := args[0] == "-pilot-config"

@@ -81,7 +81,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink': {'host.go', 'client.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter': {'jsonrpc.go', 'server.go', 'tools.go', 'output_schema.go', 'http_bridge.go', 'resident_http.go', 'resident_output_schema.go', 'resident_list.go', 'resident_read_output.go', 'resident_get_execution.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway': {'gateway.go', 'http.go', 'token.go', 'config.go', 'resident.go', 'resident_capacity.go', 'resident_list.go', 'resident_read_output.go', 'resident_get_execution.go'},
-    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-gateway': {'main.go', 'config.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-gateway': {'main.go', 'config.go', 'discovery_pilot.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-echo-probe': {'main.go', 'probe.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-access-identity': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mac-agent': {'main.go', 'config.go', 'status.go'},

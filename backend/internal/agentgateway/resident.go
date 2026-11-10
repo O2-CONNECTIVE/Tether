@@ -84,7 +84,7 @@ type residentSession struct {
 // ConfigureResident is one-shot, before any MCP session or work. A principal
 // has exactly one explicitly enrolled host here; ambiguous mappings refuse.
 func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, entries []ResidentEnrollment) error {
-	if g == nil || control == nil || len(entries) == 0 || len(entries) > MaxPrincipals || len(endpoint) > 512 {
+	if g == nil || g.discoveryOnly || control == nil || len(entries) == 0 || len(entries) > MaxPrincipals || len(endpoint) > 512 {
 		return ErrConfig
 	}
 	u, e := url.Parse(endpoint)
@@ -215,7 +215,7 @@ func (g *Gateway) ConnectResident(label string, d Dispatch, b ResidentWorkBindin
 	if entry != nil {
 		w = entry.works[b.RequestID]
 	}
-	valid := !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, entry.enrollment.HostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
+	valid := !g.discoveryOnly && !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, entry.enrollment.HostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
 	if valid {
 		w.binding.Sequence = b.Sequence
 		w.registering = true
