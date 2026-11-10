@@ -39,11 +39,13 @@
 
 resourceのpathに%エスケープ（`RawPath`）がある場合も拒否します。
 
+任意の固定常駐構成 `resident` は[通常gatewayの常駐組成](agent-cli-resident.md)を参照してください。省略時の既存文書は常駐protocolを有効化しません。
+
 ### 起動順序
 
 1. 引数 → `ReadTrustConfig` → 厳格検証 → buffer消去。失敗は終了値2（鍵も待受もなし）。
 2. principalごとに`LoadCurrentUser`。1件でも失敗・fingerprint不一致なら終了値2で待受しません（他memberの鍵での代替や一部memberだけの起動はしません）。
-3. `FileConfig.GatewayConfig`（`auth_mode`に応じて`agentgateway.NewVerifier`か`agentgateway.NewAccessVerifier`の一方だけ）→ 読み込んだsignerと`ChannelBudgets`を加えて`agentgateway.New` → `agenttransport.NewHandler`（`Registrar`はそのgateway、`DefaultBudgets`）。
+3. `FileConfig.GatewayConfig`（`auth_mode`に応じて`agentgateway.NewVerifier`か`agentgateway.NewAccessVerifier`の一方だけ）→ 読み込んだsignerと`ChannelBudgets`を加えて`agentgateway.New` → `agenttransport.NewHandler`（`Registrar`はそのgateway、`DefaultBudgets`）。任意の明示`resident`がある場合だけ、選択済みprincipalのsignerを`ResidentPrincipals`へ渡し、同じhandlerと固定host公開鍵を`ConfigureResident`へ一回設定します。失敗時は両ownerを閉じ、待受しません。
 4. 最後に保護設定で検証済みのaddressとprofileに従って待受します（既定loopbackは `tcp`、明示 `container_private` は `tcp4`）。失敗時は生成済みのhandler・gatewayを閉じて終了値1。
 5. 1つのHTTP serverで完全一致のpathだけを振り分けます：registration path → `agenttransport.Handler`、resource path → `agentgateway.Gateway`、OAuth方式に限り`/.well-known/oauth-protected-resource`・`/.well-known/oauth-protected-resource<resource path>`も`agentgateway.Gateway`へ。Access方式ではmetadata pathも含め他は404（discoveryはAccess edgeの担当）。prefix一致・path正規化・redirectはありません。HTTP serverの上限は従来どおりです。
 
@@ -120,7 +122,7 @@ resourceのpathに%エスケープ（`RawPath`）がある場合も拒否しま�
 
 試験は各cmdの`_test.go`です。設定読取り・鍵読込み・待受・`Prepare`・承認・`NewClient`はprivateな`deps`で注入したfakeで、file・実鍵・`/dev/tty`・process・`net.Listen`・networkを使いません。鍵は固定seedのmemory上の合成Ed25519鍵です。
 
-- 設定：全member必須、未知（秘密鍵・承認・自動登録・再接続・shell）・重複・null・過大・後続値、不正endpoint（ws/https、別host、port表記、resource・metadata・well-known、query、userinfo、大文字host、root）、path（相対、改行、非正規、設定文書と同一・大文字小文字違い、member間の共有）、fingerprint形式・共有、label・subject・hostの取違え、host鍵とprincipal鍵の兼用、非正規・他種別の公開鍵、host 5件、policy digestの不一致、期限・回収値の範囲と数値形式。
+- 設定：既存4 member必須・任意`resident`は明示固定対応のみ、未知（秘密鍵・承認・自動登録・再接続・shell）・重複・null・過大・後続値、不正endpoint（ws/https、別host、port表記、resource・metadata・well-known、query、userinfo、大文字host、root）、path（相対、改行、非正規、設定文書と同一・大文字小文字違い、member間の共有）、fingerprint形式・共有、label・subject・hostの取違え、host鍵とprincipal鍵の兼用、非正規・他種別の公開鍵、host 5件、policy digestの不一致、期限・回収値の範囲と数値形式。
 - 順序：検証失敗では鍵読込み・準備・承認・接続・待受へ進まないこと。鍵の拒否・別鍵の返却で待受しないこと。読取りbufferの消去。
 - gateway（Access方式）：同じfake listener経由で、Access文書から構成した実gatewayが、試験内生成RSA鍵で署名した合成assertionを認証・認可し（routeなしで503）、欠落・Bearerだけ・未設定subject・未設定鍵・識別headerだけ・重複headerを403（challengeなし）、metadata pathを404とすること。設定では方式の欠落・混在、必須値の欠落、AUDへの資源URL、resourceと異なるhostの登録endpointを拒否。
 - gateway：fake listener（`net.Pipe`）経由で、実`agentgateway.Gateway`のmetadata（200）と未認証MCP（401）、Access assertionだけのrequestも401（fallbackなし）、実`agenttransport.Handler`の事前検査（subprotocolなし400、Authorizationあり403、upgradeなし）、他path 404。割込み後のlistener closeと終了値0。`finishOwned`のhandler→gatewayの順序、未確認の保持と報告、HTTPの強制close、Serveの未終了の報告。
