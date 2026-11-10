@@ -206,3 +206,27 @@ The viewer binary and Info.plist declare macOS 13.0; running on macOS 13 hardwar
 - 検証済み範囲は source/fake の exact 拒否、コピー保持、並行冪等性、期限・
   binding・他 execution 拒否と CLI→maclaunch→Session の接続です。
   実 Claude MCP・新 binary・実 GUI を同時に使う検証はまだ行っていません。
+
+## 署名鍵不要の静的発見専用試行
+
+`rescue-gateway -discovery-pilot-config <path>` は通常の `-config` /
+`-pilot-config` と排他的な有限モードです。保護された構成読取の前から固定最大5分で
+受付を終了し、既存の有限owner cleanupで停止します。清掃時間は受付期限の延長ではなく、
+終了確認が失敗した場合は成功を返しません。構成や環境から期限を延長できません。
+
+文書は `{"mode":"discovery_only","gateway":{...}}` の2要素だけです。
+`gateway` は既存の公開信頼構成と同一で、明示auth mode、検証鍵、正確なmember subject、
+resource、listen profile等の検査を省略しません。未知・重複・null要素、通常モード文書、
+`hosts`、`principal_keys`、`registration_endpoint`、`resident`、grantや期限の追加は拒否します。
+別モードへのfallbackはありません。この例は文書形状だけで、実設定を作成しません。
+
+この構成は秘密署名鍵loaderを呼ばず、登録handlerやresident producerを構築しません。
+直接backendでも登録pathは404です。gateway自体の固定能力制限で署名鍵入力、Connect、
+ConnectResident、ConfigureResidentを拒否します。認証・member照合・session分離を維持した
+initialize、notifications/initialized、tools/listと終了処理だけを利用します。
+表示されるのは既存の**legacy静的4ツール**で、residentの7ツールではありません。
+全tools/callは既存の構文・lifecycle拒否か未接続拒否となり、command dispatchしません。
+一覧の発見はgrant、実行可能状態、resident availabilityの証明ではありません。
+
+このsource追加だけでは実ChatGPT refresh、公開接続、実時刻5分停止、native配布を検証
+したことになりません。実設定、認証変更、公開、配置、host接続は別の承認・検証が必要です。

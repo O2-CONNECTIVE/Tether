@@ -53,6 +53,9 @@ type Principal struct {
 // Config is chosen by the trusted operator composition, never by a request.
 // Exactly one of Verifier and Access selects the authentication mode.
 type Config struct {
+	// DiscoveryOnly permanently disables all registration and execution.
+	// Signers are forbidden, rather than silently ignored in this mode.
+	DiscoveryOnly  bool
 	Verifier       *Verifier       // OAuth bearer JWT mode; the resource is its audience
 	Access         *AccessVerifier // Cloudflare Access assertion mode
 	Resource       string          // Access mode only: the public MCP resource URL, distinct from the AUD tag
@@ -105,20 +108,21 @@ type session struct {
 
 // Gateway holds every mapping in memory only.
 type Gateway struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	verifier    *Verifier       // nil in Access mode
-	access      *AccessVerifier // nil in OAuth bearer mode
-	path        string
-	metadataURL string // OAuth bearer mode only
-	metadata    []byte // OAuth bearer mode only
-	origins     map[string]bool
-	bySubject   map[string]*principal
-	byLabel     map[string]*principal
-	budgets     agentchannel.Budgets
-	callTimeout time.Duration
-	clock       func() time.Time
-	inflight    chan struct{}
+	discoveryOnly bool // immutable capability restriction, never request-selected
+	ctx           context.Context
+	cancel        context.CancelFunc
+	verifier      *Verifier       // nil in Access mode
+	access        *AccessVerifier // nil in OAuth bearer mode
+	path          string
+	metadataURL   string // OAuth bearer mode only
+	metadata      []byte // OAuth bearer mode only
+	origins       map[string]bool
+	bySubject     map[string]*principal
+	byLabel       map[string]*principal
+	budgets       agentchannel.Budgets
+	callTimeout   time.Duration
+	clock         func() time.Time
+	inflight      chan struct{}
 
 	mu          sync.Mutex
 	closed      bool
@@ -151,7 +155,7 @@ func New(cfg Config) (*Gateway, error) {
 		return nil, ErrConfig
 	}
 	g := &Gateway{
-		verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
+		discoveryOnly: cfg.DiscoveryOnly, verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
 		bySubject: map[string]*principal{}, byLabel: map[string]*principal{},
 		budgets: cfg.Budgets, callTimeout: cfg.CallTimeout, clock: cfg.Clock, inflight: make(chan struct{}, MaxInflightRequests),
 		sessions: map[string]*session{}, launches: map[string]struct{}{}, joined: make(chan struct{}),
@@ -176,7 +180,7 @@ func New(cfg Config) (*Gateway, error) {
 		if !validLabel(p.Label) || !printable(p.Subject) || g.byLabel[p.Label] != nil || g.bySubject[p.Subject] != nil {
 			return nil, ErrConfig
 		}
-		if p.Signer != nil && p.Signer.PublicKey().Type() != ssh.KeyAlgoED25519 {
+		if p.Signer != nil && (cfg.DiscoveryOnly || p.Signer.PublicKey().Type() != ssh.KeyAlgoED25519) {
 			return nil, ErrConfig
 		}
 		pr := &principal{label: p.Label, subject: p.Subject, signer: p.Signer}
@@ -230,6 +234,8 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn) (*route, erro
 	switch {
 	case g.closed:
 		refusal = ErrClosed
+	case g.discoveryOnly:
+		refusal = ErrRefused
 	case p == nil || p.signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "":
 		refusal = ErrConfig
 	case reused || p.route != nil || p.connecting || len(g.launches) >= MaxAttachments:
