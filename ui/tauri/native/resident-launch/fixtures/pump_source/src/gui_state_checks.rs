@@ -1,5 +1,4 @@
 //! Real GUI managed state and original native self-child, never product trust.
-#[cfg(resident_launch_fixture)]
 use super::state::ResidentLifetime;
 use super::state::ResidentState;
 #[cfg(resident_launch_fixture)]
@@ -47,14 +46,31 @@ pub(crate) fn run(mode: &str) {
         check(state.request_exit());
         check(state.finish_requested());
         drop(state);
-        // Explicit zero-input native variant is distinct from default startup.
-        // Refused cannot become an unbound state's permission to exit.
-        let state = ResidentState::prepare_native().unwrap();
+        // Exercise the exact zero-input GUI startup entry, retaining its
+        // lifetime guard and borrowed state across the actual close/joins.
+        let lifetime = ResidentLifetime::new(ResidentState::startup().unwrap());
+        let state = lifetime.state();
         check(status(&state)["state"] == "source-unavailable");
-        check(!state.request_exit());
+        check(receipt(&state, 1)["disposition"] == "unavailable");
+        let _ = state.request_exit();
+        let until = std::time::Instant::now() + Duration::from_secs(3);
+        while !state.finish_requested() {
+            assert!(std::time::Instant::now() < until, "startup outer join unavailable");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        check(state.finish_requested());
+        check(state.request_exit());
+        drop(lifetime);
+        check(state.finish_requested());
+        // No second unavailable receipt or replacement of the first state.
+        let repeated = ResidentState::startup().unwrap();
+        check(status(&repeated)["state"] == "source-unavailable");
+        check(!repeated.request_exit());
         std::thread::sleep(Duration::from_millis(20));
-        check(!state.finish_requested());
-        check(!state.request_exit());
+        check(!repeated.finish_requested());
+        check(!repeated.request_exit());
+        drop(repeated); // Joins the refused session, never a successful guard.
+        check(state.finish_requested());
         drop(state);
         report(mode, passed, false, false);
         return;

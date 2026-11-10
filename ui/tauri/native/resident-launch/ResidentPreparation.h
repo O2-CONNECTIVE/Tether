@@ -18,6 +18,12 @@ enum {
  * UNKNOWN retains the same owner and blocks replacement. Never retry close.
  * These are process-local ownership handles, not authorization credentials. */
 uint64_t rh_resident_preparation_create(void);
+/* One-shot ordinary startup, not an availability probe. The output starts at 0.
+ * 0: ambiguous refusal; 1: inspect/retain the nonzero output handle;
+ * 2: this pristine slot was sealed unavailable before Process/IO ownership.
+ * Only missing compiled release or unsupported OS can produce 2. A previous
+ * owner, tombstone, or other error never does. Null output is rejected. */
+uint32_t rh_resident_preparation_startup(uint64_t * _Nullable handle);
 /* Same original worker/Process only; fixed nested producer, zero argv, empty
  * environment. OWNED_UNLAUNCHED means no attempt, not retirement. Run/handoff
  * failure retains active UNKNOWN. No replacement or retry after an attempt. */

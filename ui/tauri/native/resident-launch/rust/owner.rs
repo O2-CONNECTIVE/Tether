@@ -1,4 +1,4 @@
-//! Concrete client of ResidentPreparation.h. Not linked into normal Tauri.
+//! Concrete client of ResidentPreparation.h for explicitly linked native builds.
 //! Every native operation uses the same non-transferable owner and fixed launch.
 use std::{marker::PhantomData, num::NonZeroU64, rc::Rc};
 
@@ -21,6 +21,7 @@ pub use byte_io::PreparedIo;
 
 unsafe extern "C" {
     fn rh_resident_preparation_create() -> u64;
+    fn rh_resident_preparation_startup(handle: *mut u64) -> u32;
     fn rh_resident_preparation_state(handle: u64) -> u32;
     fn rh_resident_preparation_launch(handle: u64) -> u32;
     fn rh_resident_preparation_retire(handle: u64) -> u32;
@@ -43,6 +44,12 @@ pub enum Preparation {
     Unknown(NativePreparation),
 }
 
+#[must_use = "retain the native result through the original startup joins"]
+pub enum StartupPreparation {
+    UnavailableBeforeOwnership,
+    Prepared(Preparation),
+}
+
 #[must_use = "retain the original owner until retirement is established"]
 pub struct NativePreparation {
     handle: NonZeroU64,
@@ -53,6 +60,32 @@ pub struct NativePreparation {
 }
 
 impl NativePreparation {
+    pub fn startup() -> StartupPreparation {
+        let mut handle = 0;
+        // SAFETY: live output only; native retains no pointer, takes no inputs,
+        // and seals the original pristine slot on unavailable-before-ownership.
+        let result = unsafe { rh_resident_preparation_startup(&mut handle) };
+        if handle == 0 {
+            return if result == 2 {
+                StartupPreparation::UnavailableBeforeOwnership
+            } else {
+                StartupPreparation::Prepared(Preparation::Refused)
+            };
+        }
+        let mut adopted = Self::adopt(handle);
+        if result != 1 {
+            // Unexpected ABI output cannot discard a returned original owner.
+            adopted = match adopted {
+                Preparation::Owned(mut owner) | Preparation::Unknown(mut owner) => {
+                    owner.state = State::Unknown;
+                    Preparation::Unknown(owner)
+                }
+                Preparation::Refused => Preparation::Refused,
+            };
+        }
+        StartupPreparation::Prepared(adopted)
+    }
+
     pub fn prepare() -> Preparation {
         // SAFETY: no inputs; native create is the only source of handles.
         Self::adopt(unsafe { rh_resident_preparation_create() })

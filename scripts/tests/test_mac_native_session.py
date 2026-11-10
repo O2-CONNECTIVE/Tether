@@ -15,7 +15,7 @@ sys.path.pop(0)
 
 class NativeSessionReportTests(unittest.TestCase):
     def test_every_mode_requires_exact_complete_report(self):
-        for mode, count in {'session-normal': 8, **tool.CASES}.items():
+        for mode, count in {'session-normal': 13, **tool.CASES}.items():
             child = int(mode not in tool.NO_CHILD)
             unknown = int(mode not in tool.NO_CHILD and mode not in tool.TERMINAL)
             report = f'NATIVE_SESSION_FIXTURE mode={mode} passed={count} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={unknown} producer=0\n'
@@ -26,6 +26,12 @@ class NativeSessionReportTests(unittest.TestCase):
                         report.replace(f'nativeUnknown={unknown}', f'nativeUnknown={1-unknown}'), report.replace('producer=0', 'producer=1')]:
                 with self.subTest(mode=mode, output=bad), self.assertRaises(ValueError):
                     tool.validate_report(mode, bad)
+
+    def test_monitor_spawn_failure_requires_original_child_collection(self):
+        mode = 'session-monitor-spawn-failure'
+        self.assertEqual(tool.CASES[mode], 9)
+        self.assertNotIn(mode, tool.NO_CHILD)
+        self.assertNotIn(mode, tool.TERMINAL)
 
     def test_terminal_modes_are_explicit(self):
         self.assertEqual(tool.TERMINAL, {'session-confirmed', 'session-rejected', 'session-close-idle', 'session-close-pending', 'session-drop'})
@@ -101,6 +107,12 @@ class GuiStateReportTests(unittest.TestCase):
                     tool.validate_gui_report(mode, bad)
         with self.assertRaises(ValueError):
             tool.validate_gui_report('other', '')
+
+    def test_gui_startup_report_requires_repeated_startup_checks(self):
+        old = 'GUI_STATE_FIXTURE mode=gui-state-normal passed=8 failed=0 childrenStarted=0 childrenWaited=0 open=0 nativeUnknown=0 producer=0\n'
+        with self.assertRaises(ValueError):
+            tool.validate_gui_report('gui-state-normal', old)
+        self.assertEqual(tool.GUI_CASES['gui-state-normal'], 14)
 
     def test_failed_gui_state_never_exposes_raw_output(self):
         progress = {}

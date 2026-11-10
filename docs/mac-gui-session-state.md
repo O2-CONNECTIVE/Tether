@@ -5,9 +5,10 @@
 state内に保持し、同じsessionのportだけを借用する。owner/portを別々に組み合わせる
 入力、stateの再bind、ownerを取り出すAPIはない。
 
-通常起動は引き続きunbound stateを構成し、native prepareを呼ばない。
+通常起動は[閉じたnative起動入口](mac-gui-trusted-startup.md)を呼ぶ。
+nativeを明示linkしたMac buildだけが同じsessionを構成し、それ以外はunboundを維持する。
 `ApprovedRelease.production=nil`、実enrollment未構成、通常接続gate閉鎖は変わらない。
-source variantのzero-argument bootstrapがRefusedを返しても、単なるunbound状態へ
+zero-argument bootstrapがRefusedを返しても、単なるunbound状態へ
 置き換えて終了許可を与えない。同じnative ownerを保持し、Unknownのまま扱う。
 
 既存IPCのJSON・capability・caller制約は変えない。匿名GUI CIの裸portはfixture cfg内だけで
@@ -23,7 +24,7 @@ build/setupより前に、同じstateのArcを保持する外側lifetime guard�
 Arcの存在やDropによるjoinだけを終了許可にしない。Unknownでは期限や再起動による解除を行わない。
 safeな元終了証拠が揃いguardが完了してから、元run_returnのexit codeを伝播する。
 Windows等の非Macは既存App::run経路を維持する。abort、別箇所のprocess::exit、OSの強制終了を保証しない。
-この段階ではnativeの通常起動を接続しておらず、実製品Quitや自動終了通知を受入済みとしない。
+同一署名releaseでの実起動、実製品Quitや自動終了通知は受入済みとしない。
 source variantでのnative終了は最初のQuitがClose要求、確認後の次のQuitが許可となる。
 自動main-thread wakeは後続とし、Unknownは次のQuitでも拒否する。
 confirmed self-childは実lifetime guardの終了も通る。

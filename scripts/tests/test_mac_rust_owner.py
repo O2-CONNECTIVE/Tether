@@ -31,14 +31,15 @@ class NativeRustOwnerCheckerTests(unittest.TestCase):
         for output in ['', normal.replace('_rh_resident_preparation_create', '_other'),
                        normal + '\n_rh_fixture_preparation_create',
                        '\n'.join(tool.NORMAL_EXPORTS - {'_rh_resident_preparation_launch'}),
+                       '\n'.join(tool.NORMAL_EXPORTS - {'_rh_resident_preparation_startup'}),
                        normal + '\n_rh_resident_preparation_launch_path']:
             with self.subTest(output=output), self.assertRaises(ValueError):
                 tool.validate_exports(output, False)
 
     def test_fixed_launch_and_observations_exclude_normal_fixture_creation(self):
-        self.assertEqual(len(tool.NORMAL_EXPORTS), 13)
+        self.assertEqual(len(tool.NORMAL_EXPORTS), 14)
         self.assertEqual(len(tool.FIXTURE_EXPORTS), 15)
-        self.assertTrue({'_rh_resident_preparation_launch', '_rh_resident_preparation_exit', '_rh_resident_preparation_retire_active_io',
+        self.assertTrue({'_rh_resident_preparation_startup', '_rh_resident_preparation_launch', '_rh_resident_preparation_exit', '_rh_resident_preparation_retire_active_io',
                          '_rh_resident_preparation_abandon_active',
                          '_rh_resident_preparation_request_active_close',
                          '_rh_resident_preparation_discard_observation'} <= tool.NORMAL_EXPORTS)

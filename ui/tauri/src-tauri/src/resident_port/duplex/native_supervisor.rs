@@ -1,12 +1,13 @@
 //! Concrete native IO worker only; no full cleanup or application Quit permit.
 use super::*;
 use crate::native_preparation::{
-    ExitObservation, NativePreparation, NativeTerminal, Preparation, State,
+    ExitObservation, NativePreparation, NativeTerminal, Preparation, StartupPreparation, State,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NativeOutcome {
     Refused,
+    UnavailableBeforeOwnership,
     Prepared(State),
     Active {
         exit: ExitObservation,
@@ -62,13 +63,13 @@ enum Bootstrap {
     Fixture(crate::native_preparation::FixedActiveFixture, bool),
 }
 impl Bootstrap {
-    fn open(self) -> (Preparation, bool, bool) {
+    fn open(self) -> (StartupPreparation, bool, bool) {
         match self {
             Self::Preparation => {
-                let preparation = match NativePreparation::prepare() {
-                    Preparation::Owned(mut owner) => {
+                let preparation = match NativePreparation::startup() {
+                    StartupPreparation::Prepared(Preparation::Owned(mut owner)) => {
                         let _ = owner.launch();
-                        Preparation::Owned(owner)
+                        StartupPreparation::Prepared(Preparation::Owned(owner))
                     }
                     other => other,
                 };
@@ -76,7 +77,9 @@ impl Bootstrap {
             }
             #[cfg(resident_launch_fixture)]
             Self::PreparedFixture => (
-                NativePreparation::fixture(crate::native_preparation::FixedFixture::Normal),
+                StartupPreparation::Prepared(NativePreparation::fixture(
+                    crate::native_preparation::FixedFixture::Normal,
+                )),
                 false,
                 false,
             ),
@@ -86,13 +89,17 @@ impl Bootstrap {
                     mode,
                     crate::native_preparation::FixedActiveFixture::FiniteCoalesced
                 );
-                (NativePreparation::fixture_active(mode), unwind, coalesced)
+                (
+                    StartupPreparation::Prepared(NativePreparation::fixture_active(mode)),
+                    unwind,
+                    coalesced,
+                )
             }
         }
     }
 }
 impl NativeIoSupervisor {
-    // Closed launch composition; missing real release identity still refuses.
+    // Closed launch composition; unavailable only before original ownership.
     pub(crate) fn prepare() -> io::Result<(Self, io::Result<BoundDuplex>)> {
         Self::start(Bootstrap::Preparation)
     }
@@ -179,6 +186,13 @@ fn run(
     send: std::sync::mpsc::SyncSender<io::Result<BoundDuplex>>,
 ) -> NativeWorkerEnd {
     let (preparation, _unwind, _coalesced) = bootstrap.open();
+    let preparation = match preparation {
+        StartupPreparation::UnavailableBeforeOwnership => {
+            let _ = send.try_send(Err(unavailable()));
+            return NativeWorkerEnd::incomplete(NativeOutcome::UnavailableBeforeOwnership);
+        }
+        StartupPreparation::Prepared(preparation) => preparation,
+    };
     let mut original = match preparation {
         Preparation::Refused => {
             let _ = send.try_send(Err(unavailable()));

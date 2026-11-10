@@ -1,4 +1,4 @@
-//! Concrete observation/intent boundary. Normal startup and IPC remain unbound.
+//! Concrete observation/intent boundary; native startup retains its whole owner.
 pub(crate) mod duplex;
 mod model;
 mod observation;

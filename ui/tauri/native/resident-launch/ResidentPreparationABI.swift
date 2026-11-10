@@ -23,6 +23,7 @@ private final class PreparationSlot: @unchecked Sendable {
     private let key: pthread_key_t?
     private var issued: UInt64 = 0
     private var record: Record?
+    private var startupUnavailable = false
     #if RESIDENT_LAUNCH_FIXTURE
     private var completedCloses: UInt32 = 0
     private var retirementCalls: UInt32 = 0
@@ -56,7 +57,7 @@ private final class PreparationSlot: @unchecked Sendable {
     func create(fixtureMode: UInt32?) -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        guard record == nil, issued < UInt64.max else { return 0 }
+        guard !startupUnavailable, record == nil, issued < UInt64.max else { return 0 }
         let owner: ResidentLaunchPreparation
         do {
             #if RESIDENT_LAUNCH_FIXTURE
@@ -69,6 +70,32 @@ private final class PreparationSlot: @unchecked Sendable {
             owner = try ResidentLaunchPreparation.prepare()
             #endif
         } catch { return 0 }
+        return adopt(owner, fixtureMode: fixtureMode)
+    }
+
+    // No separate preflight/boolean permit: preparation and the no-owner
+    // tombstone are one locked operation on the original slot.
+    func startup(_ output: UnsafeMutablePointer<UInt64>?) -> UInt32 {
+        guard let output else { return 0 }
+        output.pointee = 0
+        lock.lock()
+        defer { lock.unlock() }
+        guard !startupUnavailable, record == nil, issued == 0 else { return 0 }
+        let owner: ResidentLaunchPreparation
+        do { owner = try ResidentLaunchPreparation.prepare() }
+        catch PreparationFailure.unsupportedOS {
+            startupUnavailable = true
+            return 2
+        } catch PreparationFailure.publisherUnconfigured {
+            startupUnavailable = true
+            return 2
+        } catch { return 0 }
+        output.pointee = adopt(owner, fixtureMode: nil)
+        return output.pointee == 0 ? 0 : 1
+    }
+
+    // Caller holds the slot lock and has already checked its issuance state.
+    private func adopt(_ owner: ResidentLaunchPreparation, fixtureMode: UInt32?) -> UInt64 {
         guard let identity = worker(create: true) else { return 0 }
         issued += 1
         let handle = issued
@@ -264,7 +291,7 @@ private final class PreparationSlot: @unchecked Sendable {
     func createActive(_ mode: UInt32) -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        guard mode <= 10, record == nil, issued < UInt64.max,
+        guard !startupUnavailable, mode <= 10, record == nil, issued < UInt64.max,
               let identity = worker(create: true) else { return 0 }
         let owner = ResidentLaunchPreparation.completionFixture()
         issued += 1
@@ -359,6 +386,9 @@ private let preparationSlot = PreparationSlot()
 
 @c @implementation public func rh_resident_preparation_create() -> UInt64 {
     autoreleasepool { preparationSlot.create(fixtureMode: nil) }
+}
+@c @implementation public func rh_resident_preparation_startup(_ handle: UnsafeMutablePointer<UInt64>?) -> UInt32 {
+    autoreleasepool { preparationSlot.startup(handle) }
 }
 @c @implementation public func rh_resident_preparation_launch(_ handle: UInt64) -> UInt32 {
     autoreleasepool { preparationSlot.launch(handle).rawValue }

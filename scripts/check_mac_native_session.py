@@ -7,7 +7,7 @@ import subprocess
 from check_mac_enrollment_lookup import command, completed
 from check_mac_native_source_variants import source_variants, validate_dependencies
 
-CASES = {'session-confirmed': 26, 'session-unknown': 26,
+CASES = {'session-monitor-spawn-failure': 9, 'session-confirmed': 26, 'session-unknown': 26,
          'session-missing': 26, 'session-malformed': 26,
          'session-lost': 18, 'session-invalid': 18, 'session-rejected': 18,
          'session-unwind': 18, 'session-drop': 18,
@@ -16,7 +16,7 @@ NO_CHILD = {'session-normal'}
 TERMINAL = {'session-confirmed', 'session-rejected', 'session-close-idle', 'session-close-pending', 'session-drop'}
 
 
-GUI_CASES = {'gui-state-normal': 8, 'gui-state-confirmed': 20, 'gui-state-unknown': 20,
+GUI_CASES = {'gui-state-normal': 14, 'gui-state-confirmed': 20, 'gui-state-unknown': 20,
              'gui-state-return': 14, 'gui-state-unwind': 14}
 
 
@@ -40,7 +40,7 @@ def execute_gui_mode(executable, mode, progress):
 
 
 def validate_report(mode, output):
-    expected = 8 if mode == 'session-normal' else CASES.get(mode)
+    expected = 13 if mode == 'session-normal' else CASES.get(mode)
     child = int(mode not in NO_CHILD)
     unknown = int(mode not in NO_CHILD and mode not in TERMINAL)
     match = re.fullmatch(r'NATIVE_SESSION_FIXTURE mode=([a-z-]+) passed=(\d+) failed=(\d+) childrenStarted=(\d+) childrenWaited=(\d+) open=(\d+) nativeUnknown=(\d+) producer=(\d+)\n?', output)
@@ -92,14 +92,14 @@ def run(progress=None):
             validate_borrow_refusal(result.returncode, result.stderr)
         progress.update(phase='fixture-build', mode=None, returncode=None, condition=None)
     print(json.dumps({'fixture': 'native-session-source', 'passed': passed,
-                      'normalModes': 2, 'fixtureModes': 15,
-                      'fixtureChildrenStarted': 15, 'fixtureChildrenWaited': 15,
-                      'physicalActiveEndpointsClosed': 60, 'retainedNativeUnknownRecords': 7, 'retainedTerminalRecords': 8,
+                      'normalModes': 2, 'fixtureModes': 16,
+                      'fixtureChildrenStarted': 16, 'fixtureChildrenWaited': 16,
+                      'physicalActiveEndpointsClosed': 64, 'retainedNativeUnknownRecords': 8, 'retainedTerminalRecords': 8,
                       'explicitOuterJoins': 14, 'sessionDropJoins': 1,
-                      'replacementRefusals': 15, 'quitPermits': 7,
+                      'replacementRefusals': 16, 'injectedMonitorSpawnFailures': 1, 'quitPermits': 9,
                       'lockedOffline': True, 'existingDependencyPackages': 11,
                       'clippyVariants': 2, 'compileRefusals': 1, 'producerLaunches': 0,
-                      'scope': 'same native owner and managed GUI state; normal IPC unbound; fixture terminal Quit proof only; no product activation / auth'}))
+                      'scope': 'same native owner and managed GUI state; normal unavailable startup joined; fixture terminal Quit proof; no product activation / auth'}))
 
 
 if __name__ == '__main__':

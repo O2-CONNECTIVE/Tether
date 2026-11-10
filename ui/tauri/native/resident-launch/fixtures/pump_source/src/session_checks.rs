@@ -35,7 +35,15 @@ fn join(session: &NativeSession) -> NativeOuterJoined {
 #[cfg(resident_launch_fixture)]
 #[path = "session_close_checks.rs"]
 mod close;
+#[cfg(resident_launch_fixture)]
+#[path = "session_spawn_failure_checks.rs"]
+mod spawn_failure;
 pub(crate) fn run(mode: &str) {
+    #[cfg(resident_launch_fixture)]
+    if mode == "session-monitor-spawn-failure" {
+        spawn_failure::run();
+        return;
+    }
     #[cfg(resident_launch_fixture)]
     if matches!(mode, "session-close-pending" | "session-close-idle") {
         close::run(mode);
@@ -50,16 +58,28 @@ pub(crate) fn run(mode: &str) {
         let session = NativeSession::prepare().unwrap();
         check(status(&session)["state"] == "source-unavailable");
         check(receipt(&session, 1)["disposition"] == "unavailable");
-        check(!session.owner().request_exit());
+        let immediate = session.owner().request_exit();
+        check(
+            !immediate
+                || (session.owner().outcome() == Some(Outcome::NotSpawned)
+                    && session.owner().poll_join().is_some()),
+        );
         let joined = join(&session);
         check(
-            joined.native().outcome() == NativeOutcome::Refused
+            joined.native().outcome() == NativeOutcome::UnavailableBeforeOwnership
                 && !joined.native().terminal_confirmed(),
         );
         check(!joined.wire_close_confirmed());
-        check(session.owner().outcome() == Some(Outcome::Unknown));
-        check(!session.owner().finish_requested());
+        check(session.owner().outcome() == Some(Outcome::NotSpawned));
+        check(session.owner().finish_requested());
         check(status(&session)["state"] == "source-unavailable");
+        let repeated = NativeSession::prepare().unwrap();
+        check(status(&repeated)["state"] == "source-unavailable");
+        check(join(&repeated).native().outcome() == NativeOutcome::Refused);
+        check(repeated.owner().outcome() == Some(Outcome::Unknown));
+        check(!repeated.owner().request_exit() && !repeated.owner().finish_requested());
+        check(session.owner().poll_join() == Some(joined) && session.owner().finish_requested());
+        drop(repeated);
         drop(session);
         report(mode, passed, false);
         return;
