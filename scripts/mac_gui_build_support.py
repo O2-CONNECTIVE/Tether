@@ -102,7 +102,7 @@ def toolchain(stage, env):
                         'deploymentTarget': MINIMUM}
 
 
-def compile_images(stage, env, swift, sdk):
+def compile_images(stage, env, swift, sdk, *, signed_release=False):
     frontend = stage / 'ui/tauri'
     def run(args, cwd, phase):
         try:
@@ -114,13 +114,18 @@ def compile_images(stage, env, swift, sdk):
     run(['node', 'scripts/notices.mjs', '--check'], frontend, 'FRONTEND_NOTICE')
     native = stage / NATIVE_ROOT
     library = stage / 'libResidentPreparation.dylib'
+    minimum = '27.0' if signed_release else MINIMUM
     swift_flags = ['-swift-version', '6', '-warnings-as-errors', '-sdk', sdk,
-                   '-target', 'arm64-apple-macosx' + MINIMUM, '-parse-as-library',
+                   '-target', 'arm64-apple-macosx' + minimum, '-parse-as-library',
                    '-module-cache-path', str(stage / 'swift-cache'),
                    '-import-objc-header', str(native / 'ResidentPreparation.h'),
                    '-no-toolchain-stdlib-rpath', '-emit-library',
                    '-module-name', 'ResidentPreparation']
-    run([swift, *swift_flags, *(str(native / name) for name in SWIFT_FILES),
+    selected = [str(native / name) for name in SWIFT_FILES]
+    if signed_release:
+        swift_flags += ['-D', 'TETHER_SIGNED_RELEASE']
+        selected += [str(stage / 'generated/SignedResidentReleaseIdentity.swift')]
+    run([swift, *swift_flags, *selected,
                     '-Xlinker', '-weak_framework', '-Xlinker', 'LightweightCodeRequirements',
                     '-Xlinker', '-install_name', '-Xlinker', layout.NATIVE,
                     '-Xlinker', '-rpath', '-Xlinker', layout.SWIFT_ROOT,

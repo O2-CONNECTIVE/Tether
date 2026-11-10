@@ -77,6 +77,7 @@ Macのcurrent-user実行はsandboxではなく、同一ユーザー権限で読�
 - [同じ native owner の byte IO](mac-native-byte-io.md): fd 所有を移さず、借用 Read / Write と control half-close を接続。raw EOF と起動後の回収証拠を区別します。
 - [同じ native owner と Pump](mac-native-pump.md): 既存framing処理へ具体的な借用IOを接続するsource fixture。通常startup / native supervisorの終了証拠は未接続です。
 - [Go license inventory](go-license-inventory.md)、[配布条件](distribution.md)。旧配布条件の合格を新しいMac packageへ転用しない。
+- [固定producer先行の署名組立](mac-signed-release-build.md): 既存identityの具体承認後に実行するlocal候補recipe。通常nil buildと、実署名・接続・配布の未受入を分けます。
 - [検証状態](tether-pilot-status.md)のpackage節に、license閉包・署名・notarization・受領者起動の残件を集約。
 - [旧Python開発手順](development.md)はPython部分の検証用。Go/Swiftの全試験を包含しない。
 
