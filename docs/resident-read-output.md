@@ -1,7 +1,7 @@
 # 常駐固定操作の保持出力読取
 
 #189 目標5 / #188 の実行管理を、既存の固定操作へ追加する。
-`rescue_fixed_read_output` は、`rescue_fixed_status` と同じ認証主体・
+`tether_fixed_read_output` は、`tether_fixed_status` と同じ認証主体・
 登録済みhost・固定control接続世代が所有する保持出力だけを読む。
 通常grant-bound 4 tools、unbound discoveryの404、認証・認可・固定routineは変更しない。
 汎用command、host catalog、他主体の実行、永続journal、新しい保持期間は追加しない。
@@ -18,7 +18,7 @@
   128 chunks。待機、再試行、hostへの読取、paging用状態の追加はしない。
 - 元のagentexec Output cursorは既読ackだが、このtoolのcursorは読取位置だけ。
   保持bytes、元の収集cursor、期限、実行、取消、回収、tombstoneを変更しない。
-  同じcursorからの再読取は可能。明示 `rescue_fixed_release` だけが既存条件でpayloadを解放する。
+  同じcursorからの再読取は可能。明示 `tether_fixed_release` だけが既存条件でpayloadを解放する。
 
 ## version 1 の出力
 

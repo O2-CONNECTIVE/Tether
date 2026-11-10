@@ -51,7 +51,7 @@ func TestResidentReadOutputThroughAuthenticatedGateway(t *testing.T) {
 	if n := call(bearer, sid, `{"jsonrpc":"2.0","method":"notifications/initialized"}`); n.Code != http.StatusAccepted {
 		t.Fatal(n.Code, n.Body.String())
 	}
-	body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rescue_fixed_read_output","arguments":{"request_id":"11111111111111111111111111111111","cursor":1,"max_bytes":2}}}`
+	body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tether_fixed_read_output","arguments":{"request_id":"11111111111111111111111111111111","cursor":1,"max_bytes":2}}}`
 	for _, credential := range []string{"", sign("other-subject")} {
 		if res := call(credential, sid, body); res.Code != http.StatusUnauthorized && res.Code != http.StatusForbidden {
 			t.Fatal("unauthorized output read", res.Code, res.Body.String())

@@ -35,11 +35,11 @@ func TestResidentListIsOptionalBoundedAndReadOnly(t *testing.T) {
 		t.Fatal(string(listing.Body))
 	}
 	catalog := v["result"].(map[string]any)["tools"].([]any)
-	if len(catalog) != 4 || catalog[3].(map[string]any)["name"] != "rescue_fixed_list" {
+	if len(catalog) != 4 || catalog[3].(map[string]any)["name"] != "tether_fixed_list" {
 		t.Fatal("missing optional list", v)
 	}
 	call := func(args string) HTTPReply {
-		return s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rescue_fixed_list","arguments":` + args + `}}`))
+		return s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tether_fixed_list","arguments":` + args + `}}`))
 	}
 	for _, args := range []string{`{}`, `{"cursor":"","limit":0}`, `{"cursor":"","limit":33}`, `{"cursor":"","limit":1.5}`, `{"cursor":"","limit":null}`, `{"cursor":null,"limit":1}`, `{"cursor":"invalid","limit":1}`, `{"cursor":"","limit":1,"host_id":"other"}`, `{"cursor":"","limit":1,"limit":2}`, `{"Cursor":"","limit":1}`} {
 		if reply := call(args); !reply.Error || b.calls != 0 {

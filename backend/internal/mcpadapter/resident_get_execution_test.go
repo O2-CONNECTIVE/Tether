@@ -35,7 +35,7 @@ func TestResidentGetExecutionOptionalAndStrictArguments(t *testing.T) {
 		}
 		catalog := v["result"].(map[string]any)["tools"].([]any)
 		call := func(args string) HTTPReply {
-			return s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rescue_fixed_get_execution","arguments":` + args + `}}`))
+			return s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tether_fixed_get_execution","arguments":` + args + `}}`))
 		}
 		valid := `{"request_id":"11111111111111111111111111111111"}`
 		if backend != b {
@@ -48,7 +48,7 @@ func TestResidentGetExecutionOptionalAndStrictArguments(t *testing.T) {
 			}
 			continue
 		}
-		if len(catalog) != 4 || catalog[3].(map[string]any)["name"] != "rescue_fixed_get_execution" {
+		if len(catalog) != 4 || catalog[3].(map[string]any)["name"] != "tether_fixed_get_execution" {
 			t.Fatal(catalog)
 		}
 		invalid := []string{`{}`, `null`, `[]`, `{"request_id":"11111111111111111111111111111111","request_id":"22222222222222222222222222222222"}`}

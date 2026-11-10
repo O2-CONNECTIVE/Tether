@@ -18,7 +18,7 @@ type ResidentReadOutputBackend interface {
 
 func residentReadOutputTool() map[string]any {
 	return map[string]any{
-		"name": "rescue_fixed_read_output", "title": "Read retained fixed output",
+		"name": "tether_fixed_read_output", "title": "Read retained fixed output",
 		"description": "Read untrusted retained output of this session's principal, enrolled host and control generation. Read-only, no acknowledgement, release, execution or permission renewal. Start cursor at 0, then use next_cursor; max_bytes bounds decoded bytes, not base64 characters. gap_bytes counts skipped unavailable bytes in this page. has_more means more positions in the observed retained view, not more source output. Empty chunks do not mean finished: inspect collection_ended, phase, terminal, cleanup and work_error separately. collection_ended only means gateway observation ended, never complete output or successful execution. source_* fields are the last observed command status, possibly stale. Do not busy-poll or blindly restart work on errors, missing records, gaps or lost sessions. Save results before explicit release; process restart loses this ledger.",
 		"inputSchema": closedObject(map[string]any{
 			"request_id": map[string]any{"type": "string", "pattern": "^[0-9a-f]{32}$"},

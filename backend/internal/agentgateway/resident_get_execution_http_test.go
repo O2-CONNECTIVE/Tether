@@ -51,7 +51,7 @@ func TestResidentGetExecutionThroughAuthenticatedGateway(t *testing.T) {
 	if n := call(bearer, sid, `{"jsonrpc":"2.0","method":"notifications/initialized"}`); n.Code != http.StatusAccepted {
 		t.Fatal(n.Code, n.Body.String())
 	}
-	body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rescue_fixed_get_execution","arguments":{"request_id":"11111111111111111111111111111111"}}}`
+	body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tether_fixed_get_execution","arguments":{"request_id":"11111111111111111111111111111111"}}}`
 	for _, credential := range []string{"", sign("other-subject")} {
 		if res := call(credential, sid, body); res.Code != http.StatusUnauthorized && res.Code != http.StatusForbidden {
 			t.Fatal("unauthorized metadata read", res.Code, res.Body.String())
@@ -76,7 +76,7 @@ func TestResidentGetExecutionThroughAuthenticatedGateway(t *testing.T) {
 	}
 	// Metadata retrieval succeeds even when the work failed. The legacy
 	// status response retains its historical isError behavior and full output.
-	res = call(bearer, sid, strings.Replace(body, "rescue_fixed_get_execution", "rescue_fixed_status", 1))
+	res = call(bearer, sid, strings.Replace(body, "tether_fixed_get_execution", "tether_fixed_status", 1))
 	if res.Code != http.StatusOK || json.Unmarshal(res.Body.Bytes(), &envelope) != nil {
 		t.Fatal(res.Code, res.Body.String())
 	}

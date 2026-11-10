@@ -42,7 +42,7 @@ func TestResidentGetExecutionSchemaAndSharedGolden(t *testing.T) {
 	var schema, input map[string]any
 	for _, entry := range request("tools/list", map[string]any{})["tools"].([]any) {
 		tool := entry.(map[string]any)
-		if tool["name"] == "rescue_fixed_get_execution" {
+		if tool["name"] == "tether_fixed_get_execution" {
 			schema = tool["outputSchema"].(map[string]any)
 			input = tool["inputSchema"].(map[string]any)
 		}
@@ -67,7 +67,7 @@ func TestResidentGetExecutionSchemaAndSharedGolden(t *testing.T) {
 	}
 	for _, v := range values {
 		b.value = v
-		result := request("tools/call", map[string]any{"name": "rescue_fixed_get_execution", "arguments": map[string]any{"request_id": strings.Repeat("1", 32)}})
+		result := request("tools/call", map[string]any{"name": "tether_fixed_get_execution", "arguments": map[string]any{"request_id": strings.Repeat("1", 32)}})
 		if err := checkOutputShape(schema, result["structuredContent"]); err != nil {
 			t.Fatal(err)
 		}

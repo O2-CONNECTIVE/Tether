@@ -105,14 +105,14 @@ func TestCIProducerObservationValidation(t *testing.T) {
 	}
 
 	d = &ciDiagnostic{}
-	d.beginTool("rescue_fixed_status")
+	d.beginTool("tether_fixed_status")
 	d.observeTool(map[string]any{"isError": true, "structuredContent": map[string]any{"error": "result_unobserved_or_uncertain", "phase": "running", "command_phase": "canceled", "stop": "canceled", "command_cleanup": "unknown", "owner_cleanup": "pending", "gateway_cleanup": "pending"}})
 	safe := map[string]any{}
 	d.annotate(safe)
 	if safe["tool_operation"] != "status" || safe["result_error"] != "result_unobserved_or_uncertain" || safe["command_cleanup"] != "unknown" {
 		t.Fatal("fixed result state lost")
 	}
-	d.beginTool("rescue_fixed_cancel")
+	d.beginTool("tether_fixed_cancel")
 	safe = map[string]any{}
 	d.annotate(safe)
 	if safe["tool_operation"] != "cancel" || safe["result_error"] != "unavailable" || safe["command_cleanup"] != "unavailable" {

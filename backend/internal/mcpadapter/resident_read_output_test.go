@@ -37,7 +37,7 @@ func TestResidentReadOutputOptionalAndStrictArguments(t *testing.T) {
 		}
 		catalog := v["result"].(map[string]any)["tools"].([]any)
 		call := func(args string) HTTPReply {
-			return s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rescue_fixed_read_output","arguments":` + args + `}}`))
+			return s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tether_fixed_read_output","arguments":` + args + `}}`))
 		}
 		valid := `{"request_id":"11111111111111111111111111111111","cursor":0,"max_bytes":4096}`
 		if backend != b {
@@ -46,7 +46,7 @@ func TestResidentReadOutputOptionalAndStrictArguments(t *testing.T) {
 			}
 			continue
 		}
-		if len(catalog) != 4 || catalog[3].(map[string]any)["name"] != "rescue_fixed_read_output" {
+		if len(catalog) != 4 || catalog[3].(map[string]any)["name"] != "tether_fixed_read_output" {
 			t.Fatal(catalog)
 		}
 		invalid := []string{`{}`, `null`, `[]`, `{"request_id":"11111111111111111111111111111111"}`, strings.Replace(valid, `"cursor":0`, `"cursor":0,"cursor":1`, 1), strings.Replace(valid, `"max_bytes":4096`, `"max_bytes":1,"host_id":"other"`, 1)}

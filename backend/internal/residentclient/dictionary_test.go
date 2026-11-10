@@ -154,7 +154,7 @@ func TestDictionaryHTTPUsesOriginalSIDAndDiscoversOnce(t *testing.T) {
 					tools := []any{}
 					if supported {
 						for _, op := range []string{"list", "get_execution", "read_output"} {
-							tools = append(tools, map[string]any{"name": "rescue_fixed_" + op, "inputSchema": map[string]any{"type": "object"}})
+							tools = append(tools, map[string]any{"name": "tether_fixed_" + op, "inputSchema": map[string]any{"type": "object"}})
 						}
 					}
 					value = map[string]any{"tools": tools}
@@ -168,17 +168,17 @@ func TestDictionaryHTTPUsesOriginalSIDAndDiscoversOnce(t *testing.T) {
 						bad = true
 					}
 					switch p.Name {
-					case "rescue_fixed_list":
+					case "tether_fixed_list":
 						if len(p.Arguments) != 2 || string(p.Arguments["cursor"]) != `""` || string(p.Arguments["limit"]) != "1" {
 							bad = true
 						}
 						value = json.RawMessage(fixtureTool(map[string]any{"schema_version": 1, "executions": []any{}, "next_cursor": ""}))
-					case "rescue_fixed_get_execution":
+					case "tether_fixed_get_execution":
 						if len(p.Arguments) != 1 || text(p.Arguments["request_id"]) != testID {
 							bad = true
 						}
 						value = json.RawMessage(fixtureTool(metadataFixture()))
-					case "rescue_fixed_read_output":
+					case "tether_fixed_read_output":
 						if len(p.Arguments) != 3 || text(p.Arguments["request_id"]) != testID || string(p.Arguments["cursor"]) != "0" || string(p.Arguments["max_bytes"]) != "2" {
 							bad = true
 						}

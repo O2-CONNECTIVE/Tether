@@ -4,13 +4,25 @@
 
 ## 既存経路との区別
 
-[resident adapter](../backend/internal/mcpadapter/resident_http.go) は `rescue_fixed_start` / `rescue_fixed_status` / `rescue_fixed_cancel` を公開し、明示的なrelease対応backendだけ `rescue_fixed_release` を追加します。これらの入力は32桁lowercase hexのrequest_idだけです。固定routine以外のcommandや任意hostは受け取りません。
+[resident adapter](../backend/internal/mcpadapter/resident_http.go) は `tether_fixed_start` / `tether_fixed_status` / `tether_fixed_cancel` を公開し、明示的なrelease対応backendだけ `tether_fixed_release` を追加します。これらの入力は32桁lowercase hexのrequest_idだけです。固定routine以外のcommandや任意hostは受け取りません。
 
-一覧対応backendではさらに `rescue_fixed_list` を公開します。入力cursor/limitとsummary出力の契約は[所有実行一覧](resident-execution-list.md)を参照してください。以下のwork結果schemaとは別のversion 1一覧schemaです。
+一覧対応backendではさらに `tether_fixed_list` を公開します。入力cursor/limitとsummary出力の契約は[所有実行一覧](resident-execution-list.md)を参照してください。以下のwork結果schemaとは別のversion 1一覧schemaです。
 
-保持出力読取に対応するbackendは `rescue_fixed_read_output` も公開します。byte cursorと最大4096 decoded bytesによる非ack読取で、[保持出力読取](resident-read-output.md)のversion 1 schemaを使います。既存work結果schemaは変更しません。
+保持出力読取に対応するbackendは `tether_fixed_read_output` も公開します。byte cursorと最大4096 decoded bytesによる非ack読取で、[保持出力読取](resident-read-output.md)のversion 1 schemaを使います。既存work結果schemaは変更しません。
 
 [gateway](../backend/internal/agentgateway/http.go) が認証済みprincipal・明示enrollment・現在のcontrol generationへ束縛した別経路です。旧4本と恒久的unbound discoveryを変更せず、sessionへ後からgrantを付けません。generation切断後の結果保持・再initialize、許可発行、失効の意味も変えません。
+
+## 公開名の統一
+
+常駐の7操作は `tether_fixed_start` / `tether_fixed_status` / `tether_fixed_cancel` / `tether_fixed_release` / `tether_fixed_list` / `tether_fixed_read_output` / `tether_fixed_get_execution` です。
+各backendの対応能力による公開範囲は従来と同じです。旧 `rescue_fixed_*` 名のaliasは残さず、旧名での呼出しはdispatch前にprotocol errorで拒否します。
+clientは保存したtool名を更新してください。実接続では、対象principalのenrollmentと認証済みstandbyのreadyを確認してから新規initializeし、同じMCP sessionで常駐のtool一覧を確認します。
+standby未接続かつ有効な単発grant経路もない場合は既存unbound discoveryとなり、単発派遣の旧4本を表示します。そのsessionは後から常駐へ昇格せず、ready後に一覧を再取得するだけでは切り替わりません。
+名前変更による再初期化やgateway再起動を、過去の作業の再実行許可にはしません。
+
+この変更は公開名だけです。入力、結果schema、request_idによる同じ作業の照会、主体・host・世代の束縛、期限、unknown、回収、明示releaseとtombstoneは維持します。
+単発派遣の `rescue_start` / `rescue_status` / `rescue_output` / `rescue_cancel` とWindows機能は変更しません。serverInfoのname、実行ファイル名、protocol版も変更しません。
+単一outcomeとサーバー採番の具体化、汎用の操作辞書、実クライアント接続の受入は別作業です。
 
 ## 実際のstructuredContent
 

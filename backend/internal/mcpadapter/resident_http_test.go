@@ -42,11 +42,11 @@ func TestResidentHTTPOnlyFixedScopeAndOriginalCorrelation(t *testing.T) {
 		t.Fatal(string(listing.Body), e)
 	}
 	tools := result["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 3 || tools[0].(map[string]any)["name"] != "rescue_fixed_start" {
+	if len(tools) != 3 || tools[0].(map[string]any)["name"] != "tether_fixed_start" {
 		t.Fatal(result)
 	}
 	for _, args := range []string{`{"request_id":"0123456789abcdef0123456789abcdef","command":"true"}`, `{"request_id":"changed"}`, `{"request_id":null}`} {
-		reply := s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rescue_fixed_start","arguments":` + args + `}}`))
+		reply := s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tether_fixed_start","arguments":` + args + `}}`))
 		if !reply.Error {
 			t.Fatal("expanded scope accepted", string(reply.Body))
 		}
@@ -54,7 +54,7 @@ func TestResidentHTTPOnlyFixedScopeAndOriginalCorrelation(t *testing.T) {
 	if b.starts != 0 {
 		t.Fatal("invalid args dispatched")
 	}
-	reply := s.Handle([]byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rescue_fixed_start","arguments":{"request_id":"0123456789abcdef0123456789abcdef"}}}`))
+	reply := s.Handle([]byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tether_fixed_start","arguments":{"request_id":"0123456789abcdef0123456789abcdef"}}}`))
 	if reply.Error || reply.Kind != HTTPResponse || b.starts != 1 || b.id != "0123456789abcdef0123456789abcdef" {
 		t.Fatal(string(reply.Body), b)
 	}

@@ -9,7 +9,7 @@ func residentOutputSchema(name string) map[string]any {
 		closedObject(map[string]any{"error": stringEnum("busy_or_refused"), "owner_cleanup": stringEnum("unknown")}, "error", "owner_cleanup"),
 		closedObject(map[string]any{"error": stringEnum("control_ended"), "owner_cleanup": stringEnum("unknown"), "reinitialize_required": map[string]any{"type": "boolean", "enum": []bool{true}}}, "error", "owner_cleanup", "reinitialize_required"),
 	}
-	if name != "rescue_fixed_release" {
+	if name != "tether_fixed_release" {
 		branches = append(branches, residentWorkSchema(false))
 	}
 	return map[string]any{"type": "object", "oneOf": branches}

@@ -15,8 +15,8 @@ type ResidentListBackend interface {
 
 func residentListTool() map[string]any {
 	return map[string]any{
-		"name": "rescue_fixed_list", "title": "List owned fixed executions",
-		"description":  "Lists only this session's principal, enrolled host and control generation's retained fixed executions and released-result tombstones. No command output or other hosts/generations. Read-only; no work or permission is created. Use request_id with rescue_fixed_status/cancel/release. cursor is empty initially or the prior next_cursor; empty next_cursor ends this page sequence. This is a live lexical request_id view, not a snapshot: restart with an empty cursor to discover newly admitted IDs before a previous cursor. Empty/missing records never prove non-execution; process restart loses this ledger.",
+		"name": "tether_fixed_list", "title": "List owned fixed executions",
+		"description":  "Lists only this session's principal, enrolled host and control generation's retained fixed executions and released-result tombstones. No command output or other hosts/generations. Read-only; no work or permission is created. Use request_id with tether_fixed_status/cancel/release. cursor is empty initially or the prior next_cursor; empty next_cursor ends this page sequence. This is a live lexical request_id view, not a snapshot: restart with an empty cursor to discover newly admitted IDs before a previous cursor. Empty/missing records never prove non-execution; process restart loses this ledger.",
 		"inputSchema":  closedObject(map[string]any{"cursor": map[string]any{"type": "string", "pattern": "^([0-9a-f]{32})?$"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 32}}, "cursor", "limit"),
 		"outputSchema": residentListSchema(),
 	}
