@@ -531,3 +531,56 @@ test("the source imports only the probe relay and has no global fetch, logging, 
   assert.doesNotMatch(source, /console\.|globalThis\.fetch|Access-Control|"Set-Cookie"|caches\.|\.connect\(/);
   assert.ok(!source.includes("tether-echo-probe.internal"));
 });
+
+test("resident control requires explicit opt-in and keeps the bounded relay", async () => {
+  const protocol = "rescue-agent-resident.v1";
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const { upstream, respond } = upgraded(protocol);
+  const binding = fakeBinding(respond);
+  const req = () => request(REGISTER_PATH, { method: "GET", headers: { ...regHeaders, "Sec-WebSocket-Protocol": protocol } });
+  for (const flag of [undefined, "", "true", "open-resident-tether-control "]) {
+    assert.equal((await worker.fetch(req(), { ...openEnv(binding), TETHER_RESIDENT_GATE: flag })).status, 400);
+  }
+  assert.equal(binding.calls.length, 0);
+  const env = { ...openEnv(binding), TETHER_RESIDENT_GATE: "open-resident-tether-control" };
+  assert.equal((await worker.fetch(req(), { ...env, TETHER_NATIVE_GATE: undefined })).status, 404);
+  const result = await worker.fetch(req(), env);
+  assert.equal(result.status, 101);
+  assert.equal(result.headers.get("Sec-WebSocket-Protocol"), protocol);
+  assert.deepEqual(binding.calls[0].init.headers, { Upgrade: "websocket", "Sec-WebSocket-Protocol": protocol });
+  assert.equal(binding.calls[0].url, UPSTREAM_ORIGIN + REGISTER_PATH);
+  const server = rt.pairs[0][1];
+  upstream.emit("message", { data: "synthetic resident challenge" });
+  assert.deepEqual(server.sent, ["synthetic resident challenge"]);
+  assert.deepEqual([...rt.timers.values()].map(t => t.ms), [300_000]);
+  rt.fireAll();
+  assert.equal(server.closed.code, 4000);
+  assert.equal(upstream.closed.code, 4000);
+  assert.equal(rt.timers.size, 0);
+  assert.equal(binding.calls.length, 1); // Worker never reconnects itself.
+});
+
+test("resident opt-in preserves forbidden headers and exact request/reply protocols", async () => {
+  const protocol = "rescue-agent-resident.v1";
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(upgraded(protocol).respond);
+  const env = { ...openEnv(binding), TETHER_RESIDENT_GATE: "open-resident-tether-control" };
+  for (const header of ["Cookie", "Authorization", "Proxy-Authorization", ASSERTION_HEADER, "Origin"]) {
+    const r = request(REGISTER_PATH, { method: "GET", headers: { ...regHeaders, "Sec-WebSocket-Protocol": protocol, [header]: "synthetic" } });
+    assert.equal((await worker.fetch(r, env)).status, 403);
+  }
+  for (const value of [`${protocol}, ${SUBPROTOCOL}`, `${protocol}, ${protocol}`, "rescue-agent-resident.v2"]) {
+    assert.equal((await worker.fetch(request(REGISTER_PATH, { method: "GET", headers: { ...regHeaders, "Sec-WebSocket-Protocol": value } }), env)).status, 400);
+  }
+  assert.equal(binding.calls.length, 0);
+  for (const [offered, answered] of [[protocol, SUBPROTOCOL], [SUBPROTOCOL, protocol]]) {
+    const mismatch = upgraded(answered);
+    const r = await worker.fetch(request(REGISTER_PATH, { method: "GET", headers: { ...regHeaders, "Sec-WebSocket-Protocol": offered } }), { ...env, TETHER_NATIVE_VPC: fakeBinding(mismatch.respond) });
+    assert.equal(r.status, 502);
+    assert.equal(mismatch.upstream.closed.code, 1002);
+  }
+  assert.equal(rt.pairs.length, 0);
+  assert.equal(rt.timers.size, 0);
+});

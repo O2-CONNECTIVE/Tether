@@ -148,3 +148,25 @@ test("active scope cap refuses before fetch and expiry clears all",async()=>{
  assert.equal((await f.worker.fetch(wsreq(),f.env)).status,503);assert.equal(sockets.length,32);
  f.setNow(START+1000);f.fireDelay(1000);assert.ok(sockets.every(s=>s.closed));assert.equal(f.timers.size,0);
 });
+
+test("resident opt-in cannot extend the bounded pilot window", async () => {
+  const f = fixture();
+  const protocol = "rescue-agent-resident.v1";
+  f.env.TETHER_RESIDENT_GATE = "open-resident-tether-control";
+  const upstream = new Socket();
+  f.env.TETHER_NATIVE_VPC.fetch = async () => ({ ...upgrade(upstream), headers: new Headers({ "Sec-WebSocket-Protocol": protocol }) });
+  const request = wsreq();
+  request.headers.set("Sec-WebSocket-Protocol", protocol);
+  assert.equal((await f.worker.fetch(request, f.env)).status, 101);
+  const server = f.pairs[0][1];
+  upstream.emit("message", { data: "synthetic" });
+  assert.deepEqual(server.sent, ["synthetic"]);
+  f.setNow(START + 1000);
+  f.fireDelay(1000);
+  assert.ok(upstream.closed);
+  assert.ok(server.closed);
+  upstream.emit("message", { data: "late" });
+  assert.deepEqual(server.sent, ["synthetic"]);
+  assert.equal((await f.worker.fetch(request, f.env)).status, 404);
+  assert.equal(f.timers.size, 0);
+});

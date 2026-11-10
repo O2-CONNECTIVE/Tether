@@ -103,3 +103,11 @@ node --test deploy/cloudflare/native/bounded-pilot.test.mjs deploy/cloudflare/na
 The tests inject clocks, timers, bindings and sockets, including expiry during body read/fetch/upgrade, late results, clock rollback, already-open relays, invalid windows and scope exhaustion. Real Cloudflare deployment, timing, OAuth and Mac operation remain separate acceptance steps. No actual STARTS/EXPIRES values or deployment commands are supplied here.
 
 The wrapper pins only the time window, not VPC binding identity. Deployment must independently keep the reviewed binding target fixed. Gate changes are not guaranteed to reach existing sockets in other isolates immediately; the absolute window and independent owned stop remain required.
+
+## 常駐制御の明示的な中継候補
+
+`TETHER_RESIDENT_GATE=open-resident-tether-control` を明示した場合だけ、同じ登録pathで `rescue-agent-resident.v1` も受け付けます。既存のnative gateと固定VPC bindingは引き続き必須です。未設定・未知値では従来の `rescue-agent-register.v1` だけを受け付けます。複数protocol、ambient credential、Originは拒否し、応答protocolは要求と完全一致しなければ中継しません。
+
+これはGoの既存常駐認証を通すsource候補です。本人の実行承認、host/principal署名、generation、同じ所有者の回収確認をWorkerが代行するものではありません。既存MCP認証、5分のrelay上限、frame/message上限とbounded pilotの絶対期限は維持します。Worker自身は再接続しません。Macの既存ResidentClientはcode4000による終了後、回収を確認して新しい接続を試みます。常駐制御の再接続は実行grantの更新・復帰を意味せず、制御断による進行中作業への影響はGo側の失効規則に従います。5分を超える単一接続や無中断実行は提供しません。
+
+既存Nodeのfake試験に、既定拒否、明示opt-in、固定宛先、protocol取り違え拒否、禁止header、5分終了を追加しています。実Cloudflare上の常駐再接続、Macの実回収・再認証、公開routeと認証設定は未検証です。配置・gate変更・credential作成・継続的アクセスの追加はこのsource変更に含めません。
