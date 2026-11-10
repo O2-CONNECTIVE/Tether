@@ -40,6 +40,6 @@ python -OO -m unittest scripts.tests.test_mac_gui_candidate_build -v
 ## 接続できる検証版まで
 
 1. Rust/Swift/Goを含むMacのnotice閉包、binaryの秘密/path監査を確定します。frontend notice成功だけでは閉包完了ではありません。
-2. 正規publisher identity、署名後producer CDHash、固定release構成、署名/notarizationを用意します。署名credentialと認証enrollmentは別の具体承認と検証が必要です。
+2. [producer先行の専用署名recipe](mac-signed-release-build.md)で正規publisher identityと署名後producer CDHashを固定release構成へ結びます。実署名とnotarizationは未実施です。署名credentialと認証enrollmentは別の具体承認と検証が必要です。
 3. 通常GUIの同じNativeSessionを使う起動sourceを、正規release・実同意・認証・失効へ接続し、同じcandidateで起動、作業/結果、OFFと元ownerの終了回収を実証します。
 4. 配布受入後、対象Macと実dotで評価します。このCI-only appはそのまま渡して使える検証版ではありません。

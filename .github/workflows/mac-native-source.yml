@@ -134,6 +134,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/native-source-evidence"
           python scripts/check_mac_atomic_pipes.py | tee "$RUNNER_TEMP/native-source-evidence/atomic-pipes.json"
+          python scripts/check_mac_signed_source_ci.py | tee "$RUNNER_TEMP/native-source-evidence/signed-source.json"
           python scripts/check_mac_launch_requirement.py | tee "$RUNNER_TEMP/native-source-evidence/requirement.json"
           python scripts/check_mac_process_completion.py | tee "$RUNNER_TEMP/native-source-evidence/completion.json"
           python scripts/check_mac_active_io.py | tee "$RUNNER_TEMP/native-source-evidence/active-io.json"

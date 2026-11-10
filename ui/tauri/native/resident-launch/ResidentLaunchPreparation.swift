@@ -13,9 +13,14 @@ private struct ApprovedRelease: Sendable {
     let team: String
     let hashes: [Data]
 
-    // Filled only by a later approved release composition, never runtime input.
-    // No real publisher or exact-release image has been established here.
+    // The signed recipe compiles one generated input after validating its producer.
+    // No runtime identity/path/environment setter is exposed.
+    #if TETHER_SIGNED_RELEASE
+    static let production: ApprovedRelease? = ApprovedRelease(
+        team: SignedResidentReleaseIdentity.team, hashes: SignedResidentReleaseIdentity.hashes)
+    #else
     static let production: ApprovedRelease? = nil
+    #endif
 
     func validate() throws {
         guard team.utf8.count == 10,
@@ -42,7 +47,7 @@ private enum ProcessCompletionPhase {
     case unlaunched, running, waited(ObservedProcessExit), unknown
 }
 
-// Partial native owner preparation only. Not linked into normal Tauri startup.
+// Native owner used by the explicitly linked normal Tauri startup.
 // Fixed native launch only; no caller path/argv/env, PID or readiness override.
 // This object is not Sendable: later FFI must retain it on its original worker.
 final class ResidentLaunchPreparation {
@@ -65,6 +70,9 @@ final class ResidentLaunchPreparation {
     }
 
     static func prepare() throws -> ResidentLaunchPreparation {
+        #if TETHER_SIGNED_RELEASE
+        guard #available(macOS 27.0, *) else { throw PreparationFailure.unsupportedOS }
+        #endif
         guard supports(ProcessInfo.processInfo.operatingSystemVersion), #available(macOS 14.4, *) else {
             throw PreparationFailure.unsupportedOS
         }
@@ -97,7 +105,8 @@ final class ResidentLaunchPreparation {
     }
 
     // Uses the same prepared Process and original pipe owner. Preparation still
-    // stops at nil ApprovedRelease.production; fixtures cannot activate this path.
+    // stops at nil ApprovedRelease.production in ordinary builds. Fixture owners
+    // cannot activate this path; the signed recipe binds one real producer.
     func launchEnrolledProducer() -> ProducerLaunchResult {
         guard productionRelease, case .unlaunched = completion,
               #available(macOS 14.4, *), task.launchRequirement != nil,
