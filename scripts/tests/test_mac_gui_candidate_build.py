@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import build_mac_gui_candidate as tool
 import check_mac_gui_candidate_ci as check
 from scripts.tests.test_mac_gui_link_layout import image
+from scripts.tests.test_mac_sealed_producer_build import executable
 
 
 class GuiCandidateBuildTests(unittest.TestCase):
@@ -32,6 +33,9 @@ class GuiCandidateBuildTests(unittest.TestCase):
         self.source_bytes = b'fixed source\n'
         self.input = 'ui/tauri/source.txt'
         self.images = {role: image(role) for role in ('gui', 'native')}
+        self.images['producer'] = executable()
+        self.producer_revision, self.producer_tree = self.revision, self.tree
+        self.patch(tool.support.producer, 'build', self.producer_build)
         self.mutate = lambda stage: None
         self.patch(tool.source, 'ROOT', self.repo)
         self.patch(tool.source, 'head', lambda: (self.revision, self.tree))
@@ -64,10 +68,65 @@ class GuiCandidateBuildTests(unittest.TestCase):
         self.calls.append(env)
         products = {}
         for role, data in self.images.items():
+            if role == 'producer':
+                continue
             products[role] = stage / role
             products[role].write_bytes(data)
         self.mutate(stage)
         return products
+
+    def producer_build(self, output):
+        output.mkdir()
+        path = output / 'resident-pipe'
+        path.write_bytes(self.images['producer'])
+        producer = tool.support.producer
+        return {'schema': 'tether-mac-sealed-producer-build/1', 'repository': 'O2-CONNECTIVE/Tether',
+                'status': 'blocked', 'activation': 'blocked', 'distribution': 'blocked',
+                'sourceCommit': self.producer_revision, 'sourceTree': self.producer_tree,
+                'target': 'darwin-arm64', 'role': producer.ROLE, 'flags': list(producer.FLAGS),
+                'settings': {'GOVERSION': 'go1.27.3', 'GOOS': 'darwin', 'GOARCH': 'arm64', 'CGO_ENABLED': '1'},
+                'producerExecutable': True, 'producerExecuted': False, 'signingPerformed': False,
+                'enrollmentAccessed': False, 'cryptographicAttestation': False,
+                'blockers': list(producer.BLOCKERS), 'image': producer.inspect_image(path),
+                'compiledRepositoryPackages': [producer.ROLE],
+                'recipe': {p: 'c' * 64 for p in producer.RECIPE}}
+
+    def test_other_producer_commit_or_tree_cannot_join_the_app(self):
+        for field in ('producer_revision', 'producer_tree'):
+            original = getattr(self, field)
+            setattr(self, field, 'd' * 40)
+            with self.subTest(field=field), self.assertRaisesRegex(tool.source.BuildError, 'PRODUCER_SOURCE_MISMATCH'):
+                tool.build(self.output)
+            self.assertFalse(self.output.exists())
+            setattr(self, field, original)
+
+    def test_producer_record_cannot_claim_different_bytes(self):
+        original = self.producer_build
+        def changed(output):
+            record = original(output)
+            record['image']['sha256'] = '0' * 64
+            return record
+        with patch.object(tool.support.producer, 'build', changed):
+            with self.assertRaisesRegex(tool.source.BuildError, 'PRODUCER_IMAGE_MISMATCH'):
+                tool.build(self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_sealed_producer_failure_never_leaves_a_partial_app(self):
+        with patch.object(tool.support.producer, 'build', side_effect=tool.source.BuildError('BUILD_COMMAND_FAILED')):
+            with self.assertRaisesRegex(tool.source.BuildError, 'BUILD_COMMAND_FAILED'):
+                tool.build(self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_normal_app_contains_the_fixed_sealed_producer(self):
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            self.assertEqual(tool.main(['--output', str(self.output)]), 2)
+        record = json.loads((self.output / 'BUILD_RECORD.json').read_text())
+        self.assertEqual(set(record['images']), {'gui', 'native', 'producer'})
+        self.assertTrue(record['producerIncluded'])
+        self.assertEqual(record['images']['producer']['path'], 'Contents/Helpers/resident-pipe')
+        self.assertEqual(record['producerBuild']['sourceCommit'], self.revision)
+        self.assertEqual(record['producerBuild']['sourceTree'], self.tree)
 
     def test_public_cli_assembles_inert_images_and_retains_blocked_record(self):
         stream = io.StringIO()
@@ -80,19 +139,20 @@ class GuiCandidateBuildTests(unittest.TestCase):
         check.validate(record, self.revision, self.tree)
         app = self.output / tool.support.APP
         self.assertEqual({p.relative_to(app).as_posix() for p in app.rglob('*') if p.is_file()},
-                         {'Contents/Info.plist', *tool.layout.IMAGES.values()})
-        for role, relative in tool.layout.IMAGES.items():
+                         {'Contents/Info.plist', *tool.layout.ASSEMBLY_IMAGES.values()})
+        for role, relative in tool.layout.ASSEMBLY_IMAGES.items():
             self.assertEqual((app / relative).read_bytes(), self.images[role])
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX permission bits required')
     def test_images_are_nonexecutable_and_output_is_private(self):
         tool.build(self.output)
         self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o700)
-        for path in tool.layout.IMAGES.values():
+        for path in tool.layout.ASSEMBLY_IMAGES.values():
             self.assertEqual(stat.S_IMODE((self.output / tool.support.APP / path).stat().st_mode), 0o600)
 
     def test_plist_tracks_highest_actual_image_minimum(self):
         self.images['gui'] = image('gui', minimum=14 << 16 | 4 << 8)
+        self.images['native'] = image('native', minimum=14 << 16 | 4 << 8)
         record = tool.build(self.output)
         plist = plistlib.loads((self.output / tool.support.APP / 'Contents/Info.plist').read_bytes())
         self.assertEqual(plist['LSMinimumSystemVersion'], record['linkLayout']['minimumMacOSDeclared'])
@@ -117,7 +177,7 @@ class GuiCandidateBuildTests(unittest.TestCase):
         for role in self.images:
             original = self.images[role]
             self.images[role] = b'PRIVATE invalid image'
-            with self.subTest(role=role), self.assertRaises(tool.layout.LayoutError):
+            with self.subTest(role=role), self.assertRaises((tool.layout.LayoutError, tool.layout.files.PackageError)):
                 tool.build(self.output)
             self.assertFalse(self.output.exists())
             self.images[role] = original
@@ -170,10 +230,31 @@ class GuiCandidateBuildTests(unittest.TestCase):
             self.assertEqual(json.loads(stream.getvalue())['code'], 'ARGUMENT_INVALID')
             self.assertNotIn('PRIVATE', stream.getvalue())
 
+    def test_ci_rejects_a_mixed_or_changed_producer_record(self):
+        record = tool.build(self.output)
+        changes = [('sourceCommit', 'd' * 40), ('sourceTree', 'd' * 40),
+                   ('producerExecuted', True), ('role', 'other'), ('flags', []),
+                   ('target', 'darwin-amd64'), ('signingPerformed', True)]
+        for field, value in changes:
+            bad = copy.deepcopy(record)
+            bad['producerBuild'][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                check.validate(bad, self.revision, self.tree)
+        for field, value in [('path', 'Contents/Helpers/other'), ('sha256', '0' * 64), ('bytes', 1)]:
+            bad = copy.deepcopy(record)
+            bad['images']['producer'][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                check.validate(bad, self.revision, self.tree)
+
+    def test_fixed_nested_path_matches_production_launch_source(self):
+        native = Path(__file__).resolve().parents[2] / tool.support.NATIVE_ROOT / 'ResidentLaunchPreparation.swift'
+        self.assertIn('Contents/Helpers/resident-pipe', native.read_text())
+        self.assertEqual(tool.layout.ASSEMBLY_IMAGES['producer'], 'Contents/Helpers/resident-pipe')
+
     def test_false_success_or_fixture_promotions_are_refused(self):
         record = tool.build(self.output)
         for field, value in [('activation', 'enabled'), ('distribution', 'ready'), ('imageExecuted', True),
-                             ('imageLoaded', True), ('producerIncluded', True), ('signingPerformed', True),
+                             ('imageLoaded', True), ('producerIncluded', False), ('signingPerformed', True),
                              ('enrollmentAccessed', True), ('productionGateClosed', False),
                              ('rustCfg', ['resident_gui_fixture']), ('swiftFixtureDefines', ['RESIDENT_LAUNCH_FIXTURE']),
                              ('cryptographicAttestation', True), ('blockers', [])]:

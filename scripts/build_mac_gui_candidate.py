@@ -1,4 +1,4 @@
-"""Build and assemble a blocked GUI/native app on a disposable CI Mac; never run it."""
+"""Build and assemble a blocked GUI/native/producer app on a disposable CI Mac; never run it."""
 from datetime import datetime, timezone
 import json
 import os
@@ -29,10 +29,11 @@ def build(output):
             env = support.environment(stage)
             swift, sdk, settings = support.toolchain(stage, env)
             built = support.compile_images(stage, env, swift, sdk)
+            built['producer'], producer_record = support.build_producer(stage, revision, tree)
             app = output / support.APP
             images = {}
             minima = []
-            for role, relative in layout.IMAGES.items():
+            for role, relative in layout.ASSEMBLY_IMAGES.items():
                 data = layout.files.read_regular(built[role], layout.LIMIT)
                 minima.append(layout.inspect(data, 'darwin-arm64', role))
                 destination = app / relative
@@ -43,20 +44,21 @@ def build(output):
             minimum = layout.files.version_string(max(minima))
             plist = plistlib.dumps(support.plist_config(stage, minimum), sort_keys=True)
             (app / 'Contents/Info.plist').write_bytes(plist)
-            matched = layout.verify(app, 'darwin-arm64', {r: v['sha256'] for r, v in images.items()})
+            matched = layout.verify_assembly(app, 'darwin-arm64', {r: v['sha256'] for r, v in images.items()})
             for name, expected in files.items():
                 source.require(source.digest((stage / name).read_bytes()) == expected, 'BUILD_INPUT_CHANGED')
             source.require(source.head() == (revision, tree), 'SOURCE_CHANGED')
-            record = {'schema': 'tether-mac-gui-candidate-build/1', 'repository': 'O2-CONNECTIVE/Tether',
+            record = {'schema': 'tether-mac-gui-candidate-build/2', 'repository': 'O2-CONNECTIVE/Tether',
                       'status': 'blocked', 'activation': 'blocked', 'distribution': 'blocked',
                       'sourceCommit': revision, 'sourceTree': tree, 'target': 'darwin-arm64',
                       'buildUTC': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                       'app': support.APP, 'settings': settings, 'cargoFlags': list(support.CARGO_FLAGS),
                       'rustCfg': ['resident_native_source'], 'swiftFixtureDefines': [],
                       'snapshotFiles': files, 'recipe': recipe, 'images': images,
+                      'producerBuild': producer_record,
                       'infoPlistSha256': source.digest(plist), 'linkLayout': matched,
                       'appAssembled': True, 'imageExecuted': False, 'imageLoaded': False,
-                      'producerIncluded': False, 'signingPerformed': False,
+                      'producerIncluded': True, 'signingPerformed': False,
                       'enrollmentAccessed': False, 'productionGateClosed': True,
                       'cryptographicAttestation': False, 'blockers': list(support.BLOCKERS)}
             (output / 'BUILD_RECORD.json').write_text(json.dumps(record, indent=2) + '\n')

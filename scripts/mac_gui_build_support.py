@@ -5,6 +5,7 @@ from pathlib import Path, PurePosixPath
 import re
 
 import build_mac_resident_source as source
+import build_mac_sealed_producer as producer
 import verify_mac_gui_link_layout as layout
 
 TARGET = 'aarch64-apple-darwin'
@@ -19,13 +20,13 @@ EXPORTS = {'_rh_resident_preparation_' + name for name in (
     'discard_observation', 'finish_active')}
 RECIPE = ('scripts/build_mac_gui_candidate.py', 'scripts/mac_gui_build_support.py',
           'scripts/build_mac_resident_source.py', 'scripts/go_ci.py',
-          'scripts/verify_mac_gui_link_layout.py', 'scripts/package_mac_agent.py')
+          'scripts/verify_mac_gui_link_layout.py', 'scripts/package_mac_agent.py',
+          'scripts/build_mac_sealed_producer.py', 'scripts/collect_go_licenses.py')
 CARGO_FLAGS = ('--locked', '--offline', '--release', '--jobs', '2',
                '--target', TARGET, '--bin', 'rescue-host-shell',
                '--features', 'custom-protocol')
-BLOCKERS = ('PRODUCER_ASSEMBLY_UNBOUND', 'THREE_IMAGE_MATERIAL_CONTRACT_PENDING',
-            'RELEASE_IDENTITY_UNCONFIGURED', 'SIGNING_UNVERIFIED',
-            'ENROLLMENT_UNCONFIGURED', 'SIGNED_PACKAGE_STARTUP_UNVERIFIED',
+BLOCKERS = ('RELEASE_IDENTITY_UNCONFIGURED', 'SIGNING_UNVERIFIED',
+            'ENROLLMENT_UNCONFIGURED', 'SIGNED_PACKAGE_STARTUP_UNVERIFIED', 'PLACEMENT_UNVERIFIED',
             'VERIFY_TO_EXEC_UNVERIFIED', 'RUNTIME_COMPATIBILITY_UNVERIFIED',
             'TOOLCHAIN_SDK_INTEGRITY_UNVERIFIED', 'NOTICE_CLOSURE_UNAUDITED',
             'BINARY_SECRET_PATH_AUDIT_PENDING')
@@ -148,3 +149,15 @@ def plist_config(stage, minimum):
             'CFBundleName': 'Tether CI Candidate', 'CFBundlePackageType': 'APPL',
             'CFBundleShortVersionString': config['version'], 'CFBundleVersion': config['version'],
             'LSMinimumSystemVersion': minimum, 'NSHighResolutionCapable': True}
+
+
+def build_producer(stage, revision, tree):
+    # Build the existing sealed command ourselves; no imported binary, path or hash.
+    output = stage / 'sealed-producer'
+    record = producer.build(output)
+    source.require(record['sourceCommit'] == revision and record['sourceTree'] == tree and
+                   record['target'] == 'darwin-arm64' and record['role'] == producer.ROLE,
+                   'PRODUCER_SOURCE_MISMATCH')
+    path = output / 'resident-pipe'
+    source.require(producer.inspect_image(path) == record['image'], 'PRODUCER_IMAGE_MISMATCH')
+    return path, record
