@@ -34,22 +34,25 @@ type localConfig struct {
 	endpoint string
 	keys     []agentkeys.Config // keys[i] belongs to gateway.Principals[i]
 	hosts    []agenttransport.EnrolledHost
+	resident []agentgateway.ResidentEnrollment // explicit fixed-scope opt-in only
 }
 
 // parseLocalConfig validates the whole document before any key is opened.
-// Every member is required; unknown, duplicate and null members are refused at
-// every depth. configPath is the document's own path, which no key may share.
+// Only resident is optional; unknown, duplicate and null members are refused at
+// every depth. Omission never promotes legacy registrations to resident access.
+// configPath is the document's own path, which no key may share.
 func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	if len(raw) == 0 || len(raw) > agentkeys.MaxTrustConfigBytes || agentwire.CheckJSON(raw, false) != nil {
 		return localConfig{}, errConfig
 	}
-	m, ok := members(raw, "gateway", "registration_endpoint", "principal_keys", "hosts")
-	if !ok {
+	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident")
+	defer wipeMembers(m)
+	if fieldErr != nil || m["gateway"] == nil || m["registration_endpoint"] == nil || m["principal_keys"] == nil || m["hosts"] == nil {
 		return localConfig{}, errConfig
 	}
-	defer wipeMembers(m)
 	var c localConfig
 	var err error
+	var ok bool
 	if c.gateway, err = agentgateway.ParseConfig(m["gateway"]); err != nil {
 		return localConfig{}, errConfig
 	}
@@ -66,7 +69,55 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	if c.hosts, ok = enrolledHosts(m["hosts"], labels, c.keys); !ok {
 		return localConfig{}, errConfig
 	}
+	if raw, present := m["resident"]; present {
+		if c.resident, ok = residentEnrollments(raw, c.hosts); !ok {
+			return localConfig{}, errConfig
+		}
+	}
 	return c, nil
+}
+
+// residentEnrollments selects an existing, unambiguous principal/host pair.
+// The fixed operation is explicit: no command, timeout, grant or policy input
+// is accepted here. All validation finishes before any native key read.
+func residentEnrollments(raw json.RawMessage, hosts []agenttransport.EnrolledHost) ([]agentgateway.ResidentEnrollment, bool) {
+	items, ok := array(raw, agentgateway.MaxPrincipals)
+	if !ok || len(items) == 0 {
+		return nil, false
+	}
+	entries := make([]agentgateway.ResidentEnrollment, 0, len(items))
+	seen := map[string]bool{}
+	for _, item := range items {
+		m, ok := members(item, "host_label", "principal_label", "operation")
+		if !ok {
+			return nil, false
+		}
+		host, hostOK := text(m["host_label"], maxLabelBytes)
+		principal, principalOK := text(m["principal_label"], maxLabelBytes)
+		operation, operationOK := text(m["operation"], 64)
+		wipeMembers(m)
+		if !hostOK || !principalOK || !operationOK || operation != agentgateway.ResidentFixedID || seen[principal] {
+			return nil, false
+		}
+		var selected *agenttransport.EnrolledHost
+		count := 0
+		for i := range hosts {
+			for _, p := range hosts[i].Principals {
+				if p == principal {
+					count++
+					if hosts[i].Label == host {
+						selected = &hosts[i]
+					}
+				}
+			}
+		}
+		if count != 1 || selected == nil {
+			return nil, false
+		}
+		seen[principal] = true
+		entries = append(entries, agentgateway.ResidentEnrollment{HostLabel: host, PrincipalLabel: principal, HostKey: selected.PublicKey.Marshal()})
+	}
+	return entries, true
 }
 
 // principalKeys requires exactly one key reference per configured principal.

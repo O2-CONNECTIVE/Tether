@@ -131,12 +131,31 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 		report(diagnostic, "設定が不正または不完全です")
 		return 2
 	}
+	// Resident signers come only from explicitly selected protected entries.
+	// Legacy host/key enrollment alone never enables the resident protocol.
+	var residentPrincipals []agenttransport.ResidentPrincipal
+	for _, entry := range cfg.resident {
+		for _, p := range principals {
+			if p.Label == entry.PrincipalLabel {
+				residentPrincipals = append(residentPrincipals, agenttransport.ResidentPrincipal{Label: p.Label, Signer: p.Signer})
+			}
+		}
+	}
 	registration, err := agenttransport.NewHandler(agenttransport.HandlerConfig{
 		Endpoint: cfg.endpoint, Hosts: cfg.hosts, Registrar: gw, Budgets: agenttransport.DefaultBudgets(),
+		ResidentPrincipals: residentPrincipals,
 	})
 	if err != nil {
 		report(diagnostic, "設定が不正または不完全です")
 		return closeUnserved(nil, gw.Close, diagnostic, 2)
+	}
+	// One-time composition happens before the listener can initialize any MCP
+	// session. Handler and gateway share the same pinned mapping and signer.
+	if len(cfg.resident) > 0 {
+		if err := gw.ConfigureResident(cfg.endpoint, registration, cfg.resident); err != nil {
+			report(diagnostic, "常駐構成を開始できませんでした。待受しません")
+			return closeUnserved(registration.Close, gw.Close, diagnostic, 2)
+		}
 	}
 	// A pilot whose lifetime ended during the reads or construction never
 	// listens; the owners built so far are closed like a listen failure.

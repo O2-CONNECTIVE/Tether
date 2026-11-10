@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
@@ -34,7 +35,7 @@ func TestResidentConfigAcceptedBeforeNativeLoads(t *testing.T) {
 
 func TestResidentConfigRefusesBeforeAnyKeyOrListener(t *testing.T) {
 	for _, tc := range []struct {
-		name string
+		name   string
 		change func(map[string]any)
 	}{
 		{"null", func(d map[string]any) { d["resident"] = nil }},
@@ -59,5 +60,34 @@ func TestResidentConfigRefusesBeforeAnyKeyOrListener(t *testing.T) {
 			}
 			checkDiagnostic(t, diagnostic.String())
 		})
+	}
+}
+
+func TestResidentConfigPinsOnlyExplicitExistingPair(t *testing.T) {
+	c, err := parseLocalConfig(encode(t, residentDoc(t)), configPath)
+	if err != nil || len(c.resident) != 1 {
+		t.Fatal("resident mapping missing", err)
+	}
+	e := c.resident[0]
+	if e.HostLabel != "mac-1" || e.PrincipalLabel != "member-1" || !bytes.Equal(e.HostKey, publicOf(t, 0x21).Marshal()) {
+		t.Fatal("resident mapping widened or substituted")
+	}
+	legacy, err := parseLocalConfig(encode(t, localDoc(t)), configPath)
+	if err != nil || len(legacy.resident) != 0 {
+		t.Fatal("legacy configuration silently promoted", err)
+	}
+}
+
+func TestResidentConfigRejectsDuplicateAndPartialEntries(t *testing.T) {
+	doc := residentDoc(t)
+	doc["resident"] = append(doc["resident"].([]any), map[string]any{"host_label": "mac-2", "principal_label": "member-2", "operation": "shell"})
+	badPartial := encode(t, doc)
+	good := string(encode(t, residentDoc(t)))
+	duplicate := strings.Replace(good, `"operation":`, `"operation":"tether-fixed-command-v1","operation":`, 1)
+	for _, raw := range [][]byte{badPartial, []byte(duplicate)} {
+		c, err := parseLocalConfig(raw, configPath)
+		if err == nil || len(c.resident) != 0 || len(c.keys) != 0 {
+			t.Fatal("invalid input published partial configuration")
+		}
 	}
 }
