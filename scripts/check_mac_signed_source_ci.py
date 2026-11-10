@@ -91,8 +91,12 @@ def run():
                    '--identifier', release.IDENTIFIERS['producer'], '--certificate-sha1', 'C' * 40]
         phase('adhoc-refusal')
         refused = completed(request, env)
+        reason = refused.stderr.strip()
+        if re.fullmatch(r'mac-release-signature: [a-z-]{1,80}', reason):
+            print('SIGNED_SOURCE_REFUSAL=' + reason.split(': ', 1)[1], file=sys.stderr)
+        print('SIGNED_SOURCE_REFUSAL_EXIT=' + str(refused.returncode), file=sys.stderr)
         if refused.returncode != 2 or refused.stdout or \
-                refused.stderr.strip() != 'mac-release-signature: signature-or-identity-invalid':
+                reason != 'mac-release-signature: signature-or-identity-invalid':
             raise ValueError('untrusted compiler output was not rejected')
         phase('argument-refusal')
         malformed = completed(request + ['--unknown', 'PRIVATE'], env)

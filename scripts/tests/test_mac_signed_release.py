@@ -8,6 +8,7 @@ import plistlib
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -41,6 +42,9 @@ class SignedReleaseTests(unittest.TestCase):
         self.patch(tool.release, 'compile_observer', lambda *a: Path('/observer'))
         self.patch(tool.release, 'sign', self.sign)
         self.patch(tool.release, 'observe', self.observe)
+        if os.name == 'nt':
+            # Model only the Darwin mode observation; Windows chmod has no POSIX bits.
+            self.patch(tool.release, 'stat', SimpleNamespace(S_IMODE=lambda mode: 0o700))
         self.patch(tool.support, 'compile_images', self.compile)
 
     def patch(self, owner, name, value):
@@ -201,6 +205,21 @@ class SignedReleaseTests(unittest.TestCase):
                 tool.release.inventory(app, hashes)
             path.unlink()
 
+    @unittest.skipUnless(os.name == 'posix', 'real POSIX executable mode required')
+    def test_real_posix_permissions_are_required_for_each_signed_image(self):
+        self.build()
+        app = self.output / tool.APP
+        hashes = {r: tool.source.digest((app / p).read_bytes()) for r, p in tool.layout.ASSEMBLY_IMAGES.items()}
+        tool.release.inventory(app, hashes)
+        for role, relative in tool.layout.ASSEMBLY_IMAGES.items():
+            path = app / relative
+            for mode in (0o600, 0o755):
+                path.chmod(mode)
+                with self.subTest(role=role, mode=mode), self.assertRaisesRegex(tool.source.BuildError, 'SIGNED_IMAGE_CHANGED'):
+                    tool.release.inventory(app, hashes)
+                path.chmod(0o700)
+        tool.release.inventory(app, hashes)
+
     def test_cli_refuses_imported_provider_manifest_producer_and_notarization(self):
         for option in ('--producer', '--provider', '--manifest', '--notarize', '--entitlements', '--flags'):
             stream = io.StringIO()
@@ -219,7 +238,7 @@ class SignedCommandTests(unittest.TestCase):
         for role, args in zip(tool.release.IDENTIFIERS, calls):
             self.assertEqual(args, ['/usr/bin/codesign', '--force', '--sign', 'C' * 40,
                 '--identifier', tool.release.IDENTIFIERS[role], '--options', 'runtime',
-                '--timestamp', '--generate-entitlement-der', '/owned/code'])
+                '--timestamp', '--generate-entitlement-der', str(Path('/owned/code'))])
             self.assertNotIn('--deep', args)
             self.assertNotIn('--entitlements', args)
 
