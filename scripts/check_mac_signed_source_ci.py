@@ -98,13 +98,24 @@ def run():
         if refused.returncode != 2 or refused.stdout or \
                 reason != 'mac-release-signature: signature-or-identity-invalid':
             raise ValueError('untrusted compiler output was not rejected')
+        phase('canonical-path-refusals')
+        (stage / 'alias').symlink_to(stage, target_is_directory=True)
+        (stage / 'nested').mkdir()
+        for path in (stage / 'alias/resident-pipe', stage / 'nested/../resident-pipe'):
+            noncanonical = list(request)
+            noncanonical[2] = str(path)
+            result = completed(noncanonical, env)
+            if result.returncode != 2 or result.stdout or \
+                    result.stderr.strip() != 'mac-release-signature: noncanonical-path':
+                raise ValueError('noncanonical path was not rejected')
         phase('argument-refusal')
         malformed = completed(request + ['--unknown', 'PRIVATE'], env)
-        if malformed.returncode != 2 or malformed.stdout or 'PRIVATE' in malformed.stderr:
+        if malformed.returncode != 2 or malformed.stdout or \
+                malformed.stderr.strip() != 'mac-release-signature: invalid-arguments':
             raise ValueError('unexpected helper arguments were not rejected')
     print(json.dumps({'fixture': 'mac-signed-release-source', 'normalTypecheck': True,
                       'syntheticReleaseCompiled': True, 'providerCompileRefusals': 2,
-                      'adHocRefusals': 1, 'argumentRefusals': 1, 'signingPerformed': False,
+                      'adHocRefusals': 1, 'canonicalPathRefusals': 2, 'argumentRefusals': 1, 'signingPerformed': False,
                       'productExecuted': False, 'productLoaded': False,
                       'scope': 'compiler and unsigned refusal only; genuine Developer ID unverified'}))
 

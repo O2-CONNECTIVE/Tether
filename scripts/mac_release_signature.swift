@@ -6,6 +6,7 @@
 // https://developer.apple.com/documentation/lightweightcoderequirements/validationresult
 // https://developer.apple.com/documentation/security/signing-information-dictionary-keys
 import Foundation
+import Darwin
 import Security
 import CryptoKit
 import LightweightCodeRequirements
@@ -42,8 +43,17 @@ private struct Request {
             throw Refusal("invalid-arguments")
         }
         let url = URL(fileURLWithPath: rawPath)
-        guard url.standardizedFileURL.path == rawPath,
-              url.resolvingSymlinksInPath().path == rawPath else { throw Refusal("noncanonical-path") }
+        // Foundation may shorten /private paths, unlike POSIX realpath and
+        // Python Path.resolve used by the recipe. Compare actual canonical
+        // UTF-8 bytes, retaining rejection of symlinks and redundant components.
+        guard !rawPath.utf8.contains(0), let canonical = realpath(rawPath, nil) else {
+            throw Refusal("noncanonical-path")
+        }
+        defer { free(canonical) }
+        let canonicalBytes = UnsafeRawPointer(canonical).assumingMemoryBound(to: UInt8.self)
+        guard rawPath.utf8.elementsEqual(UnsafeBufferPointer(start: canonicalBytes, count: strlen(canonical))) else {
+            throw Refusal("noncanonical-path")
+        }
         let names = [
             "com.o2connective.rescue-host.resident-pipe": "resident-pipe",
             "com.o2connective.rescue-host.resident-preparation": "libResidentPreparation.dylib",

@@ -53,6 +53,6 @@ python -OO -m unittest scripts.tests.test_mac_signed_release -v
 
 匿名compiler/signature fixtureは順序、不一致、改変、失敗時cleanupを検証します。初回の未実装import失敗と、native差替えに対する同じ公開build境界のred→greenは別の証拠として記録します。fixtureはDeveloper ID署名や署名済み起動の成立を証明しません。
 
-[Mac native source CI](../.github/workflows/mac-native-source.yml)では署名observerの実compile、通常nil sourceのtypecheck、合成identityを一時compileするSwift libraryのABI、provider欠落/重複のcompile拒否、compilerのad-hoc outputをDeveloper IDと認めない拒否を確認します。合成libraryはload/launch/uploadせず一時directoryとともに破棄します。実Team・証明書・署名credentialはCIへ追加しません。従来の通常GUI三image非実行buildも維持します。
+[Mac native source CI](../.github/workflows/mac-native-source.yml)では署名observerの実compile、通常nil sourceのtypecheck、合成identityを一時compileするSwift libraryのABI、provider欠落/重複のcompile拒否、symlink/非正規pathの拒否、compilerのad-hoc outputをDeveloper IDと認めない拒否を確認します。合成libraryはload/launch/uploadせず一時directoryとともに破棄します。実Team・証明書・署名credentialはCIへ追加しません。従来の通常GUI三image非実行buildも維持します。
 
 Apple資料: [配布署名](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac)、[OnDiskCodeRequirement](https://developer.apple.com/documentation/lightweightcoderequirements/ondiskcoderequirement)、[署名情報](https://developer.apple.com/documentation/security/signing-information-dictionary-keys)。
