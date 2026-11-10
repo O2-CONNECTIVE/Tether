@@ -3,13 +3,35 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import sys
 import tempfile
+from unittest.mock import patch
 
 import mac_signed_release_support as release
-from check_mac_enrollment_lookup import command, completed
+from check_mac_enrollment_lookup import completed
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def command(arguments, env, cwd=None):
+    result = completed(arguments, env, cwd)
+    if result.returncode:
+        # This CI-only driver compiles checked-in or anonymous generated source.
+        # Show bounded compiler error headlines, never source lines or raw paths.
+        headlines = []
+        for line in result.stderr.splitlines():
+            match = re.search(r'(?:error|warning): (.*)', line)
+            if match:
+                headlines.append(re.sub(r'(?:[A-Za-z]:)?/[^\s:]+', '<path>', match.group(1))[:300])
+        for line in headlines[:12]:
+            print('SIGNED_SOURCE_COMPILER_DIAGNOSTIC=' + line, file=sys.stderr)
+        raise ValueError('fixture command failed')
+    return result.stdout
+
+
+def phase(name):
+    print('SIGNED_SOURCE_PHASE=' + name, file=sys.stderr)
 
 
 def run():
@@ -25,7 +47,10 @@ def run():
         observer_source = stage / release.OBSERVER
         observer_source.parent.mkdir()
         observer_source.write_bytes((ROOT / release.OBSERVER).read_bytes())
-        observer = release.compile_observer(stage, env, swift, sdk)
+        phase('observer-compile')
+        with patch.object(release.source, 'command',
+                          lambda args, cwd, env: command(args, env, cwd).encode()):
+            observer = release.compile_observer(stage, env, swift, sdk)
         # Anonymous compile fixture only. Not a product build or approval record.
         provider = stage / release.PROVIDER
         provider.parent.mkdir()
@@ -36,15 +61,19 @@ def run():
                 '-module-cache-path', str(stage / 'swift-cache'),
                 '-import-objc-header', str(native / 'ResidentPreparation.h')]
         # Ordinary production still compiles without the generated input.
+        phase('normal-typecheck')
         command(base + ['-typecheck'] + sources, env)
         signed = base + ['-D', 'TETHER_SIGNED_RELEASE']
         output = stage / 'libReleaseSourceFixture.dylib'
+        phase('generated-provider-compile')
         command(signed + ['-emit-library', '-no-toolchain-stdlib-rpath'] + sources + [str(provider),
                           '-Xlinker', '-weak_framework', '-Xlinker', 'LightweightCodeRequirements',
                           '-o', str(output)], env)
+        phase('abi-exports')
         symbols = command(['/usr/bin/nm', '-gUj', str(output)], env).splitlines()
         if {line.strip() for line in symbols if line.startswith('_rh_')} != release.support.EXPORTS:
             raise ValueError('release variant changed the C ABI')
+        phase('provider-compile-refusals')
         missing = completed(signed + ['-typecheck'] + sources, env)
         duplicate = stage / 'DuplicateIdentity.swift'
         duplicate.write_bytes(provider.read_bytes())
@@ -56,13 +85,16 @@ def run():
         untrusted_source = stage / 'untrusted.swift'
         untrusted_source.write_text('print("unused fixture")\n')
         untrusted = stage / 'resident-pipe'
+        phase('adhoc-fixture-compile')
         command([swift, '-sdk', sdk, '-target', 'arm64-apple-macosx27.0', str(untrusted_source), '-o', str(untrusted)], env)
         request = [str(observer), '--path', str(untrusted), '--team-id', 'FIXTURE123',
                    '--identifier', release.IDENTIFIERS['producer'], '--certificate-sha1', 'C' * 40]
+        phase('adhoc-refusal')
         refused = completed(request, env)
         if refused.returncode != 2 or refused.stdout or \
                 refused.stderr.strip() != 'mac-release-signature: signature-or-identity-invalid':
             raise ValueError('untrusted compiler output was not rejected')
+        phase('argument-refusal')
         malformed = completed(request + ['--unknown', 'PRIVATE'], env)
         if malformed.returncode != 2 or malformed.stdout or 'PRIVATE' in malformed.stderr:
             raise ValueError('unexpected helper arguments were not rejected')
