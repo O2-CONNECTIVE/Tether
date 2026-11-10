@@ -5,23 +5,29 @@ import plistlib
 import sys
 
 import build_mac_gui_candidate as builder
+import check_mac_sealed_producer_ci as sealed_check
 
 
 def validate(record, revision, tree):
-    expected = {'schema': 'tether-mac-gui-candidate-build/1', 'repository': 'O2-CONNECTIVE/Tether',
+    expected = {'schema': 'tether-mac-gui-candidate-build/2', 'repository': 'O2-CONNECTIVE/Tether',
                 'status': 'blocked', 'activation': 'blocked', 'distribution': 'blocked',
                 'sourceCommit': revision, 'sourceTree': tree, 'target': 'darwin-arm64',
                 'app': builder.support.APP, 'cargoFlags': list(builder.support.CARGO_FLAGS),
                 'rustCfg': ['resident_native_source'], 'swiftFixtureDefines': [],
                 'appAssembled': True, 'imageExecuted': False, 'imageLoaded': False,
-                'producerIncluded': False, 'signingPerformed': False, 'enrollmentAccessed': False,
+                'producerIncluded': True, 'signingPerformed': False, 'enrollmentAccessed': False,
                 'productionGateClosed': True, 'cryptographicAttestation': False,
                 'blockers': list(builder.support.BLOCKERS)}
     for key, value in expected.items():
         if type(record.get(key)) is not type(value) or record[key] != value:
             raise ValueError('blocked GUI build record mismatch')
-    if set(record['images']) != {'gui', 'native'} or set(record['recipe']) != set(builder.support.RECIPE):
+    if set(record['images']) != {'gui', 'native', 'producer'} or set(record['recipe']) != set(builder.support.RECIPE):
         raise ValueError('GUI build inventory mismatch')
+    producer = record['producerBuild']
+    sealed_check.validate_result(2, sealed_check.builder.summary(producer), producer, revision, tree)
+    if record['images']['producer'] != {'path': builder.layout.ASSEMBLY_IMAGES['producer'],
+            'sha256': producer['image']['sha256'], 'bytes': producer['image']['bytes']}:
+        raise ValueError('GUI and producer material mismatch')
 
 
 def run():
@@ -35,11 +41,11 @@ def run():
     if persisted != record:
         raise ValueError('GUI record persistence mismatch')
     app = output / record['app']
-    expected_files = {'Contents/Info.plist', *builder.layout.IMAGES.values()}
+    expected_files = {'Contents/Info.plist', *builder.layout.ASSEMBLY_IMAGES.values()}
     actual_files = {p.relative_to(app).as_posix() for p in app.rglob('*') if p.is_file()}
     if actual_files != expected_files:
         raise ValueError('assembled GUI file inventory mismatch')
-    for role, relative in builder.layout.IMAGES.items():
+    for role, relative in builder.layout.ASSEMBLY_IMAGES.items():
         data = builder.layout.files.read_regular(app / relative, builder.layout.LIMIT)
         if record['images'][role] != {'path': relative, 'sha256': builder.source.digest(data), 'bytes': len(data)}:
             raise ValueError('assembled GUI image mismatch')
@@ -47,14 +53,14 @@ def run():
             raise ValueError('retained GUI image is executable')
     if builder.source.digest((app / 'Contents/Info.plist').read_bytes()) != record['infoPlistSha256']:
         raise ValueError('assembled GUI plist mismatch')
-    matched = builder.layout.verify(app, 'darwin-arm64', builder.summary(record)['imageHashes'])
+    matched = builder.layout.verify_assembly(app, 'darwin-arm64', builder.summary(record)['imageHashes'])
     if matched != record['linkLayout']:
         raise ValueError('actual GUI link layout mismatch')
     plist = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
     if plist['LSMinimumSystemVersion'] != matched['minimumMacOSDeclared']:
         raise ValueError('actual GUI minimum OS mismatch')
     print(json.dumps({'check': 'mac-gui-candidate-build', **builder.summary(record),
-                      'appAssembled': True, 'imageExecuted': False, 'producerIncluded': False,
+                      'appAssembled': True, 'imageExecuted': False, 'producerIncluded': True,
                       'productionGateClosed': True}))
 
 

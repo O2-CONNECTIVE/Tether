@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   gui-candidate:
-    name: Fixed GUI and Swift app assembly without execution
+    name: Same-source GUI, Swift and sealed producer app assembly
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -47,6 +47,11 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.1'
+      - name: Set up fixed Go for the same-source sealed producer
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
       - name: Select fixed Rust on disposable runner
         run: |
           rustup toolchain install 1.99.1 --profile minimal --no-self-update
@@ -55,7 +60,8 @@ jobs:
         run: |
           npm ci --prefix ui/tauri --ignore-scripts --no-audit --no-fund
           cargo fetch --locked --manifest-path ui/tauri/src-tauri/Cargo.toml
-      - name: Build and verify inert app without producer, signing or launch
+          python scripts/go_ci.py prepare
+      - name: Build and verify all three app images without signing or launch
         run: |
           mkdir -p "$RUNNER_TEMP/gui-candidate-evidence"
           python scripts/check_mac_gui_candidate_ci.py "$RUNNER_TEMP/gui-candidate" | tee "$RUNNER_TEMP/gui-candidate-evidence/gui-build.json"

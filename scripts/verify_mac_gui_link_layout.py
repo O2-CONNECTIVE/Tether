@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import struct
+import plistlib
 
 # -I execution deliberately excludes the caller's import path.
 import sys
@@ -14,6 +15,7 @@ import package_mac_agent as files
 
 IMAGES = {'gui': 'Contents/MacOS/rescue-host-shell',
           'native': 'Contents/Frameworks/libResidentPreparation.dylib'}
+ASSEMBLY_IMAGES = {**IMAGES, 'producer': 'Contents/Helpers/resident-pipe'}
 NATIVE = '@rpath/libResidentPreparation.dylib'
 FRAMEWORKS = '@executable_path/../Frameworks'
 SWIFT_ROOT = '/usr/lib/swift'
@@ -63,10 +65,10 @@ def swift_library(value):
 
 
 def inspect(data, target, role):
-    require(len(data) >= 32, 'LINK_MACHO_INVALID')
+    require(role in ASSEMBLY_IMAGES and len(data) >= 32, 'LINK_MACHO_INVALID')
     magic, cpu, subtype, kind, count, size, flags, reserved = struct.unpack_from('<8I', data)
     require(magic == 0xfeedfacf and cpu == files.TARGETS[target] and reserved == 0 and
-            kind == (2 if role == 'gui' else 6) and 0 < count <= 4096 and
+            kind == (6 if role == 'native' else 2) and 0 < count <= 4096 and
             8 * count <= size <= min(len(data) - 32, 1024 * 1024), 'LINK_MACHO_INVALID')
     offset, end = 32, 32 + size
     minimum, identity, dependencies, rpaths, linker = None, [], [], [], []
@@ -99,18 +101,18 @@ def inspect(data, target, role):
             require(code in OPAQUE, 'LINK_COMMAND_UNSUPPORTED')
         offset += length
     require(offset == end and minimum is not None, 'LINK_PLATFORM_INVALID')
-    require(identity == ([] if role == 'gui' else [NATIVE]), 'LINK_IDENTITY_INVALID')
-    require(linker in ([], ['/usr/lib/dyld']) if role == 'gui' else not linker,
+    require(identity == ([NATIVE] if role == 'native' else []), 'LINK_IDENTITY_INVALID')
+    require(linker in ([], ['/usr/lib/dyld']) if role != 'native' else not linker,
             'LINK_DYNAMIC_LINKER_INVALID')
     require(len(rpaths) == len(set(rpaths)) and len(dependencies) == len({v for _, v in dependencies}),
             'LINK_DUPLICATE_INVALID')
-    allowed_rpaths = {SWIFT_ROOT} | ({FRAMEWORKS} if role == 'gui' else set())
+    allowed_rpaths = set() if role == 'producer' else {SWIFT_ROOT} | ({FRAMEWORKS} if role == 'gui' else set())
     require(set(rpaths) <= allowed_rpaths and (role != 'gui' or FRAMEWORKS in rpaths),
             'LINK_RPATH_INVALID')
     native_links = [(code, value) for code, value in dependencies if value == NATIVE]
     require(native_links == ([(0xc, NATIVE)] if role == 'gui' else []), 'LINK_NATIVE_DEPENDENCY_INVALID')
     for _, value in dependencies:
-        require(value == NATIVE or system_library(value) or swift_library(value),
+        require(system_library(value) or (role != 'producer' and (value == NATIVE or swift_library(value))),
                 'LINK_DEPENDENCY_INVALID')
         if swift_library(value):
             require(SWIFT_ROOT in rpaths, 'LINK_SWIFT_RPATH_MISSING')
@@ -143,6 +145,39 @@ def verify(app, target, hashes):
             'target': target, 'imageHashes': hashes, 'minimumMacOSDeclared': files.version_string(max(minima)),
             'imageLoaded': False, 'runtimeVerified': False, 'productionGateClosed': True,
             'unverifiedScopes': GAPS.copy()}
+
+
+def verify_assembly(app, target, hashes):
+    """Three fixed product images, not an arbitrary artifact import or launch gate."""
+    require(set(hashes) == set(ASSEMBLY_IMAGES), 'ASSEMBLY_EXPECTATION_INVALID')
+    app = Path(os.path.abspath(app))
+    result = verify(app, target, {role: hashes[role] for role in IMAGES})
+    expected = {'Contents': {'MacOS', 'Frameworks', 'Helpers', 'Info.plist'},
+                'Contents/MacOS': {'rescue-host-shell'},
+                'Contents/Frameworks': {'libResidentPreparation.dylib'},
+                'Contents/Helpers': {'resident-pipe'}}
+    files.directory_chain(app)
+    require({p.name for p in app.iterdir()} == {'Contents'}, 'ASSEMBLY_INVENTORY_INVALID')
+    for relative, names in expected.items():
+        directory = app / relative
+        files.directory_chain(directory)
+        require({p.name for p in directory.iterdir()} == names, 'ASSEMBLY_INVENTORY_INVALID')
+    minima = []
+    for role, relative in ASSEMBLY_IMAGES.items():
+        expected_hash = hashes[role]
+        require(isinstance(expected_hash, str) and re.fullmatch('[0-9a-f]{64}', expected_hash),
+                'ASSEMBLY_EXPECTATION_INVALID')
+        data = files.read_regular(app / relative, LIMIT)
+        require(hashlib.sha256(data).hexdigest() == expected_hash, 'LINK_IMAGE_HASH_MISMATCH')
+        minima.append(inspect(data, target, role))
+    minimum = files.version_string(max(minima))
+    plist = plistlib.loads(files.read_regular(app / 'Contents/Info.plist', 64 * 1024))
+    require(isinstance(plist, dict) and plist.get('CFBundleExecutable') == 'rescue-host-shell' and
+            plist.get('CFBundleIdentifier') == 'com.o2connective.rescue-host.shell' and
+            plist.get('CFBundlePackageType') == 'APPL' and
+            plist.get('LSMinimumSystemVersion') == minimum, 'ASSEMBLY_PLIST_INVALID')
+    return {**result, 'check': 'mac-gui-producer-assembly', 'imageHashes': dict(hashes),
+            'minimumMacOSDeclared': minimum, 'producerIncluded': True}
 
 
 class Parser(argparse.ArgumentParser):

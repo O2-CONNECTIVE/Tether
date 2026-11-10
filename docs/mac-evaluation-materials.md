@@ -88,6 +88,6 @@ source manifest と各 file の hash / 型検査は取得した同じ bytes に�
 python -m unittest scripts.tests.test_mac_evaluation_candidate -v
 ```
 
-実候補へ進めるには、Mac の source-pinned GUI と sealed producer の build recipe、二つの image を同じ release に結ぶ記録、Mac 対象の依存 graph と必要本文、binary の秘密・path監査、recipient 説明を確定する必要があります。その後も署名 publisher、OS launch enforcement、実 enrollment、受領者環境での実行と回収、配布の許可は別の工程です。この照合器や合成 CI の成功で #24 全体を完了にしません。
+後続の[通常GUI組立](mac-gui-candidate-build.md)は同じsourceのGUI・Swift・sealed producerを三imageのbuild record v2で対応づけます。この評価材料v1とは別契約です。配布候補へ進めるには、Mac対象の依存graphと必要本文、binaryの秘密・path監査、recipient説明を確定する必要があります。その後も署名 publisher、OS launch enforcement、実 enrollment、受領者環境での実行と回収、配布の許可は別の工程です。この照合器や合成 CI の成功で #24 全体を完了にしません。
 
-[GUI/Swift link-layout 照合](mac-gui-link-layout.md)は後続の固定 dylib 配置を対象とする独立した読取専用検査です。本 v1 の二 image 契約は変更せず、dylib を含む三 image の完成候補を両 tool の成功だけで認定しません。
+[GUI/Swift link-layout 照合](mac-gui-link-layout.md)は後続の固定 dylib 配置を対象とする独立した読取専用検査です。本 v1 の二 image 契約は変更せず、dylibを含む三imageの配布候補を両toolや組立recordの成功だけで認定しません。

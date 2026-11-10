@@ -1,6 +1,7 @@
 """Synthetic Mach-O bytes only; no compiler, native load, signing or network."""
 import hashlib
 import json
+import plistlib
 import os
 from pathlib import Path
 import struct
@@ -231,6 +232,106 @@ class LinkLayoutTests(unittest.TestCase):
         result = self.run_tool()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertFalse(json.loads(result.stdout)['runtimeVerified'])
+
+
+class ThreeImageAssemblyTests(unittest.TestCase):
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        import verify_mac_gui_link_layout as layout
+        self.tool = layout
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.app = Path(temporary.name).resolve() / 'Tether.app'
+        self.hashes = {}
+        for role in layout.ASSEMBLY_IMAGES:
+            self.write(role, image(role) if role != 'producer' else self.producer())
+        self.plist = self.app / 'Contents/Info.plist'
+        self.plist.write_bytes(plistlib.dumps({'CFBundleExecutable': 'rescue-host-shell',
+            'CFBundleIdentifier': 'com.o2connective.rescue-host.shell', 'CFBundlePackageType': 'APPL',
+            'LSMinimumSystemVersion': '27.0.0'}))
+
+    def producer(self, extra=()):
+        commands = [struct.pack('<6I', 0x32, 24, 1, 27 << 16, 27 << 16, 0),
+                    text_command(0xe, '/usr/lib/dyld'), dylib(0xc, '/usr/lib/libSystem.B.dylib')]
+        return image('gui', extra, commands=commands)
+
+    def write(self, role, data):
+        path = self.app / self.tool.ASSEMBLY_IMAGES[role]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self.hashes[role] = hashlib.sha256(data).hexdigest()
+
+    def verify(self):
+        return self.tool.verify_assembly(self.app, 'darwin-arm64', self.hashes)
+
+    def test_all_three_fixed_images_are_required_and_stay_blocked(self):
+        record = self.verify()
+        self.assertEqual(record['imageHashes'], self.hashes)
+        self.assertEqual(record['status'], 'blocked')
+        self.assertTrue(record['producerIncluded'])
+        self.assertTrue(record['productionGateClosed'])
+        self.assertFalse(record['imageLoaded'])
+        self.assertFalse(record['runtimeVerified'])
+        del self.hashes['producer']
+        with self.assertRaises(self.tool.LayoutError):
+            self.verify()
+
+    def test_producer_hash_role_architecture_and_private_loader_inputs_are_refused(self):
+        original = self.hashes['producer']
+        self.hashes['producer'] = '0' * 64
+        with self.assertRaises(self.tool.LayoutError):
+            self.verify()
+        self.hashes['producer'] = original
+        wrong_arch = bytearray(self.producer())
+        struct.pack_into('<I', wrong_arch, 4, 0x1000007)
+        for data in (image('native'), wrong_arch,
+                     self.producer([text_command(0x8000001c, '/PRIVATE')]),
+                     self.producer([text_command(0x8000001c, RPATH)]),
+                     self.producer([dylib(0xc, NATIVE)]),
+                     self.producer([dylib(0xc, SWIFT)]),
+                     self.producer([dylib(0xc, '/PRIVATE/lib.dylib')]),
+                     self.producer([text_command(0x27, 'DYLD_INSERT_LIBRARIES=/PRIVATE')])):
+            self.write('producer', data)
+            with self.subTest(data=data[:40]), self.assertRaises(self.tool.LayoutError):
+                self.verify()
+
+    def test_extra_file_directory_missing_producer_or_wrong_plist_is_refused(self):
+        for relative in ('extra', 'Contents/extra', 'Contents/MacOS/extra', 'Contents/Helpers/extra'):
+            path = self.app / relative
+            for directory in (False, True):
+                path.mkdir() if directory else path.write_bytes(b'extra')
+                with self.subTest(path=relative, directory=directory), self.assertRaises(self.tool.LayoutError):
+                    self.verify()
+                path.rmdir() if directory else path.unlink()
+        plist = plistlib.loads(self.plist.read_bytes())
+        for key in ('CFBundleExecutable', 'CFBundleIdentifier', 'CFBundlePackageType', 'LSMinimumSystemVersion'):
+            bad = dict(plist, **{key: 'other'})
+            self.plist.write_bytes(plistlib.dumps(bad))
+            with self.subTest(key=key), self.assertRaises(self.tool.LayoutError):
+                self.verify()
+        self.plist.write_bytes(plistlib.dumps(plist))
+        (self.app / self.tool.ASSEMBLY_IMAGES['producer']).unlink()
+        with self.assertRaises(self.tool.LayoutError):
+            self.verify()
+
+    @unittest.skipUnless(os.name == 'posix', 'symlink fixture requires POSIX')
+    def test_producer_and_helper_directory_symlinks_are_refused(self):
+        path = self.app / self.tool.ASSEMBLY_IMAGES['producer']
+        data = path.read_bytes()
+        outside = self.app.parent / 'outside'
+        outside.write_bytes(data)
+        path.unlink()
+        path.symlink_to(outside)
+        with self.assertRaises(self.tool.files.PackageError):
+            self.verify()
+        path.unlink()
+        path.write_bytes(data)
+        helpers = path.parent
+        moved = self.app.parent / 'moved'
+        helpers.rename(moved)
+        helpers.symlink_to(moved, target_is_directory=True)
+        with self.assertRaises(self.tool.files.PackageError):
+            self.verify()
 
 
 if __name__ == '__main__':

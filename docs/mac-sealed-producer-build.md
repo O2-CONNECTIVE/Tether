@@ -25,7 +25,7 @@ schemaは `tether-mac-sealed-producer-build/1`。source SHA/tree、UTC build時�
 
 ## 実接続までの残工程
 
-1. [GUI/Swiftの非実行app組立](mac-gui-candidate-build.md)の二imageと固定producerを、新しい三image材料契約・Mac notice閉包で同じ候補へ対応づけます。現native fixtureの一時dylib/絶対rpathを配布物へ流用しません。
+1. [通常GUIの非実行app組立](mac-gui-candidate-build.md)が本builderを同じsource SHA/treeで呼び、GUI・Swift・producerを固定nested pathの一つのappへまとめます。三imageのbytesと配置は外側build record v2で対応づけます。Mac notice閉包と配布材料受入は残件で、現native fixtureの一時dylib/絶対rpathを配布物へ流用しません。
 2. 正規publisher Team/Developer ID、固定producer signing IDと署名後CDHashのrelease構成。`ApprovedRelease.production=nil` はこの変更で不変。現在の未署名image hashをtrustへ昇格しません。
 3. 実利用者の同意、保護された固定enrollment、host/client認証と失効の用意。実credentialの生成/入力/保存、永続accessは別許可・別検証です。
 4. [同じNativeSessionの通常起動source](mac-gui-trusted-startup.md)を正規releaseへ繋ぎ、同じimageをOS launch enforcementで起動し、ON/OFF・作業/結果・元owner回収を確認します。nativeをlinkしない既存buildはunboundのままです。
