@@ -18,6 +18,8 @@ import { relay } from "../probe/worker.mjs";
 export const MCP_PATH = "/mcp";
 export const REGISTER_PATH = "/tether-agent/v1/register";
 export const SUBPROTOCOL = "rescue-agent-register.v1";
+export const RESIDENT_SUBPROTOCOL = "rescue-agent-resident.v1";
+export const RESIDENT_GATE_VALUE = "open-resident-tether-control";
 export const ASSERTION_HEADER = "Cf-Access-Jwt-Assertion";
 export const GATE_VALUE = "open-native-tether-gateway";
 // URL for binding.fetch. The VPC Service sends to its own fixed host and port,
@@ -104,7 +106,7 @@ async function route(request, env, rt) {
   // No Origin is configured for either Go handler, so it is refused here
   // rather than dropped.
   if (request.headers.has("Origin")) return deny(rt, 403, "origin not allowed");
-  return mcp ? forwardMcp(request, binding, rt) : forwardRegister(request, binding, rt);
+  return mcp ? forwardMcp(request, binding, rt) : forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
 }
 
 async function forwardMcp(request, binding, rt) {
@@ -169,16 +171,17 @@ function replyHeaders(upstream) {
   return out;
 }
 
-async function forwardRegister(request, binding, rt) {
+async function forwardRegister(request, binding, rt, residentEnabled) {
   if (REGISTER_FORBIDDEN.some((name) => request.headers.has(name))) {
     return deny(rt, 403, "registration accepts no cookie, authorization or Access assertion");
   }
-  if (request.headers.get("Sec-WebSocket-Protocol") !== SUBPROTOCOL) {
+  const protocol = request.headers.get("Sec-WebSocket-Protocol");
+  if (protocol !== SUBPROTOCOL && !(residentEnabled && protocol === RESIDENT_SUBPROTOCOL)) {
     return deny(rt, 400, "the fixed registration subprotocol is required");
   }
   const response = await withDeadline(rt, LIMITS.upgradeMs, async (signal) => {
     const answer = await binding.fetch(UPSTREAM_ORIGIN + REGISTER_PATH, {
-      method: "GET", headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": SUBPROTOCOL }, redirect: "manual", signal,
+      method: "GET", headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": protocol }, redirect: "manual", signal,
     });
     // An upgrade that arrives after the deadline is closed, never relayed.
     if (signal.aborted) {
@@ -195,7 +198,7 @@ async function forwardRegister(request, binding, rt) {
     const retry = response.headers?.get("Retry-After");
     return deny(rt, status, "registration upstream refused the WebSocket", status === 503 && /^\d{1,4}$/.test(retry ?? "") ? { "Retry-After": retry } : {});
   }
-  if (response.headers.get("Sec-WebSocket-Protocol") !== SUBPROTOCOL) {
+  if (response.headers.get("Sec-WebSocket-Protocol") !== protocol) {
     await discard(response, 1002, "registration subprotocol mismatch");
     return deny(rt, 502, "registration upstream subprotocol mismatch");
   }
@@ -203,7 +206,7 @@ async function forwardRegister(request, binding, rt) {
   // handshake are the Go gateway's and the Mac host's.
   const [client, server] = rt.newPair();
   relay(server, upstream, rt, LIMITS);
-  return new rt.Response(null, { status: 101, webSocket: client, headers: { "Sec-WebSocket-Protocol": SUBPROTOCOL } });
+  return new rt.Response(null, { status: 101, webSocket: client, headers: { "Sec-WebSocket-Protocol": protocol } });
 }
 
 function closeQuietly(ws, code, reason) {
