@@ -20,7 +20,15 @@ fn join(owner: &NativeOuterOwner) -> NativeOuterJoined {
         pause();
     }
 }
+#[cfg(resident_launch_fixture)]
+#[path = "startup_outer_checks.rs"]
+mod startup;
 pub(crate) fn run(mode: &str) {
+    #[cfg(resident_launch_fixture)]
+    if matches!(mode, "outer-startup-held" | "outer-startup-panic") {
+        startup::run(mode);
+        return;
+    }
     if matches!(mode, "outer-normal" | "outer-normal-prejoined") {
         let (mut producer, source) = NativeIoSupervisor::prepare().unwrap();
         if mode == "outer-normal-prejoined" {
@@ -35,17 +43,30 @@ pub(crate) fn run(mode: &str) {
             passed += 1;
         };
         check(source.is_err());
-        check(!owner.request_exit());
+        let immediate = owner.request_exit();
+        check(
+            !immediate
+                || (owner.outcome() == Some(Outcome::NotSpawned)
+                    && owner.poll_join().is_some()),
+        );
         let joined = join(&owner);
         check(
-            joined.native().outcome() == NativeOutcome::Refused
+            joined.native().outcome() == NativeOutcome::UnavailableBeforeOwnership
                 && !joined.native().terminal_confirmed(),
         );
         check(!joined.wire_close_confirmed());
-        check(owner.outcome() == Some(Outcome::Unknown));
-        check(!owner.finish_requested());
-        check(!owner.request_exit());
+        check(owner.outcome() == Some(Outcome::NotSpawned));
+        check(owner.finish_requested());
+        check(owner.request_exit());
         check(owner.poll_join() == Some(joined));
+        let (repeated, unavailable) = NativeIoSupervisor::prepare().unwrap();
+        let repeated = NativeOuterOwner::start(repeated).unwrap();
+        check(unavailable.is_err());
+        check(join(&repeated).native().outcome() == NativeOutcome::Refused);
+        check(repeated.outcome() == Some(Outcome::Unknown));
+        check(!repeated.request_exit() && !repeated.finish_requested());
+        check(owner.poll_join() == Some(joined) && owner.finish_requested());
+        drop(repeated);
         drop(owner);
         drop(source);
         println!(

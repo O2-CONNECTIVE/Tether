@@ -18,7 +18,7 @@ fn join(supervisor: &mut NativeIoSupervisor) -> NativeJoined {
     }
 }
 pub(crate) fn run(mode: &str) {
-    if mode == "supervisor-normal" {
+    if matches!(mode, "supervisor-normal" | "supervisor-startup-sealed") {
         let (mut supervisor, source) = NativeIoSupervisor::prepare().unwrap();
         let mut passed = 0;
         let mut check = |v: bool| {
@@ -29,11 +29,35 @@ pub(crate) fn run(mode: &str) {
         check(supervisor.joined().is_none());
         check(!supervisor.wire_close_confirmed());
         let actual = join(&mut supervisor);
-        check(actual.outcome() == NativeOutcome::Refused && !actual.terminal_confirmed());
+        check(
+            actual.outcome() == NativeOutcome::UnavailableBeforeOwnership
+                && !actual.terminal_confirmed(),
+        );
         check(supervisor.joined() == Some(actual));
         check(supervisor.poll_join().is_none());
         check(!supervisor.wire_close_confirmed());
         drop(supervisor);
+        let (mut repeated, unavailable) = NativeIoSupervisor::prepare().unwrap();
+        check(unavailable.is_err());
+        check(join(&mut repeated).outcome() == NativeOutcome::Refused);
+        check(!repeated.wire_close_confirmed());
+        drop(repeated);
+        #[cfg(resident_launch_fixture)]
+        {
+            use crate::native_preparation::{FixedFixture, Preparation};
+            check(matches!(
+                NativePreparation::fixture(FixedFixture::Normal),
+                Preparation::Refused
+            ));
+            check(matches!(
+                NativePreparation::fixture_active(FixedActiveFixture::Early),
+                Preparation::Refused
+            ));
+            check(NativePreparation::fixture_counts().open == 0);
+            check(NativePreparation::fixture_counts().closes == 0);
+            check(NativePreparation::fixture_active_stats().waits == 0);
+            check(NativePreparation::fixture_retained_state() == 0);
+        }
         println!(
             "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 unknown=0 producer=0"
         );
@@ -78,6 +102,12 @@ fn active(mode: &str) {
         check(NativePreparation::fixture_active_stats().waits == 0);
         check(NativePreparation::fixture_active_stats().abandons == 0);
         check(NativePreparation::fixture_retained_state() == 0);
+        // Even a retired, now-empty slot has ownership history.
+        let (mut repeated, unavailable) = NativeIoSupervisor::prepare().unwrap();
+        check(unavailable.is_err());
+        check(join(&mut repeated).outcome() == NativeOutcome::Refused);
+        check(NativePreparation::fixture_counts().closes == 4);
+        drop(repeated);
         println!(
             "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=0 childrenWaited=0 open=0 unknown=0 producer=0"
         );
@@ -229,6 +259,13 @@ fn active(mode: &str) {
         crate::native_preparation::Preparation::Refused
     ));
     check(NativePreparation::fixture_collect_retained_active() == ExitObservation::Unavailable);
+    // A new startup cannot turn either original terminal or Unknown evidence
+    // into an unavailable-before-ownership receipt, or replace that record.
+    let (mut repeated, unavailable) = NativeIoSupervisor::prepare().unwrap();
+    check(unavailable.is_err());
+    check(join(&mut repeated).outcome() == NativeOutcome::Refused);
+    check(NativePreparation::fixture_retained_state() == if terminal { 7 } else { 3 });
+    drop(repeated);
     let unknown = u8::from(!terminal);
     println!(
         "NATIVE_SUPERVISOR_FIXTURE mode={mode} passed={passed} failed=0 childrenStarted=1 childrenWaited=1 open=0 unknown={unknown} producer=0"

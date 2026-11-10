@@ -38,21 +38,23 @@ impl NativeOuterOwner {
         let output = observed.clone();
         #[cfg(resident_launch_fixture)]
         let fixture_finish = finish.fixture();
-        let monitor = thread::Builder::new()
-            .name("resident-native-outer-owner".into())
-            .spawn(move || {
-                loop {
-                    if let Some(observed) = observe_join(&mut producer) {
-                        *output.lock().unwrap_or_else(|e| e.into_inner()) = Some(observed);
-                        // Publish no success before this very monitor actually joins.
-                        // A later panic must leave the native evidence insufficient.
-                        state.complete(Outcome::Unknown);
-                        finish.wait(&state);
-                        return;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-            })?; // On failed spawn, the captured native supervisor closes/joins.
+        let builder = thread::Builder::new().name("resident-native-outer-owner".into());
+        let run = move || loop {
+            if let Some(observed) = observe_join(&mut producer) {
+                *output.lock().unwrap_or_else(|e| e.into_inner()) = Some(observed);
+                // Publish no success before this very monitor actually joins.
+                // A later panic must leave the native evidence insufficient.
+                state.complete(Outcome::Unknown);
+                finish.wait(&state);
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        #[cfg(resident_launch_fixture)]
+        let monitor = fixture::spawn_monitor(builder, run)?;
+        #[cfg(not(resident_launch_fixture))]
+        let monitor = builder.spawn(run)?;
+        // On failed spawn, the captured native supervisor closes/joins.
         gate.0
             .monitor
             .lock()
@@ -119,6 +121,7 @@ impl Drop for NativeOuterOwner {
 fn classify(observed: Observed) -> Outcome {
     use crate::native_preparation::{ExitObservation, State};
     match observed.native.outcome() {
+        NativeOutcome::UnavailableBeforeOwnership => Outcome::NotSpawned,
         NativeOutcome::Prepared(State::RetiredUnlaunched) => Outcome::NotSpawned,
         NativeOutcome::Active {
             exit: ExitObservation::Exit(0),

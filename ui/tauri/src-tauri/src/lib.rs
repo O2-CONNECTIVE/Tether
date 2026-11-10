@@ -7,7 +7,7 @@ mod mac_status;
 #[cfg(all(target_os = "macos", resident_native_source))]
 #[allow(
     dead_code,
-    reason = "explicit native source variant, no production binding"
+    reason = "native ownership includes fixture and diagnostic methods"
 )]
 #[path = "../../native/resident-launch/rust/owner.rs"]
 mod native_preparation;
@@ -138,7 +138,7 @@ fn commands_with_presentation<R: tauri::Runtime>(
 }
 
 // All GUI callers use the same managed state. A native state retains its entire
-// original session; normal startup remains unbound until release prerequisites.
+// original session; a linked native build enters the closed release startup.
 #[allow(
     dead_code,
     reason = "resident IPC awaits trusted launch and GUI composition"
@@ -181,8 +181,11 @@ pub fn run() {
     #[cfg(any(test, feature = "startup-diagnostics"))]
     let startup = startup_diagnostics::Trace::start();
     // Established before build/setup. This same-state guard also runs on unwind.
-    // No normal native prepare while the real release identity is unconfigured.
-    let lifetime = resident_port::ResidentLifetime::new(resident_port::ResidentState::default());
+    // A linked native build enters the same closed startup. An absent compiled
+    // release is a sealed no-owner result, not a fake publisher or default reset.
+    let lifetime = resident_port::ResidentLifetime::new(
+        resident_port::ResidentState::startup().expect("failed to start resident owner thread"),
+    );
     let app = commands_with_state(
         tauri::Builder::default(),
         ShellRuntime::default(),

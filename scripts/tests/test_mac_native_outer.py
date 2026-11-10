@@ -14,7 +14,7 @@ sys.path.pop(0)
 
 class NativeOuterReportTests(unittest.TestCase):
     def test_every_mode_requires_exact_complete_report(self):
-        for mode, count in {'outer-normal': 8, 'outer-normal-prejoined': 8, **tool.CASES}.items():
+        for mode, count in {'outer-normal': 13, 'outer-normal-prejoined': 13, **tool.CASES}.items():
             child = int(mode not in tool.NO_CHILD)
             unknown = int(mode not in tool.NO_CHILD and mode not in tool.TERMINAL)
             report = f'NATIVE_OUTER_FIXTURE mode={mode} passed={count} failed=0 childrenStarted={child} childrenWaited={child} open=0 nativeUnknown={unknown} producer=0\n'
@@ -25,6 +25,12 @@ class NativeOuterReportTests(unittest.TestCase):
                         report.replace(f'nativeUnknown={unknown}', f'nativeUnknown={1-unknown}'), report.replace('producer=0', 'producer=1')]:
                 with self.subTest(mode=mode, output=bad), self.assertRaises(ValueError):
                     tool.validate_report(mode, bad)
+
+    def test_startup_join_gates_have_no_child_or_terminal_claim(self):
+        for mode in ('outer-startup-held', 'outer-startup-panic'):
+            self.assertEqual(tool.CASES[mode], 12)
+            self.assertIn(mode, tool.NO_CHILD)
+            self.assertNotIn(mode, tool.TERMINAL)
 
     def test_terminal_modes_are_explicit(self):
         self.assertEqual(tool.TERMINAL, {'outer-rejected', 'outer-drop', 'outer-confirmed', 'outer-prejoined', 'outer-panic', 'outer-held'})

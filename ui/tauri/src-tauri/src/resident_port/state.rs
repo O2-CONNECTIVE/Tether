@@ -21,8 +21,18 @@ impl Default for ResidentState {
     }
 }
 impl ResidentState {
-    // Closed, zero-input bootstrap. Normal app startup does NOT call this while
-    // the release identity is unconfigured. No setter, rebind or owner extraction.
+    // No caller input or fallback after entering the native ownership path.
+    pub(crate) fn startup() -> std::io::Result<Self> {
+        #[cfg(all(target_os = "macos", resident_native_source))]
+        {
+            Self::prepare_native()
+        }
+        #[cfg(not(all(target_os = "macos", resident_native_source)))]
+        {
+            Ok(Self::default())
+        }
+    }
+    // Closed, zero-input bootstrap. No setter, rebind or owner extraction.
     #[cfg(all(target_os = "macos", resident_native_source))]
     pub(crate) fn prepare_native() -> std::io::Result<Self> {
         NativeSession::prepare().map(|session| Self {

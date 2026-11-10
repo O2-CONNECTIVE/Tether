@@ -42,7 +42,7 @@ python scripts/verify_mac_gui_link_layout.py \
 
 [材料照合 v1](mac-evaluation-materials.md) は GUI と producer の二 image に限定され、この Swift dylib を含む layout を受理しません。今回 v1 を黙って拡張したり、新しい full-package manifest を作ったりしていません。両検査を通せば一つの完成 package になる、とは扱わないでください。
 
-次の工程は固定 source の GUI/Swift build recipe とその実 image による照合、三 image の組立・同一 release 記録・Mac notice 閉包を扱う新材料契約です。正規署名 identity、`ApprovedRelease.production`、enrollment、通常 GUI の native 起動、実 dot、実終了回収と配布受入は未構成・未検証のままです。通常 GUI の unbound と接続 gate は変更しません。
+固定 source の実build入口は[GUI/Swiftの非実行app組立](mac-gui-candidate-build.md)で扱います。通常GUIの同じsessionへの入口は[閉じたstartup](mac-gui-trusted-startup.md)へ接続します。三 image の同一署名release組立・記録・Mac notice閉包、正規署名identity、`ApprovedRelease.production`、enrollment、実dot、実終了回収と配布受入は未構成・未検証のままです。未設定gateは維持します。
 
 ## 有限試験
 

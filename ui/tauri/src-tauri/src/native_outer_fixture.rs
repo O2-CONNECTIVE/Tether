@@ -66,3 +66,37 @@ impl NativeOuterOwner {
         }
     }
 }
+
+// One-shot and calling-thread-local: cannot fail the native IO worker or an
+// unrelated test's monitor. The exact captured closure is dropped as on Err.
+thread_local! {
+    static SPAWN_FAILURE: std::cell::RefCell<Option<std::sync::mpsc::SyncSender<()>>> =
+        const { std::cell::RefCell::new(None) };
+    static SPAWN_FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+pub(super) fn spawn_monitor<F>(
+    builder: thread::Builder,
+    run: F,
+) -> std::io::Result<thread::JoinHandle<()>>
+where
+    F: FnOnce() + Send + 'static,
+{
+    if SPAWN_FAILURE.with(|slot| slot.borrow().is_some()) {
+        drop(run); // Closes/joins the original captured supervisor first.
+        SPAWN_FAILED.with(|failed| failed.set(true));
+        return Err(std::io::Error::other("fixed monitor spawn failure"));
+    }
+    builder.spawn(run)
+}
+impl NativeOuterOwner {
+    pub(crate) fn fixture_fail_next_spawn(observer: std::sync::mpsc::SyncSender<()>) {
+        SPAWN_FAILURE.with(|slot| assert!(slot.replace(Some(observer)).is_none()));
+    }
+    pub(crate) fn fixture_observe_failure_containment() {
+        if SPAWN_FAILED.with(|failed| failed.replace(false)) {
+            SPAWN_FAILURE.with(|slot| {
+                slot.borrow_mut().take().unwrap().send(()).unwrap();
+            });
+        }
+    }
+}

@@ -1,4 +1,4 @@
-//! Same closed native preparation and its typed port; no production activation.
+//! Same closed native startup and its typed port; release identity is required.
 use super::{
     duplex::owner::{native::NativeIoSupervisor, BoundDuplex},
     ResidentPort,
@@ -19,7 +19,10 @@ impl NativeSession {
         (producer, source): (NativeIoSupervisor, io::Result<BoundDuplex>),
     ) -> io::Result<Self> {
         // Establish outer ownership before waiting for any first observation.
-        let owner = NativeOuterOwner::start(producer)?;
+        let owner = match NativeOuterOwner::start(producer) {
+            Ok(owner) => owner,
+            Err(_) => retain_failed_monitor(),
+        };
         let port = source.and_then(ResidentPort::bound).unwrap_or_else(|_| {
             // Attachment failure is unavailable, with this SAME owner retained.
             // Close seals submissions; it never authorizes Quit or replacement.
@@ -44,3 +47,13 @@ impl NativeSession {
 }
 // No custom Drop: private port drops first, then original outer owner's guard.
 // Dropping/losing a viewer is only a borrow and never closes its control pipe.
+
+// Returning Err here would let GUI setup panic/fall back despite ownership
+// having existed. Keep this explicitly diverging, including after worker join.
+fn retain_failed_monitor() -> ! {
+    #[cfg(resident_launch_fixture)]
+    NativeOuterOwner::fixture_observe_failure_containment();
+    loop {
+        std::thread::park_timeout(std::time::Duration::from_secs(1));
+    }
+}
