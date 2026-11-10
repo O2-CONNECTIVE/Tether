@@ -84,19 +84,19 @@ var ciResultEnums = map[string][]string{
 func (d *ciDiagnostic) beginTool(name string) {
 	d.toolOperation = "unavailable"
 	switch name {
-	case "rescue_fixed_start":
+	case "tether_fixed_start":
 		d.toolOperation = "start"
-	case "rescue_fixed_status":
+	case "tether_fixed_status":
 		d.toolOperation = "status"
-	case "rescue_fixed_cancel":
+	case "tether_fixed_cancel":
 		d.toolOperation = "cancel"
-	case "rescue_fixed_release":
+	case "tether_fixed_release":
 		d.toolOperation = "release"
-	case "rescue_fixed_list":
+	case "tether_fixed_list":
 		d.toolOperation = "list"
-	case "rescue_fixed_get_execution":
+	case "tether_fixed_get_execution":
 		d.toolOperation = "get_execution"
-	case "rescue_fixed_read_output":
+	case "tether_fixed_read_output":
 		d.toolOperation = "read_output"
 	}
 	d.toolResult = nil

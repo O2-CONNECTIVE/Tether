@@ -1,7 +1,7 @@
 # 常駐固定操作の所有実行一覧
 
 #189 の目標5 / #188 の実行管理を、既存の固定操作に小さく追加する。
-`rescue_fixed_list` は `rescue_fixed_status` と同じ認証主体・登録済みhost・
+`tether_fixed_list` は `tether_fixed_status` と同じ認証主体・登録済みhost・
 control接続世代に属する保持中の実行を列挙する。新しい実行許可を作らない。
 汎用の `tether_list_executions`、multi-host routing、grant不要のhost catalogは未採用のまま。
 既存grant-bound 4 toolsとunbound discoveryの404契約は変更しない。

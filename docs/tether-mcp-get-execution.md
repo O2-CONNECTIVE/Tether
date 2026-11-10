@@ -2,7 +2,7 @@
 
 [操作辞書案 #188](https://github.com/O2-CONNECTIVE/Tether/issues/188) / [段階目標 #189](https://github.com/O2-CONNECTIVE/Tether/issues/189) / [保持出力の読取](resident-read-output.md)
 
-`rescue_fixed_get_execution` は、既存の常駐固定作業について出力本文を取得せずに状態を確認する追加の読取操作です。
+`tether_fixed_get_execution` は、既存の常駐固定作業について出力本文を取得せずに状態を確認する追加の読取操作です。
 汎用の `tether_get_execution` や新しい操作contextを実装したものではありません。
 同じ認証主体・登録host・固定されたcontrol世代の保持作業と、明示release後の既存tombstoneだけを返します。
 
@@ -37,7 +37,7 @@
 引数・未対応toolの拒否は従来どおりJSON-RPCのprotocol errorです。
 `structuredContent` とtext mirrorは同じ値です。
 
-既存の `rescue_fixed_status` は全保持出力と従来の `error` を返し、作業失敗を `isError: true` にする互換動作を維持します。
+既存の `tether_fixed_status` は全保持出力と従来の `error` を返し、作業失敗を `isError: true` にする互換動作を維持します。
 この追加で旧statusのschemaや意味を変更しません。
 optionalな `ResidentGetExecutionBackend` 実装時だけtoolを公開し、旧3本・release付き4本のbackend、通常4tool、静的discoveryの境界は維持します。
 
@@ -51,7 +51,7 @@ optionalな `ResidentGetExecutionBackend` 実装時だけtoolを公開し、旧3
 - commandの観測は古い可能性があります。空field、未知exit、`not_found` は未実行の証拠ではありません。同じ作業を新IDで盲目的に再実行しません。
 
 `chunks`、cursor、`source_*`、出力完全性、stdin対応などを追加しません。
-出力bytesは対応する `rescue_fixed_read_output` から読み、必要な結果を保存してから明示releaseします。
+出力bytesは対応する `tether_fixed_read_output` から読み、必要な結果を保存してから明示releaseします。
 この照会は出力を複製・ack・破棄せず、保持量やtombstoneを変えません。
 返すobjectとexit objectは独立しており、呼出側の書換えは保持結果へ戻りません。
 

@@ -37,7 +37,7 @@ func TestResidentListOutputSchemaAndBounds(t *testing.T) {
 	var schema map[string]any
 	for _, entry := range request("tools/list", map[string]any{})["tools"].([]any) {
 		tool := entry.(map[string]any)
-		if tool["name"] == "rescue_fixed_list" {
+		if tool["name"] == "tether_fixed_list" {
 			schema = tool["outputSchema"].(map[string]any)
 		}
 	}
@@ -65,7 +65,7 @@ func TestResidentListOutputSchemaAndBounds(t *testing.T) {
 	valid = append(valid, golden)
 	for _, v := range valid {
 		b.value = v
-		result := request("tools/call", map[string]any{"name": "rescue_fixed_list", "arguments": map[string]any{"cursor": "", "limit": 32}})
+		result := request("tools/call", map[string]any{"name": "tether_fixed_list", "arguments": map[string]any{"cursor": "", "limit": 32}})
 		if err := checkOutputShape(schema, result["structuredContent"]); err != nil {
 			t.Fatal(err)
 		}

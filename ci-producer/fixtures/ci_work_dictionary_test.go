@@ -14,7 +14,7 @@ const ciUnknownWork = "ffffffffffffffffffffffffffffffff"
 // directly to the gateway. Each page is one explicit request on the same pipe.
 func (p *ciWorkChild) dictionary(g *ciGateway, op, id, suffix string) map[string]any {
 	g.t.Helper()
-	g.diagnostic.beginTool("rescue_fixed_" + op)
+	g.diagnostic.beginTool("tether_fixed_" + op)
 	line := op
 	if id != "" { line += " " + id }
 	line += suffix + "\n"
@@ -96,7 +96,7 @@ func (p *ciWorkChild) dictionaryFinished(g *ciGateway, status map[string]any, ex
 	ahead := p.dictionary(g, "read_output", id, fmt.Sprintf(" %d 7", len(expected)+1))
 	if !reflect.DeepEqual(ahead, map[string]any{"error": "cursor_ahead"}) { g.diagnostic.fail(g.t, "work-cli-dictionary-output") }
 	// Read-only dictionary calls must leave the existing full result retained.
-	if !reflect.DeepEqual(status, p.tool(g, "rescue_fixed_status", id)) { g.diagnostic.fail(g.t, "work-cli-dictionary-retained") }
+	if !reflect.DeepEqual(status, p.tool(g, "tether_fixed_status", id)) { g.diagnostic.fail(g.t, "work-cli-dictionary-retained") }
 }
 
 func (p *ciWorkChild) dictionaryReleased(g *ciGateway, status map[string]any) {

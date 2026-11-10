@@ -136,7 +136,7 @@ func TestResidentListThroughAuthenticatedGateway(t *testing.T) {
 	if n := call(bearer, sid, `{"jsonrpc":"2.0","method":"notifications/initialized"}`); n.Code != http.StatusAccepted {
 		t.Fatal(n.Code, n.Body.String())
 	}
-	body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rescue_fixed_list","arguments":{"cursor":"","limit":32}}}`
+	body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tether_fixed_list","arguments":{"cursor":"","limit":32}}}`
 	for _, credential := range []string{"", sign("other-subject")} {
 		if res := call(credential, sid, body); res.Code != http.StatusUnauthorized && res.Code != http.StatusForbidden {
 			t.Fatal("unauthorized list", res.Code, res.Body.String())

@@ -57,7 +57,7 @@ func (c *client) dictionaryCall(ctx context.Context, op string, args any, id, af
 		}
 		c.dictionary = available
 	}
-	name := "rescue_fixed_" + op
+	name := "tether_fixed_" + op
 	if !c.dictionary[name] {
 		return json.RawMessage(`{"error":"unsupported"}`), nil
 	}

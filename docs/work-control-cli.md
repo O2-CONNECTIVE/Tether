@@ -27,8 +27,8 @@ close
 
 - `request_id` は既存 fixed-work の32桁小文字16進 idempotency key。CLI が生成しません。
   JSON-RPC の連番、host ON/OFF の request ID / revision とは別です。
-- `start` → `rescue_fixed_start`、`result` → `rescue_fixed_status`、
-  `cancel` → `rescue_fixed_cancel`、`release` → `rescue_fixed_release`。
+- `start` → `tether_fixed_start`、`result` → `tether_fixed_status`、
+  `cancel` → `tether_fixed_cancel`、`release` → `tether_fixed_release`。
   shell、command、profile、host、scope を選ぶ引数はありません。
 - ID の再送可否と保持 ledger は既存サービスが判断します。CLI は自動再送しません。
   一度の initialize / initialized で得た元 SID を全操作で使います。認証主体・host・

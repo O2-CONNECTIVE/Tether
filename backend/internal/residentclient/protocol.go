@@ -52,10 +52,10 @@ func enum(raw json.RawMessage, values ...string) bool {
 }
 func operation(op string) string {
 	switch op {
-	case "start": return "rescue_fixed_start"
-	case "result": return "rescue_fixed_status"
-	case "cancel": return "rescue_fixed_cancel"
-	case "release": return "rescue_fixed_release"
+	case "start": return "tether_fixed_start"
+	case "result": return "tether_fixed_status"
+	case "cancel": return "tether_fixed_cancel"
+	case "release": return "tether_fixed_release"
 	}
 	return ""
 }

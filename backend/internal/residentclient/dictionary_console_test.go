@@ -57,7 +57,7 @@ func TestDictionaryArgumentValidationNoHTTP(t *testing.T) {
 	}
 }
 func TestDictionaryDiscoveryRejectsMalformedCatalog(t *testing.T) {
-	for _, raw := range []string{`{"tools":null}`, `{"tools":[],"nextCursor":"x"}`, `{"tools":[{"name":"rescue_fixed_list","inputSchema":{}} ,{"name":"rescue_fixed_list","inputSchema":{}}]}`, `{"tools":[{"name":"x"}]}`, `{"tools":[{"name":"x","inputSchema":{},"private":"x"}]}`} {
+	for _, raw := range []string{`{"tools":null}`, `{"tools":[],"nextCursor":"x"}`, `{"tools":[{"name":"tether_fixed_list","inputSchema":{}} ,{"name":"tether_fixed_list","inputSchema":{}}]}`, `{"tools":[{"name":"x"}]}`, `{"tools":[{"name":"x","inputSchema":{},"private":"x"}]}`} {
 		if _, e := dictionaryNames([]byte(raw)); e == nil {
 			t.Fatal("invalid discovery")
 		}

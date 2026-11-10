@@ -34,16 +34,16 @@ func TestResidentReleaseToolIsExplicitOptionalAndStrict(t *testing.T) {
 		t.Fatal(e)
 	}
 	tools := v["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 4 || tools[3].(map[string]any)["name"] != "rescue_fixed_release" {
+	if len(tools) != 4 || tools[3].(map[string]any)["name"] != "tether_fixed_release" {
 		t.Fatal(v)
 	}
 	for _, args := range []string{`{"request_id":"0123456789abcdef0123456789abcdef","confirmed":true}`, `{"request_id":"invalid"}`} {
-		r := s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rescue_fixed_release","arguments":` + args + `}}`))
+		r := s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tether_fixed_release","arguments":` + args + `}}`))
 		if !r.Error || b.releases != 0 {
 			t.Fatal(string(r.Body), b.releases)
 		}
 	}
-	r := s.Handle([]byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rescue_fixed_release","arguments":{"request_id":"0123456789abcdef0123456789abcdef"}}}`))
+	r := s.Handle([]byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tether_fixed_release","arguments":{"request_id":"0123456789abcdef0123456789abcdef"}}}`))
 	if r.Error || b.releases != 1 || b.starts != 0 {
 		t.Fatal(string(r.Body), b.releases, b.starts)
 	}

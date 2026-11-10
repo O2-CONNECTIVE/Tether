@@ -84,7 +84,7 @@ func TestResidentOutputSchemasMatchGatewayGoldenResults(t *testing.T) {
 				t.Fatalf("%s lacks object outputSchema", name)
 			}
 			for label, value := range values {
-				if name == "rescue_fixed_release" && value["request_id"] != nil && value["result_released"] != true {
+				if name == "tether_fixed_release" && value["request_id"] != nil && value["result_released"] != true {
 					continue
 				}
 				b.value = value
@@ -101,7 +101,7 @@ func TestResidentOutputSchemasMatchGatewayGoldenResults(t *testing.T) {
 					t.Fatal("error meaning changed", label, result)
 				}
 			}
-			if name != "rescue_fixed_release" {
+			if name != "tether_fixed_release" {
 				assertResidentSchemaBounds(t, schema)
 			}
 			for _, mutation := range []func(map[string]any){

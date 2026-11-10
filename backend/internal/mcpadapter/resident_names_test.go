@@ -92,3 +92,31 @@ func TestResidentTetherCatalogAndDispatch(t *testing.T) {
 		t.Fatalf("dispatch = %v", b.calls)
 	}
 }
+
+func TestResidentOldNamesRejectedWithoutDispatch(t *testing.T) {
+	b := &residentNamesFixture{}
+	s, err := NewResidentHTTPSession(b, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Handle([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}`))
+	s.Handle([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+	for n, name := range []string{"rescue_fixed_start", "rescue_fixed_status", "rescue_fixed_cancel", "rescue_fixed_release", "rescue_fixed_list", "rescue_fixed_read_output", "rescue_fixed_get_execution"} {
+		args := map[string]any{"request_id": "0123456789abcdef0123456789abcdef"}
+		if name == "rescue_fixed_list" {
+			args = map[string]any{"cursor": "", "limit": 1}
+		} else if name == "rescue_fixed_read_output" {
+			args["cursor"], args["max_bytes"] = 0, 1
+		}
+		raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": n + 2, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reply := s.Handle(raw)
+		var body struct{ Error struct{ Code int } }
+		if !reply.Error || json.Unmarshal(reply.Body, &body) != nil || body.Error.Code != -32602 || len(b.calls) != 0 {
+			t.Fatalf("old name %s was not refused before dispatch: %s", name, reply.Body)
+		}
+	}
+}

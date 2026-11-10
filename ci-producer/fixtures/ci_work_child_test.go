@@ -84,7 +84,7 @@ func (p *ciWorkChild) read() (map[string]any,error) {
 
 func (p *ciWorkChild) tool(g *ciGateway,name,id string) map[string]any {
 	g.t.Helper();g.diagnostic.beginTool(name)
-	op:=map[string]string{"rescue_fixed_start":"start","rescue_fixed_status":"result","rescue_fixed_cancel":"cancel","rescue_fixed_release":"release"}[name]
+	op:=map[string]string{"tether_fixed_start":"start","tether_fixed_status":"result","tether_fixed_cancel":"cancel","tether_fixed_release":"release"}[name]
 	if op=="" || !agentwire.ValidCommandID(id) || p.send(op+" "+id+"\n")!=nil{g.diagnostic.fail(g.t,"work-cli-write")}
 	v,e:=p.read()
 	value,ok:=v["value"].(map[string]any)

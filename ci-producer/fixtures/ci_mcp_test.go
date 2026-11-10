@@ -117,7 +117,7 @@ func (g *ciGateway) initialize() {
 func (g *ciGateway) tool(name, id string) map[string]any {
 	g.t.Helper()
 	g.diagnostic.beginTool(name)
-	if name != "rescue_fixed_start" && name != "rescue_fixed_status" && name != "rescue_fixed_cancel" {
+	if name != "tether_fixed_start" && name != "tether_fixed_status" && name != "tether_fixed_cancel" {
 		g.diagnostic.fail(g.t, "mcp-tool-name")
 	}
 	status, _, message := g.request("tools/call", map[string]any{"name": name, "arguments": map[string]any{"request_id": id}}, g.token)

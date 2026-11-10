@@ -143,7 +143,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		if work == nil { gateway.initialize() }
 		id := fmt.Sprintf("%032x", n+1)
 		diag.at(mode + "-start")
-		start := tool("rescue_fixed_start", id)
+		start := tool("tether_fixed_start", id)
 		if start["request_id"] != id {
 			diag.fail(t, "request-correlation")
 		}
@@ -155,7 +155,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 		deadline := time.Now().Add(60 * time.Second)
 		var value map[string]any
 		for time.Now().Before(deadline) {
-			value = tool("rescue_fixed_status", id)
+			value = tool("tether_fixed_status", id)
 			for _, field := range []string{"phase", "command_cleanup", "owner_cleanup", "gateway_cleanup"} {
 				if value[field] == "unknown" {
 					diag.fail(t, map[string]string{"phase": "work-phase-unknown", "command_cleanup": "command-cleanup-unknown", "owner_cleanup": "owner-cleanup-unknown", "gateway_cleanup": "gateway-cleanup-unknown"}[field])
@@ -179,7 +179,7 @@ func TestCIActualProducerConnection(t *testing.T) {
 			if mode == "cancel" && !canceled && output == "TETHER_MCP_GUI_BEGIN\n" {
 				if work != nil { work.dictionaryRunning(gateway, value) }
 				diag.at("cancel-submit")
-				tool("rescue_fixed_cancel", id)
+				tool("tether_fixed_cancel", id)
 				diag.at("cancel-poll")
 				canceled = true
 			}
@@ -217,12 +217,12 @@ func TestCIActualProducerConnection(t *testing.T) {
 			dictionaryResults = append(dictionaryResults, value)
 			work.checkList(gateway, dictionaryResults)
 			diag.at("work-cli-release")
-			released := tool("rescue_fixed_release", id)
+			released := tool("tether_fixed_release", id)
 			if released["result_released"] != true || released["phase"] != "finished" || released["owner_cleanup"] != "confirmed" || released["gateway_cleanup"] != "confirmed" || ciOutput(t, released, diag) != "" {
 				diag.fail(t, "work-cli-release")
 			}
 			// Same SID observes its tombstone, never a reset/new generation.
-			if tool("rescue_fixed_status", id)["result_released"] != true { diag.fail(t, "work-cli-tombstone") }
+			if tool("tether_fixed_status", id)["result_released"] != true { diag.fail(t, "work-cli-tombstone") }
 			work.dictionaryReleased(gateway, released)
 			dictionaryResults[n] = released
 			work.checkList(gateway, dictionaryResults)
