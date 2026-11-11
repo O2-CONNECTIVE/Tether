@@ -51,6 +51,6 @@ func TestDevelopmentPendingContractGolden(t *testing.T) {
 	observe(o)
 	golden, err := os.ReadFile("../../../ui/mac-development/Tests/DevelopmentChecks/Fixtures/mapper-pending.jsonl")
 	if err != nil || !bytes.Equal(golden, lines) {
-		t.Fatalf("public mapper golden mismatch: %v\nGOLDEN_BEGIN\n%sGOLDEN_END", err, lines)
+		t.Fatalf("public mapper golden mismatch: %v; actual_bytes=%d expected_bytes=%d actual_CR=%d expected_CR=%d\nGOLDEN_BEGIN\n%sGOLDEN_END", err, len(golden), len(lines), bytes.Count(golden, []byte{13}), bytes.Count(lines, []byte{13}), lines)
 	}
 }

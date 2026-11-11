@@ -123,3 +123,9 @@ negative mutation は別の合成入力であり、実通信・実 host の回�
 当該実行の raw frame は取得していません。修正前の Swift に Go mapper の接続中出力を
 与える回帰試験は失敗し、契約の不一致を再現しています。動作中の旧 GUI の証拠を
 後から補完したり、unknown の状態をリセットする変更ではありません。
+
+公開 JSONL は wire の LF も含めて固定 bytes とし、完全一致 path の `.gitattributes`
+で checkout 時の文字変換を無効にします。`test_development_fixture_bytes.py` は
+一時 Git repository の `core.autocrlf=true` checkout で同一 bytes を検査します。
+Go 側の byte 比較は改行を正規化しません。Windows の実 normal/race CI はこの
+checkout 合成試験とは別に必要です。
