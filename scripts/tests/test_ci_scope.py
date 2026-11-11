@@ -10,7 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'scripts/ci_scope.py'
-LANES = ['mac', 'windows', 'mac-development', 'mac-status', 'windows-owner']
+LANES = ['mac', 'windows-shared', 'windows-native', 'mac-development', 'mac-status', 'windows-owner']
 
 
 class ScopeCLITests(unittest.TestCase):
@@ -74,9 +74,9 @@ class ScopeCLITests(unittest.TestCase):
 
     def test_isolated_windows_tools_and_mixed_changes_keep_union(self):
         self.write('tools/native-driver-trace/driver.patch'); self.commit()
-        self.assert_lanes(['windows'])
+        self.assert_lanes(['windows-shared', 'windows-native'])
         self.write('tools/windows-owner-probe/Probe.cs'); self.write('ui/mac-status/Sources/Screen.swift'); self.commit()
-        self.assert_lanes(['windows', 'windows-owner', 'mac-status'])
+        self.assert_lanes(['windows-shared', 'windows-native', 'windows-owner', 'mac-status'])
 
     def test_backend_shared_ui_helpers_workflows_contracts_and_locks_run_all(self):
         paths = ['backend/internal/agentgateway/gateway.go', 'backend/internal/ssh/server.go',
@@ -88,6 +88,65 @@ class ScopeCLITests(unittest.TestCase):
                 self.base = self.git('rev-parse', 'HEAD')
                 self.write(path); self.commit()
                 self.assert_lanes(LANES)
+
+    def test_audited_backend_changes_keep_shared_checks_without_windows_gui(self):
+        initial_base = self.base
+        paths = [
+            'backend/cmd/rescue-gateway/access_refresh.go',
+            'backend/cmd/rescue-gateway/access_refresh_test.go',
+            'backend/cmd/rescue-gateway/discovery_pilot.go',
+            'backend/cmd/rescue-gateway/main.go',
+            'backend/cmd/tether-echo-probe/probe.go',
+            'backend/cmd/tether-echo-probe/probe_test.go',
+            'backend/internal/agentgateway/access_rotation.go',
+            'backend/internal/agentgateway/access_rotation_config_test.go',
+            'backend/internal/agentgateway/config.go',
+            'scripts/go_ci.py', 'scripts/tests/test_go_ci.py',
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                self.base = self.git('rev-parse', 'HEAD')
+                self.write(path); self.commit()
+                self.assert_lanes(set(LANES) - {'windows-native'})
+        self.base = initial_base
+        for path in ['docs/access-key-rotation-candidate.md', 'docs/agent-cli.md',
+                     'docs/agent-gateway.md', 'docs/go-ci.md']:
+            self.write(path)
+        self.commit()
+        self.assert_lanes(set(LANES) - {'windows-native'})
+        self.assertEqual(self.invoke()[1]['changed_files'], 15)
+
+    def test_backend_mixed_with_native_inputs_and_unknown_paths_runs_all(self):
+        paths = ['ui/tauri/src/main.tsx', 'ui/tauri/src-tauri/build.rs',
+                 'ui/tauri/native-smoke/setup.ps1', 'contracts/session.json',
+                 'backend/go.mod', 'backend/go.sum', 'backend/new.go',
+                 'backend/internal/agentgateway/unknown.go',
+                 'scripts/go_ci_extra.py', 'scripts/tests/test_go_ci_extra.py',
+                 'scripts/package_tauri_evaluation.py', 'scripts/ci_scope.py',
+                 'docs/tauri-evaluation-readme.txt', 'LICENSE',
+                 'ui/tauri/package-lock.json', 'ui/tauri/src-tauri/Cargo.lock',
+                 '.github/workflows/tauri-evaluation.yml']
+        for path in paths:
+            with self.subTest(path=path):
+                self.base = self.git('rev-parse', 'HEAD')
+                self.write('backend/cmd/rescue-gateway/access_refresh.go', path)
+                self.write(path); self.commit()
+                self.assert_lanes(LANES)
+
+    def test_audited_backend_deletion_is_exempt_but_rename_from_shared_is_not(self):
+        path = 'backend/cmd/rescue-gateway/access_refresh.go'
+        self.write(path); self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        self.git('rm', path); self.commit()
+        self.assert_lanes(set(LANES) - {'windows-native'})
+        self.write('ui/tauri/input.rs'); self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+        self.git('mv', 'ui/tauri/input.rs', path); self.commit()
+        self.assert_lanes(LANES)
+        self.base = self.git('rev-parse', 'HEAD')
+        self.git('mv', path, 'ui/tauri/input.rs'); self.commit()
+        self.assert_lanes(LANES)
 
     def test_rename_from_shared_to_exclusive_keeps_both_sides(self):
         self.write('shared.txt'); self.commit()
@@ -133,7 +192,8 @@ class ScopeCLITests(unittest.TestCase):
         self.assertEqual(report['comparison_sha'], self.base)
         self.assertEqual(report['head_sha'], head)
         self.assertEqual(report['changed_files'], 2)
-        self.assertEqual(self.invoke('windows', event, 'pull_request', 'a' * 40)[1]['applicability'], 'not_applicable')
+        for lane in ['windows-shared', 'windows-native']:
+            self.assertEqual(self.invoke(lane, event, 'pull_request', 'a' * 40)[1]['applicability'], 'not_applicable')
 
     def test_missing_or_invalid_history_wrong_head_event_and_nonlinear_push_fail_closed(self):
         head = self.git('rev-parse', 'HEAD')
@@ -193,6 +253,21 @@ class ScopeGateTests(unittest.TestCase):
 
 
 class ScopeWorkflowTests(unittest.TestCase):
+    def test_windows_gui_and_shared_checks_have_distinct_lanes(self):
+        for name in ['tauri-native-smoke', 'tauri-evaluation', 'tauri-startup-diagnostic']:
+            source = (ROOT / '.github/workflows' / (name + '.yml')).read_text()
+            self.assertIn('select --lane windows-native', source)
+            self.assertNotIn('continue-on-error:', source)
+        source = (ROOT / '.github/workflows/tauri-shell.yml').read_text()
+        self.assertIn('select --lane windows-shared', source)
+        for command in ['npm run typecheck', 'npm run lint', 'npm run knip',
+                        'npm test', 'npm run test:browser', 'cargo +1.99.1 test',
+                        'cargo +1.99.1 clippy']:
+            self.assertIn(command, source)
+        self.assertNotIn('continue-on-error:', source)
+        for path in (ROOT / '.github/workflows').glob('*.yml'):
+            self.assertNotRegex(path.read_text(), r'--lane windows(?:\s|$)')
+
     def test_existing_jobs_are_always_created_and_all_work_is_in_the_gate(self):
         workflows = ['mac-development', 'mac-native-source', 'mac-resident-gui',
                      'mcp-loopback', 'producer-connection', 'tauri-evaluation',
