@@ -97,7 +97,13 @@ func signedCollectionFixture(t *testing.T, g *Gateway, s *residentSession, host 
 	return proof
 }
 func TestResidentLateFailedAcquisitionNeverUsesHostCleanupAsGatewayProof(t *testing.T) {
+	t.Run("mixed", func(t *testing.T) { residentLateFailedAcquisition(t, false) })
+	t.Run("resident_only", func(t *testing.T) { residentLateFailedAcquisition(t, true) })
+}
+
+func residentLateFailedAcquisition(t *testing.T, residentOnly bool) {
 	g, s, host, control := residentEvidenceRig(t)
+	g.residentOnly = residentOnly
 	id := strings.Repeat("1", 32)
 	s.FixedStart(context.Background(), id)
 	conn := &failingResidentConn{read: make(chan struct{}), closed: make(chan struct{}), started: make(chan struct{})}
@@ -318,5 +324,18 @@ func TestResidentRetainedSessionCannotReadCancelOrReplayAnotherGeneration(t *tes
 	newer.generation = replacement.binding.Generation
 	if v := newer.FixedStatus(context.Background(), id); v["request_id"] != id {
 		t.Fatal("actual owning generation cannot read", v)
+	}
+}
+
+func TestResidentOnlyRejectsGenericRegistrationAndClosesStream(t *testing.T) {
+	g, _, _, _ := residentEvidenceRig(t)
+	g.residentOnly = true // before registration or any session
+	c := &failingResidentConn{closed: make(chan struct{})}
+	close(c.closed)
+	if err := g.Connect("member1", Dispatch{}, c); !errors.Is(err, ErrRefused) || c.closes.Load() != 1 {
+		t.Fatal("generic registration not refused and closed", err)
+	}
+	if len(g.launches) != 0 || g.byLabel["member1"].route != nil {
+		t.Fatal("generic registration consumed state")
 	}
 }

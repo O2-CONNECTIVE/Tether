@@ -111,3 +111,17 @@ The wrapper pins only the time window, not VPC binding identity. Deployment must
 これはGoの既存常駐認証を通すsource候補です。本人の実行承認、host/principal署名、generation、同じ所有者の回収確認をWorkerが代行するものではありません。既存MCP認証、5分のrelay上限、frame/message上限とbounded pilotの絶対期限は維持します。Worker自身は再接続しません。Macの既存ResidentClientはcode4000による終了後、回収を確認して新しい接続を試みます。常駐制御の再接続は実行grantの更新・復帰を意味せず、制御断による進行中作業への影響はGo側の失効規則に従います。5分を超える単一接続や無中断実行は提供しません。
 
 既存Nodeのfake試験に、既定拒否、明示opt-in、固定宛先、protocol取り違え拒否、禁止header、5分終了を追加しています。実Cloudflare上の常駐再接続、Macの実回収・再認証、公開routeと認証設定は未検証です。配置・gate変更・credential作成・継続的アクセスの追加はこのsource変更に含めません。
+
+### 常駐の固定操作だけに限定する origin 構成
+
+専用 origin の保護された composition document に `"resident_only": true` と
+既存の `resident` enrollment を明示すると、汎用の登録 `Connect` を拒否し、
+MCP は認証済み常駐 control と同じ世代の固定操作だけを提供します。
+control 不在・未登録 principal の initialize は 503 となり、汎用 MCP へ fallback しません。
+省略時は既存の混在構成を維持します。false、null、文字列、resident enrollment 不在は拒否します。
+
+Worker の `rescue-agent-register.v1` は閉じません。常駐の固定操作もこの protocol を
+実データ経路に使い、origin の `ConnectResident` が署名済みの host と取得済み work の
+相関・期限を確認します。protocol 名だけで汎用操作と固定操作を区別できません。
+`TETHER_RESIDENT_GATE` は引き続き必要で、これは認証や専用ユーザー設定の代替ではありません。
+この source opt-in は公開中の Worker、origin document、鍵、OS 権限を変更しません。

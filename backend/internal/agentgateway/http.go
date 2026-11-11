@@ -246,6 +246,9 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	case closed:
 		writeJSON(w, http.StatusServiceUnavailable, rpcError("the gateway is closed"))
 		return
+	case g.residentOnly && resident == nil:
+		writeJSON(w, http.StatusServiceUnavailable, rpcError("resident control unavailable"))
+		return
 	case full:
 		writeJSON(w, http.StatusTooManyRequests, rpcError("too many MCP sessions for this principal; DELETE an unused session"))
 		return
