@@ -103,10 +103,33 @@ public struct Feed {
         if unknown(fields, ["outcome"]) { return true }
         if case let .object(receipt)? = fields["receipt"], unknown(receipt, ["disposition"]) { return true }
         if case let .object(snapshot)? = fields["snapshot"] {
-            if unknown(snapshot, ["cleanup", "standby", "work"]) { return true }
+            if unknown(snapshot, ["cleanup", "work"]) { return true }
+            if unknown(snapshot, ["standby"]), !isPendingOnSnapshot(.object(snapshot)) { return true }
             if case let .object(transition)? = snapshot["transition"], unknown(transition, ["outcome"]) { return true }
         }
         return false
+    }
+    // The producer deliberately withholds ON proof while initial authentication
+    // is pending. Only this complete, correlated shape is observation uncertainty,
+    // not collection uncertainty. It never clears any fault or enables a command.
+    private func isPendingOnSnapshot(_ value: Value) -> Bool {
+        do {
+            guard let p = pending, p.intent == "on", awaitingReceipt == nil else { return false }
+            let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition"])
+            guard try s.number("protocolVersion") == 1,
+                  try s.text("source", ["resident-owner"]) == "resident-owner",
+                  try s.text("state", ["source-observation"]) == "source-observation",
+                  try s.number("validForMs") == 3000,
+                  try s.number("revision") > (observation?.revision ?? 0),
+                  try s.text("standby", ["unknown"]) == "unknown",
+                  try s.text("registration", ["connecting"]) == "connecting",
+                  try s.text("work", ["idle"]) == "idle",
+                  try s.text("cleanup", ["confirmed"]) == "confirmed",
+                  try !s.bool("canRequestOn"), try !s.bool("canRequestOff"),
+                  case .null? = s.fields["caller"] else { return false }
+            let t = try Object(s.fields["transition"]!, ["requestId", "intent", "outcome"])
+            return try t.number("requestId") == p.id && t.text("intent", ["on"]) == "on" && t.text("outcome", ["pending"]) == "pending"
+        } catch { return false }
     }
     private mutating func receiveReceipt(_ value: Value) throws {
         let r = try Object(value, ["protocolVersion", "requestId", "intent", "disposition"])
@@ -136,7 +159,7 @@ public struct Feed {
         let work = try s.text("work", ["idle", "preparing", "running", "stopping", "unknown"])
         let cleanup = try s.text("cleanup", ["confirmed", "pending", "unknown"])
         let canOn = try s.bool("canRequestOn"), canOff = try s.bool("canRequestOff")
-        if cleanup == "unknown" || standby == "unknown" || work == "unknown" {
+        if cleanup == "unknown" || (standby == "unknown" && !isPendingOnSnapshot(value)) || work == "unknown" {
             invalidateCleanup("owner-cleanup-unknown"); throw Invalid.input
         }
         guard

@@ -103,3 +103,23 @@ EOF や process 不在だけでは終了可能にせず、同じ owner を保持
 終了通知・EOF・reap・正常 exit の有無だけです。設定本文、鍵、token、caller、
 endpoint、原 frame、stderr は表示・保存しません。hash は publisher 認証では
 ありません。起動前の一般的な失敗を、回収済みと推測する変更は含みません。
+
+### 初回接続中の観測と回収不明の区別
+
+Go mapper は初回 ON の認証前に `standby=unknown` を出します。この値だけでは
+回収不明を意味しません。受理済みの同じ ON 要求に対応する pending transition、
+connecting・idle・cleanup confirmed・caller null・両操作不可が全て一致する時だけ、
+GUI は「接続を確認中・待機 ON は未確認」と表示して待ちます。新しい要求や実行は
+許可しません。cleanup、receipt、transition、terminal の unknown は従来どおり
+回収証拠を無効化し、以前の fault/close を解除しません。
+
+`backend/internal/residentpipe/development_contract_test.go` は実 mapper と Encode の
+出力を `Tests/DevelopmentChecks/Fixtures/mapper-pending.jsonl` と byte 比較します。
+Swift は同じ公開 fixture を読むため、片側だけの手書きモデルの一致ではありません。
+Go の共通検査と Mac の DevelopmentChecks を両方実行してください。閉じる通知と
+negative mutation は別の合成入力であり、実通信・実 host の回収を証明しません。
+
+実試験では ON を一度押した後に owner-result-unknown、EOF/reap/exit0 を観測しました。
+当該実行の raw frame は取得していません。修正前の Swift に Go mapper の接続中出力を
+与える回帰試験は失敗し、契約の不一致を再現しています。動作中の旧 GUI の証拠を
+後から補完したり、unknown の状態をリセットする変更ではありません。
