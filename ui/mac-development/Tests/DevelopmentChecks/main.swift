@@ -72,3 +72,43 @@ for completion: UInt64 in [2000, 2001] {
     catch { check(true, "late LF rejected before clearing partial") }
 }
 print("Total including line deadline regressions: \(checks) passed")
+
+// Regression: sealing admission must not discard a later original-owner close.
+func terminal(_ outcome: String = "confirmed", time: UInt64 = 5000) -> Data {
+    Data("{\"protocolVersion\":1,\"type\":\"closed\",\"sourceContinuousMs\":\(time),\"outcome\":\"\(outcome)\"}".utf8)
+}
+var recoverable = Feed()
+recoverable.ingest(status(), at: 5000) // stale complete observation
+check(recoverable.fault && !recoverable.can("on", at: 5000), "stale observation seals admission")
+_ = recoverable.requestClose()
+recoverable.ingest(terminal(), at: 5000)
+check(recoverable.fault && recoverable.closeConfirmed, "fault retains strictly validated owner close")
+check(recoverable.command("on", at: 5000) == nil, "recovered collection never restores admission")
+for badTerminal in [terminal("unknown"), terminal(time: 999), Data("{\"type\":\"closed\"}".utf8), Data("not-json".utf8)] {
+    var blocked = Feed(); blocked.ingest(status(), at: 5000)
+    blocked.ingest(badTerminal, at: 5000); blocked.ingest(terminal(), at: 5000)
+    check(blocked.cleanupInvalid && !blocked.closeConfirmed && blocked.fault, "bad or unknown terminal stays blocked")
+}
+for trailing in [terminal(), status(2, time: 5000), Data("x".utf8)] {
+    var blocked = Feed(); blocked.ingest(terminal(), at: 5000)
+    blocked.ingest(trailing, at: 5000)
+    check(blocked.cleanupInvalid && !blocked.closeConfirmed, "post-terminal frame invalidates collection")
+}
+var framedFailure = Feed(); framedFailure.invalidateCleanup("frame-invalid")
+framedFailure.ingest(terminal(), at: 5000)
+check(framedFailure.cleanupInvalid && !framedFailure.closeConfirmed, "lost framing cannot salvage terminal")
+print("Total including original-owner recovery: \(checks) passed")
+
+var rejectedClock = Feed()
+rejectedClock.ingest(status(), at: 1000)
+rejectedClock.ingest(status(2), at: 5000)
+rejectedClock.ingest(terminal(time: 4000), at: 4000)
+check(rejectedClock.cleanupInvalid && !rejectedClock.closeConfirmed, "invalid observation retains receiver clock high-water mark")
+let staleUnknown = Data(String(decoding: status(), as: UTF8.self).replacingOccurrences(of: "\"cleanup\":\"confirmed\"", with: "\"cleanup\":\"unknown\"").utf8)
+for unknownFrame in [staleUnknown, receipt("unknown")] {
+    var rejectedUnknown = Feed()
+    rejectedUnknown.ingest(unknownFrame, at: 5000)
+    rejectedUnknown.ingest(terminal(), at: 5000)
+    check(rejectedUnknown.cleanupInvalid && !rejectedUnknown.closeConfirmed, "unknown wins over stale or uncorrelated observation")
+}
+print("Total including review regressions: \(checks) passed")

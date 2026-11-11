@@ -9,6 +9,9 @@ public struct Observation {
 public struct Feed {
     public private(set) var observation: Observation?
     public private(set) var fault = false
+    public private(set) var cleanupInvalid = false
+    public private(set) var faultCode: String?
+    public private(set) var cleanupCode: String?
     public private(set) var closed = false
     public private(set) var closeConfirmed = false
     public private(set) var closing = false
@@ -18,7 +21,17 @@ public struct Feed {
     private var nextID: UInt64 = 1
     private var awaitingReceipt: (id: UInt64, intent: String)?
     public init() {}
-    public mutating func fail() { fault = true }
+    // Admission never resumes. Collection has a separate, monotonic trust gate.
+    public mutating func fail(_ code: String = "protocol-invalid") {
+        fault = true
+        if faultCode == nil { faultCode = code }
+    }
+    public mutating func invalidateCleanup(_ code: String) {
+        cleanupInvalid = true
+        if cleanupCode == nil { cleanupCode = code }
+        closeConfirmed = false
+        fail(code)
+    }
     public mutating func requestClose() -> String? {
         guard !closing else { return nil }
         closing = true
@@ -38,13 +51,24 @@ public struct Feed {
         return "\(intent) \(id) \(o.revision)\n"
     }
     public mutating func ingest(_ data: Data, at now: UInt64) {
-        guard !fault else { return }
+        guard !cleanupInvalid else { return }
+        var kind: String?
         do {
-            guard !closed, now >= lastTime, !data.isEmpty, data.count <= 4096 else { throw Invalid.input }
+            guard !closed, now >= lastTime, !data.isEmpty, data.count <= 4096 else {
+                invalidateCleanup("stream-order-invalid"); return
+            }
+            // Retain receiver time even for a recoverable rejected observation.
+            // A later terminal cannot erase a rollback across that observation.
+            lastTime = now
             var parser = Parser(bytes: Array(data))
             let value = try parser.value(); parser.whitespace()
             guard parser.i == data.count, case let .object(fields) = value,
-                  case let .text(kind)? = fields["type"] else { throw Invalid.input }
+                  case let .text(kindValue)? = fields["type"] else { throw Invalid.input }
+            kind = kindValue
+            // Unknown owner results poison proof before freshness/correlation
+            // checks: a stale or mismatched unknown cannot be washed away.
+            if hasUnknownResult(fields) { invalidateCleanup("owner-result-unknown"); return }
+            guard ["status", "receipt", "closed"].contains(kindValue) else { throw Invalid.input }
             let keys = kind == "status" ? ["protocolVersion", "type", "sourceContinuousMs", "snapshot"] : kind == "closed" ? ["protocolVersion", "type", "sourceContinuousMs", "outcome"] : ["protocolVersion", "type", "receipt"]
             let root = try Object(value, keys)
             guard try root.number("protocolVersion") == 1 else { throw Invalid.input }
@@ -57,18 +81,39 @@ public struct Feed {
                 else if kind == "closed" {
                     let outcome = try root.text("outcome", ["confirmed", "unknown"])
                     closed = true; closing = true; closeConfirmed = outcome == "confirmed"
-                    if !closeConfirmed { throw Invalid.input }
+                    if !closeConfirmed { invalidateCleanup("owner-cleanup-unknown") }
                 } else { throw Invalid.input }
             }
             lastTime = now
-        } catch { fail() }
+        } catch {
+            // A complete observation/receipt may seal admission while its own
+            // pipe remains usable for a later strict terminal. A damaged or
+            // unknown terminal cannot be replaced by a success frame.
+            if kind == "status" || kind == "receipt" { fail() }
+            else { invalidateCleanup("terminal-invalid") }
+        }
+    }
+    private func hasUnknownResult(_ fields: [String: Value]) -> Bool {
+        func unknown(_ fields: [String: Value], _ names: [String]) -> Bool {
+            names.contains { name in
+                if case .text("unknown")? = fields[name] { return true }
+                return false
+            }
+        }
+        if unknown(fields, ["outcome"]) { return true }
+        if case let .object(receipt)? = fields["receipt"], unknown(receipt, ["disposition"]) { return true }
+        if case let .object(snapshot)? = fields["snapshot"] {
+            if unknown(snapshot, ["cleanup", "standby", "work"]) { return true }
+            if case let .object(transition)? = snapshot["transition"], unknown(transition, ["outcome"]) { return true }
+        }
+        return false
     }
     private mutating func receiveReceipt(_ value: Value) throws {
         let r = try Object(value, ["protocolVersion", "requestId", "intent", "disposition"])
         guard try r.number("protocolVersion") == 1, let p = awaitingReceipt,
               try r.number("requestId") == p.id, try r.text("intent", ["on", "off"]) == p.intent else { throw Invalid.input }
         let disposition = try r.text("disposition", ["accepted", "rejected", "stale", "unknown"])
-        if disposition == "unknown" { throw Invalid.input }
+        if disposition == "unknown" { invalidateCleanup("owner-result-unknown"); throw Invalid.input }
         awaitingReceipt = nil
         // Receipts never confirm ON/OFF. Only a correlated owner transition does.
         // A rejected/stale receipt confirms no dispatch and allows an explicit retry.
@@ -91,14 +136,18 @@ public struct Feed {
         let work = try s.text("work", ["idle", "preparing", "running", "stopping", "unknown"])
         let cleanup = try s.text("cleanup", ["confirmed", "pending", "unknown"])
         let canOn = try s.bool("canRequestOn"), canOff = try s.bool("canRequestOff")
-        guard cleanup != "unknown", standby != "unknown", work != "unknown",
+        if cleanup == "unknown" || standby == "unknown" || work == "unknown" {
+            invalidateCleanup("owner-cleanup-unknown"); throw Invalid.input
+        }
+        guard
               !canOn || (standby == "off" && work == "idle" && cleanup == "confirmed"),
               !canOff || standby == "on", !(canOn && canOff) else { throw Invalid.input }
         if case .null? = s.fields["transition"] {} else {
             let t = try Object(s.fields["transition"]!, ["requestId", "intent", "outcome"])
             let id = try t.number("requestId"), intent = try t.text("intent", ["on", "off"])
             let outcome = try t.text("outcome", ["pending", "applied", "rejected", "unknown"])
-            guard id > 0, id < nextID, outcome != "unknown" else { throw Invalid.input }
+            if outcome == "unknown" { invalidateCleanup("owner-result-unknown"); throw Invalid.input }
+            guard id > 0, id < nextID else { throw Invalid.input }
             if let p = pending {
                 guard id == p.id, intent == p.intent else { throw Invalid.input }
                 if outcome == "applied" {
