@@ -16,7 +16,8 @@ import (
 )
 
 // AccessKeyRefreshPolicy has no defaults. Adopting values and scheduling calls
-// is a separate trusted composition decision; no command enables this mode.
+// is a separate trusted composition decision. The explicit file configuration
+// uses ConfiguredAccessKeyRefreshPolicy; direct callers must choose a policy.
 // MaxAge is the TOTAL age since the last successful request START, not an
 // extra stale allowance after MinInterval. Failed refreshes never extend it.
 type AccessKeyRefreshPolicy struct {
@@ -44,7 +45,15 @@ type accessKeyRotation struct {
 	client    *http.Client
 }
 
-// NewRotatingAccessVerifier is an unwired, opt-in counterpart to the static
+// ConfiguredAccessKeyRefreshPolicy is the explicit cloudflare_certs file-mode
+// policy, not a default for all verifiers. The owner waits MinInterval AFTER
+// each attempt completes. A failed attempt never extends the 300-second age.
+// These are deliberate source policy values, not provider overlap guarantees.
+func ConfiguredAccessKeyRefreshPolicy() AccessKeyRefreshPolicy {
+	return AccessKeyRefreshPolicy{Timeout: 5 * time.Second, MinInterval: 60 * time.Second, MaxAge: 300 * time.Second}
+}
+
+// NewRotatingAccessVerifier is an explicit, opt-in counterpart to the static
 // NewAccessVerifier. Keys must be empty: only a successful fresh HTTPS response
 // can populate this verifier. Construction does not perform I/O or launch a
 // goroutine. Verify fails closed until RefreshKeys succeeds and after MaxAge.

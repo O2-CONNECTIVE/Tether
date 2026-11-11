@@ -76,6 +76,11 @@ func TestProbeConfigAcceptsOnlyAccessProbeDocument(t *testing.T) {
 		{"missing access_aud", func(d map[string]any) { delete(d, "access_aud") }},
 		{"empty access_aud", func(d map[string]any) { d["access_aud"] = "" }},
 		{"empty access_issuer", func(d map[string]any) { d["access_issuer"] = "" }},
+		{"rotating source without owner", func(d map[string]any) {
+			d["access_issuer"] = "https://synthetic-team.cloudflareaccess.com"
+			d["access_key_source"] = "cloudflare_certs"
+			delete(d, "access_keys")
+		}},
 		{"no access keys", func(d map[string]any) { d["access_keys"] = map[string]any{"keys": []any{}} }},
 		{"empty listen", func(d map[string]any) { d["listen"] = "" }},
 		{"default profile wildcard", func(d map[string]any) { d["listen"] = "0.0.0.0:8787" }},

@@ -47,26 +47,28 @@ const (
 // FileConfig is the operator's public trust configuration. It holds no
 // secret: no signer, client secret, token or private key member is accepted.
 type FileConfig struct {
-	Listen         string            // numeric host:port admitted by Profile; see listenAllowed
-	Profile        DeploymentProfile // ProfileLoopback unless the document names another
-	Mode           AuthMode
-	Resource       string               // the public MCP resource URL in both modes
-	Verifier       VerifierConfig       // ModeOAuthBearer only
-	Access         AccessVerifierConfig // ModeCloudflareAccess only
-	Principals     []Principal          // Signer is never read from the file
-	AllowedOrigins []string
+	Listen          string            // numeric host:port admitted by Profile; see listenAllowed
+	Profile         DeploymentProfile // ProfileLoopback unless the document names another
+	Mode            AuthMode
+	Resource        string               // the public MCP resource URL in both modes
+	Verifier        VerifierConfig       // ModeOAuthBearer only
+	Access          AccessVerifierConfig // ModeCloudflareAccess only
+	AccessKeySource string               // empty: static access_keys; cloudflare_certs: bounded HTTPS refresh
+	Principals      []Principal          // Signer is never read from the file
+	AllowedOrigins  []string
 }
 
 // Members of each mode. The sets share only the mode-neutral members, so a
 // document can never mix the two modes' trust inputs.
 var (
 	oauthMembers  = []string{"listen", "deployment_profile", "auth_mode", "resource", "issuer", "scope", "token_types", "leeway_seconds", "jwks", "principals", "allowed_origins"}
-	accessMembers = []string{"listen", "deployment_profile", "auth_mode", "resource", "access_issuer", "access_aud", "access_keys", "leeway_seconds", "principals", "allowed_origins"}
+	accessMembers = []string{"listen", "deployment_profile", "auth_mode", "resource", "access_issuer", "access_aud", "access_keys", "access_key_source", "leeway_seconds", "principals", "allowed_origins"}
 )
 
 // ParseConfig reads the strict JSON configuration. "auth_mode" is required and
 // selects the member set; every member of that set is required except
-// deployment_profile and allowed_origins; unknown (including the other
+// deployment_profile and allowed_origins. Access requires either access_keys
+// or access_key_source="cloudflare_certs", never both; unknown (including the other
 // mode's), duplicate or null members are refused.
 func ParseConfig(raw []byte) (FileConfig, error) {
 	if len(raw) == 0 || len(raw) > MaxConfigBytes || agentwire.CheckJSON(raw, false) != nil {
@@ -101,9 +103,13 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 		c.Verifier.Audience = c.Resource
 		c.Verifier.JWKS = append([]byte(nil), m["jwks"]...)
 	} else {
-		ok = ok && decodeInto(m["access_issuer"], &c.Access.Issuer) && decodeInto(m["access_aud"], &c.Access.AUD) &&
-			firstByte(m["access_keys"]) == '{'
-		c.Access.Keys = append([]byte(nil), m["access_keys"]...)
+		ok = ok && decodeInto(m["access_issuer"], &c.Access.Issuer) && decodeInto(m["access_aud"], &c.Access.AUD)
+		if source, has := m["access_key_source"]; has {
+			ok = ok && decodeInto(source, &c.AccessKeySource) && c.AccessKeySource == "cloudflare_certs" && m["access_keys"] == nil
+		} else {
+			ok = ok && firstByte(m["access_keys"]) == '{'
+			c.Access.Keys = append([]byte(nil), m["access_keys"]...)
+		}
 	}
 	if raw, has := m["allowed_origins"]; has {
 		ok = ok && decodeInto(raw, &c.AllowedOrigins)
@@ -153,12 +159,19 @@ func (c FileConfig) GatewayConfig() (Config, error) {
 	var err error
 	switch c.Mode {
 	case ModeOAuthBearer:
-		if c.Verifier.Audience != c.Resource {
+		if c.Verifier.Audience != c.Resource || c.AccessKeySource != "" {
 			return Config{}, ErrConfig
 		}
 		cfg.Verifier, err = NewVerifier(c.Verifier)
 	case ModeCloudflareAccess:
-		cfg.Access, err = NewAccessVerifier(c.Access)
+		switch c.AccessKeySource {
+		case "":
+			cfg.Access, err = NewAccessVerifier(c.Access)
+		case "cloudflare_certs":
+			cfg.Access, err = NewRotatingAccessVerifier(c.Access, ConfiguredAccessKeyRefreshPolicy())
+		default:
+			err = ErrConfig
+		}
 		cfg.Resource = c.Resource
 	default:
 		err = ErrConfig

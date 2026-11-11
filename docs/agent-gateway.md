@@ -56,7 +56,7 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 
 | 段階 | 内容 | 失敗時 |
 | --- | --- | --- |
-| 認証（`AccessVerifier`） | header`Cf-Access-Jwt-Assertion`がちょうど1つ。compact JWS、alg `RS256`だけ。headerは`alg`/`kid`/`typ`だけ（`jku`・`x5u`・`jwk`・`x5t`・`crit`などは拒否）、`typ`は省略可能で、存在する場合は`JWT`（空・null・非文字列は拒否）。`kid`は設定した`access_keys`にあること（未知kidは拒否、取得しない）。payloadは重複member拒否、`type`が`app`、`iss`が設定したteam-domain URLと完全一致、`aud`は配列で設定したAUD tagを含む（文字列`aud`や資源URLは拒否）、`sub`は空でない文字列、`email`は`@`を含む文字列、`common_name`（service token）があれば拒否、`exp`・`iat`・`nbf`は必須の整数、許容誤差は最大60秒、寿命は24時間以下 | 403、`WWW-Authenticate`なし |
+| 認証（`AccessVerifier`） | header`Cf-Access-Jwt-Assertion`がちょうど1つ。compact JWS、alg `RS256`だけ。headerは`alg`/`kid`/`typ`だけ（`jku`・`x5u`・`jwk`・`x5t`・`crit`などは拒否）、`typ`は省略可能で、存在する場合は`JWT`（空・null・非文字列は拒否）。`kid`は設定した`access_keys`または明示更新modeの未期限切れsnapshotにあること（未知kidは拒否、取得しない）。payloadは重複member拒否、`type`が`app`、`iss`が設定したteam-domain URLと完全一致、`aud`は配列で設定したAUD tagを含む（文字列`aud`や資源URLは拒否）、`sub`は空でない文字列、`email`は`@`を含む文字列、`common_name`（service token）があれば拒否、`exp`・`iat`・`nbf`は必須の整数、許容誤差は最大60秒、寿命は24時間以下 | 403、`WWW-Authenticate`なし |
 | 認可 | 検証済み`sub`が、設定した最大4人のprincipalのどれかと完全一致。`email`は存在確認だけで、認可にも識別にも使いません | 403（challengeなし） |
 
 - scopeは読みません（Accessのapplication tokenはOAuth scopeを約束しません）。Access側のpolicyで許可した利用者のうち、設定した`sub`だけが通ります。
@@ -157,6 +157,7 @@ Cloudflare Access assertion方式：
 | `access_issuer` | team-domainのURL。小文字host、https、port・path・末尾`/`・query・fragmentなし。`iss`と完全一致で比較 |
 | `access_aud` | Access applicationのAUD tag。英数字・`-`・`_`の1〜256文字（URLは書けません）。資源URLとは別の値 |
 | `access_keys` | teamのcerts文書（`https://<team-domain>/cdn-cgi/access/certs`）の`keys` memberをそのまま`{"keys":[…]}`として転記したもの。RSA（2048〜8192 bit）だけ、`alg`は省略可だが書くなら`RS256`、`use`は書くなら`sig`、1〜16鍵、kid重複・private member・`key_ops`などは拒否。`public_cert`/`public_certs`は含めません（top-levelの未知memberとして拒否） |
+| `access_key_source` | `"cloudflare_certs"` だけ。指定時は `access_keys` を省略必須。固定5秒取得・完了後60秒待機・開始から300秒の鍵寿命とCLI ownerは[詳細](access-key-rotation-candidate.md)を参照。省略時は従来の静的鍵を要求 |
 | `principals[].subject` | Accessの`sub`（利用者ごと）。emailは書けません |
 
 CLI envelopeは[agent CLI](agent-cli.md)に記載します。保護文書と登録済み鍵を検証し、最後に既定loopbackまたは明示container_privateで待受するsourceです。実起動は未承認です。診断は固定文だけで、subject、path、token、headerを出力しません。
@@ -169,14 +170,14 @@ CLI envelopeは[agent CLI](agent-cli.md)に記載します。保護文書と登�
 
 Access applicationとAUDは、このMCP hostname/path専用にします。他origin、Worker route、preview routeとの共用は不可です。同一AUDの別originへ渡ったassertionも署名検証上は受理可能なためです。
 
-署名鍵の先行公開は未確認です。更新前に新鍵を取得できなければ、保護設定更新と再起動までfail-closedで停止し、新しいMac承認が必要です。無停止rotationを保証しません。
+静的鍵modeでは、更新前に新鍵を取得できなければ保護設定更新と再起動までfail-closedで停止し、新しいMac承認が必要です。明示更新modeも次回取得成功まで未知kidを拒否します。無停止rotationを保証しません。
 
 ## 実装済みの配線と残る条件
 
 - agenttransport.Handler/Clientはhost鍵のnonce proofと同じWSS streamをchannelへ渡し、両CLIへ接続しています。maclaunchの今回の同意をgatewayが代行する経路はありません。
 - signerはagentkeysの保護path/fingerprint検査から供給します。新しい端末の鍵発行・配置・enrollmentはsource取得で自動的に成立しません。
 - issuer、audience、scope、署名鍵、token type、subjectとclient登録は実環境ごとの入力です。4名向けpolicyは4名の登録完了を意味しません。実identityを公開sampleへ埋めません。
-- JWKSは自動取得・更新しません。未知kidは拒否し、保護された経路で独立確認した新旧鍵（最大16鍵）を設定して再起動します。再起動では既存routeと承認を失い、本人の新しい同意が必要です。無停止rotationは保証しません。`azp`/`client_id`の照合はありません。
+- OAuth JWKSと静的Access鍵は自動取得・更新しません。未知kidは拒否し、保護された経路で独立確認した新旧鍵（最大16鍵）を設定して再起動します。再起動では既存routeと承認を失い、本人の新しい同意が必要です。無停止rotationは保証しません。`azp`/`client_id`の照合はありません。
 - 限定実演の入口は閉鎖・停止済みです。Claude HTTP/OAuthの4tool discoveryはcommand実行ではなく、dot workspaceのplugin作成403も別の未達です。現在の実績は[正本](tether-pilot-status.md)に集約します。
 
 ## source/memory試験が確認する範囲
@@ -205,7 +206,7 @@ Access applicationとAUDは、このMCP hostname/path専用にします。他ori
 
 2026-10-31 local verification update: the official cloudflared CLI application token may omit JOSE typ. A separately authorized local inspector successfully verified a real human assertion against the pinned public keys, issuer, AUD, lifetime and expected-person binding. No token or actual identity is included in this source. This does not establish other users, live gateway authorization, Managed OAuth or dot MCP connectivity.
 
-### 公開鍵自動更新の未配線候補
+### Access公開鍵の明示更新
 
-[Access署名公開鍵の更新候補](access-key-rotation-candidate.md)は独立constructorだけです。
-CLI/設定JSONは現在も静的JWKSを使用し、運用値・scheduler・実配置は未採用です。
+[Access公開鍵更新とCLI所有](access-key-rotation-candidate.md)は、明示設定だけで候補constructorと有限schedulerを通常CLIへ構成します。
+省略時の静的鍵は不変です。実配置・TLS到達性・常時運用は未検証で、scratch imageへのCA bundle供給も別途必要です。
