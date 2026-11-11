@@ -58,3 +58,13 @@ control認証はnative workのgrantではありません。実Macの保護policy
 これらはsourceと隔離CIの証拠です。通常配布物から実Macへ接続した証明ではありません。
 実credential・鍵・運用保護文書の作成、gatewayの配置と起動、公開TLS/tunnel/Access route、dotsのMCP接続、実Macの許可・取消・回収は別途未検証です。
 製品gateや既存44条件の未達を解除せず、運用上の永続アクセスをこの変更で作成しません。
+
+## 常駐専用構成のoffline catalog
+
+`resident_only: true` の明示構成で、認証済みprincipalに固定resident enrollmentがある場合だけ、Mac controlが未接続でもinitializeと固定7ツールの一覧を提供します。通常の4ツールdiscoveryとは別です。登録のないprincipalは従来どおり拒否します。各要求の認証、subject対応、SID所有、期限・上限は維持します。
+
+このsessionにはbackend、control、signer、host ownerを渡しません。全tools/callをJSON-RPC errorで拒否し、status、cancel、list、read、releaseも実行しません。空の実行一覧、停止済み、回収済みや実行権限があるという結果は作りません。initializeのinstructionsにcatalog-onlyであることと、新しいinitializeが必要であることを明示します。
+
+後からMacがONになっても既存SIDは昇格しません。認証済みstandbyの後に新しいMCP sessionを作る必要があります。初期化中にcontrolが接続した場合もoffline sessionはofflineのままです。公開URLを維持すること、MacのON/OFF、MCP session、作業grantは別です。実ChatGPTの再初期化・更新や5分のcontrol世代変更への追随は別途受入が必要です。
+
+試験は合成認証・net.Pipeの通常CLI入口とadapterの回帰です。実Cloudflare配置、鍵、enrollment、権限設定は変更しません。
