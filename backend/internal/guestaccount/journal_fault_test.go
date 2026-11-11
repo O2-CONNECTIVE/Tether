@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -210,42 +211,45 @@ func journalTerminalHistory(t *testing.T, j *journalBackend, count int) []byte {
 func TestJournalReserveKeepsAllSixCleanupFramesAtCapacityBoundary(t *testing.T) {
 	for _, history := range []int{509, 510} {
 		t.Run(string(rune('A'+history-509)), func(t *testing.T) {
-			j, k, _, f := journalFixture(t)
-			if e := j.close(testContext(t)); e != nil {
-				t.Fatal(e)
-			}
-			k.data = journalTerminalHistory(t, j, history)
-			p := journalPlan(t, 10000, uint64(history+1))
-			next, e := reopenJournal(t, j, k, p)
-			if e != nil {
-				t.Fatal(e)
-			}
-			f.s.journal = next
-			f.s.journalSeal = next.seal
-			owner, e := newLifecycle(p, f.s)
-			if e != nil {
-				t.Fatal(e)
-			}
-			e = owner.Prepare(testContext(t))
-			if history == 510 {
-				if e == nil || hasJournalCreate(f) {
-					t.Fatal("insufficient cleanup capacity admitted create")
+			// Capacity is a ledger invariant, not a wall-clock replay benchmark.
+			synctest.Test(t, func(t *testing.T) {
+				j, k, _, f := journalFixture(t)
+				if e := j.close(testContext(t)); e != nil {
+					t.Fatal(e)
 				}
-				return
-			}
-			if e != nil {
-				t.Fatal(e)
-			}
-			if e = owner.Close(testContext(t)); e != nil {
-				t.Fatal("reserved cleanup budget exhausted", e)
-			}
-			if next.count != journalMaxFrames || len(k.data) != journalHeaderBytes+journalMaxFrames*journalFrameBytes {
-				t.Fatal("cleanup did not fit exact bound", next.count, len(k.data))
-			}
-			writes := k.writes
-			if _, e = next.save(testContext(t), next.record); e != nil || k.writes != writes {
-				t.Fatal("full ledger terminal idempotence appended")
-			}
+				k.data = journalTerminalHistory(t, j, history)
+				p := journalPlan(t, 10000, uint64(history+1))
+				next, e := reopenJournal(t, j, k, p)
+				if e != nil {
+					t.Fatal(e)
+				}
+				f.s.journal = next
+				f.s.journalSeal = next.seal
+				owner, e := newLifecycle(p, f.s)
+				if e != nil {
+					t.Fatal(e)
+				}
+				e = owner.Prepare(testContext(t))
+				if history == 510 {
+					if e == nil || hasJournalCreate(f) {
+						t.Fatal("insufficient cleanup capacity admitted create")
+					}
+					return
+				}
+				if e != nil {
+					t.Fatal(e)
+				}
+				if e = owner.Close(testContext(t)); e != nil {
+					t.Fatal("reserved cleanup budget exhausted", e)
+				}
+				if next.count != journalMaxFrames || len(k.data) != journalHeaderBytes+journalMaxFrames*journalFrameBytes {
+					t.Fatal("cleanup did not fit exact bound", next.count, len(k.data))
+				}
+				writes := k.writes
+				if _, e = next.save(testContext(t), next.record); e != nil || k.writes != writes {
+					t.Fatal("full ledger terminal idempotence appended")
+				}
+			})
 		})
 	}
 }

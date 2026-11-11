@@ -115,7 +115,7 @@ jobs:
       - name: Select applicable work from complete source history
         id: ci-scope
         working-directory: ${{ github.workspace }}
-        run: python scripts/ci_scope.py select --lane windows
+        run: python scripts/ci_scope.py select --lane windows-shared
       - name: Require and record exact source checkout
         if: steps.ci-scope.outputs.selected == 'true'
         id: ci-work-1
