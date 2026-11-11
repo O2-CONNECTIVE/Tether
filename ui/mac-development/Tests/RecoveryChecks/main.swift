@@ -114,5 +114,7 @@ let guarded = RecoveryController(owner: inconsistent) { Owner("forbidden") }
 check(guarded.preparation == .blocked && !guarded.prepare(), "cleanup invalid blocks preparation even before launch")
 check(unresolved.previousDiagnostic == nil && unresolved.diagnostic == "unresolved original", "unresolved diagnostic stays current")
 
+checkPresentation()
+
 if !failures.isEmpty { print("RecoveryChecks: \(failures.count) failed / \(checks) checks"); exit(1) }
 print("RecoveryChecks: \(checks) passed; pure lifecycle fixtures only; no UI departure, host or storage operation")

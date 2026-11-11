@@ -18,7 +18,8 @@
 ## source-only controller
 
 `DevelopmentProcess/RecoveryController.swift` は既存 ResidentProcess を包みます。
-実 AppKit の main への配線はまだなく、現在起動している旧アプリは変わりません。
+AppKit の main は同じ controller の表示値と操作を使います。source 配線と非実行 build
+の確認であり、実描画や実 helper の回収を確認したものではありません。
 
 - 初回準備は一度だけ開始し、起動中・close 中・証拠不足中は新しい owner を作りません。
 - child 未起動の launch failure では、明示操作で別の owner による準備を試せます。
@@ -31,12 +32,26 @@
 `swift run RecoveryChecks` は本番 controller と Feed parser に、内部の有限 lifecycle
 fixture を渡します。production constructor は固定 ResidentProcess だけを作り、
 fixture factory を引数・環境変数・設定から選べません。実 helper、pipe、GUI 描画は
-実行せず、AppKit 配線、実回収、横断的な再起動遮断を証明しません。
+実行せず、実 AppKit の操作結果、実回収、横断的な再起動遮断を証明しません。
 
 同じ fixture と one-shot baseline controller の組は 27 条件中 7 条件で失敗し、
 修正後はその 27 条件と初回・連打等の追加条件に合格しました。
 独立レビューで指摘された準備前 close の後の起動も、2 条件の red/green で拒否を確認しました。追加した controller 境界の red/green であり、
 旧 AppKit を自動操作して失敗を再現したという意味ではありません。
+
+### 終了と再準備の競合を防ぐ UI 配線
+
+初回は「開発ホストを準備」、起動前失敗と完全回収後は「もう一度準備」です。
+「ホストを停止」は画面を残し、元 owner の回収後に新しい準備を選べます。
+Quit とウィンドウ閉鎖は controller に一方向の終了 intent を残し、以後は UI の無効化
+だけでなく prepare/intent の入口でも拒否します。回収の到着と遅れた再準備クリックが
+同じ turn にあっても、新 owner を開始してから自動終了する経路を作りません。
+
+RecoveryPresentation は同じ controller から作り、AppKit はその文字と操作可否を描画します。
+UI fixture では one-shot 表示と Quit 競合を残した baseline が 65 条件中 15 条件で失敗し、
+修正後に同じ 65 条件が成功しました。さらに pending OFF と accepted connecting の
+表示回帰 4 条件を追加し、合計 69 条件を確認しました。pending、stopping、cleanup pending
+を OFF 完了と表示しないことも含みます。これは source 状態境界の検証で、実画面の検証ではありません。
 
 ## 実際の回収未確認状態に必要な次の設計（未実装）
 

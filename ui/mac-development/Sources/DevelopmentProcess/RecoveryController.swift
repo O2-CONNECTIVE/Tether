@@ -24,6 +24,7 @@ public final class RecoveryController {
     private var owner: any RecoveryOwner
     private let makeOwner: () -> any RecoveryOwner
     public private(set) var previousDiagnostic: String?
+    public private(set) var quitRequested = false
     public init() {
         owner = ResidentProcess()
         makeOwner = { ResidentProcess() }
@@ -38,7 +39,7 @@ public final class RecoveryController {
     public var mayQuit: Bool { owner.mayQuit }
     public var diagnostic: String { owner.diagnostic }
     public var preparation: Preparation {
-        guard !owner.feed.cleanupInvalid else { return .blocked }
+        guard !quitRequested, !owner.feed.cleanupInvalid else { return .blocked }
         if !owner.launched {
             guard !owner.feed.closing else { return .blocked }
             return owner.launchFailed ? .retryLaunch : .initial
@@ -55,7 +56,15 @@ public final class RecoveryController {
         owner.start()
         return owner.launched
     }
-    public func intent(_ intent: String) { owner.intent(intent) }
+    public func intent(_ intent: String) {
+        guard !quitRequested else { return }
+        owner.intent(intent)
+    }
     public func close() { owner.close() }
+    public var shouldTerminate: Bool { quitRequested && mayQuit }
+    public func requestQuit() {
+        quitRequested = true
+        if !mayQuit { owner.close() }
+    }
     public func poll() { owner.poll() }
 }
