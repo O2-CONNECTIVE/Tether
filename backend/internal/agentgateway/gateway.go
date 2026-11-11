@@ -55,6 +55,7 @@ type Principal struct {
 type Config struct {
 	// DiscoveryOnly permanently disables all registration and execution.
 	// Signers are forbidden, rather than silently ignored in this mode.
+	ResidentOnly   bool // only correlated fixed work, never generic Connect or MCP binding
 	DiscoveryOnly  bool
 	Verifier       *Verifier       // OAuth bearer JWT mode; the resource is its audience
 	Access         *AccessVerifier // Cloudflare Access assertion mode
@@ -108,6 +109,7 @@ type session struct {
 
 // Gateway holds every mapping in memory only.
 type Gateway struct {
+	residentOnly  bool // immutable, trusted composition only
 	discoveryOnly bool // immutable capability restriction, never request-selected
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -138,7 +140,7 @@ type Gateway struct {
 
 // New validates the configuration. It opens nothing and listens nowhere.
 func New(cfg Config) (*Gateway, error) {
-	if len(cfg.Principals) == 0 || len(cfg.Principals) > MaxPrincipals || cfg.CallTimeout < 0 {
+	if (cfg.DiscoveryOnly && cfg.ResidentOnly) || len(cfg.Principals) == 0 || len(cfg.Principals) > MaxPrincipals || cfg.CallTimeout < 0 {
 		return nil, ErrConfig
 	}
 	var raw string
@@ -155,7 +157,7 @@ func New(cfg Config) (*Gateway, error) {
 		return nil, ErrConfig
 	}
 	g := &Gateway{
-		discoveryOnly: cfg.DiscoveryOnly, verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
+		residentOnly: cfg.ResidentOnly, discoveryOnly: cfg.DiscoveryOnly, verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
 		bySubject: map[string]*principal{}, byLabel: map[string]*principal{},
 		budgets: cfg.Budgets, callTimeout: cfg.CallTimeout, clock: cfg.Clock, inflight: make(chan struct{}, MaxInflightRequests),
 		sessions: map[string]*session{}, launches: map[string]struct{}{}, joined: make(chan struct{}),
@@ -215,6 +217,14 @@ func validLabel(s string) bool {
 // closes the supplied stream; it never resumes the Mac approval.
 // The gateway never issues or extends a grant.
 func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
+	// ConnectResident uses the private connect port only after correlation and
+	// enrolled-host proof. Never let legacy registration enter that path.
+	if g != nil && g.residentOnly {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return ErrRefused
+	}
 	_, e := g.connect(label, d, conn)
 	return e
 }

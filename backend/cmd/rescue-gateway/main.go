@@ -131,6 +131,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 		return 2
 	}
 	gwConfig.Principals, gwConfig.Budgets = principals, agentgateway.ChannelBudgets()
+	gwConfig.ResidentOnly = cfg.residentOnly
 	gw, err := agentgateway.New(gwConfig)
 	if err != nil {
 		report(diagnostic, "設定が不正または不完全です")

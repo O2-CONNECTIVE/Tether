@@ -91,3 +91,23 @@ func TestResidentConfigRejectsDuplicateAndPartialEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestResidentOnlyConfigRequiresExactExplicitOptIn(t *testing.T) {
+	for _, value := range []any{nil, false, "true", 1, []any{}, map[string]any{}} {
+		d := residentDoc(t)
+		d["resident_only"] = value
+		if _, err := parseLocalConfig(encode(t, d), configPath); err == nil {
+			t.Fatalf("invalid resident_only accepted: %v", value)
+		}
+	}
+	d := residentDoc(t)
+	d["resident_only"] = true
+	cfg, err := parseLocalConfig(encode(t, d), configPath)
+	if err != nil || !cfg.residentOnly {
+		t.Fatal("explicit resident-only scope refused", err)
+	}
+	delete(d, "resident")
+	if _, err := parseLocalConfig(encode(t, d), configPath); err == nil {
+		t.Fatal("resident-only accepted without fixed enrollment")
+	}
+}

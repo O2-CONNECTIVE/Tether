@@ -30,22 +30,23 @@ const (
 // enrolled key path plus an independently recorded fingerprint, the exact wss
 // registration endpoint and the enrolled host keys. It holds no private byte.
 type localConfig struct {
-	gateway  agentgateway.FileConfig
-	endpoint string
-	keys     []agentkeys.Config // keys[i] belongs to gateway.Principals[i]
-	hosts    []agenttransport.EnrolledHost
-	resident []agentgateway.ResidentEnrollment // explicit fixed-scope opt-in only
+	gateway      agentgateway.FileConfig
+	endpoint     string
+	keys         []agentkeys.Config // keys[i] belongs to gateway.Principals[i]
+	hosts        []agenttransport.EnrolledHost
+	resident     []agentgateway.ResidentEnrollment // explicit fixed-scope opt-in only
+	residentOnly bool                              // rejects legacy registration and generic MCP binding
 }
 
 // parseLocalConfig validates the whole document before any key is opened.
-// Only resident is optional; unknown, duplicate and null members are refused at
+// Only resident and resident_only are optional; unknown, duplicate and null members are refused at
 // every depth. Omission never promotes legacy registrations to resident access.
 // configPath is the document's own path, which no key may share.
 func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	if len(raw) == 0 || len(raw) > agentkeys.MaxTrustConfigBytes || agentwire.CheckJSON(raw, false) != nil {
 		return localConfig{}, errConfig
 	}
-	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident")
+	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident", "resident_only")
 	defer wipeMembers(m)
 	if fieldErr != nil || m["gateway"] == nil || m["registration_endpoint"] == nil || m["principal_keys"] == nil || m["hosts"] == nil {
 		return localConfig{}, errConfig
@@ -73,6 +74,12 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 		if c.resident, ok = residentEnrollments(raw, c.hosts); !ok {
 			return localConfig{}, errConfig
 		}
+	}
+	if raw, present := m["resident_only"]; present {
+		if !bytes.Equal(raw, []byte("true")) || len(c.resident) == 0 {
+			return localConfig{}, errConfig
+		}
+		c.residentOnly = true
 	}
 	return c, nil
 }
