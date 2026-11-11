@@ -3,6 +3,8 @@ package mcpadapter
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -64,4 +66,51 @@ func TestResidentHTTPOnlyFixedScopeAndOriginalCorrelation(t *testing.T) {
 // have not been observed yet. Cancellation requests do not invent a new phase.
 func fixedResultFixture(id string) map[string]any {
 	return map[string]any{"request_id": id, "phase": "pending", "profile": "", "command_id": "", "command_phase": "", "exit": map[string]any{"known": false}, "stop": "none", "terminal": false, "command_cleanup": "", "owner_cleanup": "pending", "gateway_cleanup": "pending", "chunks": []any{}, "next_cursor": 0, "error": ""}
+}
+
+func TestResidentDiscoveryHasCatalogButNoAuthority(t *testing.T) {
+	s, err := NewResidentDiscoveryHTTPSession(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.backend != nil || s.resident != nil {
+		t.Fatal("discovery retained backend")
+	}
+	if !s.Handle([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)).Error {
+		t.Fatal("premature catalog")
+	}
+	reply := s.Handle([]byte(`{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}`))
+	if !reply.Initialized || !strings.Contains(string(reply.Body), "Resident catalog only") {
+		t.Fatal(string(reply.Body))
+	}
+	s.Handle([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+	reply = s.Handle([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`))
+	var result map[string]any
+	if json.Unmarshal(reply.Body, &result) != nil || reply.Error {
+		t.Fatal(string(reply.Body))
+	}
+	tools := result["result"].(map[string]any)["tools"].([]any)
+	if len(tools) != 7 {
+		t.Fatal(len(tools))
+	}
+	expected, _ := json.Marshal(residentCatalog(true, true, true, true))
+	actual, _ := json.Marshal(tools)
+	if !reflect.DeepEqual(expected, actual) {
+		t.Fatal("catalog drift")
+	}
+	for _, tool := range tools {
+		name := tool.(map[string]any)["name"].(string)
+		reply = s.Handle([]byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"` + name + `","arguments":{}}}`))
+		if !reply.Error || !strings.Contains(string(reply.Body), "Resident catalog only") {
+			t.Fatal(name, string(reply.Body))
+		}
+	}
+	if s.backend != nil || s.resident != nil {
+		t.Fatal("discovery acquired backend")
+	}
+	s.Close()
+	if s.ctx.Err() == nil || s.backend != nil || s.resident != nil {
+		t.Fatal("catalog close did not cancel or acquired authority")
+	}
 }

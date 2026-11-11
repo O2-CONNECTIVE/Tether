@@ -57,15 +57,16 @@ type HTTPReply struct {
 // header and never authenticates: the HTTP owner must authenticate the caller
 // and route it to the session bound to that caller's approved grant.
 type HTTPSession struct {
-	backend  *agentwire.Client
-	resident ResidentBackend
-	timeout  time.Duration
-	slots    chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	mu       sync.Mutex
-	state    int
-	calls    map[string]*call
+	backend           *agentwire.Client
+	resident          ResidentBackend
+	residentDiscovery bool // Immutable catalog-only mode, with no authority/backend.
+	timeout           time.Duration
+	slots             chan struct{}
+	ctx               context.Context
+	cancel            context.CancelFunc
+	mu                sync.Mutex
+	state             int
+	calls             map[string]*call
 }
 
 // NewHTTPSession creates one session in the pre-initialize state.
@@ -203,6 +204,8 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 		text := instructions
 		if s.resident != nil {
 			text = residentInstructions
+		} else if s.residentDiscovery {
+			text = residentDiscoveryInstructions
 		}
 		r := response(id, map[string]any{
 			"protocolVersion": ProtocolVersion,
@@ -219,6 +222,9 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 		if s.resident != nil {
 			return response(id, map[string]any{"tools": residentToolList(s.resident)})
 		}
+		if s.residentDiscovery {
+			return response(id, map[string]any{"tools": residentCatalog(true, true, true, true)})
+		}
 		return response(id, map[string]any{"tools": toolList()})
 	case "tools/call":
 		if state != stateReady {
@@ -232,6 +238,9 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 // toolCall runs one tool on the caller's goroutine with the same parsing,
 // slot bound, in-flight ID refusal, timeout and suppression rules as run.
 func (s *HTTPSession) toolCall(id *requestID, params json.RawMessage) HTTPReply {
+	if s.residentDiscovery {
+		return failed(id, codeInvalidRequest, residentDiscoveryInstructions)
+	}
 	if s.resident != nil {
 		return s.residentToolCall(id, params)
 	}

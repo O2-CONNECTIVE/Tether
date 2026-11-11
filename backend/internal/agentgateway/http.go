@@ -230,10 +230,14 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	g.expireLocked()
 	rt, full, closed := p.route, p.sessions >= MaxSessionsPerPrincipal, g.closed
 	var resident *residentSession
+	residentDiscovery := false
 	if g.resident != nil {
 		if entry := g.resident.entries[p]; entry != nil {
 			if gen := g.resident.control.ResidentGeneration(entry.enrollment.HostLabel, p.label); gen != "" {
 				resident = &residentSession{gateway: g, principal: p, entry: entry, generation: gen}
+				rt = nil
+			} else if g.residentOnly {
+				residentDiscovery = true
 				rt = nil
 			}
 		}
@@ -246,7 +250,7 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	case closed:
 		writeJSON(w, http.StatusServiceUnavailable, rpcError("the gateway is closed"))
 		return
-	case g.residentOnly && resident == nil:
+	case g.residentOnly && resident == nil && !residentDiscovery:
 		writeJSON(w, http.StatusServiceUnavailable, rpcError("resident control unavailable"))
 		return
 	case full:
@@ -257,6 +261,8 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	var err error
 	if resident != nil {
 		mcp, err = mcpadapter.NewResidentHTTPSession(resident, g.callTimeout, nil)
+	} else if residentDiscovery {
+		mcp, err = mcpadapter.NewResidentDiscoveryHTTPSession(g.callTimeout)
 	} else if rt == nil {
 		mcp, err = mcpadapter.NewDiscoveryHTTPSession(g.callTimeout)
 	} else {

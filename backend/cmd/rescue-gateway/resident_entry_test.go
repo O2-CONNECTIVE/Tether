@@ -101,40 +101,85 @@ func TestEntryComposesAuthenticatedResidentBeforeFirstSession(t *testing.T) {
 }
 
 func TestResidentOnlyEntryNeverFallsBackToGenericSession(t *testing.T) {
-	doc := residentDoc(t)
-	doc["resident_only"] = true
-	l := serveResidentEntry(t, doc)
-	auth := residentAuth(t, false, "synthetic-subject-1")
-	params := map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "fixture", "version": "1"}}
-	if code, h, _ := residentRPC(t, l, auth, "", "initialize", params); code != 503 || h.Get("Mcp-Session-Id") != "" {
-		t.Fatal("offline control created fallback session", code)
-	}
-	ws, _ := residentPeer(t, l)
-	defer ws.CloseNow()
-	var sid string
-	deadline := time.Now().Add(5 * time.Second)
-	for sid == "" {
-		code, h, _ := residentRPC(t, l, auth, "", "initialize", params)
-		sid = h.Get(agentgateway.HeaderSession)
-		if code == 200 && sid != "" {
-			break
-		}
-		if code != 503 || sid != "" || time.Now().After(deadline) {
-			t.Fatal("resident control did not become available", code)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if code, _, _ := residentRPC(t, l, auth, sid, "notifications/initialized", nil); code != 202 {
-		t.Fatal("initialized failed", code)
-	}
-	if code, _, body := residentRPC(t, l, auth, sid, "tools/list", nil); code != 200 || !strings.Contains(body, "tether_fixed_start") || strings.Contains(body, "rescue_start") {
-		t.Fatal("resident-only catalog is not fixed", code, body)
-	}
-	if code, body := residentTool(t, l, auth, sid, "rescue_start", map[string]any{"request_id": "legacy", "command": "id", "timeout_ms": 1000}); code == 200 && !strings.Contains(body, `"error"`) {
-		t.Fatal("generic command admitted", code, body)
-	}
-	other := residentAuth(t, false, "synthetic-subject-2")
-	if code, _, _ := residentRPC(t, l, other, "", "initialize", params); code != 503 {
-		t.Fatal("unenrolled principal created fallback session", code)
+	for _, access := range []bool{false, true} {
+		t.Run(strconv.FormatBool(access), func(t *testing.T) {
+			doc := residentDoc(t)
+			if access {
+				doc["gateway"] = accessGatewayDoc(t)
+			}
+			doc["resident_only"] = true
+			l := serveResidentEntry(t, doc)
+			auth := residentAuth(t, access, "synthetic-subject-1")
+			params := map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "fixture", "version": "1"}}
+			code, headers, body := residentRPC(t, l, auth, "", "initialize", params)
+			offlineSID := headers.Get(agentgateway.HeaderSession)
+			if code != 200 || offlineSID == "" || !strings.Contains(body, "Resident catalog only") {
+				t.Fatal("offline catalog unavailable", code, body)
+			}
+			if code, _, _ := residentRPC(t, l, auth, offlineSID, "notifications/initialized", nil); code != 202 {
+				t.Fatal("offline initialized", code)
+			}
+			assertOffline := func() {
+				t.Helper()
+				if code, _, body := residentRPC(t, l, auth, offlineSID, "tools/list", nil); code != 200 || !strings.Contains(body, "tether_fixed_get_execution") || strings.Contains(body, "rescue_start") {
+					t.Fatal("offline catalog", code, body)
+				}
+				for _, tool := range []string{"tether_fixed_start", "tether_fixed_status", "tether_fixed_cancel", "tether_fixed_release", "tether_fixed_list", "tether_fixed_read_output", "tether_fixed_get_execution", "rescue_start"} {
+					if code, body := residentTool(t, l, auth, offlineSID, tool, map[string]any{"request_id": strings.Repeat("a", 32)}); code != 200 || !strings.Contains(body, "Resident catalog only") || !strings.Contains(body, `"error"`) {
+						t.Fatal("offline call not refused", tool, code, body)
+					}
+				}
+			}
+			assertOffline()
+			wantUnauth := 401
+			if access {
+				wantUnauth = 403
+			}
+			if code, _, _ := residentRPC(t, l, "", offlineSID, "tools/list", nil); code != wantUnauth {
+				t.Fatal("offline auth bypass", code)
+			}
+			if code, _, _ := residentRPC(t, l, residentAuth(t, access, "synthetic-subject-2"), offlineSID, "tools/list", nil); code != 404 {
+				t.Fatal("offline session borrowed", code)
+			}
+			ws, _ := residentPeer(t, l)
+			defer ws.CloseNow()
+			var sid string
+			deadline := time.Now().Add(5 * time.Second)
+			for sid == "" {
+				code, h, body := residentRPC(t, l, auth, "", "initialize", params)
+				sid = h.Get(agentgateway.HeaderSession)
+				if code == 200 && sid != "" && !strings.Contains(body, "Resident catalog only") {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("resident control did not become available", code)
+				}
+				if code == 200 && sid != "" && strings.Contains(body, "Resident catalog only") {
+					residentDelete(t, l, auth, sid)
+					sid = ""
+				} else if code != 503 || sid != "" {
+					t.Fatal("unexpected initialization response", code, body)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			assertOffline() // A later live control must not promote the old catalog session.
+			if code, _, _ := residentRPC(t, l, auth, sid, "notifications/initialized", nil); code != 202 {
+				t.Fatal("initialized failed", code)
+			}
+			if code, _, body := residentRPC(t, l, auth, sid, "tools/list", nil); code != 200 || !strings.Contains(body, "tether_fixed_start") || strings.Contains(body, "rescue_start") {
+				t.Fatal("resident-only catalog is not fixed", code, body)
+			}
+			if code, body := residentTool(t, l, auth, sid, "rescue_start", map[string]any{"request_id": "legacy", "command": "id", "timeout_ms": 1000}); code == 200 && !strings.Contains(body, `"error"`) {
+				t.Fatal("generic command admitted", code, body)
+			}
+			other := residentAuth(t, access, "synthetic-subject-2")
+			if code, _, _ := residentRPC(t, l, other, "", "initialize", params); code != 503 {
+				t.Fatal("unenrolled principal created fallback session", code)
+			}
+			residentDelete(t, l, auth, offlineSID)
+			if code, _, _ := residentRPC(t, l, auth, offlineSID, "tools/list", nil); code != 404 {
+				t.Fatal("deleted offline session survived", code)
+			}
+		})
 	}
 }
