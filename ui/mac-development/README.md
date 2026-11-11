@@ -79,3 +79,9 @@ python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
 このローカルbundleは本人のsource評価用で、一般配布物ではありません。
 配布用の署名・notarization・license/notice閉包・binary監査は別受入です。
+
+専用CI [Development Mac GUI source and synthetic pipes](../../.github/workflows/mac-development.yml)
+は固定checkoutを記録し、Mac ARM64 / Xcode 26.5でappのbuild、DevelopmentChecks、
+ProcessChecks、合成bytesのpackaging試験を実行します。app/実resident起動、
+credential、enrollment、公開、配布artifactは作成しません。ローカルのSwift 6.4.2
+での確認とは別の実行結果として、固定headのCI終端を確認してください。
