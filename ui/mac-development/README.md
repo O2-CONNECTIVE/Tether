@@ -85,3 +85,21 @@ python3 -m unittest discover -s scripts -p 'test_*.py' -v
 ProcessChecks、合成bytesのpackaging試験を実行します。app/実resident起動、
 credential、enrollment、公開、配布artifactは作成しません。ローカルのSwift 6.4.2
 での確認とは別の実行結果として、固定headのCI終端を確認してください。
+
+### 操作停止後の回収確認
+
+開発 GUI は操作を許可する状態と、元の子プロセスの回収証拠を分けます。
+完全な状態通知の期限切れ・拒否で操作を停止した後も、同じ専用 pipe から来た
+厳格な終了通知を読みます。新しい ON、操作、helper の置換は許可しません。
+`confirmed` の終了通知、EOF、元の child の通常 exit 0 と reap がすべて揃った
+場合だけ、「停止して終了」で GUI を閉じられます。操作停止の事実は残ります。
+
+未知の回収結果、不正な終了通知、終了後の追加データ、部分 frame の期限切れ・
+過大入力、読取り失敗、clock rollback、非 0 exit は回収成功に変更しません。
+EOF や process 不在だけでは終了可能にせず、同じ owner を保持します。
+終了操作の連打や再接続で証拠を作り直す経路はありません。
+
+診断表示は固定の理由コード、GUI/helper PID、検証した helper hash の短縮値、
+終了通知・EOF・reap・正常 exit の有無だけです。設定本文、鍵、token、caller、
+endpoint、原 frame、stderr は表示・保存しません。hash は publisher 認証では
+ありません。起動前の一般的な失敗を、回収済みと推測する変更は含みません。

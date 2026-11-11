@@ -58,12 +58,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if resident.launchFailed {
             status.stringValue = "起動できませんでした"
             detail.stringValue = "同梱ファイルと開発用ビルドを確認してください。接続は開始していません。"
+        } else if resident.mayQuit && resident.launched {
+            status.stringValue = f.fault ? "操作を停止し、元のホストの回収を確認しました" : "停止・回収を確認しました"
+            detail.stringValue = "終了報告・出力終了・元プロセスの正常終了と回収を確認しました。「停止して終了」で閉じられます。再接続は行いません。\n" + resident.diagnostic
         } else if f.fault {
             status.stringValue = "停止・回収を確認できません"
-            detail.stringValue = "追加の操作と自動再起動を止めました。元のホストを保持しています。時間切れや画面の終了を停止完了とは扱いません。"
-        } else if resident.mayQuit && resident.launched {
-            status.stringValue = "停止・回収を確認しました"
-            detail.stringValue = "ホストの終了報告、出力の終了、元プロセスの回収を確認しました。"
+            detail.stringValue = "操作は停止しました。元のホストの回収証拠が不足しているため、この画面を保持します。終了の連打・再接続では復旧しません。次の診断情報を確認してください。\n" + resident.diagnostic
         } else if f.closing {
             status.stringValue = "停止と回収を確認中"
             detail.stringValue = "完了するまで、この画面と元のホストを保持します。"

@@ -20,11 +20,12 @@ public final class ResidentProcess {
     private var output: Pipe?
     private var lines = LineBuffer()
     private var exitOK = false
+    private var helperBuild = "unavailable"
     public static func now() -> UInt64 {
         var info = mach_timebase_info_data_t(); mach_timebase_info(&info)
         return UInt64(Double(mach_continuous_time()) * Double(info.numer) / Double(info.denom) / 1_000_000)
     }
-    public var mayQuit: Bool { !launched || (feed.closeConfirmed && !feed.fault && reaped && eof && exitOK) }
+    public var mayQuit: Bool { !launched || (feed.closeConfirmed && !feed.cleanupInvalid && reaped && eof && exitOK) }
     public func start() {
         guard !launched, !launchFailed else { return }
         do {
@@ -38,6 +39,7 @@ public final class ResidentProcess {
             let expected = try String(contentsOf: digestFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
             let digest = SHA256.hash(data: try Data(contentsOf: helper)).map { String(format: "%02x", $0) }.joined()
             guard expected.count == 64, digest == expected else { throw Invalid.input }
+            helperBuild = String(digest.prefix(12))
             let p = Process(), toChild = Pipe(), fromChild = Pipe()
             for fd in [toChild.fileHandleForWriting.fileDescriptor, fromChild.fileHandleForReading.fileDescriptor] {
                 let flags = fcntl(fd, F_GETFL)
@@ -57,13 +59,19 @@ public final class ResidentProcess {
         guard let command, let input, !reaped else { return }
         let bytes = Array(command.utf8)
         let count = bytes.withUnsafeBytes { Darwin.write(input.fileHandleForWriting.fileDescriptor, $0.baseAddress, $0.count) }
-        if count != bytes.count { feed.fail(); try? input.fileHandleForWriting.close() }
+        if count != bytes.count { feed.fail("input-write-failed"); try? input.fileHandleForWriting.close() }
     }
     public func intent(_ intent: String) { send(feed.command(intent, at: Self.now())) }
     public func close() { send(feed.requestClose()) }
+    // Fixed reason codes and process/build identities only, never policy,
+    // credentials, endpoint, caller, raw frames or stderr.
+    public var diagnostic: String {
+        let child = process.map { String($0.processIdentifier) } ?? "none"
+        return "GUI PID=\(ProcessInfo.processInfo.processIdentifier) helper PID=\(child) build=\(helperBuild) reason=\(feed.faultCode ?? "none") collection=\(feed.cleanupCode ?? "none") terminal=\(feed.closeConfirmed) EOF=\(eof) reaped=\(reaped) exit0=\(exitOK)"
+    }
     public func poll() {
         guard launched, let output, let process else { return }
-        do { try lines.checkDeadline(at: Self.now()) } catch { feed.fail() }
+        do { try lines.checkDeadline(at: Self.now()) } catch { feed.invalidateCleanup("frame-invalid") }
         if !eof {
             var bytes = [UInt8](repeating: 0, count: 4096)
             // Bounded read budget; no dispatch queue or unbounded callback backlog.
@@ -71,11 +79,11 @@ public final class ResidentProcess {
                 let n = Darwin.read(output.fileHandleForReading.fileDescriptor, &bytes, bytes.count)
                 if n == 0 {
                     eof = true
-                    if !lines.isEmpty || !feed.closed { feed.fail() }
+                    if !lines.isEmpty || !feed.closed { feed.invalidateCleanup("terminal-missing") }
                     try? output.fileHandleForReading.close(); break
                 }
                 if n < 0 {
-                    if errno != EAGAIN && errno != EINTR { feed.fail(); eof = true }
+                    if errno != EAGAIN && errno != EINTR { feed.invalidateCleanup("output-read-failed"); eof = true }
                     break
                 }
                 let receivedAt = Self.now() // sample after read; never before child publication
@@ -83,13 +91,13 @@ public final class ResidentProcess {
                     for frame in try lines.receive(Array(bytes.prefix(n)), at: receivedAt) {
                         feed.ingest(frame, at: receivedAt)
                     }
-                } catch { feed.fail() }
+                } catch { feed.invalidateCleanup("frame-invalid") }
             }
         }
         if !process.isRunning && !reaped {
             process.waitUntilExit(); reaped = true
             exitOK = process.terminationReason == .exit && process.terminationStatus == 0
-            if !exitOK { feed.fail() }
+            if !exitOK { feed.invalidateCleanup("child-exit-failed") }
             try? input?.fileHandleForWriting.close()
         }
         if feed.fault { close() }
