@@ -2,10 +2,8 @@ name: Windows isolated owner probe
 on:
   pull_request:
     branches: [main]
-    paths: ['tools/windows-owner-probe/**', '.github/workflows/windows-owner-probe.yml']
   push:
     branches: [main]
-    paths: ['tools/windows-owner-probe/**', '.github/workflows/windows-owner-probe.yml']
 permissions:
   contents: read
 concurrency:
@@ -18,12 +16,28 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane windows-owner
       - name: Require exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         run: python scripts/check_ci_checkout.py
       - name: Run each fixed native case once
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         shell: pwsh
         timeout-minutes: 2
         run: ./tools/windows-owner-probe/probe.test.ps1
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2

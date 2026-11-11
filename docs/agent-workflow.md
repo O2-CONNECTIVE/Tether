@@ -59,6 +59,7 @@ gh pr merge "$pr_number" --repo O2-CONNECTIVE/Tether --merge \
 
 この検査はメッセージだけの確認であり、以下のレビュー・適用CI・競合確認を代替しません。
 実行後は実merge commitの件名・本文・treeと、そのSHAの全適用workflowの終端を確認します。
+[Native CIの適用範囲](ci-scope.md)の`not_applicable`は試験未実行として区別します。
 まだjobが生成されていないpending workflowは、`gh pr checks`の成功だけで完了扱いしません。
 既存mainの不適合メッセージは追補commitでは修正できません。元の失敗を記録し、履歴の書換え、検査の例外追加、成功目的だけの再実行で隠さないでください。
 

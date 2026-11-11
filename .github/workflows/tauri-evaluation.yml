@@ -2,10 +2,8 @@ name: Tauri unwired evaluation package
 on:
   pull_request:
     branches: [main]
-    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'scripts/*driver_trace.py', 'scripts/*tauri*.py', 'scripts/tests/test_tauri_evaluation_*.py', 'docs/tauri-evaluation*', '.github/workflows/tauri-evaluation.yml']
   push:
     branches: [main]
-    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'scripts/*driver_trace.py', 'scripts/*tauri*.py', 'scripts/tests/test_tauri_evaluation_*.py', 'docs/tauri-evaluation*', '.github/workflows/tauri-evaluation.yml']
 permissions:
   contents: read
 concurrency:
@@ -17,17 +15,29 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane windows
       - name: Require and record exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         working-directory: ${{ github.workspace }}
         run: python scripts/check_ci_checkout.py
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         with:
           python-version: '3.13.17'
           architecture: x64
       - name: Record fixed source and test archive boundary
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         run: |
           $sha = (git rev-parse HEAD).Trim()
           if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'SOURCE_SHA_INVALID' }
@@ -36,9 +46,13 @@ jobs:
           python -B -m unittest discover -s scripts/tests -p 'test_tauri_evaluation_*.py' -v
           exit $LASTEXITCODE
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         with:
           node-version: '24.22.1'
       - name: Build locked frontend with runtime notices
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         working-directory: ui/tauri
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
@@ -48,13 +62,19 @@ jobs:
           node scripts/notices.mjs --check
           exit $LASTEXITCODE
       - name: Select fixed official Rust in disposable CI
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
       - name: Read locked Cargo metadata before compiling
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-7
         working-directory: ui/tauri
         run: |
           cargo +1.99.1 metadata --locked --format-version 1 --features custom-protocol --filter-platform x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml > "$env:RUNNER_TEMP/cargo-metadata.json"
           exit $LASTEXITCODE
       - name: Collect complete dependency license texts before compiling
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-8
         run: |
           $sysroot = (rustc +1.99.1 --print sysroot).Trim()
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -62,15 +82,21 @@ jobs:
           python -B scripts/collect_tauri_licenses.py --metadata "$env:RUNNER_TEMP/cargo-metadata.json" --frontend-notice ui/tauri/dist/THIRD_PARTY_NOTICES.txt --rust-docs "$sysroot/share/doc/rust" --output "$env:RUNNER_TEMP/evaluation-licenses"
           exit $LASTEXITCODE
       - name: Build locked release executable
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-9
         working-directory: ui/tauri
         run: cargo +1.99.1 build --release --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol
       - name: Create source-bound evaluation archive
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-10
         run: |
           $exe = "$env:CARGO_TARGET_DIR/release/rescue-host-shell.exe"
           if ((Get-AuthenticodeSignature $exe).Status -ne 'NotSigned') { throw 'UNEXPECTED_SIGNATURE_STATE' }
           python -B scripts/package_tauri_evaluation.py --exe $exe --licenses "$env:RUNNER_TEMP/evaluation-licenses" --source-sha $env:EVALUATION_SOURCE_SHA --output "$env:RUNNER_TEMP/evaluation-package"
           exit $LASTEXITCODE
       - name: Extract the exact distribution ZIP and check every file hash
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-11
         run: |
           $zip = "$env:RUNNER_TEMP/evaluation-package/RescueHostTauriUnwiredEvaluation-x64.zip"
           $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -85,18 +111,27 @@ jobs:
             if ((Get-FileHash (Join-Path $root $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) { throw 'PACKAGE_FILE_HASH_MISMATCH' }
           }
       - name: Read existing CI WebView2 without updating it
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-12
         run: ./ui/tauri/native-smoke/inventory.ps1 -OutputPath "$env:RUNNER_TEMP/evaluation-inventory.json"
       - name: Prepare existing pinned native test tools in runner temp
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-13
         timeout-minutes: 6
         run: ./ui/tauri/native-smoke/setup.ps1 -ToolsDirectory "$env:RUNNER_TEMP/evaluation-tools" -InventoryPath "$env:RUNNER_TEMP/evaluation-inventory.json"
       - name: Launch extracted release EXE and observe UI, IPC and normal close
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-14
         timeout-minutes: 3
         run: ./ui/tauri/native-smoke/supervise.ps1 -ToolsDirectory "$env:RUNNER_TEMP/evaluation-tools" -OutputDirectory "$env:RUNNER_TEMP/evaluation-evidence" -ApplicationPath "$env:RUNNER_TEMP/evaluation-unpacked/RescueHostTauriUnwiredEvaluation/rescue-host-shell.exe"
       - name: Validate anonymous driver stages and provenance
-        if: always()
+        id: ci-work-15
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         timeout-minutes: 1
         run: ./ui/tauri/native-smoke/inspect-driver-trace.ps1 -ToolsDirectory "$env:RUNNER_TEMP/evaluation-tools" -OutputDirectory "$env:RUNNER_TEMP/evaluation-evidence"
       - name: Save validated internal evaluation ZIP and separate evidence
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-16
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: tauri-unwired-windows-x64-evaluation
@@ -107,7 +142,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Save failure evidence without distributing a failed candidate
-        if: failure()
+        id: ci-work-17
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (failure()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: tauri-evaluation-failure-evidence
@@ -116,3 +152,9 @@ jobs:
             ${{ runner.temp }}/evaluation-inventory.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6,ci-work-7,ci-work-8,ci-work-9,ci-work-10,ci-work-11,ci-work-12,ci-work-13,ci-work-14,ci-work-15,ci-work-16 --optional ci-work-17

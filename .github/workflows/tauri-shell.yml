@@ -3,10 +3,8 @@ name: Tauri unwired shell
 on:
   pull_request:
     branches: [main]
-    paths: ['ui/tauri/**', '.github/workflows/tauri-shell.yml']
   push:
     branches: [main]
-    paths: ['ui/tauri/**', '.github/workflows/tauri-shell.yml']
 
 permissions:
   contents: read
@@ -29,23 +27,38 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac
       - name: Require and record exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         working-directory: ${{ github.workspace }}
         run: python scripts/check_ci_checkout.py
       - name: Set up Node
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.1'
       - name: Build locked frontend without starting a viewer
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm run build
       - name: Select official Rust on disposable runner
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
       - name: Restore Mac compilation cache
+        if: steps.ci-scope.outputs.selected == 'true'
         id: mac-rust-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -54,8 +67,12 @@ jobs:
             ui/tauri/src-tauri/target
           key: tauri-mac-rust-1.99.1-${{ hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml') }}
       - name: Fetch locked dependencies before offline checks
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         run: cargo +1.99.1 fetch --locked --manifest-path src-tauri/Cargo.toml
       - name: Check both context variants and all owned anonymous pipe tests
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-7
         run: |
           cargo +1.99.1 fmt --manifest-path src-tauri/Cargo.toml --check
           cargo +1.99.1 test --locked --offline --manifest-path src-tauri/Cargo.toml --lib
@@ -66,13 +83,21 @@ jobs:
           cargo +1.99.1 build --locked --offline --manifest-path src-tauri/Cargo.toml --features custom-protocol
           cargo +1.99.1 rustc --locked --offline --manifest-path src-tauri/Cargo.toml --lib -- --cfg resident_native_source -Dwarnings
       - name: Save Mac compilation cache
-        if: success() && steps.mac-rust-cache.outputs.cache-hit != 'true'
+        id: ci-work-8
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (success() && steps.mac-rust-cache.outputs.cache-hit != 'true') }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ui/tauri/src-tauri/target
           key: tauri-mac-rust-1.99.1-${{ hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml') }}
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,mac-rust-cache,ci-work-6,ci-work-7 --optional ci-work-8
+
   windows-shell:
     runs-on: windows-2022
     timeout-minutes: 20
@@ -82,19 +107,33 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane windows
       - name: Require and record exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         working-directory: ${{ github.workspace }}
         run: python scripts/check_ci_checkout.py
       - name: Set up Node
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.1'
       - name: Install locked frontend and test dependencies
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Lint, types and unused code
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         run: |
           npm run typecheck
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -105,6 +144,8 @@ jobs:
           npm run knip:production
           exit $LASTEXITCODE
       - name: Test GUI boundary and build bundled assets
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         run: |
           npm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -113,15 +154,22 @@ jobs:
           npm run test:browser
           exit $LASTEXITCODE
       - name: Test operator mock state and history
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         run: node --test tests/operator-controller.test.ts tests/operator-history.test.ts
       - name: Build separate operator mock assets
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-7
         run: node operator/build.mjs
       - name: Test operator mock browser interactions
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-8
         run: node --test tests/operator-browser.test.ts
         env:
           OPERATOR_SCREENSHOT_DIR: ${{ runner.temp }}/operator-gui-mock-states
       - name: Upload operator mock state screenshots
-        if: always()
+        id: ci-work-9
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: operator-gui-mock-states
@@ -129,8 +177,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Select official Rust on disposable runner
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-10
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
       - name: Cache Rust compilation
+        if: steps.ci-scope.outputs.selected == 'true'
         id: rust-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -140,20 +191,33 @@ jobs:
           key: tauri-windows-rust-1.99.1-${{ hashFiles('ui/tauri/src-tauri/Cargo.lock', 'ui/tauri/src-tauri/Cargo.toml') }}
           restore-keys: tauri-windows-rust-1.99.1-
       - name: Rust formatting and lint
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-12
         run: |
           cargo +1.99.1 fmt --manifest-path src-tauri/Cargo.toml --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +1.99.1 clippy --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol --all-targets -- -D warnings
           exit $LASTEXITCODE
       - name: Test Rust public IPC boundary
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-13
         run: cargo +1.99.1 test --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol
       - name: Build native unwired shell without installer
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-14
         run: cargo +1.99.1 build --locked --manifest-path src-tauri/Cargo.toml --features custom-protocol
       - name: Save compilation cache
-        if: always() && steps.rust-cache.outputs.cache-primary-key != '' && steps.rust-cache.outputs.cache-hit != 'true'
+        id: ci-work-15
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always() && steps.rust-cache.outputs.cache-primary-key != '' && steps.rust-cache.outputs.cache-hit != 'true') }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ui/tauri/src-tauri/target
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6,ci-work-7,ci-work-8,ci-work-9,ci-work-10,rust-cache,ci-work-12,ci-work-13,ci-work-14 --optional ci-work-15

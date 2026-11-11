@@ -28,13 +28,23 @@ jobs:
     steps:
       - name: Check out source without retained credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac-status
       - name: Require and record exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         working-directory: ${{ github.workspace }}
         run: python scripts/check_ci_checkout.py
       - name: Require the documented standard arm64 toolchain
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         run: |
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$RUNNER_OS" = macOS
@@ -49,6 +59,8 @@ jobs:
           sw_vers
           printf 'ImageOS=%s ImageVersion=%s\n' "$ImageOS" "$ImageVersion"
       - name: Test the bounded source-only CI harness
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         run: |
           python3 - <<'PYTEST'
           import unittest
@@ -60,11 +72,16 @@ jobs:
               raise SystemExit(1)
           PYTEST
       - name: Build, core checks and local evaluation packaging
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         run: python3 Tests/run_ci_checks.py source
       - name: Require real owned-window and own-content rendering checks
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         run: python3 Tests/run_ci_checks.py gui
       - name: Preserve only synthetic status evidence
-        if: always()
+        id: ci-work-6
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: tether-mac-status-synthetic-evidence
@@ -73,3 +90,9 @@ jobs:
             ui/mac-status/.build/fixture-images/*.png
           if-no-files-found: error
           retention-days: 3
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6

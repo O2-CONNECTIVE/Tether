@@ -3,16 +3,8 @@ name: MCP loopback TLS connection
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'backend/**'
-      - '.github/workflows/mcp-loopback.yml'
-      - 'scripts/check_ci_checkout.py'
   push:
     branches: [main]
-    paths:
-      - 'backend/**'
-      - '.github/workflows/mcp-loopback.yml'
-      - 'scripts/check_ci_checkout.py'
 
 permissions:
   contents: read
@@ -38,30 +30,46 @@ jobs:
     steps:
       - name: Check out the exact source without retained credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac
       - name: Verify exact source identity
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         run: python3 scripts/check_ci_checkout.py
       - name: Require the standard Mac arm64 runner
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         run: |
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$RUNNER_OS" = macOS
           test "$RUNNER_ARCH" = ARM64
           test "$(uname -m)" = arm64
       - name: Set up fixed Go
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.3'
           architecture: arm64
           cache: false
       - name: Prepare locked public modules
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         working-directory: backend
         run: |
           go mod download
           go mod verify
           git diff --exit-code -- go.mod go.sum
       - name: Run the explicit connection test normally and with race checks
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         working-directory: backend
         env:
           GOPROXY: 'off'
@@ -92,3 +100,9 @@ jobs:
               raise SystemExit('MCP_LOOPBACK_NOT_VERIFIED')
           PY
           done
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5

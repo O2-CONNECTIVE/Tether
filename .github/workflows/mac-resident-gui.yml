@@ -2,10 +2,8 @@ name: Mac resident GUI wiring
 on:
   pull_request:
     branches: [main]
-    paths: ['ui/tauri/**', 'ci-producer/**', 'backend/**', '.github/workflows/mac-resident-gui.yml']
   push:
     branches: [main]
-    paths: ['ui/tauri/**', 'ci-producer/**', 'backend/**', '.github/workflows/mac-resident-gui.yml']
 permissions:
   contents: read
 concurrency:
@@ -20,10 +18,18 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac
       - name: Require exact source and disposable Mac
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         run: |
           python3 scripts/check_ci_checkout.py
           test "$RUNNER_ENVIRONMENT" = github-hosted
@@ -32,11 +38,15 @@ jobs:
           test "$(sw_vers -productVersion | cut -d. -f1)" -ge 27
           test "$(xcodebuild -version | head -n 1)" = 'Xcode 27.1'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         with:
           go-version: '1.27.3'
           architecture: arm64
           cache: false
       - name: Build source-pinned Go producer composition
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         env:
           GOTOOLCHAIN: local
           GOWORK: 'off'
@@ -53,9 +63,13 @@ jobs:
           echo "CI_GUI_PRODUCER_BINARY=$producer" >> "$GITHUB_ENV"
           echo "CI_GUI_PRODUCER_SHA256=$(shasum -a 256 "$producer" | awk '{print $1}')" >> "$GITHUB_ENV"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         with:
           node-version: '24.22.1'
       - name: Build reviewed frontend
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         working-directory: ui/tauri
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
@@ -63,6 +77,8 @@ jobs:
           npm test
           npm run build
       - name: Select pinned Rust and build explicit CI composition
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         run: |
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --no-self-update
           cargo +1.99.1 fmt --manifest-path ui/tauri/src-tauri/Cargo.toml --check
@@ -72,6 +88,8 @@ jobs:
           RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 test --lib --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml resident_gui_
           RUSTFLAGS='--cfg resident_gui_fixture' cargo +1.99.1 build --locked --offline --manifest-path ui/tauri/src-tauri/Cargo.toml --features custom-protocol --example resident_gui_ci
       - name: Run real GUI through original owner keeper
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-7
         run: |
           umask 077
           test "$(shasum -a 256 "$CI_GUI_PRODUCER_BINARY" | awk '{print $1}')" = "$CI_GUI_PRODUCER_SHA256"
@@ -115,3 +133,9 @@ jobs:
           assert r['producer_sha256'] == os.environ['CI_GUI_PRODUCER_SHA256']
           print(json.dumps(r, ensure_ascii=False))
           PY
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6,ci-work-7

@@ -2,10 +2,8 @@ name: Tauri startup diagnostic variant
 on:
   pull_request:
     branches: [main]
-    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'scripts/*driver_trace.py', '.github/workflows/tauri-startup-diagnostic.yml']
   push:
     branches: [main]
-    paths: ['ui/tauri/**', 'tools/native-driver-trace/**', 'scripts/*driver_trace.py', '.github/workflows/tauri-startup-diagnostic.yml']
 permissions:
   contents: read
 concurrency:
@@ -22,25 +20,43 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane windows
       - name: Require and record exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         working-directory: ${{ github.workspace }}
         run: python scripts/check_ci_checkout.py
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         with:
           python-version: '3.13.17'
           architecture: x64
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         with:
           node-version: '24.22.1'
       - name: Test fixed classification and file boundary
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         working-directory: ui/tauri
         run: node --test tests/app-startup-stages.test.ts tests/app-startup-files.test.ts tests/app-startup-cli.test.ts
       - name: Test finite harness collection contract
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         run: ./ui/tauri/native-smoke/app-startup-contract.test.ps1
       - name: Record exact diagnostic source and existing runtime
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         run: |
           $sha = (git rev-parse HEAD).Trim()
           if ($sha -cnotmatch '^[0-9a-f]{40}$') { throw 'NATIVE_DIAGNOSTIC_SOURCE_INVALID' }
@@ -48,11 +64,17 @@ jobs:
           "CARGO_TARGET_DIR=$env:RUNNER_TEMP/startup-target" >> $env:GITHUB_ENV
           ./ui/tauri/native-smoke/inventory.ps1 -OutputPath "$env:RUNNER_TEMP/startup-inventory.json"
       - name: Select existing fixed CI Rust
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-7
         run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
       - name: Prepare pinned driver diagnostic source
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-8
         timeout-minutes: 6
         run: ./ui/tauri/native-smoke/setup.ps1 -ToolsDirectory "$env:RUNNER_TEMP/startup-tools" -InventoryPath "$env:RUNNER_TEMP/startup-inventory.json"
       - name: Build unchanged bundled frontend
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-9
         working-directory: ui/tauri
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
@@ -60,6 +82,8 @@ jobs:
           npm run build
           exit $LASTEXITCODE
       - name: Test and build explicit diagnostic feature
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-10
         working-directory: ui/tauri
         env:
           STARTUP_PROFILE: ${{ matrix.profile }}
@@ -71,6 +95,8 @@ jobs:
           & cargo @args
           exit $LASTEXITCODE
       - name: Bind source features and hash to isolated diagnostic fixture
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-11
         env:
           STARTUP_PROFILE: ${{ matrix.profile }}
         run: |
@@ -96,20 +122,25 @@ jobs:
           node ui/tauri/native-smoke/inspect-app-startup.ts --manifest "$fixture/BUILD.json" --exe "$fixture/rescue-host-shell.exe" --source $env:STARTUP_SOURCE --build-only
           exit $LASTEXITCODE
       - name: One native request with existing owned cleanup
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-12
         timeout-minutes: 3
         run: ./ui/tauri/native-smoke/supervise.ps1 -ToolsDirectory "$env:RUNNER_TEMP/startup-tools" -OutputDirectory "$env:RUNNER_TEMP/startup-evidence" -ApplicationPath $env:STARTUP_EXE -StartupDiagnostic -StartupManifest $env:STARTUP_MANIFEST -StartupSource $env:STARTUP_SOURCE
       - name: Validate anonymous app stage and build after cleanup
-        if: always()
+        id: ci-work-13
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         run: |
           New-Item -ItemType Directory "$env:RUNNER_TEMP/startup-evidence" -Force | Out-Null
           node ui/tauri/native-smoke/inspect-app-startup.ts --directory "$env:RUNNER_TEMP/startup-tools/app-startup" --manifest $env:STARTUP_MANIFEST --exe $env:STARTUP_EXE --source $env:STARTUP_SOURCE --collection "$env:RUNNER_TEMP/startup-evidence/native-result.json" > "$env:RUNNER_TEMP/startup-evidence/app-startup-report.json"
           exit $LASTEXITCODE
       - name: Validate anonymous driver stage and provenance
-        if: always()
+        id: ci-work-14
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         timeout-minutes: 1
         run: ./ui/tauri/native-smoke/inspect-driver-trace.ps1 -ToolsDirectory "$env:RUNNER_TEMP/startup-tools" -OutputDirectory "$env:RUNNER_TEMP/startup-evidence"
       - name: Save safe evidence only, never the diagnostic EXE or ZIP
-        if: always()
+        id: ci-work-15
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: startup-diagnostic-${{ matrix.profile }}-evidence
@@ -118,3 +149,9 @@ jobs:
             ${{ runner.temp }}/startup-inventory.json
           if-no-files-found: error
           retention-days: 7
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6,ci-work-7,ci-work-8,ci-work-9,ci-work-10,ci-work-11,ci-work-12,ci-work-13,ci-work-14,ci-work-15

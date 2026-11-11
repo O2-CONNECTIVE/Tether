@@ -3,18 +3,8 @@ name: Actual producer connection
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'backend/**'
-      - 'ci-producer/**'
-      - '.github/workflows/producer-connection.yml'
-      - 'scripts/check_ci_checkout.py'
   push:
     branches: [main]
-    paths:
-      - 'backend/**'
-      - 'ci-producer/**'
-      - '.github/workflows/producer-connection.yml'
-      - 'scripts/check_ci_checkout.py'
 
 permissions:
   contents: read
@@ -51,24 +41,38 @@ jobs:
     steps:
       - name: Check out exact source without retained credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac
       - name: Verify exact source identity
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         run: python3 scripts/check_ci_checkout.py
       - name: Require the standard hosted Mac ARM64 runner
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         run: |
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$RUNNER_OS" = macOS
           test "$RUNNER_ARCH" = ARM64
           test "$(uname -m)" = arm64
       - name: Set up fixed Go
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.3'
           architecture: arm64
           cache: false
       - name: Prepare locked public modules
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         working-directory: backend
         run: |
           test "$(go env GOVERSION)" = go1.27.3
@@ -77,8 +81,12 @@ jobs:
           go mod verify
           git diff --exit-code -- go.mod go.sum
       - name: Prepare reviewed source overlay
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         run: python3 ci-producer/prepare_overlay.py
       - name: Compile corresponding helper and test binaries
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         working-directory: backend
         env:
           GOPROXY: 'off'
@@ -112,6 +120,8 @@ jobs:
             printf 'CI_PRODUCER_SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
           } >> "$GITHUB_ENV"
       - name: Verify pure fixture parser and trust regressions
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-7
         working-directory: backend
         env:
           CI_ACTUAL_PRODUCER: '0'
@@ -179,6 +189,8 @@ jobs:
           PYGATE
           done
       - name: Verify pure native capture and private evidence regressions
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-8
         working-directory: backend
         env:
           CI_ACTUAL_PRODUCER: '0'
@@ -242,6 +254,8 @@ jobs:
           PYNATIVE
           done
       - name: Verify negative TLS, then the actual producer with original owners
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-9
         working-directory: backend
         env:
           CI_ACTUAL_PRODUCER: '1'
@@ -687,3 +701,9 @@ jobs:
           run_owned_test connection connection.test TestCIActualProducerConnection \
             github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe
           # Intentionally no artifact upload, raw-log publication or cleanup job.
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6,ci-work-7,ci-work-8,ci-work-9
