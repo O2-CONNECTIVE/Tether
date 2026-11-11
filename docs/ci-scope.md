@@ -53,7 +53,7 @@ Windows GUI入力から独立と監査したpathは次の完全一致11件だけ
 これはpath依存の静的監査であり、実GUIの成功証明ではありません。
 
 - 3 workflowのbuild入口は`ui/tauri/package.json`のfrontend buildと`ui/tauri/src-tauri/Cargo.toml`のCargo build/testです。Windows側ではGoのtoolchain導入・compile・起動を行いません。
-- npm buildは`ui/tauri/vite.config.ts`のVite buildと`ui/tauri/scripts/notices.mjs`のnotice生成を使います。Cargo依存、`build.rs`のmanifest、`tauri.conf.json`の`frontendDist`、Rustのinclude fixtureはTauri配下を入力とし、上記Go source/helperを読み込みません。
+- npm buildは`ui/tauri/vite.config.ts`のVite buildと`ui/tauri/scripts/notices.mjs`のnotice生成を使います。Cargo依存、`build.rs`のmanifest、`tauri.conf.json`の`frontendDist`はTauri配下を入力とします。Rustのinclude fixtureはTauri配下に加え、rootの`contracts/control-v1/vectors.json`も読み込みます。契約変更は全laneへ適用され、上記Go source/helperは読み込みません。
 - evaluationの`collect_tauri_licenses.py`はCargo metadata、lock、frontend notice、Rust licenseを収集します。`package_tauri_evaluation.py`と`verify_tauri_evaluation.py`はEXE、license、Tauri lock、`LICENSE`、`docs/tauri-evaluation-readme.txt`、source SHAを扱います。MarkdownやGo fileをarchiveへ取り込みません。
 - native smoke/startupは`ui/tauri/native-smoke/`のPowerShell harnessとTauri testを使います。`scripts/go_ci.py`とそのtestはGo検査の入口で、これらのworkflow/helperからimport・実行されません。
 
