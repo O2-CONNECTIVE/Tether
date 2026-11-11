@@ -33,7 +33,7 @@ PythonとGoの3OS検査、日本語commit検査は従来どおり常時実行し
 `tools/native-driver-trace/**`は従来のWindows両方の範囲を維持します。
 Go/PythonのWindows検査はこの分類を使わず常時実行します。
 
-Windows GUI入力から独立と監査したpathは次の完全一致11件だけです。
+Windows GUI入力から独立と監査したpathは次の完全一致12件だけです。
 新しいGo fileを拡張子や親directoryだけで除外せず、`backend/go.mod`、`backend/go.sum`と未知のbackend sourceも全laneへ戻します。
 
 - `backend/cmd/rescue-gateway/access_refresh.go`
@@ -45,6 +45,7 @@ Windows GUI入力から独立と監査したpathは次の完全一致11件だけ
 - `backend/internal/agentgateway/access_rotation.go`
 - `backend/internal/agentgateway/access_rotation_config_test.go`
 - `backend/internal/agentgateway/config.go`
+- `backend/internal/residentpipe/development_contract_test.go`
 - `scripts/go_ci.py`
 - `scripts/tests/test_go_ci.py`
 
@@ -56,6 +57,15 @@ Windows GUI入力から独立と監査したpathは次の完全一致11件だけ
 - npm buildは`ui/tauri/vite.config.ts`のVite buildと`ui/tauri/scripts/notices.mjs`のnotice生成を使います。Cargo依存、`build.rs`のmanifest、`tauri.conf.json`の`frontendDist`はTauri配下を入力とします。Rustのinclude fixtureはTauri配下に加え、rootの`contracts/control-v1/vectors.json`も読み込みます。契約変更は全laneへ適用され、上記Go source/helperは読み込みません。
 - evaluationの`collect_tauri_licenses.py`はCargo metadata、lock、frontend notice、Rust licenseを収集します。`package_tauri_evaluation.py`と`verify_tauri_evaluation.py`はEXE、license、Tauri lock、`LICENSE`、`docs/tauri-evaluation-readme.txt`、source SHAを扱います。MarkdownやGo fileをarchiveへ取り込みません。
 - native smoke/startupは`ui/tauri/native-smoke/`のPowerShell harnessとTauri testを使います。`scripts/go_ci.py`とそのtestはGo検査の入口で、これらのworkflow/helperからimport・実行されません。
+
+追加の完全一致 `backend/internal/residentpipe/development_contract_test.go` は、
+main `3795af8d3b4c8ba6c93f537aa06fe9eed3344613` を基準に監査した Go test-only file です。
+製品 source や権限・認証を変更せず、既存 mapper/Encode の公開合成出力と、
+開発 Mac GUI の同じ fixture の byte 一致だけを検査します。上記 Windows GUI の
+npm/Cargo/packaging/native harness からは import・compile・起動されません。
+Windows を含む Go/Python 共通検査、Windows shared、Mac の検査は維持します。
+隣接する production file、新しい test file、policy 自身とその test は全laneのままです。
+この例外を追加する PR 自体も policy を変更するため全laneを実行します。
 
 依存経路を増やす変更はUI、native、workflow、契約、manifest/lock、共通helperの分類で全laneを実行し、同時にこの監査とallowlistを再評価します。
 新しい依存を追加した後もGo fileを除外し続けてよいとは限りません。
