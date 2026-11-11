@@ -8,12 +8,29 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-LANES = {'mac', 'windows', 'mac-development', 'mac-status', 'windows-owner'}
+LANES = {'mac', 'windows-shared', 'windows-native', 'mac-development', 'mac-status', 'windows-owner'}
 EXCLUSIVE = {
     'ui/mac-development/': {'mac-development'},
     'ui/mac-status/': {'mac-status'},
     'tools/windows-owner-probe/': {'windows-owner'},
-    'tools/native-driver-trace/': {'windows'},
+    'tools/native-driver-trace/': {'windows-shared', 'windows-native'},
+}
+
+
+# Audited Windows GUI dependency closure: docs/ci-scope.md. Exact paths only;
+# new Go files, manifests, other helpers and changes to this policy run all lanes.
+WINDOWS_GUI_INDEPENDENT = {
+    'backend/cmd/rescue-gateway/access_refresh.go',
+    'backend/cmd/rescue-gateway/access_refresh_test.go',
+    'backend/cmd/rescue-gateway/discovery_pilot.go',
+    'backend/cmd/rescue-gateway/main.go',
+    'backend/cmd/tether-echo-probe/probe.go',
+    'backend/cmd/tether-echo-probe/probe_test.go',
+    'backend/internal/agentgateway/access_rotation.go',
+    'backend/internal/agentgateway/access_rotation_config_test.go',
+    'backend/internal/agentgateway/config.go',
+    'scripts/go_ci.py',
+    'scripts/tests/test_go_ci.py',
 }
 
 
@@ -68,6 +85,9 @@ def selected_lanes(paths):
                 or path.endswith('.lock') or parts[-1] in {'go.mod', 'go.sum', 'Cargo.toml', 'package.json', 'package-lock.json', 'Package.resolved'}):
             return LANES.copy(), 'shared_or_unknown_run_all'
         if path == 'README.md' or (path.startswith('docs/') and path.endswith('.md')):
+            continue
+        if path in WINDOWS_GUI_INDEPENDENT:
+            selected.update(LANES - {'windows-native'})
             continue
         matches = [lanes for prefix, lanes in EXCLUSIVE.items() if path.startswith(prefix)]
         if not matches:
