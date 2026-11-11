@@ -1,0 +1,33 @@
+name: Windows owner prerequisite diagnostic only
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  prerequisite-diagnostic:
+    if: github.head_ref == 'codex/windows-owner-prerequisite-diagnostic'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Require exact diagnostic source
+        run: python scripts/check_ci_checkout.py
+      - name: One diagnostic-only prerequisite execution
+        timeout-minutes: 2
+        run: ./tools/windows-app-owner/diagnostic.test.ps1 -OutputPath "$env:RUNNER_TEMP/app-owner-prerequisite-diagnostic.json"
+      - name: Save fixed classifications without raw logs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: app-owner-prerequisite-diagnostic
+          path: ${{ runner.temp }}/app-owner-prerequisite-diagnostic.json
+          if-no-files-found: error
+          retention-days: 7

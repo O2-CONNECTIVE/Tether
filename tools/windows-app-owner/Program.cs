@@ -7,9 +7,9 @@ namespace Tether.AppOwnerFixture {
         private static int Helper(string role, IntPtr[] handles) {
             FixtureNative.Member(DescendantNative.GetCurrentProcess(), handles[0]);
             if (role == "child") {
-                FixtureNative.Require(FixtureNative.SetEvent(handles[1]));
-                FixtureNative.Require(Native.WaitForSingleObject(handles[2], 20000) == 0);
-                FixtureNative.Require(FixtureNative.SetEvent(handles[3]));
+                FixtureNative.Require(Diagnostic.Api(FixtureNative.SetEvent(handles[1]), "SetEvent"));
+                FixtureNative.Require(Diagnostic.Wait(Native.WaitForSingleObject(handles[2], 20000)) == 0);
+                FixtureNative.Require(Diagnostic.Api(FixtureNative.SetEvent(handles[3]), "SetEvent"));
                 return 0;
             }
             Native.ProcessInfo child = FixtureNative.Create("child", handles);
@@ -17,8 +17,8 @@ namespace Tether.AppOwnerFixture {
             // Keep its original handles until this fixed root exits. The external owner retains
             // its root handles and Job even after this root exits while the child remains alive.
             FixtureNative.Member(child.process, handles[0]);
-            FixtureNative.Require(Native.ResumeThread(child.thread) == 1);
-            FixtureNative.Require(Native.WaitForSingleObject(handles[1], 5000) == 0);
+            FixtureNative.Require(Diagnostic.Resume(Native.ResumeThread(child.thread)) == 1);
+            FixtureNative.Require(Diagnostic.Wait(Native.WaitForSingleObject(handles[1], 5000)) == 0);
             return 0;
         }
         public static int Main(string[] args) {
@@ -35,15 +35,17 @@ namespace Tether.AppOwnerFixture {
                     return Helper(args[0], handles);
                 }
                 FixtureNative.Require(args.Length == 0);
-                FixtureNative.Require(AppOwner.Run(Scenario.LateChild) == Outcome.NormalExit);
-                FixtureNative.Require(AppOwner.Run(Scenario.ForcedCleanup) == Outcome.ForcedCleanup);
-                FixtureNative.Require(AppOwner.Run(Scenario.CancelBeforeResume) == Outcome.Cancelled);
-                FixtureNative.Require(AppOwner.Run(Scenario.AssignmentDenied) == Outcome.AssignmentDenied);
-                Console.WriteLine("APP_OWNER_FIXED_CASES_PASSED_4");
+                FixtureNative.Require(AppOwner.Run(Scenario.LateChild) == Outcome.NormalExit); Diagnostic.Completed++;
+                FixtureNative.Require(AppOwner.Run(Scenario.ForcedCleanup) == Outcome.ForcedCleanup); Diagnostic.Completed++;
+                FixtureNative.Require(AppOwner.Run(Scenario.CancelBeforeResume) == Outcome.Cancelled); Diagnostic.Completed++;
+                FixtureNative.Require(AppOwner.Run(Scenario.AssignmentDenied) == Outcome.AssignmentDenied); Diagnostic.Completed++;
+                Console.WriteLine(Diagnostic.Json(true));
                 return 0;
-            } catch (Exception) {
-                // Never publish raw errors, process IDs, paths, commands, or handle values.
-                Console.WriteLine("APP_OWNER_FIXTURE_FAILED");
+            } catch (Exception error) {
+                if (args.Length == 0) {
+                    if (Diagnostic.Primary == null && Diagnostic.Cleanup == null) Diagnostic.Primary = Diagnostic.Capture(error);
+                    Console.WriteLine(Diagnostic.Json(false));
+                }
                 return 1;
             }
         }
