@@ -16,6 +16,9 @@ Linux377 / Darwin-cgo382 / Darwin-nocgo379 / Windows408 production fileでした
 静的発見専用CLIの `cmd/rescue-gateway/discovery_pilot.go` を1fileだけ追加した現在は
 52 package、Linux378 / Darwin-cgo383 / Darwin-nocgo380 / Windows409 production fileです。
 既存gateway実装内の能力制限はfile集合を増やしません。実接続や公開配置は証明しません。
+Access公開鍵refreshの未配線候補では `internal/agentgateway/access_rotation.go` だけを追加します。
+52 package、Linux379 / Darwin-cgo384 / Darwin-nocgo381 / Windows410 production fileです。
+[更新候補と運用前の未決](access-key-rotation-candidate.md)を参照してください。
 任意 argv は exit 1、対応 build のゼロ引数だけが固定 enrollment を選びます。
 この entry の追加は署名・配置・native verified launch・配布を証明せず、通常 CLI / Tauri は未接続です。
 command unit は純粋な argv 判定と拒否だけを実行し、Darwin の実 account / policy / key を読みません。

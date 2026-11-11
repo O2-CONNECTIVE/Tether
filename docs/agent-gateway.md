@@ -204,3 +204,8 @@ Access applicationとAUDは、このMCP hostname/path専用にします。他ori
 - 取消通知では原則 JSON-RPC 応答を抑制する MCP の推奨と、JSON 単一応答型 HTTP の終了を両立させるため、元 POST に明示的 cancellation error を返します。実 client 互換は未確認です。開始の再確認には同じ request_id を使い、新 ID で再実行しません。
 
 2026-10-31 local verification update: the official cloudflared CLI application token may omit JOSE typ. A separately authorized local inspector successfully verified a real human assertion against the pinned public keys, issuer, AUD, lifetime and expected-person binding. No token or actual identity is included in this source. This does not establish other users, live gateway authorization, Managed OAuth or dot MCP connectivity.
+
+### 公開鍵自動更新の未配線候補
+
+[Access署名公開鍵の更新候補](access-key-rotation-candidate.md)は独立constructorだけです。
+CLI/設定JSONは現在も静的JWKSを使用し、運用値・scheduler・実配置は未採用です。

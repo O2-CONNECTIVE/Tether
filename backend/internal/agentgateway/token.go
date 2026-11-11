@@ -294,6 +294,7 @@ type AccessVerifierConfig struct {
 // application. It is a separate mode from Verifier: it accepts no OAuth
 // access token, reads no scope and never falls back to the bearer verifier.
 type AccessVerifier struct {
+	rotation    *accessKeyRotation // nil for the existing static verifier
 	issuer, aud string
 	keys        map[string]verificationKey
 	leeway      time.Duration
@@ -327,7 +328,14 @@ func (v *AccessVerifier) Verify(assertion string) (Identity, error) {
 	if v == nil {
 		return Identity{}, ErrToken
 	}
-	typ, payload, ok := verifyJWS(assertion, v.keys, false, "alg", "kid", "typ")
+	if v.rotation != nil {
+		return v.rotation.verify(v, assertion)
+	}
+	return v.verifyWithKeys(assertion, v.keys)
+}
+
+func (v *AccessVerifier) verifyWithKeys(assertion string, keys map[string]verificationKey) (Identity, error) {
+	typ, payload, ok := verifyJWS(assertion, keys, false, "alg", "kid", "typ")
 	if !ok || normalType(typ) != "jwt" || agentwire.CheckJSON(payload, true) != nil {
 		return Identity{}, ErrToken
 	}
