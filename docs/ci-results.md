@@ -84,3 +84,8 @@ merge前には別途最新head・レビュー・実Actionsの取得完了を確�
 
 workflowの成功と要求jobすべての成功が両方必要です。個別stepの内容、テスト数・skip理由・秘密scan・依存scan・配布一致の検証は既存の各検査とレビューが担当します。
 実GUI・実dot接続・本番利用・44条件・P2 runtimeの合格を意味せず、既存の未達と接続gate閉鎖を維持します。
+
+[Native CIの適用範囲](ci-scope.md)を分けたjobは、既存check名の中で終端判定を常時実行します。
+そのjobのsuccessは`passed`または明示された`not_applicable`であり、後者は試験未実行です。
+この集約checkerはstepを読まないため、native試験の実績にはsummaryとstepの適用記録も照合します。
+既存のjob/workflow skip拒否は緩和しません。

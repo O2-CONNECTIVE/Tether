@@ -27,53 +27,81 @@ jobs:
     steps:
       - name: Check out exact candidate without retained credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac
       - name: Set up Python
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13.17'
       - name: Require and record exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         run: python scripts/check_ci_checkout.py
       - name: Require disposable ARM64 Mac
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         run: |
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$RUNNER_ARCH" = ARM64
           test "$(uname -m)" = arm64
           test "$(xcodebuild -version | head -n 1)" = "Xcode 27.1"
       - name: Set up fixed Node for normal frontend
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.1'
       - name: Set up fixed Go for the same-source sealed producer
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.3'
           cache: false
       - name: Select fixed Rust on disposable runner
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         run: |
           rustup toolchain install 1.99.1 --profile minimal --no-self-update
           dirname "$(rustup which --toolchain 1.99.1 rustc)" >> "$GITHUB_PATH"
       - name: Prepare locked public dependencies before offline snapshot build
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-7
         run: |
           npm ci --prefix ui/tauri --ignore-scripts --no-audit --no-fund
           cargo fetch --locked --manifest-path ui/tauri/src-tauri/Cargo.toml
           python scripts/go_ci.py prepare
       - name: Build and verify all three app images without signing or launch
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-8
         run: |
           mkdir -p "$RUNNER_TEMP/gui-candidate-evidence"
           python scripts/check_mac_gui_candidate_ci.py "$RUNNER_TEMP/gui-candidate" | tee "$RUNNER_TEMP/gui-candidate-evidence/gui-build.json"
           cp "$RUNNER_TEMP/gui-candidate/BUILD_RECORD.json" "$RUNNER_TEMP/gui-candidate-evidence/gui-build-record.json"
       - name: Preserve JSON records only, never app or executable images
-        if: always()
+        id: ci-work-9
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: gui-candidate-evidence
           path: ${{ runner.temp }}/gui-candidate-evidence/*.json
           if-no-files-found: warn
           retention-days: 3
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6,ci-work-7,ci-work-8,ci-work-9
 
   native-source:
     name: Native source, owned fixtures and Intel compile only
@@ -91,18 +119,29 @@ jobs:
     steps:
       - name: Check out exact candidate without retained credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac
       - name: Set up Python
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13.17'
       - name: Require and record exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         working-directory: ${{ github.workspace }}
         run: python scripts/check_ci_checkout.py
       - name: Require reviewed disposable Mac toolchain
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         run: |
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$RUNNER_ARCH" = ARM64
@@ -113,24 +152,34 @@ jobs:
           xcrun swift --version
           xcrun --sdk macosx --show-sdk-version
       - name: Set up fixed Go for source-only fixtures
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.3'
           cache: false
       - name: Select fixed Rust and explicit Intel compile target on disposable runner
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         run: |
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
           rustup target add --toolchain 1.99.1 x86_64-apple-darwin
           dirname "$(rustup which --toolchain 1.99.1 rustc)" >> "$GITHUB_PATH"
       - name: Prepare existing public dependencies
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         run: |
           python scripts/go_ci.py prepare
           cargo fetch --locked --manifest-path ui/tauri/native/resident-launch/fixtures/pump_source/Cargo.toml
       - name: Run source helper regressions
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-7
         run: |
           python -m unittest discover -s scripts/tests -p 'test_ci_checkout.py' -v
           python -m unittest discover -s scripts/tests -p 'test_mac_*.py' -v
       - name: Check preparation, fixed self-child completion and same-owner fixtures
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-8
         run: |
           mkdir -p "$RUNNER_TEMP/native-source-evidence"
           python scripts/check_mac_atomic_pipes.py | tee "$RUNNER_TEMP/native-source-evidence/atomic-pipes.json"
@@ -147,25 +196,38 @@ jobs:
           python scripts/check_mac_native_outer.py | tee "$RUNNER_TEMP/native-source-evidence/outer.json"
           python scripts/check_mac_native_session.py | tee "$RUNNER_TEMP/native-source-evidence/session.json"
       - name: Compile and link Intel images without execution
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-9
         run: python scripts/check_mac_native_cross.py | tee "$RUNNER_TEMP/native-source-evidence/intel.json"
       - name: Replay synthetic enrollment lookup and build untrusted source archives
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-10
         run: |
           python scripts/check_mac_standby_consume.py | tee "$RUNNER_TEMP/native-source-evidence/consume.json"
           python scripts/check_mac_enrollment_lookup.py | tee "$RUNNER_TEMP/native-source-evidence/enrollment.json"
           python scripts/check_mac_library_ci.py "$RUNNER_TEMP/native-source-library" | tee "$RUNNER_TEMP/native-source-evidence/library.json"
           cp "$RUNNER_TEMP/native-source-library/BUILD_RECORD.json" "$RUNNER_TEMP/native-source-evidence/build-record.json"
       - name: Build fixed sealed producer without execution or signing
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-11
         run: |
           python scripts/check_mac_sealed_producer_ci.py "$RUNNER_TEMP/native-sealed-producer" | tee "$RUNNER_TEMP/native-source-evidence/sealed-producer.json"
           cp "$RUNNER_TEMP/native-sealed-producer/BUILD_RECORD.json" "$RUNNER_TEMP/native-source-evidence/sealed-producer-build-record.json"
       - name: Preserve source-only reports, never binary archives
-        if: always()
+        id: ci-work-12
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: native-source-evidence
           path: ${{ runner.temp }}/native-source-evidence/*.json
           if-no-files-found: warn
           retention-days: 3
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6,ci-work-7,ci-work-8,ci-work-9,ci-work-10,ci-work-11,ci-work-12
 
   intel-library:
     name: Intel Go source library without producer execution
@@ -182,17 +244,28 @@ jobs:
     steps:
       - name: Check out exact source without retained credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac
       - name: Set up Python
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13.17'
       - name: Require and record exact source checkout
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         run: python scripts/check_ci_checkout.py
       - name: Require Intel runner and record SDK
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         run: |
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$(uname -m)" = x86_64
@@ -200,22 +273,35 @@ jobs:
           xcrun clang --version
           xcrun --sdk macosx --show-sdk-version
       - name: Set up fixed Go
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.3'
           cache: false
       - name: Prepare and verify public dependencies
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-5
         run: python scripts/go_ci.py prepare
       - name: Verify blocked Intel source build record
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
         run: |
           mkdir -p "$RUNNER_TEMP/native-intel-library-evidence"
           python scripts/check_mac_library_ci.py "$RUNNER_TEMP/native-intel-source-library" | tee "$RUNNER_TEMP/native-intel-library-evidence/library.json"
           cp "$RUNNER_TEMP/native-intel-source-library/BUILD_RECORD.json" "$RUNNER_TEMP/native-intel-library-evidence/build-record.json"
       - name: Preserve source reports only
-        if: always()
+        id: ci-work-7
+        if: ${{ steps.ci-scope.outputs.selected == 'true' && (always()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: native-intel-library-evidence
           path: ${{ runner.temp }}/native-intel-library-evidence/*.json
           if-no-files-found: warn
           retention-days: 3
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6,ci-work-7

@@ -23,10 +23,18 @@ jobs:
     steps:
       - name: Check out exact source without retained credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: ci-checkout
         with:
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Select applicable work from complete source history
+        id: ci-scope
+        working-directory: ${{ github.workspace }}
+        run: python scripts/ci_scope.py select --lane mac-development
       - name: Require exact checkout and documented toolchain
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-1
         run: |
           python3 scripts/check_ci_checkout.py
           test "$RUNNER_ENVIRONMENT" = github-hosted
@@ -37,13 +45,25 @@ jobs:
           xcrun swift --version
           xcrun --sdk macosx --show-sdk-version
       - name: Build development app and synthetic test executables
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-2
         working-directory: ui/mac-development
         run: swift build
       - name: Check bounded protocol and real synthetic child pipes
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-3
         working-directory: ui/mac-development
         run: |
           swift run --skip-build DevelopmentChecks
           swift run --skip-build ProcessChecks
       - name: Check non-executing packaging with synthetic bytes
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-4
         working-directory: ui/mac-development
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Require applicable work or explicit non-applicability
+        if: always()
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_SCOPE_STEPS: ${{ toJSON(steps) }}
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4
