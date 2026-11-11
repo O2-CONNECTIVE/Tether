@@ -72,7 +72,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             detail.stringValue = "新しい状態を受け取るまで ON/OFF は操作できません。"
         } else if let o = f.observation {
             let connected = o.registration == "authenticated"
-            status.stringValue = o.standby == "on" ? (connected ? "開発ホストは待機中" : "待機 ON・接続を確認中") : "待機は OFF"
+            if o.standby == "unknown" && f.pending?.intent == "on" {
+                status.stringValue = "接続を確認中・待機 ON は未確認"
+            } else {
+                status.stringValue = o.standby == "on" ? (connected ? "開発ホストは待機中" : "待機 ON・接続を確認中") : "待機は OFF"
+            }
             detail.stringValue = f.pending != nil ? "要求を受け付けました。実際の状態変更を確認しています。" : "接続: \(connected ? "認証済み" : "未確認") ／ 操作: \(o.work == "idle" ? "なし" : "処理中") ／ 回収: \(o.cleanup == "confirmed" ? "確認済み" : "確認中")"
         }
         if quitRequested && resident.mayQuit { NSApp.terminate(nil) }

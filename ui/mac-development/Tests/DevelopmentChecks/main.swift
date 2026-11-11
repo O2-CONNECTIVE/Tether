@@ -112,3 +112,6 @@ for unknownFrame in [staleUnknown, receipt("unknown")] {
     check(rejectedUnknown.cleanupInvalid && !rejectedUnknown.closeConfirmed, "unknown wins over stale or uncorrelated observation")
 }
 print("Total including review regressions: \(checks) passed")
+
+runMapperContract()
+print("Total including mapper contract: \(checks) passed")

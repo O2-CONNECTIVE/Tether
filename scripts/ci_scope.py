@@ -29,6 +29,7 @@ WINDOWS_GUI_INDEPENDENT = {
     'backend/internal/agentgateway/access_rotation.go',
     'backend/internal/agentgateway/access_rotation_config_test.go',
     'backend/internal/agentgateway/config.go',
+    'backend/internal/residentpipe/development_contract_test.go',
     'scripts/go_ci.py',
     'scripts/tests/test_go_ci.py',
 }

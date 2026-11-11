@@ -13,3 +13,6 @@ backend/internal/servicecontrol/testdata/response-vectors.json -text
 
 # 管理者がhash照合するASCII-only scriptのbytesをcheckout時に変換しない。
 deploy/cloudflare/prepare-directory.ps1 -text
+
+# Go/Swift共通のwire fixtureはLFを含む固定bytesとして保持する。
+ui/mac-development/Tests/DevelopmentChecks/Fixtures/mapper-pending.jsonl -text

@@ -133,6 +133,21 @@ class ScopeCLITests(unittest.TestCase):
                 self.write(path); self.commit()
                 self.assert_lanes(LANES)
 
+    def test_development_mapper_fixture_exemption_is_exact_and_keeps_common_lanes(self):
+        fixture = 'backend/internal/residentpipe/development_contract_test.go'
+        self.write(fixture); self.write('ui/mac-development/Tests/DevelopmentChecks/Fixtures/mapper-pending.jsonl')
+        self.commit()
+        self.assert_lanes(set(LANES) - {'windows-native'})
+        for path in ['backend/internal/residentpipe/mapper.go',
+                     'backend/internal/residentpipe/codec.go',
+                     'backend/internal/residentpipe/development_contract.go',
+                     'backend/internal/residentpipe/development_contract_extra_test.go',
+                     'scripts/ci_scope.py', 'scripts/tests/test_ci_scope.py']:
+            with self.subTest(path=path):
+                self.base = self.git('rev-parse', 'HEAD')
+                self.write(fixture, path); self.write(path); self.commit()
+                self.assert_lanes(LANES)
+
     def test_audited_backend_deletion_is_exempt_but_rename_from_shared_is_not(self):
         path = 'backend/cmd/rescue-gateway/access_refresh.go'
         self.write(path); self.commit()
