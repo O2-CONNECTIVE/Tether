@@ -1,0 +1,64 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -15,0 +16,2 @@
++#[cfg(windows)]
++mod owned_attach;
+@@ -32,8 +34,3 @@
+-  let _job_handle = {
+-    let job = win32job::Job::create().unwrap();
+-    let mut info = job.query_extended_limit_info().unwrap();
+-    info.limit_kill_on_job_close();
+-    job.set_extended_limit_info(&info).unwrap();
+-    job.assign_current_process().unwrap();
+-    job
+-  };
++  let outer = owned_attach::outer_job();
++  #[cfg(windows)]
++  let channel = owned_attach::Channel::inherited();
+@@ -46,0 +44,3 @@
++  #[cfg(windows)]
++  owned_attach::start(channel, driver, outer);
++
+@@ -48 +48 @@
+-  if let Err(e) = server::run(args, driver) {
++  if let Err(e) = server::run(args) {
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -24 +24 @@
+-use std::process::Child;
++
+@@ -170,26 +170 @@
+-pub async fn run(args: Args, mut _driver: Child) -> Result<(), Error> {
+-  #[cfg(unix)]
+-  let (signals_handle, signals_task) = {
+-    use futures_util::StreamExt;
+-    use signal_hook::consts::signal::*;
+-
+-    let signals = signal_hook_tokio::Signals::new([SIGTERM, SIGINT, SIGQUIT])?;
+-    let signals_handle = signals.handle();
+-    let signals_task = tokio::spawn(async move {
+-      let mut signals = signals.fuse();
+-      #[allow(clippy::never_loop)]
+-      while let Some(signal) = signals.next().await {
+-        match signal {
+-          SIGTERM | SIGINT | SIGQUIT => {
+-            _driver
+-              .kill()
+-              .expect("unable to kill native webdriver server");
+-            std::process::exit(0);
+-          }
+-          _ => unreachable!(),
+-        }
+-      }
+-    });
+-    (signals_handle, signals_task)
+-  };
+-
++pub async fn run(args: Args) -> Result<(), Error> {
+@@ -238,6 +212,0 @@
+-  #[cfg(unix)]
+-  {
+-    signals_handle.close();
+-    signals_task.await?;
+-  }
+-
