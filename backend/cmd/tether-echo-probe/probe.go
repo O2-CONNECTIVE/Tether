@@ -62,9 +62,10 @@ type probe struct {
 // newProbe accepts only a parsed cloudflare_access document whose resource is
 // the probe's HTTP echo URL, so the real gateway document (an MCP resource) is
 // refused, with no allowed origins. The subject allowlist is exactly the
-// document's principals (one to four); email is never consulted.
+// document's principals (one to four); email is never consulted. This bounded
+// probe has no refresh owner and therefore accepts only the static key mode.
 func newProbe(c agentgateway.FileConfig, l limits) (*probe, error) {
-	if c.Mode != agentgateway.ModeCloudflareAccess || len(c.AllowedOrigins) != 0 || probePath(c.Resource) != HTTPPath ||
+	if c.Mode != agentgateway.ModeCloudflareAccess || c.AccessKeySource != "" || len(c.AllowedOrigins) != 0 || probePath(c.Resource) != HTTPPath ||
 		len(c.Principals) == 0 || len(c.Principals) > agentgateway.MaxPrincipals ||
 		l.Body <= 0 || l.Message <= 0 || l.Frames <= 0 || l.HTTP <= 0 || l.Conns <= 0 || l.Lifetime <= 0 {
 		return nil, errProbeConfig

@@ -33,7 +33,7 @@ func parseDiscoveryConfig(raw []byte) (agentgateway.FileConfig, error) {
 
 // No signer read, registration handler, resident enrollment, grant or command
 // producer exists in this composition. Existing auth and membership remain.
-func executeDiscovery(parent context.Context, path string, diagnostic io.Writer, d deps) int {
+func executeDiscovery(parent context.Context, path string, diagnostic io.Writer, d deps) (code int) {
 	if parent == nil || parent.Err() != nil || path == "" || d.readTrust == nil || d.listen == nil {
 		report(diagnostic, "Discovery mode is not configured")
 		return 2
@@ -65,6 +65,17 @@ func executeDiscovery(parent context.Context, path string, diagnostic io.Writer,
 		report(diagnostic, "Invalid discovery configuration")
 		return 2
 	}
+	stopRefresh, err := startAccessRefresh(ctx, cfg, gwConfig.Access, diagnostic, d)
+	if err != nil {
+		report(diagnostic, "Access公開鍵を取得できませんでした。待受しません")
+		return closeUnserved(nil, gw.Close, diagnostic, 2)
+	}
+	defer func() {
+		if err := stopRefresh(); err != nil {
+			report(diagnostic, "Owned shutdown could not be confirmed")
+			code = 1
+		}
+	}()
 	if ctx.Err() != nil {
 		return closeUnserved(nil, gw.Close, diagnostic, 1)
 	}
@@ -77,7 +88,7 @@ func executeDiscovery(parent context.Context, path string, diagnostic io.Writer,
 		return closeUnserved(nil, gw.Close, diagnostic, 1)
 	}
 	handler := discoveryRoutes(ctx, pathOf(cfg.Resource), cfg.Mode == agentgateway.ModeOAuthBearer, gw)
-	code := serve(ctx, ln, handler, func(context.Context) error { return nil }, gw.Close, diagnostic)
+	code = serve(ctx, ln, handler, func(context.Context) error { return nil }, gw.Close, diagnostic)
 	if ctx.Err() == context.DeadlineExceeded {
 		report(diagnostic, "Discovery pilot expired")
 		return 1

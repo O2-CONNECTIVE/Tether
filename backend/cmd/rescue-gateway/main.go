@@ -51,15 +51,19 @@ type deps struct {
 	listen    func(network, addr string) (net.Listener, error)
 	// pilotLifetime applies to -pilot-config only. Production fixes it at
 	// pilotMaxLifetime; a test may shorten it but never exceed the maximum.
-	pilotLifetime time.Duration
+	pilotLifetime     time.Duration
+	refreshAccessKeys func(context.Context, *agentgateway.AccessVerifier) error
+	waitAccessRefresh func(context.Context, time.Duration) bool
 }
 
 func nativeDeps() deps {
 	return deps{
-		readTrust:     agentkeys.ReadTrustConfig,
-		loadKey:       agentkeys.LoadCurrentUser,
-		listen:        net.Listen,
-		pilotLifetime: pilotMaxLifetime,
+		readTrust:         agentkeys.ReadTrustConfig,
+		loadKey:           agentkeys.LoadCurrentUser,
+		listen:            net.Listen,
+		pilotLifetime:     pilotMaxLifetime,
+		refreshAccessKeys: func(ctx context.Context, v *agentgateway.AccessVerifier) error { return v.RefreshKeys(ctx) },
+		waitAccessRefresh: waitAccessRefresh,
 	}
 }
 
@@ -74,7 +78,8 @@ func main() {
 // the listener normally exits 2; an expired constructed pilot closes owners
 // and exits 1. Diagnostics are fixed messages; no
 // token, header, subject, label, fingerprint or path is printed.
-func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) int {
+func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (code int) {
+	diagnostic = lockDiagnostic(diagnostic)
 	// Select before requiring a signer loader. No mixed or extra flags can
 	// enter this branch, and the discovery parser never falls back.
 	if len(args) == 2 && args[0] == "-discovery-pilot-config" {
@@ -163,10 +168,24 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 			return closeUnserved(registration.Close, gw.Close, diagnostic, 2)
 		}
 	}
-	// A pilot whose lifetime ended during the reads or construction never
-	// listens; the owners built so far are closed like a listen failure.
-	if pilot && ctx.Err() != nil {
-		report(diagnostic, "試行期限内に待受を開始できませんでした")
+	stopRefresh, err := startAccessRefresh(ctx, cfg.gateway, gwConfig.Access, diagnostic, d)
+	if err != nil {
+		report(diagnostic, "Access公開鍵を取得できませんでした。待受しません")
+		return closeUnserved(registration.Close, gw.Close, diagnostic, 2)
+	}
+	defer func() {
+		if err := stopRefresh(); err != nil {
+			report(diagnostic, "Owned shutdown could not be confirmed")
+			code = 1
+		}
+	}()
+	// A cancelled/expired start never listens; all constructed owners close.
+	if ctx.Err() != nil {
+		if pilot {
+			report(diagnostic, "試行期限内に待受を開始できませんでした")
+		} else {
+			report(diagnostic, "停止要求のため待受しません")
+		}
 		return closeUnserved(registration.Close, gw.Close, diagnostic, 1)
 	}
 	// The network comes from the same parsed profile as the address.
@@ -180,7 +199,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 	}
 	mcpPath, registrationPath := pathOf(cfg.gateway.Resource), pathOf(cfg.endpoint)
 	metadata := cfg.gateway.Mode == agentgateway.ModeOAuthBearer
-	code := serve(ctx, ln, routes(mcpPath, registrationPath, metadata, gw, registration), registration.Close, gw.Close, diagnostic)
+	code = serve(ctx, ln, routes(mcpPath, registrationPath, metadata, gw, registration), registration.Close, gw.Close, diagnostic)
 	if pilot && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		report(diagnostic, "試行期限に達したため停止しました")
 	}

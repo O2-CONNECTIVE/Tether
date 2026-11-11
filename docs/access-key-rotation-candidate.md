@@ -1,13 +1,13 @@
-# Access署名公開鍵の更新候補
+# Access署名公開鍵の更新とCLI所有
 
 [gatewayの現行契約](agent-gateway.md) / [Go CI](go-ci.md)
 
 ## 範囲
 
 [Issue #337](https://github.com/O2-CONNECTIVE/Tether/issues/337) / R-14へのsource-level候補です。`NewRotatingAccessVerifier` は既存の静的検証器と別の明示constructorです。
-CLI、設定JSON、gateway起動、実Cloudflare、配置、credential、常時運用へは接続しません。
-既存 `NewAccessVerifier` と `access_keys` の静的運用は不変です。
-refresh呼出を所有するschedulerとshutdown/join、運用値、実到達性は未採用・未検証です。
+設定JSONの明示 `access_key_source: "cloudflare_certs"` を、通常gateway CLIの構成・起動順序・有限refresh ownerへ接続します。
+これはsource-onlyの変更で、実Cloudflare、配置、credential、常時運用やGUIの実起動は行いません。
+既存 `NewAccessVerifier` と `access_keys` の静的運用は省略時のままで、暗黙に新方式へ移行しません。
 
 ## 固定した境界
 
@@ -28,12 +28,48 @@ refresh呼出を所有するschedulerとshutdown/join、運用値、実到達性
 - RSA署名、issuer/AUD、app種別、本人subject/email、時刻、有効期間、禁止header/service tokenの既存検査を共用します。
   principal/session/route/本人同意は変更せず、鍵更新自体はそれらを再起動・再発行しません。
 
-## 運用前に決める項目
+## 明示設定と採用するsource方針
 
-`AccessKeyRefreshPolicy` の `Timeout`、`MinInterval`、`MaxAge` は全て必須で既定値なしです。
-`0 < Timeout < MinInterval < MaxAge` を要求しますが、数値を製品の安全/可用性方針として採用していません。
-更新schedulerの間隔、許容する取得障害の長さ、期限切れの観測/通知、shutdown回収を運用側で決める必要があります。
-試験の1秒/1分/10分などは匿名fixture値で、推奨運用値ではありません。
+Access設定の `access_keys` を削除し、同じ階層に `"access_key_source": "cloudflare_certs"` を置いた場合だけ新方式を選びます。
+両方の併記、空文字、null、未知のsource、任意URL、OAuth方式との混在は拒否します。
+`access_issuer` は一つのCloudflare team originに制限し、AUD・resource・principal・resident・登録鍵・routeの規則は変えません。
+`ParseConfig` と `GatewayConfig` はI/Oやgoroutineを開始せず、空の検証器を構成するだけです。
+
+`ConfiguredAccessKeyRefreshPolicy()` はこの設定に限って以下の固定値を選びます。
+これはfixture値の流用ではなく、retirement遅延を5分未満に抑えるsource方針です。
+providerの可用性や実運用での適合は未検証で、配置前に別途確認します。
+
+- `Timeout = 5秒`。一回の取得と応答本文読取の総上限です。
+- `MinInterval = 60秒`。ownerは各試行の**完了から**60秒待ち、次を一回だけ試します。
+  開始間隔は通常60〜65秒で、tickerの蓄積、即時retry、未知kidによる早期取得はありません。
+- `MaxAge = 300秒`。成功したrequestの**開始から**の総寿命です。
+  失敗後に300秒を足すものではなく、到達時は既知鍵も拒否します。
+
+設定、引数、環境変数でこれらを上書きしません。
+直接constructorを呼ぶ場合の `AccessKeyRefreshPolicy` は従来どおり全項目必須で、`0 < Timeout < MinInterval < MaxAge` を要求します。
+旧candidate試験の1秒/10分などは直接API用fixtureで、CLI方針ではありません。
+
+## 起動・終了の所有
+
+`-config`、`-pilot-config`、`-discovery-pilot-config` は、それぞれの既存構成が完成した後、listen前に初回取得を一回行います。
+初回失敗・timeout・取消では待受せず、構築済みhandler/gatewayを閉じて終了値2です。回収未確認は1へ変更します。
+初回成功後だけ一つのgoroutineで待機とrefreshを直列に実行します。
+継続中の取得失敗は固定診断を出しますが、元のsnapshot期限も次回待機時間も変えません。
+静的modeは取得、timer、schedulerを開始しません。refresh ownerのない `tether-echo-probe` は新sourceを明示拒否します。
+
+親contextの取消・期限は待機と取得へ伝播します。
+listen失敗、Serve異常終了を含む全returnでownerを取消し、goroutine終了を最大10秒待ちます。
+終了未確認を成功扱いせず、終了値1と固定診断を返します。停止のretryはしません。
+HTTP・登録・gatewayの既存終了順序は維持し、その後owner joinを確認してCLIが返ります。
+静的modeと同じく、鍵更新はMacの同意、5分のcontrol generation、15分の開発helper寿命を延長しません。
+
+## 配置前の残る条件
+
+通常transportはsystem rootsだけを使います。
+現在の `deploy/cloudflare/Dockerfile.gateway` は `FROM scratch` にbinaryだけを置き、CA trust bundleを含みません。
+このimageのままでは新方式のTLS検証は成立せず、初回取得でfail-closedになります。
+信頼する公開CA bundleのpackagingまたは読取専用mountを別途レビュー・検証する必要があります。
+本変更はDockerfile・OS trust・network・proxy・実設定を変更せず、TLS検証無効化や任意CA overrideも追加しません。
 
 MaxAge以内でも既にprovider側で退役した鍵が最後のsnapshotに残る可能性があります。
 このretirement遅延の上限と可用性のtradeoffを、Cloudflareの重複期間から自動決定しません。
@@ -47,6 +83,8 @@ MaxAge以内でも既にprovider側で退役した鍵が最後のsnapshotに残�
 
 ## 検証の境界
 
-匿名RSA/JWT、memory HTTP transport、偽時計で初回拒否、鍵重複期間、旧鍵退役、未知kid、refresh失敗、期限/時計逆行、redirect、過大応答、cancel/timeout/同時呼出を検査します。
+通常CLIの文書受理と初回失敗での待受拒否は、同じexecute境界のbehavioral RED→GREENを記録します。
+追加回帰は3入口の直列更新、初回取消、listen失敗後のowner回収、途中取得のcancel/join、固定診断、曖昧設定拒否です。
+設定→実候補verifierの構成も匿名RSA/JWT、memory HTTP transport、偽時計で確認し、初回拒否、鍵重複期間、旧鍵退役、未知kid、refresh失敗、期限/時計逆行、redirect、過大応答、cancel/timeout/同時呼出を検査します。
 HTTP fixtureはTLS通信やCloudflareの実応答の成立を示しません。通常transportの安全設定は構造検査です。
 既存gateway/CLI回帰、race、vet/build、独立review、hosted CIはそれぞれ実行結果を別途記録し、未実行を成功扱いしません。

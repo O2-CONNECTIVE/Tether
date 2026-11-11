@@ -45,8 +45,8 @@ resourceのpathに%エスケープ（`RawPath`）がある場合も拒否しま�
 
 1. 引数 → `ReadTrustConfig` → 厳格検証 → buffer消去。失敗は終了値2（鍵も待受もなし）。
 2. principalごとに`LoadCurrentUser`。1件でも失敗・fingerprint不一致なら終了値2で待受しません（他memberの鍵での代替や一部memberだけの起動はしません）。
-3. `FileConfig.GatewayConfig`（`auth_mode`に応じて`agentgateway.NewVerifier`か`agentgateway.NewAccessVerifier`の一方だけ）→ 読み込んだsignerと`ChannelBudgets`を加えて`agentgateway.New` → `agenttransport.NewHandler`（`Registrar`はそのgateway、`DefaultBudgets`）。任意の明示`resident`がある場合だけ、選択済みprincipalのsignerを`ResidentPrincipals`へ渡し、同じhandlerと固定host公開鍵を`ConfigureResident`へ一回設定します。失敗時は両ownerを閉じ、待受しません。
-4. 最後に保護設定で検証済みのaddressとprofileに従って待受します（既定loopbackは `tcp`、明示 `container_private` は `tcp4`）。失敗時は生成済みのhandler・gatewayを閉じて終了値1。
+3. `FileConfig.GatewayConfig`（`auth_mode`に応じて`agentgateway.NewVerifier`か`agentgateway.NewAccessVerifier`、明示 `cloudflare_certs` なら `NewRotatingAccessVerifier` の一つだけ）→ 読み込んだsignerと`ChannelBudgets`を加えて`agentgateway.New` → `agenttransport.NewHandler`（`Registrar`はそのgateway、`DefaultBudgets`）。任意の明示`resident`がある場合だけ、選択済みprincipalのsignerを`ResidentPrincipals`へ渡し、同じhandlerと固定host公開鍵を`ConfigureResident`へ一回設定します。失敗時は両ownerを閉じ、待受しません。
+4. 明示 `cloudflare_certs` の場合だけ、[固定方針](access-key-rotation-candidate.md)で初回公開鍵取得を一回行い、成功後に直列refresh ownerを開始します。失敗・取消ではhandler/gatewayを閉じて終了値2（回収未確認は1）です。最後に保護設定で検証済みのaddressとprofileに従って待受します（既定loopbackは `tcp`、明示 `container_private` は `tcp4`）。失敗時は生成済みのhandler・gatewayを閉じて終了値1。
 5. 1つのHTTP serverで完全一致のpathだけを振り分けます：registration path → `agenttransport.Handler`、resource path → `agentgateway.Gateway`、OAuth方式に限り`/.well-known/oauth-protected-resource`・`/.well-known/oauth-protected-resource<resource path>`も`agentgateway.Gateway`へ。Access方式ではmetadata pathも含め他は404（discoveryはAccess edgeの担当）。prefix一致・path正規化・redirectはありません。HTTP serverの上限は従来どおりです。
 
 ### 終了（SIGINT・SIGTERMまたはServeの異常終了）
@@ -56,7 +56,7 @@ resourceのpathに%エスケープ（`RawPath`）がある場合も拒否しま�
 3. `agentgateway.Gateway.Close`：session・route・agent channelを終わらせます（Mac側は切断で失効し、再開しません）。
 4. HTTPのdrainと`Serve`のgoroutineをjoinします。drainが期限内に終わらなければ`Close`で強制終了し、失敗として報告します。
 
-各段階は有限（基準5秒、回収は10秒、drainは全体で15秒）で、再試行しません。未確認があれば固定文を出して終了値1です。正常な割込み終了は0です。
+各段階は有限（基準5秒、回収は10秒、drainは全体で15秒）で、再試行しません。明示公開鍵更新modeでは親contextから取消を伝播し、全returnでrefresh ownerを取消して最大10秒のjoinを追加確認します。listen失敗とServe異常終了でも同じ所有を回収します。未確認があれば固定文を出して終了値1です。正常な割込み終了は0です。
 
 ### 試行期限（`rescue-gateway -pilot-config <path>`）
 
