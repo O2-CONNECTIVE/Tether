@@ -2,6 +2,7 @@ package agentwire_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -16,52 +17,66 @@ var sharedProfiles = []agentexec.Profile{agentexec.ProfileMacCurrentUser, agente
 func TestSharedContractCancelKeepsAcceptanceSeparateFromCleanup(t *testing.T) {
 	for _, profile := range sharedProfiles {
 		t.Run(agentwire.ProfileName(profile), func(t *testing.T) {
-			r := newContractRig(t, profile)
-			p := r.prepare()
-			ctx := finite(t)
-			st, err := r.client.Start(ctx, "same-request", []byte("fixture command"), 60_000)
-			if err != nil {
-				t.Fatal(err)
-			}
-			contractAwait(t, p.startEntered)
-			r.assertViews(st, 1, 0, 0, agentexec.CleanupPending, false)
-			if st.Phase != agentexec.PhaseStarting || st.Terminal || st.Exit.Known {
-				t.Fatalf("pending start became completion: %+v", st)
-			}
-			again, err := r.client.Start(ctx, "same-request", []byte("fixture command"), 60_000)
-			if err != nil || again.CommandID != st.CommandID || r.runtime.starts.Load() != 1 {
-				t.Fatalf("replay acquired another process: %+v %v", again, err)
-			}
-			if _, err := r.client.Start(ctx, "same-request", []byte("changed command"), 60_000); !errors.Is(err, agentexec.ErrRequestMismatch) {
-				t.Fatalf("changed payload replay: %v", err)
-			}
-			p.allowStart()
-			st = r.status(st.CommandID, func(s agentwire.Status) bool { return s.Phase == agentexec.PhaseRunning })
-			r.assertViews(st, 0, 1, 0, agentexec.CleanupPending, false)
-			p.events <- event{stream: agentexec.Stdout, data: []byte("out")}
-			p.events <- event{stream: agentexec.Stderr, data: []byte{0xff, 0}}
-			st = r.status(st.CommandID, func(s agentwire.Status) bool { return s.OutputEnd == 5 })
-			accepted, err := r.client.Cancel(ctx, st.CommandID)
-			if err != nil || accepted.Stop != agentexec.StopCanceled || accepted.Terminal || accepted.Cleanup != agentexec.CleanupPending {
-				t.Fatalf("cancel acceptance pretended to confirm cleanup: %+v %v", accepted, err)
-			}
-			contractAwait(t, p.releaseEntered)
-			st = r.status(st.CommandID, func(s agentwire.Status) bool { return s.Stop == agentexec.StopCanceled })
-			r.assertViews(st, 0, 0, 1, agentexec.CleanupPending, false)
-			if _, err := r.client.Start(ctx, "replacement", []byte("next"), 60_000); !errors.Is(err, agentexec.ErrBusy) {
-				t.Fatalf("replacement admitted before original release: %v", err)
-			}
-			p.allowRelease()
-			st = r.status(st.CommandID, func(s agentwire.Status) bool { return s.Terminal })
-			r.assertViews(st, 0, 0, 0, agentexec.CleanupConfirmed, false)
-			if st.Phase != agentexec.PhaseCanceled || st.Exit.Known || p.releases.Load() != 1 || !r.issuer.Snapshot().HasAuthority {
-				t.Fatalf("command cancel changed grant/exit/cleanup semantics: %+v", st)
-			}
-			out, err := r.client.Output(ctx, st.CommandID, 0, 1024)
-			if err != nil || !out.Complete || out.Next != 5 || len(out.Chunks) != 2 || out.Chunks[0].Stream != agentexec.Stdout || string(out.Chunks[0].Data) != "out" || out.Chunks[1].Stream != agentexec.Stderr || out.Chunks[1].Offset != 3 || !bytes.Equal(out.Chunks[1].Data, []byte{0xff, 0}) {
-				t.Fatalf("same command output changed across cancellation: %+v %v", out, err)
-			}
+			contractCancelScenario(t, profile, contractOperationScope)
 		})
+	}
+}
+
+func contractCancelScenario(t *testing.T, profile agentexec.Profile, scope contractScope) {
+	t.Helper()
+	r := newContractRig(t, profile)
+	p := r.prepare()
+	st, err := contractRPC(scope, func(ctx context.Context) (agentwire.Status, error) {
+		return r.client.Start(ctx, "same-request", []byte("fixture command"), 60_000)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractAwait(t, p.startEntered)
+	r.assertViews(st, 1, 0, 0, agentexec.CleanupPending, false)
+	if st.Phase != agentexec.PhaseStarting || st.Terminal || st.Exit.Known {
+		t.Fatalf("pending start became completion: %+v", st)
+	}
+	again, err := contractRPC(scope, func(ctx context.Context) (agentwire.Status, error) {
+		return r.client.Start(ctx, "same-request", []byte("fixture command"), 60_000)
+	})
+	if err != nil || again.CommandID != st.CommandID || r.runtime.starts.Load() != 1 {
+		t.Fatalf("replay acquired another process: %+v %v", again, err)
+	}
+	if _, err := contractRPC(scope, func(ctx context.Context) (agentwire.Status, error) {
+		return r.client.Start(ctx, "same-request", []byte("changed command"), 60_000)
+	}); !errors.Is(err, agentexec.ErrRequestMismatch) {
+		t.Fatalf("changed payload replay: %v", err)
+	}
+	p.allowStart()
+	st = r.status(st.CommandID, func(s agentwire.Status) bool { return s.Phase == agentexec.PhaseRunning })
+	r.assertViews(st, 0, 1, 0, agentexec.CleanupPending, false)
+	p.events <- event{stream: agentexec.Stdout, data: []byte("out")}
+	p.events <- event{stream: agentexec.Stderr, data: []byte{0xff, 0}}
+	st = r.status(st.CommandID, func(s agentwire.Status) bool { return s.OutputEnd == 5 })
+	accepted, err := contractRPC(scope, func(ctx context.Context) (agentwire.Status, error) { return r.client.Cancel(ctx, st.CommandID) })
+	if err != nil || accepted.Stop != agentexec.StopCanceled || accepted.Terminal || accepted.Cleanup != agentexec.CleanupPending {
+		t.Fatalf("cancel acceptance pretended to confirm cleanup: %+v %v", accepted, err)
+	}
+	contractAwait(t, p.releaseEntered)
+	st = r.status(st.CommandID, func(s agentwire.Status) bool { return s.Stop == agentexec.StopCanceled })
+	r.assertViews(st, 0, 0, 1, agentexec.CleanupPending, false)
+	if _, err := contractRPC(scope, func(ctx context.Context) (agentwire.Status, error) {
+		return r.client.Start(ctx, "replacement", []byte("next"), 60_000)
+	}); !errors.Is(err, agentexec.ErrBusy) {
+		t.Fatalf("replacement admitted before original release: %v", err)
+	}
+	p.allowRelease()
+	st = r.status(st.CommandID, func(s agentwire.Status) bool { return s.Terminal })
+	r.assertViews(st, 0, 0, 0, agentexec.CleanupConfirmed, false)
+	if st.Phase != agentexec.PhaseCanceled || st.Exit.Known || p.releases.Load() != 1 || !r.issuer.Snapshot().HasAuthority {
+		t.Fatalf("command cancel changed grant/exit/cleanup semantics: %+v", st)
+	}
+	out, err := contractRPC(scope, func(ctx context.Context) (agentexec.Output, error) {
+		return r.client.Output(ctx, st.CommandID, 0, 1024)
+	})
+	if err != nil || !out.Complete || out.Next != 5 || len(out.Chunks) != 2 || out.Chunks[0].Stream != agentexec.Stdout || string(out.Chunks[0].Data) != "out" || out.Chunks[1].Stream != agentexec.Stderr || out.Chunks[1].Offset != 3 || !bytes.Equal(out.Chunks[1].Data, []byte{0xff, 0}) {
+		t.Fatalf("same command output changed across cancellation: %+v %v", out, err)
 	}
 }
 
