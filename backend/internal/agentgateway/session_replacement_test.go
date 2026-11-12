@@ -46,7 +46,10 @@ func newCapacityRig(t *testing.T) *capacityRig {
 	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	r := newModeRig(t, agentgateway.Config{Verifier: verifier(t), Clock: clock})
 	control := &generationControl{}
-	entries := []agentgateway.ResidentEnrollment{{HostLabel: "host1", PrincipalLabel: label(0), HostKey: fixtureSigner(t, 0x61).PublicKey().Marshal()}}
+	entries := []agentgateway.ResidentEnrollment{
+		{HostLabel: "host1", PrincipalLabel: label(0), HostKey: fixtureSigner(t, 0x61).PublicKey().Marshal()},
+		{HostLabel: "host2", PrincipalLabel: label(1), HostKey: fixtureSigner(t, 0x62).PublicKey().Marshal()},
+	}
 	if err := r.gw.ConfigureResident("wss://example.test/register", control, entries); err != nil {
 		t.Fatal(err)
 	}
@@ -117,18 +120,30 @@ func TestResidentReconnectReplacesOldestSupersededSession(t *testing.T) {
 	c.assertReplacedOnlyOldest(ids)
 }
 
-// Sessions opened before the Mac connected are discovery-only forever: they
-// can list tools but never run work. Once the resident is connected they must
-// not block the session that can.
-func TestResidentConnectReplacesOldestDiscoverySession(t *testing.T) {
+// Another member's superseded sessions are older and just as unable to start
+// work, but they are not this principal's to end: one member reconnecting must
+// never cut off another member's client.
+func TestReplacementNeverEndsAnotherPrincipalsSupersededSession(t *testing.T) {
 	c := newCapacityRig(t)
-	ids := c.fill()
+	other := token(t, subjects[1])
 	c.control.set(generationA)
+	var theirs []string
+	for i := 0; i < agentgateway.MaxSessionsPerPrincipal; i++ {
+		theirs = append(theirs, c.open(other))
+		c.tick()
+	}
+	ids := c.fill()
+	c.control.set(generationB)
 
 	if status := c.initializeStatus(); status != http.StatusOK {
-		t.Fatalf("initialize after resident connect = %d, want 200", status)
+		t.Fatalf("initialize after reconnect = %d, want 200", status)
 	}
 	c.assertReplacedOnlyOldest(ids)
+	for _, sid := range theirs {
+		if res := c.do(http.MethodPost, other, sid, rpc(1, "tools/list", nil), nil); res.status != http.StatusOK {
+			t.Fatal("another principal's superseded session was replaced")
+		}
+	}
 }
 
 // "Oldest" means least recently used, not first created: a superseded session
@@ -201,9 +216,10 @@ func TestNoSessionEndsWithoutAdmittingOne(t *testing.T) {
 	})
 }
 
-// Replacement exists only to admit a session that can work. Sessions that can
-// still start work, and requests that would only add a discovery session, keep
-// the bound: the caller gets 429 and nothing is ended on its behalf.
+// Replacement exists only to admit a session that can work, and only at the
+// cost of a resident session whose generation is gone. Sessions that can still
+// start work, discovery sessions, and requests that would only add a discovery
+// session keep the bound: the caller gets 429 and nothing is ended on its behalf.
 func TestSessionBoundHoldsWithoutSupersededSession(t *testing.T) {
 	t.Run("all sessions are of the current generation", func(t *testing.T) {
 		c := newCapacityRig(t)
@@ -211,6 +227,17 @@ func TestSessionBoundHoldsWithoutSupersededSession(t *testing.T) {
 		ids := c.fill()
 		if status := c.initializeStatus(); status != http.StatusTooManyRequests {
 			t.Fatalf("initialize at the bound = %d, want 429", status)
+		}
+		c.assertAllAlive(ids)
+	})
+	// A catalog client may still be listing tools on a discovery session, so a
+	// rejected initialize must not silently end one.
+	t.Run("the principal holds only discovery sessions", func(t *testing.T) {
+		c := newCapacityRig(t)
+		ids := c.fill()
+		c.control.set(generationA)
+		if status := c.initializeStatus(); status != http.StatusTooManyRequests {
+			t.Fatalf("initialize over discovery sessions = %d, want 429", status)
 		}
 		c.assertAllAlive(ids)
 	})

@@ -309,11 +309,16 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 		g.sessions[id] = &session{owner: p, route: rt, mcp: mcp, lastUsed: g.clock(), resident: resident}
 		p.sessions++
 	} else {
-		ok = false
+		// A concurrent initialize can take the slot seen free above.
+		full, ok = ok, false
 	}
 	g.mu.Unlock()
 	if !ok {
 		mcp.Close()
+		if full {
+			writeJSON(w, http.StatusTooManyRequests, rpcError("too many MCP sessions for this principal; DELETE an unused session"))
+			return
+		}
 		writeJSON(w, http.StatusServiceUnavailable, rpcError("the approved grant ended during initialize"))
 		return
 	}
@@ -378,15 +383,15 @@ func (g *Gateway) dropLocked(id string, s *session) {
 
 // oldestSupersededLocked returns p's least recently used session that can no longer
 // start work once a resident session of generation current exists: a resident
-// session of another generation, or a permanently unbound discovery session.
-// A session bound to an approved route is never returned. A superseded resident
+// session of another generation. Discovery sessions and sessions bound to an
+// approved route are never returned; they keep the bound. A superseded resident
 // session may still read results of its own generation, so initialize replaces
 // one only when the principal is at MaxSessionsPerPrincipal.
 func (g *Gateway) oldestSupersededLocked(p *principal, current string) (string, *session) {
 	var id string
 	var oldest *session
 	for k, s := range g.sessions {
-		if s.owner != p || s.route != nil || (s.resident != nil && s.resident.generation == current) {
+		if s.owner != p || s.route != nil || s.resident == nil || s.resident.generation == current {
 			continue
 		}
 		if oldest == nil || s.lastUsed.Before(oldest.lastUsed) {

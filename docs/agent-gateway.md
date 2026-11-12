@@ -86,7 +86,7 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 | POST（parse error、batch、不正なid） | 400、JSON-RPC error |
 | POST（session headerのない`initialize`以外） | 400。sessionは作りません |
 | `initialize`時にrouteがない / session数が上限 | 認証済みdiscovery専用session / 429（常駐作業用の`initialize`は次の行） |
-| 常駐作業用の`initialize`時にsession数が上限 | そのprincipalの作業を開始できないsession（接続世代が現行と異なる常駐session、または未束縛のdiscovery専用session）のうち、最後の利用が最も古い1件を終了して受け付けます。該当がなければ429。routeへ束縛したsessionと現行世代の常駐sessionは終了しません。終了したsessionからは、その世代の結果を照会できなくなります |
+| 常駐作業用の`initialize`時にsession数が上限 | そのprincipalの、接続世代が現行と異なる常駐sessionのうち、最後の利用が最も古い1件を終了して受け付けます。該当がなければ429。discovery専用session、routeへ束縛したsession、現行世代の常駐sessionは終了しません。終了したsessionからは、その世代の結果を照会できなくなります |
 | discovery専用sessionの妥当なtools/call | backendへ到達せず404で同sessionを破棄。不正な要求は400等で拒否し得る。新規initializeが必要。grantへ後付け束縛せず、commandを配送しない |
 | `notifications/cancelled`で取り消された元のPOST | 200、元 id の JSON-RPC error -32800。HTTP の単一 JSON 応答を保ち、遠隔配送の不確定性を明記します。遠隔 command は止まりません。notification 自体は 202 です |
 | GET（SSE stream）、PUTなど | 405、`Allow: POST, DELETE` |
