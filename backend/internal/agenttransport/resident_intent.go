@@ -14,6 +14,9 @@ var ErrWorkUnconfigured = errors.New("agenttransport: resident work factory is n
 
 // ResidentFixedIntent is validated wire correlation, never an execution grant.
 // Its zero value is invalid. No command, profile or approval flag is accepted.
+// The same type also correlates command-run work (see resident_run.go): then
+// run is set, and Operation and TimeoutMillis report the run values, which the
+// fixed-operation admission refuses.
 type ResidentFixedIntent struct {
 	generation, requestID                 string
 	endpoint, host, principal             string
@@ -22,6 +25,7 @@ type ResidentFixedIntent struct {
 	original                              context.Context
 	receiver                              *ResidentReceiver
 	hostFingerprint, principalFingerprint string
+	run                                   residentRunScope
 }
 
 func (i ResidentFixedIntent) OriginalContext() context.Context { return i.original }
@@ -31,15 +35,28 @@ func (i ResidentFixedIntent) PrincipalKeyFingerprint() string  { return i.princi
 func (i ResidentFixedIntent) HostLabel() string                { return i.host }
 func (i ResidentFixedIntent) PrincipalLabel() string           { return i.principal }
 func (i ResidentFixedIntent) Endpoint() string                 { return i.endpoint }
-func (i ResidentFixedIntent) TimeoutMillis() uint32            { return 15000 }
-func (i ResidentFixedIntent) RequestID() string                { return i.requestID }
-func (i ResidentFixedIntent) Generation() string               { return i.generation }
-func (i ResidentFixedIntent) Deadline() time.Time              { return i.deadline }
-func (i ResidentFixedIntent) Operation() string                { return ResidentFixedOperation }
+func (i ResidentFixedIntent) TimeoutMillis() uint32 {
+	if i.isRun() {
+		return i.run.timeoutMillis
+	}
+	return 15000
+}
+func (i ResidentFixedIntent) RequestID() string   { return i.requestID }
+func (i ResidentFixedIntent) Generation() string  { return i.generation }
+func (i ResidentFixedIntent) Deadline() time.Time { return i.deadline }
+func (i ResidentFixedIntent) Operation() string {
+	if i.isRun() {
+		return ResidentRunOperation
+	}
+	return ResidentFixedOperation
+}
 func (i ResidentFixedIntent) values() []string {
 	return []string{i.generation, strconv.FormatUint(i.sequence, 10), i.requestID, ResidentFixedOperation, strconv.FormatInt(i.deadline.UnixMilli(), 10), "15000"}
 }
 func residentEncodeIntent(b residentBinding, i ResidentFixedIntent, s ssh.Signer) ([]byte, error) {
+	if i.isRun() {
+		return nil, ErrRefused // never sign a command-run intent as the fixed operation
+	}
 	sig, e := sign(s, s.PublicKey(), residentTranscript(b, "gateway-fixed", i.values()...))
 	if e != nil {
 		return nil, e
