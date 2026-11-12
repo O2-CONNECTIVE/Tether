@@ -245,6 +245,11 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	if rt != nil && ended(rt) {
 		rt = nil
 	}
+	if full && resident != nil {
+		if _, s := g.oldestSupersededLocked(p, resident.generation); s != nil {
+			full = false
+		}
+	}
 	g.mu.Unlock()
 	switch {
 	case closed:
@@ -290,15 +295,21 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	}
 	id := hex.EncodeToString(raw)
 	g.mu.Lock()
-	ok := !g.closed && (rt == nil || (p.route == rt && !ended(rt))) && p.sessions < MaxSessionsPerPrincipal && g.sessions[id] == nil
-	if ok {
-		if resident != nil && g.resident.control.ResidentGeneration(resident.entry.enrollment.HostLabel, p.label) != resident.generation {
+	ok := !g.closed && (rt == nil || (p.route == rt && !ended(rt))) && g.sessions[id] == nil
+	if ok && resident != nil {
+		if g.resident.control.ResidentGeneration(resident.entry.enrollment.HostLabel, p.label) != resident.generation {
 			ok = false
+		} else if p.sessions >= MaxSessionsPerPrincipal {
+			if old, s := g.oldestSupersededLocked(p, resident.generation); s != nil {
+				g.dropLocked(old, s)
+			}
 		}
-		if ok {
-			g.sessions[id] = &session{owner: p, route: rt, mcp: mcp, lastUsed: g.clock(), resident: resident}
-			p.sessions++
-		}
+	}
+	if ok && p.sessions < MaxSessionsPerPrincipal {
+		g.sessions[id] = &session{owner: p, route: rt, mcp: mcp, lastUsed: g.clock(), resident: resident}
+		p.sessions++
+	} else {
+		ok = false
 	}
 	g.mu.Unlock()
 	if !ok {
@@ -363,6 +374,26 @@ func (g *Gateway) dropLocked(id string, s *session) {
 		s.owner.sessions--
 		s.mcp.Close()
 	}
+}
+
+// oldestSupersededLocked returns p's least recently used session that can no longer
+// start work once a resident session of generation current exists: a resident
+// session of another generation, or a permanently unbound discovery session.
+// A session bound to an approved route is never returned. A superseded resident
+// session may still read results of its own generation, so initialize replaces
+// one only when the principal is at MaxSessionsPerPrincipal.
+func (g *Gateway) oldestSupersededLocked(p *principal, current string) (string, *session) {
+	var id string
+	var oldest *session
+	for k, s := range g.sessions {
+		if s.owner != p || s.route != nil || (s.resident != nil && s.resident.generation == current) {
+			continue
+		}
+		if oldest == nil || s.lastUsed.Before(oldest.lastUsed) {
+			id, oldest = k, s
+		}
+	}
+	return id, oldest
 }
 
 func (g *Gateway) expireLocked() {
