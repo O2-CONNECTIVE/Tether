@@ -1,0 +1,31 @@
+# 常駐MCP sessionの上限と世代変更
+
+[常駐CLI構成](agent-cli-resident.md)の補足です。公開接続先の存在、Macのstandby、control transport、MCP session、個別workの権限と回収は別です。
+
+## 上限と終了
+
+- `MaxSessionsPerPrincipal`は4です。residentのcatalog-only sessionとcontrol世代へ固定したsessionが同じ枠を使います。ツール呼出し件数からsession数は推定できません。
+- 上限の429はSIDなしのinitialize経路で返ります。既存SIDの呼出しにこの上限判定はありません。同時initializeが最後の登録判定で競合した場合は503にもなり、すべての503がcontrol世代の喪失を意味するわけではありません。
+- `SessionIdle`は30分です。最後のlookupから厳密に30分を超えたsessionを、lookupまたは次のinitializeで回収します。時刻だけで動くreaperではありません。lookupが続けばidle期限も進みます。
+- resident catalog-only sessionのtools/call拒否はSIDを削除しません。MacがONになっても既存SIDは昇格せず、認証済みstandbyの後に新しいinitializeが必要です。
+- 認証済みの同じprincipalによるDELETEは指定SIDだけを終了します。実行中workの取消、command終了、結果payloadのrelease、replay tombstoneの削除ではありません。不要と確認できないSIDを一括削除しません。
+
+## 公開edgeの5分と再接続
+
+`deploy/cloudflare/native/worker.mjs`の`forwardRegister`は、通常登録とresidentの両subprotocolに同じ`LIMITS.lifetimeMs = 300_000`を渡します。共有relayは期限で両socketをclose code 4000にしてtimerを解除します。Worker自身は再接続しません。
+
+Goのresident control自体は5分timerを持ちません。MacのResidentClientは4000を再接続可能な終了として扱いますが、元transportの回収確認が前提です。初回5秒、最大30秒のbackoffと再認証を使い、回収不明なら停止します。開発helper全体の15分期限は別で、再接続によって延長しません。
+
+新しいcontrolは新しいgenerationになります。古いMCP SIDは元のgenerationの結果読取り・取消・releaseの範囲を保持し、新しいworkには`control_ended`と`reinitialize_required`を返します。新しいgenerationのSIDから古い結果は読めず、古いrequest IDの再実行もできません。新しいworkには新しいinitializeが必要で、そのSIDも4枠を消費します。
+
+世代が終了したという理由だけで古いSIDを削除すると、保持している元世代の結果へアクセスできなくなる可能性があります。枠を増やす、古いsessionを新しい世代へ付替える、回収不明をconfirmedにする、再送抑止記録を捨てることを対処にしません。payloadの明示releaseとMCP DELETEも別操作です。
+
+## 回帰試験と残る実証
+
+- `session_lifecycle_http_test.go`: catalogとboundの合計4枠、同時initialize、既存SIDの継続利用、DELETE後の保持結果・active work・tombstone、idle境界と遅延回収を合成認証のHTTP境界で確認します。
+- `session_generation_http_test.go`: 合成controlの世代変更後、古いSIDの元結果への読取り、新しいworkの拒否、新しいSIDの別世代隔離と固定work取得前拒否までを確認します。native command実行ではありません。
+- 既存`TestExclusiveRelay4000RequiresOriginalFinishBeforeFreshGeneration`は元transportの終了確認を待って新世代へ進むGo側の試験です。Workerの`resident control requires explicit opt-in and keeps the bounded relay`は300,000msと両socketの4000終了をfake runtimeで確認します。
+
+これらは層別の合成試験であり、実CloudflareとChatGPTを連結したend-to-end試験ではありません。実clientのinitialize・SID再利用・DELETEの動作、5分を跨ぐ再接続、元結果の読取り継続、有限上限に達した時の利用者への案内は別途受入が必要です。source上の上限から、特定の実clientが何session作ったか、どのsessionが枠を占有したかは断定しません。
+
+この変更ではquota、認証、権限、gate、配置、live sessionを変更しません。

@@ -17,8 +17,9 @@ import (
 // This fixture observes the public HTTP boundary with synthetic credentials.
 // It does not model an SDK's session reuse or an edge WebSocket connection.
 type lifecycleControl struct {
-	mu sync.Mutex
+	mu         sync.Mutex
 	generation string
+	begins     int
 }
 
 func (c *lifecycleControl) ResidentGeneration(string, string) string {
@@ -31,16 +32,19 @@ func (c *lifecycleControl) set(generation string) {
 	defer c.mu.Unlock()
 	c.generation = generation
 }
-func (*lifecycleControl) BeginResidentFixed(context.Context, string, string, string, string, time.Time) error {
+func (c *lifecycleControl) BeginResidentFixed(context.Context, string, string, string, string, time.Time) error {
+	c.mu.Lock()
+	c.begins++
+	c.mu.Unlock()
 	return ErrResidentWorkUnconfigured
 }
 
 type lifecycleHTTP struct {
-	g *Gateway
-	s *residentSession
+	g       *Gateway
+	s       *residentSession
 	control *lifecycleControl
-	bearer string
-	now time.Time // read and changed only under Gateway.mu
+	bearer  string
+	now     time.Time // read and changed only under Gateway.mu
 }
 
 func newLifecycleHTTP(t *testing.T) *lifecycleHTTP {
@@ -59,7 +63,9 @@ func newLifecycleHTTP(t *testing.T) *lifecycleHTTP {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := g.Close(ctx); err != nil { t.Error(err) }
+		if err := g.Close(ctx); err != nil {
+			t.Error(err)
+		}
 	})
 	return f
 }
@@ -86,9 +92,13 @@ func (f *lifecycleHTTP) open(t *testing.T) string {
 	t.Helper()
 	w := f.call(http.MethodPost, "", lifecycleInit)
 	sid := w.Header().Get(HeaderSession)
-	if w.Code != 200 || sid == "" { t.Fatalf("initialize: %d %s", w.Code, w.Body.String()) }
+	if w.Code != 200 || sid == "" {
+		t.Fatalf("initialize: %d %s", w.Code, w.Body.String())
+	}
 	w = f.call(http.MethodPost, sid, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
-	if w.Code != 202 { t.Fatalf("initialized: %d %s", w.Code, w.Body.String()) }
+	if w.Code != 202 {
+		t.Fatalf("initialized: %d %s", w.Code, w.Body.String())
+	}
 	return sid
 }
 
@@ -99,4 +109,19 @@ func (f *lifecycleHTTP) count(t *testing.T, want int) {
 	if len(f.g.sessions) != want || f.s.principal.sessions != want {
 		t.Fatalf("session accounting: map=%d principal=%d want=%d", len(f.g.sessions), f.s.principal.sessions, want)
 	}
+}
+
+func lifecycleValue(t *testing.T, res *httptest.ResponseRecorder, wantError bool) map[string]any {
+	t.Helper()
+	var envelope struct {
+		Result struct {
+			IsError bool           `json:"isError"`
+			Value   map[string]any `json:"structuredContent"`
+		} `json:"result"`
+		Error any `json:"error"`
+	}
+	if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &envelope) != nil || envelope.Error != nil || envelope.Result.Value == nil || envelope.Result.IsError != wantError {
+		t.Fatalf("unexpected tool reply: %d %s", res.Code, res.Body.String())
+	}
+	return envelope.Result.Value
 }

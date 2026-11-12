@@ -67,4 +67,6 @@ control認証はnative workのgrantではありません。実Macの保護policy
 
 後からMacがONになっても既存SIDは昇格しません。認証済みstandbyの後に新しいMCP sessionを作る必要があります。初期化中にcontrolが接続した場合もoffline sessionはofflineのままです。公開URLを維持すること、MacのON/OFF、MCP session、作業grantは別です。実ChatGPTの再初期化・更新や5分のcontrol世代変更への追随は別途受入が必要です。
 
+共有4枠、30分のidle期限、DELETEと結果保持、公開edgeの5分とGo側再接続の違いは[常駐MCP sessionの上限と世代変更](mcp-session-lifecycle.md)を参照してください。
+
 試験は合成認証・net.Pipeの通常CLI入口とadapterの回帰です。実Cloudflare配置、鍵、enrollment、権限設定は変更しません。
