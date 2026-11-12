@@ -46,7 +46,7 @@ Tetherの共通サービスにCLI・GUI・MCPを接続し、認可・失効・�
 - #348はpending/connectingの観測をcleanup unknownと誤分類する問題の修正です。別の [#347](https://github.com/O2-CONNECTIVE/Tether/pull/347) はcleanup latchの修正です。今回の成功で、別途保持している過去3件のcleanup unknownを解消扱いにしません。
 - #348の統合前後CIはそれぞれ14 workflow / 25 jobs成功です（[Mac native](https://github.com/O2-CONNECTIVE/Tether/actions/runs/43122018604)、[GUI限定縦断](https://github.com/O2-CONNECTIVE/Tether/actions/runs/43122018612)）。CIと今回の実接続観測は別の証拠です。
 
-**達成はこの固定作業の実接続に限定します。** 未署名の開発用信頼モデルであり、製品のDeveloper ID署名・notarization・通常Tauri・一般配布の受入ではありません。4アカウントのAccess利用資格と、操作できる登録済み本人/Macの対応は別です。自動起動なし・`restart=no`、5分の制御sessionとfresh initializeの制限が残り、無人運転や途切れない日常利用は未達です。session上限429の原因調査・修正も別残件です。
+**達成はこの固定作業の実接続に限定します。** 未署名の開発用信頼モデルであり、製品のDeveloper ID署名・notarization・通常Tauri・一般配布の受入ではありません。4アカウントのAccess利用資格と、操作できる登録済み本人/Macの対応は別です。自動起動なし・`restart=no`、Worker edge relayの制御接続に5分の寿命上限があり、fresh initializeの制限が残り、無人運転や途切れない日常利用は未達です。session上限429の原因調査・修正も別残件です。
 
 [#349](https://github.com/O2-CONNECTIVE/Tether/pull/349) の開発GUI再準備導線は後続のsource統合であり、上記固定SHAの実接続試験には含めません。実機での回復受入、取消を含む広い機能条件、製品受入は未完了のままです。
 
