@@ -75,7 +75,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-work': {'main.go', 'entry.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/permissionmodel': {'model.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentapi': {'execution.go'},
-    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac': {'factory.go', 'standby.go', 'standby_types.go', 'wire.go', 'enrollment.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac': {'factory.go', 'standby.go', 'standby_run.go', 'standby_types.go', 'wire.go', 'enrollment.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe': {'codec.go', 'mapper.go', 'startup.go', 'foreground.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/workerowner': {'owner.go', 'run_once.go', 'wait_source.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink': {'host.go', 'client.go'},
