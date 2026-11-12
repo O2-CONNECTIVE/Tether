@@ -96,7 +96,11 @@ def inspect(app, record, expected_source):
         contents[role] = regular_bytes(root / relative, limit)
         if hashlib.sha256(contents[role]).hexdigest() != hashes[role]:
             refuse()
-    plist = plistlib.loads(contents["plist"])
+    try:
+        plist = plistlib.loads(contents["plist"])
+    except (ValueError, TypeError, OverflowError, AttributeError, ExpatError,
+            plistlib.InvalidFileException):
+        refuse()
     if not isinstance(plist, dict) or plist.get("CFBundleIdentifier") != "com.o2connective.tether.development.gui" or plist.get("CFBundleExecutable") != "TetherDevelopment":
         refuse()
     if contents["resident_digest"] != (hashes["resident"] + "\n").encode("ascii"):

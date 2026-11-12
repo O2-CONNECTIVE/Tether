@@ -15,7 +15,7 @@ class InternalBuildChecks(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.app = self.root / "Development.app"
         for directory in checker.DIRECTORIES:
             (self.app / directory).mkdir(parents=True, exist_ok=True)
@@ -31,6 +31,8 @@ class InternalBuildChecks(unittest.TestCase):
                          "sha256": {role: hashlib.sha256(content).hexdigest() for role, content in data.items()}}
         self.record = self.root / "record.json"
         self.save()
+        # Every refusal starts from a verified valid fixture, including on macOS.
+        self.assertEqual(self.inspect()["status"], "development-bytes-match")
 
     def save(self):
         self.record.write_text(json.dumps(self.manifest))
@@ -128,6 +130,18 @@ class InternalBuildChecks(unittest.TestCase):
 
     def test_cli_refusal_no_path_leak(self):
         self.record.write_text("invalid")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = checker.main(["--app", str(self.app), "--record", str(self.record), "--source-commit", self.source])
+        self.assertEqual(code, 1)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(err.getvalue(), "preflight-refused\n")
+
+    def test_matching_hash_malformed_plist_has_fixed_cli_refusal(self):
+        target = self.app / checker.FILES["plist"]
+        target.write_bytes(b'<plist><dict><key>bad</key><date>not-a-date</date></dict></plist>')
+        self.manifest["sha256"]["plist"] = hashlib.sha256(target.read_bytes()).hexdigest()
+        self.save()
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = checker.main(["--app", str(self.app), "--record", str(self.record), "--source-commit", self.source])
