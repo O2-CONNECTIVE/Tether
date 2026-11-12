@@ -19,6 +19,18 @@ import (
 )
 
 const ResidentFixedID = "tether-fixed-command-v1"
+
+// ResidentRunID names the command-run operation in every signed transcript.
+const ResidentRunID = "tether-run-command-v1"
+
+// ResidentRunScope is what the gateway signed for a command run. The zero value
+// means fixed work. It is part of the work binding so the Mac's registration and
+// collection proofs name the command, directory and timeout it acted on.
+type ResidentRunScope struct {
+	CommandSHA256, Cwd string
+	TimeoutMillis      uint32
+}
+
 const ResidentFixedCommand = "/usr/bin/printf 'TETHER_MCP_GUI_BEGIN\\n'; /bin/sleep 5; /usr/bin/printf 'TETHER_MCP_GUI_END\\n'"
 
 var ErrResidentWorkUnconfigured = errors.New("agentgateway: host refused without work acquisition")
@@ -38,6 +50,7 @@ type ResidentWorkBinding struct {
 	Host, Principal, Generation, RequestID string
 	Sequence                               uint64
 	DeadlineMillis                         int64
+	Run                                    ResidentRunScope
 }
 type residentSetup struct {
 	endpoint string
@@ -215,7 +228,7 @@ func (g *Gateway) ConnectResident(label string, d Dispatch, b ResidentWorkBindin
 	if entry != nil {
 		w = entry.works[b.RequestID]
 	}
-	valid := !g.discoveryOnly && !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, entry.enrollment.HostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
+	valid := !g.discoveryOnly && !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Run == w.binding.Run && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, entry.enrollment.HostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
 	if valid {
 		w.binding.Sequence = b.Sequence
 		w.registering = true
@@ -268,7 +281,12 @@ func ResidentCollectionTranscript(p ResidentCollectionProof) []byte {
 	for _, v := range [][]byte{p.ClientNonce, p.ServerNonce, p.HostKey, p.PrincipalKey} {
 		field(v)
 	}
-	for _, v := range []string{b.Generation, strconv.FormatUint(b.Sequence, 10), b.RequestID, ResidentFixedID, strconv.FormatInt(b.DeadlineMillis, 10), "15000", p.Cleanup} {
+	// Fixed work keeps its original bytes; a command run names its own scope.
+	operation, timeout, scope := ResidentFixedID, "15000", []string(nil)
+	if b.Run != (ResidentRunScope{}) {
+		operation, timeout, scope = ResidentRunID, strconv.FormatUint(uint64(b.Run.TimeoutMillis), 10), []string{b.Run.CommandSHA256, b.Run.Cwd}
+	}
+	for _, v := range append(append([]string{b.Generation, strconv.FormatUint(b.Sequence, 10), b.RequestID, operation, strconv.FormatInt(b.DeadlineMillis, 10), timeout}, scope...), p.Cleanup) {
 		field([]byte(v))
 	}
 	return out
@@ -287,7 +305,7 @@ func (g *Gateway) ResidentCollected(proof ResidentCollectionProof) error {
 	w := e.works[proof.Binding.RequestID]
 	key, err := ssh.ParsePublicKey(e.enrollment.HostKey)
 	b := proof.Binding
-	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, e.enrollment.HostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
+	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Run != w.binding.Run || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, e.enrollment.HostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
 		return ErrRefused
 	}
 	w.binding.Sequence = b.Sequence

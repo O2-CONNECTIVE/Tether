@@ -127,6 +127,22 @@ func residentLateFailedAcquisition(t *testing.T, residentOnly bool) {
 	g.mu.Unlock()
 	b.Sequence = 1
 	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "launch-1", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
+	// A registration that names a command run must not attach to work the
+	// gateway recorded as fixed, or it would spend that work's one registration.
+	run := b
+	run.Run = ResidentRunScope{CommandSHA256: strings.Repeat("0", 64), Cwd: ".", TimeoutMillis: 60000}
+	left, right := net.Pipe()
+	defer right.Close()
+	refused := make(chan error, 1)
+	go func() { refused <- g.ConnectResident("member1", d, run, left) }()
+	select {
+	case e := <-refused:
+		if !errors.Is(e, ErrRefused) {
+			t.Fatal("command-run registration attached to fixed work", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("command-run registration attached to fixed work")
+	}
 	attempted := make(chan error, 1)
 	go func() { attempted <- g.ConnectResident("member1", d, b, conn) }()
 	select {
@@ -215,6 +231,18 @@ func TestResidentCollectionRejectsAlteredProofAndKeepsSinglePublication(t *testi
 		})
 	}
 	p := signedCollectionFixture(t, g, s, host, id)
+	// A correctly signed command-run proof must not collect work the gateway
+	// recorded as fixed: the two kinds never stand in for each other.
+	run := p
+	run.Binding.Run = ResidentRunScope{CommandSHA256: strings.Repeat("0", 64), Cwd: ".", TimeoutMillis: 60000}
+	sig, e := host.Sign(nil, ResidentCollectionTranscript(run))
+	if e != nil {
+		t.Fatal(e)
+	}
+	run.Signature = ssh.Marshal(sig)
+	if e := g.ResidentCollected(run); !errors.Is(e, ErrRefused) {
+		t.Fatal("command-run proof collected fixed work", e)
+	}
 	if e := g.ResidentCollected(p); e != nil {
 		t.Fatal(e)
 	}

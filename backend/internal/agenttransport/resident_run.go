@@ -8,11 +8,12 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"golang.org/x/crypto/ssh"
 )
 
 const (
-	ResidentRunOperation  = "tether-run-command-v1"
+	ResidentRunOperation  = agentgateway.ResidentRunID
 	ResidentRunMaxTimeout = 240000 * time.Millisecond
 	residentRunMaxCwd     = 1024
 )
