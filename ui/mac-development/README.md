@@ -8,16 +8,20 @@ Developer ID の結果をモックに置換しません。別 bundle ID、常時
 ## 操作と制限
 
 - アプリを開くだけでは helper を起動しません。「開発ホストを準備」で
-  固定同梱 `tether-dev-resident foreground` を一度だけ起動します。
+  固定同梱 `tether-dev-resident foreground` を今回の owner として一度だけ起動します。
 - 同梱 helper の SHA-256 は取り違え検出です。publisher 認証や同一ユーザーの
   改変への防御、コード署名・notarization の代替ではありません。
 - 新鮮な owner 状態に対する ON/OFF だけ。固定検証操作以外の command/path/env
   入力はありません。重複クリックと pending 中の操作を拒否します。
 - 受領 receipt と状態変更、認証済み接続、停止回収を区別します。未知の状態、
   JSON 異常、時刻逆行、source age 3秒以上では操作を止めます。
+- 「ホストを停止」は元 owner に close を要求し、画面を残します。完全な回収証拠が
+  揃った後と child 未起動の起動失敗時は「もう一度準備」で明示的にやり直せます。
+  新しい owner は待機 ON を継承しません。unknown・証拠不足のまま置換しません。
 - Quit とウィンドウ閉鎖は同じ元 owner に close を一度要求します。
   confirmed 終了frame、EOF、元 child の正常終了/回収が揃うまで終了を許可しません。
-  unknown を kill・再起動・時間切れで成功へ変更しません。
+  unknown を kill・再起動・時間切れで成功へ変更しません。Quit 要求後は再準備を拒否し、
+  回収確認後に終了します。「ホストを停止」とアプリの終了は別の操作です。
 - **起動から15分で終了を要求する限定CLIです。永続運転ではありません。**
   LaunchAgent、ログイン起動、自動再起動はありません。期限終了時の非0 exit は
   保守的に回収未確認として残します。server-side bounded pilot は別途必要です。
@@ -90,14 +94,15 @@ credential、enrollment、公開、配布artifactは作成しません。ロー�
 
 開発 GUI は操作を許可する状態と、元の子プロセスの回収証拠を分けます。
 完全な状態通知の期限切れ・拒否で操作を停止した後も、同じ専用 pipe から来た
-厳格な終了通知を読みます。新しい ON、操作、helper の置換は許可しません。
+厳格な終了通知を読みます。同じ owner の新しい ON と操作は許可しません。
 `confirmed` の終了通知、EOF、元の child の通常 exit 0 と reap がすべて揃った
-場合だけ、「停止して終了」で GUI を閉じられます。操作停止の事実は残ります。
+場合だけ、GUI を終了するか「もう一度準備」で新しい owner を準備できます。
+元 owner の操作停止の事実と直前の固定診断は残ります。
 
 未知の回収結果、不正な終了通知、終了後の追加データ、部分 frame の期限切れ・
 過大入力、読取り失敗、clock rollback、非 0 exit は回収成功に変更しません。
 EOF や process 不在だけでは終了可能にせず、同じ owner を保持します。
-終了操作の連打や再接続で証拠を作り直す経路はありません。
+終了操作の連打や再準備で不足した証拠を作り直す経路はありません。
 
 診断表示は固定の理由コード、GUI/helper PID、検証した helper hash の短縮値、
 終了通知・EOF・reap・正常 exit の有無だけです。設定本文、鍵、token、caller、
@@ -129,3 +134,18 @@ negative mutation は別の合成入力であり、実通信・実 host の回�
 一時 Git repository の `core.autocrlf=true` checkout で同一 bytes を検査します。
 Go 側の byte 比較は改行を正規化しません。Windows の実 normal/race CI はこの
 checkout 合成試験とは別に必要です。
+
+### 回復操作の source 検証
+
+AppKit は同じ RecoveryController の表示状態と操作を使います。「ホストを停止」後は
+回収確認まで再準備を無効にし、確認できたら画面を残して「もう一度準備」を表示します。
+起動前失敗も同じラベルで明示 retry を選べます。Quit/ウィンドウ閉鎖を選んだ後は
+遅れたクリックでも新 owner を作らず、完全な回収証拠が揃ったときだけ終了します。
+
+pending ON/OFF、standby stopping、cleanup pending は OFF 完了表示と分けます。
+unknown は「回収未確認・再準備できません」と固定診断を表示します。
+[未解決記録と画面だけの退出案](../../docs/mac-development-recovery.md)は設計段階であり、
+unknown の GUI を安全に閉じる新機能や横断的な再起動遮断はまだ実装していません。
+
+`swift run RecoveryChecks` は controller と UI 表示値を同じ fixture で検査します。
+実 AppKit の描画、折返し、フォーカス、VoiceOver、実 helper の起動・回収は未確認です。

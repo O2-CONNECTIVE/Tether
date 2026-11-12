@@ -55,6 +55,7 @@ jobs:
         working-directory: ui/mac-development
         run: |
           swift run --skip-build DevelopmentChecks
+          swift run --skip-build RecoveryChecks
           swift run --skip-build ProcessChecks
       - name: Check non-executing packaging with synthetic bytes
         if: steps.ci-scope.outputs.selected == 'true'
