@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -264,13 +263,15 @@ func TestTransportLossIsReportedWithoutResume(t *testing.T) {
 	st, _ := h.start("req-1", "whoami\n")
 	id := commandID(t, st)
 	p := h.proc()
-	var mu sync.Mutex
+	// Revocation marks the authority Revoked, then runs Terminate on its own
+	// goroutine while the wire closes, so the in-flight reply may arrive before
+	// the hook: wait for it instead of assuming that order.
+	terminated := make(chan struct{})
 	var atTerminate supervisor.State
 	p.mu.Lock()
 	p.onTerminate = func() {
-		mu.Lock()
-		defer mu.Unlock()
 		atTerminate = h.authority.Snapshot(h.clock.Now()).State
+		close(terminated)
 	}
 	p.mu.Unlock()
 	// One call is in flight when the owner ends the channel.
@@ -283,11 +284,13 @@ func TestTransportLossIsReportedWithoutResume(t *testing.T) {
 	if code := result["structuredContent"].(map[string]any)["error"]; resp["id"] != "t1" || result["isError"] != true || (code != "uncertain" && code != "transport_closed") {
 		t.Fatalf("in-flight call at transport loss = %v", resp)
 	}
-	mu.Lock()
-	state := atTerminate
-	mu.Unlock()
-	if state != supervisor.Revoked {
-		t.Fatalf("authority at Terminate = %q", state)
+	select {
+	case <-terminated:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Terminate was not called after transport loss")
+	}
+	if atTerminate != supervisor.Revoked {
+		t.Fatalf("authority at Terminate = %q", atTerminate)
 	}
 	// The adapter stops instead of answering every later call with the loss.
 	if err := h.waitDone(); !errors.Is(err, mcpadapter.ErrChannelClosed) {
