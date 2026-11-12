@@ -44,7 +44,7 @@ Tetherの共通サービスにCLI・GUI・MCPを接続し、認可・失効・�
 - チャットの要求と予測不能なコマンドIDを保持記録と独立に照合し、同じ実行の `mac_current_user`、exit 0、finished/terminal、command・owner・gatewayの各cleanup confirmedを確認しました。チャットにはBEGIN/ENDが表示されました。追加の独立した出力bytes読取はsession上限の429で拒否されたため、全bytesの独立取得完了は主張しません。
 - OFF確認、GUI/helperの正常終了、serverの限定pilotの期限前exit 0、常駐登録の閉鎖、認証付きoffline catalogへの復帰を確認しました。常時運転は提供していません。
 - #348はpending/connectingの観測をcleanup unknownと誤分類する問題の修正です。別の [#347](https://github.com/O2-CONNECTIVE/Tether/pull/347) はcleanup latchの修正です。今回の成功で、別途保持している過去3件のcleanup unknownを解消扱いにしません。
-- #348の統合前後CIはそれぞれ14 workflow / 25 jobs成功です（[Mac native](https://github.com/O2-CONNECTIVE/Tether/actions/runs/43122018604)、[GUI限定縦断](https://github.com/O2-CONNECTIVE/Tether/actions/runs/43122018612)）。CIと今回の実接続観測は別の証拠です。
+- #348の統合前後CIはそれぞれ14 workflow / 25 jobs成功です（[Go 3 OS・通常/race](https://github.com/O2-CONNECTIVE/Tether/actions/runs/43122018604)、[開発Macビルド・限定テスト](https://github.com/O2-CONNECTIVE/Tether/actions/runs/43122018612)）。CIと今回の実接続観測は別の証拠です。
 
 **達成はこの固定作業の実接続に限定します。** 未署名の開発用信頼モデルであり、製品のDeveloper ID署名・notarization・通常Tauri・一般配布の受入ではありません。4アカウントのAccess利用資格と、操作できる登録済み本人/Macの対応は別です。自動起動なし・`restart=no`、Worker edge relayの制御接続に5分の寿命上限があり、fresh initializeの制限が残り、無人運転や途切れない日常利用は未達です。session上限429の原因調査・修正も別残件です。
 
