@@ -17,7 +17,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -46,6 +48,7 @@ var (
 	// table, or SIGCHLD ignored (which lets the kernel reap the leader).
 	ErrHostState = errors.New("macagent: host process state is unsafe for spawning")
 	errNoProcess = errors.New("macagent: spawn returned no process")
+	errWorkDir   = errors.New("macagent: working directory is not a directory inside the work root")
 )
 
 // hostChecks are read-only checks of the host process. They neither close,
@@ -117,6 +120,7 @@ type Runtime struct {
 }
 
 var _ agentexec.ProfiledRuntime = (*Runtime)(nil)
+var _ agentexec.DirectoryRuntime = (*Runtime)(nil)
 var _ agentexec.GuestProcess = (*process)(nil)
 
 // New validates the local composition, refuses a host where SIGCHLD is ignored,
@@ -153,11 +157,47 @@ func trustedDir(p string) bool {
 	return p != "" && p != "/" && path.IsAbs(p) && path.Clean(p) == p && !strings.ContainsAny(p, "\x00\n")
 }
 
+// resolveWorkDir maps a clean relative slash path to the real directory it
+// names and refuses anything that is not a directory at or below the resolved
+// work root. Resolution and spawn are not atomic, and the cwd is not a
+// filesystem sandbox: the command still runs with the user's own access.
+func resolveWorkDir(root, dir string) (string, error) {
+	if !filepath.IsLocal(dir) || path.Clean(dir) != dir {
+		return "", errWorkDir
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", errWorkDir
+	}
+	resolvedDir, err := filepath.EvalSymlinks(filepath.Join(resolvedRoot, dir))
+	if err != nil {
+		return "", errWorkDir
+	}
+	info, err := os.Stat(resolvedDir)
+	if err != nil || !info.IsDir() {
+		return "", errWorkDir
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", errWorkDir
+	}
+	return resolvedDir, nil
+}
+
 func (r *Runtime) AgentProfile() agentexec.Profile { return agentexec.ProfileMacCurrentUser }
 
 // StartShell spawns the fixed shell for one command. A process returned with
 // an error is still owned by the caller; no process means not started.
 func (r *Runtime) StartShell(ctx context.Context, grant supervisor.Binding, stdin []byte) (agentexec.GuestProcess, error) {
+	return r.startShell(ctx, grant, "", false, stdin)
+}
+
+// StartShellIn starts the fixed shell in an approved directory below WorkDir.
+func (r *Runtime) StartShellIn(ctx context.Context, grant supervisor.Binding, dir string, stdin []byte) (agentexec.GuestProcess, error) {
+	return r.startShell(ctx, grant, dir, true, stdin)
+}
+
+func (r *Runtime) startShell(ctx context.Context, grant supervisor.Binding, dir string, useDir bool, stdin []byte) (agentexec.GuestProcess, error) {
 	if r == nil || r.spawn == nil {
 		if r != nil {
 			r.diagnostics.record(StartFailureConfiguration)
@@ -187,6 +227,16 @@ func (r *Runtime) StartShell(ctx context.Context, grant supervisor.Binding, stdi
 	}
 	spec := r.spec
 	spec.argv, spec.env = shellArgv(), environment(r.home)
+	// useDir separates "no directory requested" from an empty, refused one.
+	// Resolution touches the filesystem, so it runs before the last stop check.
+	if useDir {
+		resolved, err := resolveWorkDir(r.spec.dir, dir)
+		if err != nil {
+			r.diagnostics.record(StartFailureWorkDir)
+			return nil, errors.Join(agentexec.ErrNotStarted, err)
+		}
+		spec.dir = resolved
+	}
 	// Host checks can outlast the original command scope. Re-observe it at
 	// spawn admission rather than start new work after an already known stop.
 	// This is not atomic with fork: a later stop still owns any late process.

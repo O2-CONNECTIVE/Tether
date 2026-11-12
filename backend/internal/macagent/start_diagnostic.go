@@ -27,6 +27,7 @@ const (
 	StartFailureExecResource
 	StartFailureExecOther
 	StartFailureSpawnOther
+	StartFailureWorkDir
 )
 
 func (f StartFailure) String() string {
@@ -61,6 +62,8 @@ func (f StartFailure) String() string {
 		return "exec_other"
 	case StartFailureSpawnOther:
 		return "spawn_other"
+	case StartFailureWorkDir:
+		return "work_dir"
 	default:
 		return "unknown"
 	}
@@ -79,7 +82,7 @@ func (d *StartDiagnostics) Failure() StartFailure {
 }
 
 func (d *StartDiagnostics) record(f StartFailure) {
-	if d != nil && f > StartFailureNone && f <= StartFailureSpawnOther {
+	if d != nil && f > StartFailureNone && f <= StartFailureWorkDir {
 		d.first.CompareAndSwap(0, uint32(f))
 	}
 }

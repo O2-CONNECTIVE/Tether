@@ -51,7 +51,11 @@ func (s *Session) run(c *command) {
 
 	var proc GuestProcess
 	err := guard(func() (err error) {
-		proc, err = s.runtime.StartShell(c.ctx, s.binding, stdin)
+		if f := s.fixedStart; f != nil && f.Dir != "" {
+			proc, err = s.runtime.(DirectoryRuntime).StartShellIn(c.ctx, s.binding, f.Dir, stdin)
+		} else {
+			proc, err = s.runtime.StartShell(c.ctx, s.binding, stdin)
+		}
 		return err
 	})
 	s.mu.Lock()
