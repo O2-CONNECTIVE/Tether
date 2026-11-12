@@ -240,8 +240,8 @@ build済みのappを渡すことになり、OSによる起動の制止と、発�
 | 4b | Mac側の受付と実行。実行層（hashの照合、`cwd` の確認）、受付（許可の確認）、登録と回収の署名 | 4a |
 | 4c-1 | gatewayとMCPに `tether_run_command` を追加。引数の検査、署名する範囲、同じ要求IDの照合。状態照会と取消はgatewayの試験で確認 | 4b |
 | 4c-2 | MCPからMacの実行・回収までを通す結合試験。出力の読取と解放を含む既存ツールとの結合。**未実施。** CIの実producerのfixtureは、gatewayの `/mcp` が観測専用で実行のbackendにつながっておらず、そのままでは `tether_run_command` を通せない | 4c-1 |
-| 5 | 開発GUIに許可の切替とコマンド表示。pipeの入口。source試験まで。実機では画面とボタンの表示だけ確認（2026-11-13）。待機ONで許可が受理される経路は未確認 | 3 |
-| 6 | 実機受入。**未実施（2026-11-13）。** dev環境のWorker `tether-dev` が常駐用の登録（`rescue-agent-resident.v1`）を400で拒否し、Macの待機ONが成立しない。ChatGPT側のconnectorもgatewayから403を受け、ツール一覧を更新できない。どちらもmainのbuildと旧gatewayで再現し、この変更が原因ではない | 4c-2、5 |
+| 5 | 開発GUIに許可の切替とコマンド表示。pipeの入口。source試験まで。実機では、待機ONで `allow` が受理されること（CLIで駆動）と、実行したコマンドがGUIに表示されることを確認（2026-11-13、下の記録） | 3 |
+| 6 | 実機受入。**項目1と6だけ実施（2026-11-13、下の記録）。** 項目2〜5は未実施 | 4c-2、5 |
 
 - 2〜4は認可の境界を変えます。独立レビューを通し、統合の判断は利用者に上げます。1〜3は利用者の指示で統合しました（2026-11-12）。4c-1でgatewayが汎用のintentを送るようになりました。Mac側で許可をONにする入口（5）がないため、Macは汎用コマンドを実行しません。
 - 6の実機受入が済むまで、機能を有効にする統合はしません。
@@ -259,6 +259,28 @@ build済みのappを渡すことになり、OSによる起動の制止と、発�
 6. 実行したコマンドが開発GUIに表示されることを確認する。
 
 source試験、CI、実クライアント接続、実OS実行、GUI操作は別の証拠として記録します。
+### 実機受入の記録（2026-11-13）
+
+source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` のbuildをforeground pipeで駆動、clientは実ChatGPTの開発コネクタ、1名・1 Macです。
+
+| 項目 | 結果 |
+| --- | --- |
+| 1 | 通過。ただし作業ディレクトリは空で、実リポジトリの `git status` ではない。`pwd && uname -s && echo tether-acceptance-1`、`cwd` は `.`、`timeout_ms` は30000。ChatGPTが受け取った結果は、stdout 3行、`exit.code` 0、`command_cleanup`・`owner_cleanup`・`gateway_cleanup` がいずれも `confirmed`。常駐の作業状態は `preparing` → `running` → `idle`（回収 `confirmed`） |
+| 2〜5 | 未実施 |
+| 6 | 通過。開発GUIに「全1件のうち直近1件」と、同じ時刻・ディレクトリ・コマンドが表示された。画面の読取はcodexのコンピュータユーズで行い、記録ファイルの内容と一致した |
+
+受入の前に、環境側で次の2つを変えています。どちらもこの変更のコードではありません。
+
+- Worker `tether-dev` の `TETHER_RESIDENT_GATE` を `closed` から `open-resident-tether-control` へ変更（本人がデプロイ）。変更前は常駐用の登録が400で拒否され、待機ONが成立しなかった。
+- ChatGPTのコネクタを再接続。
+
+受入の途中で分かったこと。対処は未裁定です。
+
+- **再接続から24時間を超えると `/mcp` が403になる。** Managed OAuth経由のassertionは、`iat` が最初の認証時刻のまま、`exp` だけがaccess tokenの更新（10分）で延びる。gatewayは `exp - iat` が24時間を超えるassertionを拒否する（`MaxTokenLifetime`）。観測値は `exp - iat` が142540秒で、再接続後は674秒。Accessのgrant sessionは1週間の設定なので、現状は24時間ごとに再接続が要る。
+- **gatewayは拒否の理由を記録しない。** 上の原因は、gatewayの応答本文（`the Cloudflare Access assertion is not valid`）と、assertionのclaim名・判定結果だけを取り出して特定した。
+- **最初の呼出しが `Resident catalog only` で拒否された。** 同じ会話の2回目の呼出しは通った。1回目の送信から約5秒後に、常駐が `connecting` へ落ちて約6秒で `authenticated` へ戻っている。因果は未調査。
+- Workerのrelayは300秒で切れるため、常駐は1回290秒以内で起動し直した。待機が再接続をまたいでも、許可は有効なままコマンドが実行された。
+
 
 ## 段階の目安（提案）
 
