@@ -85,7 +85,8 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 | POST（notification、またはclientのresponse） | 202、本文なし |
 | POST（parse error、batch、不正なid） | 400、JSON-RPC error |
 | POST（session headerのない`initialize`以外） | 400。sessionは作りません |
-| `initialize`時にrouteがない / session数が上限 | 認証済みdiscovery専用session / 429 |
+| `initialize`時にrouteがない / session数が上限 | 認証済みdiscovery専用session / 429（常駐作業用の`initialize`は次の行） |
+| 常駐作業用の`initialize`時にsession数が上限 | そのprincipalの、接続世代が現行と異なる常駐sessionのうち、最後の利用が最も古い1件を終了して受け付けます。該当がなければ429。discovery専用session、routeへ束縛したsession、現行世代の常駐sessionは終了しません。終了したsessionからは、その世代の結果を照会できなくなります |
 | discovery専用sessionの妥当なtools/call | backendへ到達せず404で同sessionを破棄。不正な要求は400等で拒否し得る。新規initializeが必要。grantへ後付け束縛せず、commandを配送しない |
 | `notifications/cancelled`で取り消された元のPOST | 200、元 id の JSON-RPC error -32800。HTTP の単一 JSON 応答を保ち、遠隔配送の不確定性を明記します。遠隔 command は止まりません。notification 自体は 202 です |
 | GET（SSE stream）、PUTなど | 405、`Allow: POST, DELETE` |
@@ -191,6 +192,7 @@ Access applicationとAUDは、このMCP hostname/path専用にします。他ori
   - RS256の受理、principal間とsessionの分離、自己申告headerの無視、routeのないprincipal
   - backendの喪失とhard deadlineでのsession終了と非再開、再起動後の非再開、登録の拒否（二重route、LaunchIDの再利用、未知label、Windows profile、signerなし）
   - 開始の不確定とJSON-RPC IDの衝突、出力の停滞と`notifications/cancelled`、DELETEとsession上限
+  - 常駐の再接続後・接続後に上限へ達したときの、作業を開始できないsessionの入替と、入替えない条件（`session_replacement_test.go`）
   - 不正なHTTP・JSON、SSE（GET）の拒否、Origin、query、protocol version、metadata、設定の拒否、CLIの待受前拒否
 - 未確認の項目：全体の同時HTTP上限（32）、principalごとのtool同時上限の飽和、session idleの30分、LaunchID 1024件の上限、HTTP serverの実timeout。
 - これらの合格は、実provider、実token、tunnel、実relay、Macでの実行、dotsからの遠隔操作、配置の成功を示しません。
