@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/workerowner"
@@ -68,8 +69,29 @@ func (f *ResidentFactory) matchesWire(r *agenttransport.ResidentReceiver) bool {
 
 // NewWireRequest retains the actual received work context and monotonic deadline.
 // Outer request correlation never becomes the canonical FixedStart request ID.
+// It admits the fixed operation only, never a command run.
 func (s *ResidentSource) NewWireRequest(i agenttransport.ResidentFixedIntent) (*workerowner.Request, error) {
-	if s == nil || s.self != s || !finiteResident(i.OriginalContext()) || i.Receiver() == nil || i.Receiver() != s.wireReceiver || !s.factory.matchesWire(i.Receiver()) || i.HostKeyFingerprint() != s.factory.policy.key.Fingerprint || i.PrincipalKeyFingerprint() != ssh.FingerprintSHA256(s.factory.policy.peer) || i.Operation() != ResidentFixedRequestID || i.TimeoutMillis() != 15000 || i.Generation() != s.wireReceiver.Generation() {
+	if s == nil || s.self != s || i.Operation() != ResidentFixedRequestID || i.TimeoutMillis() != 15000 {
+		return nil, ErrResident
+	}
+	op := s.factory.policy.operations[ResidentFixedRequestID]
+	return s.newWireRequest(i, agentexec.FixedStartConstraint{RequestID: ResidentFixedRequestID, Command: op.command, TimeoutMillis: op.timeout})
+}
+
+// NewWireRunRequest admits one signed command run. The protected policy names
+// no command for it: the gateway's signature over the command hash, directory
+// and timeout is the scope, and the worker is held to exactly those values.
+// The caller must first check the local run allowance, which this package
+// cannot see; that is why NewWireRequest never admits a command run.
+func (s *ResidentSource) NewWireRunRequest(i agenttransport.ResidentFixedIntent) (*workerowner.Request, error) {
+	if s == nil || s.self != s || i.Operation() != agenttransport.ResidentRunOperation || i.CommandSHA256() == "" || i.Cwd() == "" || i.TimeoutMillis() == 0 {
+		return nil, ErrResident
+	}
+	return s.newWireRequest(i, agentexec.FixedStartConstraint{RequestID: agenttransport.ResidentRunOperation, CommandSHA256: i.CommandSHA256(), Dir: i.Cwd(), TimeoutMillis: i.TimeoutMillis()})
+}
+
+func (s *ResidentSource) newWireRequest(i agenttransport.ResidentFixedIntent, fixed agentexec.FixedStartConstraint) (*workerowner.Request, error) {
+	if !finiteResident(i.OriginalContext()) || i.Receiver() == nil || i.Receiver() != s.wireReceiver || !s.factory.matchesWire(i.Receiver()) || i.HostKeyFingerprint() != s.factory.policy.key.Fingerprint || i.PrincipalKeyFingerprint() != ssh.FingerprintSHA256(s.factory.policy.peer) || i.Generation() != s.wireReceiver.Generation() || fixed.Validate() != nil {
 		return nil, ErrResident
 	}
 	deadline := i.Deadline()
@@ -81,7 +103,6 @@ func (s *ResidentSource) NewWireRequest(i agenttransport.ResidentFixedIntent) (*
 		return nil, ErrResident
 	}
 	id := i.RequestID()
-	op := s.factory.policy.operations[ResidentFixedRequestID]
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.liveLocked() || s.entries[id] != nil || len(s.entries) >= maxResidentIntents {
@@ -91,6 +112,6 @@ func (s *ResidentSource) NewWireRequest(i agenttransport.ResidentFixedIntent) (*
 	entry := &residentEntry{wireIntent: &copy}
 	s.entries[id] = entry
 	return &workerowner.Request{SourceContext: original, Deadline: deadline, Reply: make(chan error, 1), Approve: func(ctx context.Context) (*workerowner.Worker, error) {
-		return s.approveWithID(ctx, original, entry, id, ResidentFixedRequestID, op, deadline)
+		return s.approveWithID(ctx, original, entry, id, fixed, deadline)
 	}}, nil
 }

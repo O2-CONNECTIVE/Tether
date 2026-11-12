@@ -166,10 +166,12 @@ func (s *ResidentSource) newRequest(original context.Context, i residentwork.Int
 	}}, nil
 }
 func (s *ResidentSource) approve(ctx, original context.Context, e *residentEntry, id string, op residentOperation, deadline time.Time) (*workerowner.Worker, error) {
-	return s.approveWithID(ctx, original, e, id, id, op, deadline)
+	return s.approveWithID(ctx, original, e, id, agentexec.FixedStartConstraint{RequestID: id, Command: op.command, TimeoutMillis: op.timeout}, deadline)
 }
 
-func (s *ResidentSource) approveWithID(ctx, original context.Context, e *residentEntry, id, canonicalID string, op residentOperation, deadline time.Time) (owned *workerowner.Worker, result error) {
+// approveWithID starts the one worker of entry id. fixed is the whole admission
+// scope of that worker; its request ID is canonical and never the outer id.
+func (s *ResidentSource) approveWithID(ctx, original context.Context, e *residentEntry, id string, fixed agentexec.FixedStartConstraint, deadline time.Time) (owned *workerowner.Worker, result error) {
 	s.mu.Lock()
 	if !s.liveLocked() || e.started || s.entries[id] != e {
 		s.mu.Unlock()
@@ -214,7 +216,7 @@ func (s *ResidentSource) approveWithID(ctx, original context.Context, e *residen
 	}
 	b := f.deps.budgets
 	b.Cleanup = f.policy.cleanup
-	p, err := prepare(Config{HostKey: f.signer, AllowedKeys: []ssh.PublicKey{f.policy.peer}, Runtime: f.policy.runtime, Deadline: deadline, CleanupTimeout: f.policy.cleanup, Budgets: b, FixedStart: &agentexec.FixedStartConstraint{RequestID: canonicalID, Command: op.command, TimeoutMillis: op.timeout}}, runtime)
+	p, err := prepare(Config{HostKey: f.signer, AllowedKeys: []ssh.PublicKey{f.policy.peer}, Runtime: f.policy.runtime, Deadline: deadline, CleanupTimeout: f.policy.cleanup, Budgets: b, FixedStart: &fixed}, runtime)
 	if err != nil {
 		return owned, ErrResident
 	}

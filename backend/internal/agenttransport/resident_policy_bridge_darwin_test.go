@@ -107,6 +107,13 @@ func TestProtectedPolicyAcceptsActualReceiverBeforeWorkApproval(t *testing.T) {
 	protectedPolicyBridge(t, "request")
 }
 
+// A command-run intent carries a command a person never saw. The Mac may admit
+// it only through the entry point whose caller checked the local run
+// allowance; the fixed-work entry point must keep refusing it.
+func TestProtectedPolicyAdmitsCommandRunOnlyThroughItsOwnEntryPoint(t *testing.T) {
+	protectedPolicyBridge(t, "run-request")
+}
+
 func TestProtectedPolicyReceiverClaimFailureRetainsOriginalOwner(t *testing.T) {
 	for _, scenario := range []string{"abandoned", "policy-drift", "canceled", "expired", "closed", "unknown"} {
 		t.Run(scenario, func(t *testing.T) { protectedPolicyBridge(t, scenario) })
@@ -221,7 +228,7 @@ func protectedPolicyBridge(t *testing.T, scenario string) {
 		case <-time.After(time.Millisecond):
 		}
 	}
-	if scenario != "request" {
+	if scenario != "request" && scenario != "run-request" {
 		r := lease.Receiver()
 		switch scenario {
 		case "abandoned", "policy-drift", "canceled", "unknown":
@@ -315,12 +322,51 @@ func protectedPolicyBridge(t *testing.T, scenario string) {
 		t.Fatal("no consumer acquired the original native source")
 	}
 	proposed := make(chan error, 1)
+	if scenario == "run-request" {
+		go func() {
+			proposed <- handler.ProposeResidentRun(ctx, "host-one", "member-one", strings.Repeat("a", 32), time.Now().Add(10*time.Second).Truncate(time.Millisecond), strings.Repeat("ab", 32), "src/app", 60_000)
+		}()
+		intent, err := lease.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request, err := source.NewWireRequest(intent); request != nil || !errors.Is(err, maclaunch.ErrResident) {
+			t.Fatal("fixed-work entry point admitted a command run", err)
+		}
+		request, err := source.NewWireRunRequest(intent)
+		if err != nil || request == nil || request.SourceContext != intent.OriginalContext() || !request.Deadline.Equal(intent.Deadline()) {
+			t.Fatal("signed command-run scope was not retained", err)
+		}
+		if repeated, err := source.NewWireRunRequest(intent); repeated != nil || !errors.Is(err, maclaunch.ErrResident) {
+			t.Fatal("same command-run intent was admitted twice", err)
+		}
+		// Stop at input acceptance, as the fixed scenario does.
+		if err := lease.Refuse(intent); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-proposed:
+			if !errors.Is(err, agenttransport.ErrWorkUnconfigured) {
+				t.Fatal("refusal became work success", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("original proposal did not finish")
+		}
+		source.Close()
+		if registrar.calls.Load() != 0 || transport.calls.Load() != 0 {
+			t.Fatal("input acceptance created a work transport")
+		}
+		return
+	}
 	go func() {
 		proposed <- handler.ProposeResidentFixed(ctx, "host-one", "member-one", strings.Repeat("a", 32), time.Now().Add(10*time.Second).Truncate(time.Millisecond))
 	}()
 	intent, err := lease.Next()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if run, err := source.NewWireRunRequest(intent); run != nil || !errors.Is(err, maclaunch.ErrResident) {
+		t.Fatal("fixed intent was admitted as a command run", err)
 	}
 	request, err := source.NewWireRequest(intent)
 	if err != nil || request == nil || request.SourceContext != intent.OriginalContext() || !request.Deadline.Equal(intent.Deadline()) {

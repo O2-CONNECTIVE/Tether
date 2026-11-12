@@ -382,14 +382,24 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 		if e != nil {
 			break
 		}
+		run := i.Operation() == agenttransport.ResidentRunOperation
 		s.mu.Lock()
-		allowed := s.cycle == c && !s.observation.AdmissionSealed
+		admitted := s.admissionLocked(c, run)
 		s.mu.Unlock()
-		if !allowed {
+		if admitted == admitNothing {
 			_ = lease.Refuse(i)
 			break
 		}
-		request, e := source.NewRequest(i)
+		if admitted == admitNoRun {
+			_ = lease.Refuse(i)
+			continue
+		}
+		var request *workerowner.Request
+		if admitted == admitRun {
+			request, e = source.NewRunRequest(i)
+		} else {
+			request, e = source.NewRequest(i)
+		}
 		if e != nil {
 			_ = lease.Refuse(i)
 			continue
