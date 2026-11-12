@@ -43,7 +43,10 @@ func decodeControl(line []byte, dialect inputDialect) (controlCommand, error) {
 		return controlCommand{kind: controlClose}, nil
 	}
 	fields := strings.Split(text, " ")
-	if len(fields) != 3 || (fields[0] != "on" && fields[0] != "off") {
+	// allow and deny switch the local command-run allowance. They take no
+	// duration: residentmac.MaxRunAllowance is the only one.
+	intent, ok := map[string]string{"on": "on", "off": "off", "allow": "allow-run", "deny": "deny-run"}[fields[0]]
+	if len(fields) != 3 || !ok {
 		return controlCommand{}, ErrProtocol
 	}
 	var numbers [2]uint64
@@ -57,5 +60,5 @@ func decodeControl(line []byte, dialect inputDialect) (controlCommand, error) {
 	if numbers[0] == 0 {
 		return controlCommand{}, ErrProtocol
 	}
-	return controlCommand{kind: controlIntent, intent: Intent{1, numbers[0], numbers[1], fields[0]}}, nil
+	return controlCommand{kind: controlIntent, intent: Intent{1, numbers[0], numbers[1], intent}}, nil
 }

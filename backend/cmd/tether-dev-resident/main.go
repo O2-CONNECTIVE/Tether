@@ -19,8 +19,10 @@ This timer is not an absolute access cutoff; a bounded server pilot is required.
 Expiry requests original-owner cleanup; unknown cleanup is never success.
 Commands: status; on <request_id> <expected_revision>;
 off <request_id> <expected_revision>; close. Each ends in LF.
+allow <request_id> <expected_revision> lets signed command runs through
+for at most 15 minutes of the current standby; deny ... withdraws it.
 Use fresh status revisions and strictly increasing positive request IDs.
-ON permits only the existing fixed Tether BEGIN/sleep/END operation through MCP.
+ON alone permits only the fixed Tether BEGIN/sleep/END operation through MCP.
 Receipts are not authentication, readiness or cleanup confirmation.
 No policy, identity, command, endpoint, duration or trust override arguments.
 `

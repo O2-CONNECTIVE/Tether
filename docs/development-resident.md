@@ -20,7 +20,16 @@ credential を使用し、製品 enrollment/credential をコピー・共有し�
 ON するまでは接続しません。実 host/principal 認証、固定 operation、generation、
 replay 拒否、元 owner の回収は既存実装を使います。operation は既存の
 `TETHER_MCP_GUI_BEGIN` 出力、5秒待機、`TETHER_MCP_GUI_END` 出力だけで、
-command/path/env を client が指定する入口を追加しません。
+ON だけでは command/path/env を client が指定する入口はありません。
+
+`allow <request_id> <expected_revision>` は、署名付きの汎用コマンド
+（[run-command-design](run-command-design.md)）を現在の待機の間、最大15分だけ
+通します。`deny` は取り消します。期間は pipe で指定できません。許可は待機の
+状態遷移ではないので `status` には出ず、結果は receipt だけで返ります。
+pipe 側が未知（poisoned）または遷移待ちの間は `deny` も Mac 側の owner へ
+届きません。その間に許可を確実に閉じる手段は `close` か `off` です。
+ON で `allow` が受理される経路は source 試験では通しておらず、CI の実 producer
+の結合試験で確認します。
 
 15分の終了要求期限は invocation の最初に固定し、ON/OFF・再接続で延長しません。
 期限・signal・close・入力断は元 owner の Close を要求します。終了要求の時刻と
