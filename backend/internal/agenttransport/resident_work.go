@@ -69,7 +69,7 @@ func (h *Handler) ResidentGeneration(host, principal string) string {
 	return p.binding.generation
 }
 func (h *Handler) BeginResidentFixed(ctx context.Context, host, principal, generation, id string, deadline time.Time) error {
-	e := h.proposeResidentFixed(ctx, host, principal, generation, id, deadline)
+	e := h.proposeResident(ctx, host, principal, generation, id, deadline, residentRunScope{})
 	if e == ErrWorkPending {
 		return agentgateway.ErrResidentPending
 	}
