@@ -21,7 +21,20 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-type residentControlFixture struct{ begin chan struct{} }
+type residentRunCall struct {
+	generation, id string
+	deadline       time.Time
+	scope          ResidentRunScope
+}
+type residentControlFixture struct {
+	begin chan struct{}
+	runs  chan residentRunCall
+}
+
+func (c *residentControlFixture) BeginResidentRun(ctx context.Context, _ string, _ string, generation, id string, deadline time.Time, scope ResidentRunScope) error {
+	c.runs <- residentRunCall{generation, id, deadline, scope}
+	return c.BeginResidentFixed(ctx, "", "", generation, id, deadline)
+}
 
 func (*residentControlFixture) ResidentGeneration(string, string) string {
 	return strings.Repeat("a", 64)
@@ -74,7 +87,7 @@ func residentEvidenceRig(t *testing.T) (*Gateway, *residentSession, ssh.Signer, 
 	if e != nil {
 		t.Fatal(e)
 	}
-	control := &residentControlFixture{begin: make(chan struct{})}
+	control := &residentControlFixture{begin: make(chan struct{}), runs: make(chan residentRunCall, 8)}
 	e = g.ConfigureResident("wss://example.test/register", control, []ResidentEnrollment{{HostLabel: "host1", PrincipalLabel: "member1", HostKey: host.PublicKey().Marshal()}})
 	if e != nil {
 		t.Fatal(e)

@@ -87,6 +87,22 @@ func (h *Handler) BeginResidentFixed(ctx context.Context, host, principal, gener
 	return e
 }
 
+// BeginResidentRun is BeginResidentFixed for a command run. A zero scope is not
+// well formed, so it can never fall through to the fixed operation.
+func (h *Handler) BeginResidentRun(ctx context.Context, host, principal, generation, id string, deadline time.Time, scope agentgateway.ResidentRunScope) error {
+	if !scope.WellFormed() {
+		return ErrRefused
+	}
+	e := h.proposeResident(ctx, host, principal, generation, id, deadline, residentRunScope{commandSHA256: scope.CommandSHA256, cwd: scope.Cwd, timeoutMillis: scope.TimeoutMillis})
+	if e == ErrWorkPending {
+		return agentgateway.ErrResidentPending
+	}
+	if e == ErrWorkUnconfigured {
+		return agentgateway.ErrResidentWorkUnconfigured
+	}
+	return e
+}
+
 // currentWork reports whether b names an intent this gateway signed and still
 // holds, and returns b with the run scope of that intent. The scope never comes
 // from the Mac: the registration message does not carry one.

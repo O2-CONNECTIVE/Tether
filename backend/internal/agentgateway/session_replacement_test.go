@@ -29,6 +29,9 @@ func (*generationControl) BeginResidentFixed(ctx context.Context, _, _, _, _ str
 	<-ctx.Done()
 	return ctx.Err()
 }
+func (*generationControl) BeginResidentRun(ctx context.Context, _, _, _, _ string, _ time.Time, _ agentgateway.ResidentRunScope) error {
+	return agentgateway.ErrResidentWorkUnconfigured
+}
 
 type capacityRig struct {
 	*rig

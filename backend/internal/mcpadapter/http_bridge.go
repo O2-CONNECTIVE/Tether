@@ -223,7 +223,7 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 			return response(id, map[string]any{"tools": residentToolList(s.resident)})
 		}
 		if s.residentDiscovery {
-			return response(id, map[string]any{"tools": residentCatalog(true, true, true, true)})
+			return response(id, map[string]any{"tools": residentCatalog(true, true, true, true, true)})
 		}
 		return response(id, map[string]any{"tools": toolList()})
 	case "tools/call":
