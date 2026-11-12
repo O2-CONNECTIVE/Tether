@@ -83,6 +83,7 @@ type Config struct {
 	TerminalDisposition *TerminalDisposition // trusted local foreground owner only
 	WorkDir             string               // absolute cwd for every command; not a sandbox
 	Home                string               // the current user's home, exported as HOME
+	RunLog              string               // optional absolute path for directory-command history
 	TermGrace           time.Duration        // TERM to KILL; default 2s
 	KillWait            time.Duration        // KILL to confirmed reap; default 2s
 	IOWait              time.Duration        // reap to stdio EOF; default 2s
@@ -112,6 +113,7 @@ type Runtime struct {
 	terminalDisposition *TerminalDisposition
 	spec                spawnSpec
 	home                string
+	runLog              string
 	timing              timing
 	spawn               spawnFunc
 	checks              hostChecks
@@ -134,7 +136,7 @@ func New(cfg Config) (*Runtime, error) {
 }
 
 func newRuntime(cfg Config, spawn spawnFunc, checks hostChecks, poll time.Duration) (*Runtime, error) {
-	if spawn == nil || checks.inheritableFDs == nil || checks.childReaping == nil || poll <= 0 || !trustedDir(cfg.WorkDir) || !trustedDir(cfg.Home) {
+	if spawn == nil || checks.inheritableFDs == nil || checks.childReaping == nil || poll <= 0 || !trustedDir(cfg.WorkDir) || !trustedDir(cfg.Home) || (cfg.RunLog != "" && !trustedDir(cfg.RunLog)) {
 		return nil, ErrConfig
 	}
 	if err := checks.childReaping(); err != nil {
@@ -149,7 +151,7 @@ func newRuntime(cfg Config, spawn spawnFunc, checks hostChecks, poll time.Durati
 			*d = defaultGrace
 		}
 	}
-	return &Runtime{terminalDisposition: cfg.TerminalDisposition, spec: spawnSpec{path: shellPath, dir: cfg.WorkDir}, home: cfg.Home, timing: t, spawn: spawn, checks: checks, diagnostics: cfg.StartDiagnostics, cleanupDiagnostics: cfg.CleanupDiagnostics}, nil
+	return &Runtime{terminalDisposition: cfg.TerminalDisposition, spec: spawnSpec{path: shellPath, dir: cfg.WorkDir}, home: cfg.Home, runLog: cfg.RunLog, timing: t, spawn: spawn, checks: checks, diagnostics: cfg.StartDiagnostics, cleanupDiagnostics: cfg.CleanupDiagnostics}, nil
 }
 
 // trustedDir accepts only clean absolute slash paths other than the root.
@@ -236,6 +238,11 @@ func (r *Runtime) startShell(ctx context.Context, grant supervisor.Binding, dir 
 			return nil, errors.Join(agentexec.ErrNotStarted, err)
 		}
 		spec.dir = resolved
+	}
+	if useDir && r.runLog != "" {
+		if err := appendRunLog(r.runLog, spec.dir, stdin); err != nil {
+			return nil, agentexec.ErrNotStarted
+		}
 	}
 	// Host checks can outlast the original command scope. Re-observe it at
 	// spawn admission rather than start new work after an already known stop.

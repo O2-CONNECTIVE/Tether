@@ -1,7 +1,7 @@
 // Values rendered directly by AppKit; no effects or alternate cleanup proof.
 public struct RecoveryPresentation {
-    public let status, detail, prepareTitle, quitTitle, diagnostic: String
-    public let canPrepare, canOn, canOff, canStop: Bool
+    public let status, detail, prepareTitle, quitTitle, diagnostic, run: String
+    public let canPrepare, canOn, canOff, canAllow, canDeny, canStop: Bool
 }
 
 extension RecoveryController {
@@ -46,12 +46,22 @@ extension RecoveryController {
         }
         let diagnosticText = (launched || launchFailed ? "現在: " + diagnostic : "")
             + (previousDiagnostic.map { "\n前回: " + $0 } ?? "")
+        let run: String
+        if f.runAllowed(at: now), let until = f.runAllowedUntil {
+            let remaining = until - now
+            let minutes = remaining / 60_000 + (remaining % 60_000 == 0 ? 0 : 1)
+            run = "コマンド実行: 許可中（残り約\(minutes)分）"
+        } else {
+            run = "コマンド実行: 許可なし（待機 ON だけでは実行されません）"
+        }
         return RecoveryPresentation(
             status: status, detail: detail,
             prepareTitle: launched || launchFailed ? "もう一度準備" : "開発ホストを準備",
             quitTitle: mayQuit ? "終了" : "停止して終了", diagnostic: diagnosticText,
+            run: run,
             canPrepare: preparation != .blocked,
             canOn: !quitRequested && f.can("on", at: now), canOff: !quitRequested && f.can("off", at: now),
+            canAllow: !quitRequested && f.can("allow", at: now), canDeny: !quitRequested && f.can("deny", at: now),
             canStop: launched && !quitRequested && !f.closing && !f.closed)
     }
 }

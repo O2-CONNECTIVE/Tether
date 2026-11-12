@@ -110,6 +110,8 @@ func loadResidentMode(ctx context.Context, policyPath string, d residentDeps, st
 		}
 		return nil, ErrResident
 	}
+	// Fixed beside the protected policy, not read from it: see macagent.Config.RunLog.
+	p.runtime.RunLog = path.Join(path.Dir(policyPath), "run-history.jsonl")
 	signer, e := d.key(ctx, p.key)
 	if e != nil {
 		return nil, residentReadError(e)

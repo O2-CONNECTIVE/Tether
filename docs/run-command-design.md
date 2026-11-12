@@ -63,7 +63,7 @@ CLIは開発とCIの検証用として現状を維持します。
 - 開発GUIは待機ON/OFFをpipeでGo側へ送ります（[ResidentProcess.swift](../ui/mac-development/Sources/DevelopmentProcess/ResidentProcess.swift)、[residentpipe](../backend/internal/residentpipe/run_darwin.go)、[standby](../backend/internal/residentmac/standby.go)）。個々のコマンドの許可を送る入口はありません。
 - 既存の `tether_fixed_status` / `cancel` / `release` / `list` / `get_execution` / `read_output` は、要求IDと接続世代で実行を特定します。操作名や固定コマンドを照合していません。
 - 署名の型は2つ並存します。現行経路が使うのは通信路の署名で、[residentwork の intent](../backend/internal/residentwork/intent.go)は本体からの呼び出しがなく、テストだけが使っています。
-- 開発GUIは状態と実行数を表示します。コマンド内容の表示はありません。
+- 開発GUIは状態と、実行したコマンドの本文（直近5件）を表示します。
 
 ## `tether_run_command` の仕様案
 
@@ -99,7 +99,7 @@ gatewayとMCPの入口の実装（4c-1）では、次のとおりにしました
 - 許可は待機の1周期の状態として持ち、期限切れ・待機OFF・GUIからのOFFで失効します。中継の張り直しでは失効しません。1回の許可は最大15分で、期限は経過時間と壁時計の両方で判定します（スリープ中も進みます）。当初案のresident policyへの追加は採りませんでした。
 - 延長はMac側の操作だけで行います。MCPの引数やモデルの出力は許可になりません。
 - 待機ONだけでは、コマンド実行を許可しません。
-- GUIからGo側へ伝えるpipeの入口（`allow` / `deny`）は追加しました。開発GUIのボタンは未実装です（分割の5）。
+- GUIからGo側へ伝えるpipeの入口（`allow` / `deny`）と、開発GUIのボタン・許可の表示・実行したコマンドの表示を追加しました。記録の制約は[development-resident](development-resident.md)を参照。
 - 許可を待機の1周期に置くこと、上限15分、古い取り消し要求を適用しないことは、実装上の設計で未裁定です（[PR #357](https://github.com/O2-CONNECTIVE/Tether/pull/357)）。
 
 ## 安全上の変化
