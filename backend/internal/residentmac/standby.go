@@ -36,6 +36,8 @@ type standbyCycle struct {
 	intent        *agenttransport.ResidentFixedIntent
 	result        error
 	initialUntil  time.Time
+	runUntil      time.Time // guarded by Standby.mu; zero means run is not allowed
+	runUntilWall  time.Time // the same instant without the monotonic reading
 	authenticated bool
 }
 
@@ -122,17 +124,8 @@ func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r := StandbyReceipt{RequestID: id, Intent: intent, Disposition: "rejected", Revision: s.observation.Revision}
-	if id == 0 || id > maxStandbyInteger || id <= s.lastRequest || revision != s.observation.Revision {
-		r.Disposition = "stale"
-		return r
-	}
-	s.lastRequest = id
-	if s.closed {
-		return r
-	}
-	if s.observation.Standby == "unknown" {
-		r.Disposition = "unknown"
+	r, ok := s.admitLocked(id, revision, intent)
+	if !ok {
 		return r
 	}
 	if intent == "on" {
@@ -164,6 +157,25 @@ func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
 	r.Disposition = "accepted"
 	r.Revision = s.observation.Revision
 	return r
+}
+
+// admitLocked is the one replay and staleness check for every local request.
+// On false the receipt is final; on true it is "rejected" until the caller accepts.
+func (s *Standby) admitLocked(id, revision uint64, intent string) (StandbyReceipt, bool) {
+	r := StandbyReceipt{RequestID: id, Intent: intent, Disposition: "rejected", Revision: s.observation.Revision}
+	if id == 0 || id > maxStandbyInteger || id <= s.lastRequest || revision != s.observation.Revision {
+		r.Disposition = "stale"
+		return r, false
+	}
+	s.lastRequest = id
+	if s.closed {
+		return r, false
+	}
+	if s.observation.Standby == "unknown" {
+		r.Disposition = "unknown"
+		return r, false
+	}
+	return r, true
 }
 
 // Close seals this object permanently; caller timeout never retries collection.
