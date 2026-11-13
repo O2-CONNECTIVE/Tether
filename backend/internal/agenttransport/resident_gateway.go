@@ -26,6 +26,7 @@ type residentPending struct {
 	reply  chan error
 }
 type residentPeer struct {
+	handler   *Handler
 	binding   residentBinding
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -63,6 +64,22 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 		clean := residentCleanup(c, ping, h.budgets.Cleanup)
 		if peer != nil {
 			defer close(peer.finished)
+			peer.mu.Lock()
+			var last ResidentFixedIntent
+			for _, intent := range peer.intents {
+				if intent.sequence > last.sequence {
+					last = intent
+				}
+			}
+			peer.mu.Unlock()
+			if last.sequence != 0 {
+				h.mu.Lock()
+				if h.residentReceipts == nil {
+					h.residentReceipts = map[string]residentReceipt{}
+				}
+				h.residentReceipts[residentMapKey(peer.binding.host, peer.binding.principal)] = residentReceipt{binding: peer.binding, intent: last}
+				h.mu.Unlock()
+			}
 		}
 		if peer != nil && clean == nil {
 			h.mu.Lock()
@@ -85,7 +102,7 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 	if e != nil {
 		return
 	}
-	peer = &residentPeer{registrar: h.registrar, binding: b, ctx: life, cancel: cancel, ws: ws, link: c, key: key, signer: signer, gate: make(chan struct{}, 1), seen: map[string]bool{}, intents: map[string]ResidentFixedIntent{}, finished: make(chan struct{})}
+	peer = &residentPeer{handler: h, registrar: h.registrar, binding: b, ctx: life, cancel: cancel, ws: ws, link: c, key: key, signer: signer, gate: make(chan struct{}, 1), seen: map[string]bool{}, intents: map[string]ResidentFixedIntent{}, finished: make(chan struct{})}
 	peer.gate <- struct{}{}
 	reserve, stopReserve := context.WithTimeout(life, h.budgets.Registration)
 	e = h.reserveResident(reserve, peer)
@@ -182,11 +199,22 @@ func (p *residentPeer) readReceipts() error {
 		if m, ok := residentFields(msg, "resident_collected", "generation", "sequence", "request_id", "cleanup", "signature"); ok {
 			p.mu.Lock()
 			i, found := p.intents[m["request_id"]]
+			binding := p.binding
 			p.mu.Unlock()
+			if !found {
+				k := residentMapKey(p.binding.host, p.binding.principal)
+				h := p.handler
+				h.mu.Lock()
+				r, ok := h.residentReceipts[k]
+				if ok && m["request_id"] == r.intent.requestID && m["generation"] == r.intent.generation && m["sequence"] == strconv.FormatUint(r.intent.sequence, 10) && bytes.Equal(r.binding.hostKey, p.binding.hostKey) && r.binding.host == p.binding.host && r.binding.principal == p.binding.principal {
+					i, binding, found = r.intent, r.binding, true
+				}
+				h.mu.Unlock()
+			}
 			if !found || m["generation"] != i.generation || m["sequence"] != strconv.FormatUint(i.sequence, 10) {
 				return ErrRefused
 			}
-			proof := collectionProof(p.binding, i, m["cleanup"])
+			proof := collectionProof(binding, i, m["cleanup"])
 			proof.Signature, _ = decodeB64(m["signature"])
 			if verify(p.key, agentgateway.ResidentCollectionTranscript(proof), proof.Signature) != nil {
 				return ErrRefused
@@ -196,6 +224,12 @@ func (p *residentPeer) readReceipts() error {
 			})
 			if !ok || registrar.ResidentCollected(proof) != nil {
 				return ErrRefused
+			}
+			if binding.generation != p.binding.generation {
+				h := p.handler
+				h.mu.Lock()
+				delete(h.residentReceipts, residentMapKey(binding.host, binding.principal))
+				h.mu.Unlock()
 			}
 			continue
 		}

@@ -52,17 +52,18 @@ type enrolled struct {
 // Handler accepts host registrations and hands each verified stream to the
 // Registrar. It does not listen; the operator composition mounts it.
 type Handler struct {
-	endpoint        string
-	path            string
-	hosts           map[string]*enrolled
-	registrar       Registrar
-	residentSigners map[string]ssh.Signer
-	residents       map[string]*residentPeer
-	budgets         Budgets
-	clock           func() time.Time
-	slots           chan struct{}
-	ctx             context.Context
-	cancel          context.CancelFunc
+	endpoint         string
+	path             string
+	hosts            map[string]*enrolled
+	registrar        Registrar
+	residentSigners  map[string]ssh.Signer
+	residents        map[string]*residentPeer
+	residentReceipts map[string]residentReceipt
+	budgets          Budgets
+	clock            func() time.Time
+	slots            chan struct{}
+	ctx              context.Context
+	cancel           context.CancelFunc
 
 	mu         sync.Mutex
 	closed     bool
@@ -71,6 +72,11 @@ type Handler struct {
 	inflight   int       // admitted requests whose ServeHTTP has not returned
 	idle       chan struct{}
 	idleClosed bool
+}
+
+type residentReceipt struct {
+	binding residentBinding
+	intent  ResidentFixedIntent
 }
 
 // admission is one admitted request's reservation. tracked is set, under
