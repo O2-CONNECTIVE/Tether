@@ -162,8 +162,14 @@ func (p *ciChild) finishNativeEvidence() error {
 	if err := p.nativeEvidence.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return err
 	}
-	raw, err := io.ReadAll(io.LimitReader(p.nativeEvidence, 129))
-	if err != nil || len(raw) > 128 {
+	// One 64-byte record per native command: two fixed runs, plus the command
+	// run that only the foreground lane performs.
+	limit := 128
+	if p.foreground {
+		limit = 192
+	}
+	raw, err := io.ReadAll(io.LimitReader(p.nativeEvidence, int64(limit)+1))
+	if err != nil || len(raw) > limit {
 		return errors.New("native evidence EOF unconfirmed")
 	}
 	// Evidence is optional on successful original cleanup; never weakens prior gates.

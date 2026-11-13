@@ -161,9 +161,15 @@ const ciRunCommand = "printf 'TETHER_RUN_BEGIN\\n' && pwd -P && : > tether-run-m
 func (g *ciGateway) runCommand(child *ciChild, root string) {
 	t, diag := g.t, g.diagnostic
 	t.Helper()
-	marker := filepath.Join(root, "tether-run-marker")
+	// A directory below the work root: a run that ignored cwd would print the
+	// root itself and leave its marker there.
+	dir := filepath.Join(root, "run-cwd")
+	if os.Mkdir(dir, 0700) != nil {
+		diag.fail(t, "run-refusal")
+	}
+	marker := filepath.Join(dir, "tether-run-marker")
 	settle := func(id string) map[string]any {
-		if v, _ := g.call("tether_run_command", map[string]any{"request_id": id, "command": ciRunCommand, "cwd": ".", "timeout_ms": 15000}); v["request_id"] != id {
+		if v, _ := g.call("tether_run_command", map[string]any{"request_id": id, "command": ciRunCommand, "cwd": "run-cwd", "timeout_ms": 15000}); v["request_id"] != id {
 			diag.fail(t, "request-correlation")
 		}
 		deadline := time.Now().Add(60 * time.Second)
@@ -201,7 +207,7 @@ func (g *ciGateway) runCommand(child *ciChild, root string) {
 	}
 	diag.at("run-command")
 	id := fmt.Sprintf("%032x", 4)
-	expected := "TETHER_RUN_BEGIN\n" + root + "\n"
+	expected := "TETHER_RUN_BEGIN\n" + dir + "\n"
 	v = settle(id)
 	exit, _ := v["exit"].(map[string]any)
 	if _, err := os.Lstat(marker); err != nil || v["error"] != "" || v["terminal"] != true || v["command_phase"] != "exited" || v["stop"] != "none" || exit["known"] != true || exit["code"] != float64(0) || !confirmed(v, "command_cleanup", "owner_cleanup", "gateway_cleanup") || ciOutput(t, v, diag) != expected {

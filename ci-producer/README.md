@@ -207,9 +207,11 @@ lane does not run this step.
 
 - Without the allowance the work ends `admission_refused_or_uncertain` with
   owner and gateway cleanup confirmed, and the command's marker file is absent.
-- After an accepted `allow`, one fixed command runs with `cwd` `.`: exit 0,
-  all three cleanup results confirmed, and stdout carrying the resolved work
-  root, which shows the requested cwd was used.
+- After an accepted `allow`, one fixed command runs with `cwd` naming a
+  directory below the work root: exit 0, all three cleanup results confirmed,
+  stdout carrying that directory's resolved path, and the marker inside it.
+  The producer-close evidence bound is 192 bytes in this lane, one 64-byte
+  native record per command.
 - `tether_fixed_read_output` returns the same bytes, `tether_fixed_release`
   releases the result, and a later read returns `result_released`.
 
