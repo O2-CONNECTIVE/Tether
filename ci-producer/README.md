@@ -198,9 +198,28 @@ those evidence gates but are not native execution proof. Failure retains the
 same original owners; no retries, signals, new cleanup path or source-pin
 changes are added.
 
+## Command run coverage
+
+After the work CLI has closed, the CLI lane takes `tether_run_command` through
+the same gateway, signed control and producer, over direct MCP HTTP in a new
+session. The allowance exists only as the foreground `allow` verb, so the JSON
+lane does not run this step.
+
+- Without the allowance the work ends `admission_refused_or_uncertain` with
+  owner and gateway cleanup confirmed, and the command's marker file is absent.
+- After an accepted `allow`, one fixed command runs with `cwd` `.`: exit 0,
+  all three cleanup results confirmed, and stdout carrying the resolved work
+  root, which shows the requested cwd was used.
+- `tether_fixed_read_output` returns the same bytes, `tether_fixed_release`
+  releases the result, and a later read returns `result_released`.
+
+It does not cover allowance expiry, a cwd outside the work root, signature
+mismatch, cancellation of a command run or OFF during one. Source tests and
+the recorded device acceptance cover those.
+
 This is regression coverage for the existing dictionary implementation. It
 uses one fixed command and synthetic CI credentials on an isolated hosted
 Mac. It does not exercise dot's real account/session, production credentials,
-GUI actions, signed distribution, arbitrary commands, output gaps/overflow or
+GUI actions, signed distribution, output gaps/overflow or
 live host-generation rotation. Existing source/unit coverage of those other
 cases is separate, and product connection gates remain closed.

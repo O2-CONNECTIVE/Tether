@@ -6,10 +6,14 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +134,91 @@ func (g *ciGateway) tool(name, id string) map[string]any {
 		g.diagnostic.fail(g.t, code)
 	}
 	return result["structuredContent"].(map[string]any)
+}
+
+// call sends one tools/call with explicit arguments and returns the structured
+// result unclassified: a refusal is an expected result of the run path.
+func (g *ciGateway) call(name string, args map[string]any) (map[string]any, bool) {
+	g.t.Helper()
+	status, _, message := g.request("tools/call", map[string]any{"name": name, "arguments": args}, g.token)
+	result, ok := message["result"].(map[string]any)
+	value, shaped := result["structuredContent"].(map[string]any)
+	failed, flagged := result["isError"].(bool)
+	if status != http.StatusOK || !ok || !shaped || !flagged {
+		g.diagnostic.fail(g.t, "mcp-tool-response")
+	}
+	return value, failed
+}
+
+const ciRunCommand = "printf 'TETHER_RUN_BEGIN\\n' && pwd -P && : > tether-run-marker"
+
+// runCommand takes tether_run_command through the same gateway, signed control
+// and real producer as the fixed routine. The person at the Mac decides whether
+// a remote caller may run a command at all, so the refusal comes first: without
+// the local allowance nothing may run. Once allowed, exactly the requested
+// command runs in the requested cwd, and the existing read and release tools
+// apply to its result.
+func (g *ciGateway) runCommand(child *ciChild, root string) {
+	t, diag := g.t, g.diagnostic
+	t.Helper()
+	marker := filepath.Join(root, "tether-run-marker")
+	settle := func(id string) map[string]any {
+		if v, _ := g.call("tether_run_command", map[string]any{"request_id": id, "command": ciRunCommand, "cwd": ".", "timeout_ms": 15000}); v["request_id"] != id {
+			diag.fail(t, "request-correlation")
+		}
+		deadline := time.Now().Add(60 * time.Second)
+		for {
+			v, _ := g.call("tether_fixed_status", map[string]any{"request_id": id})
+			if v["phase"] == "finished" {
+				return v
+			}
+			if v["phase"] == "unknown" || time.Now().After(deadline) {
+				diag.fail(t, "terminal-missing")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	confirmed := func(v map[string]any, fields ...string) bool {
+		for _, field := range fields {
+			if v[field] != "confirmed" {
+				return false
+			}
+		}
+		return true
+	}
+	diag.at("run-refused")
+	g.initialize()
+	v := settle(fmt.Sprintf("%032x", 3))
+	if _, err := os.Lstat(marker); v["error"] != "admission_refused_or_uncertain" || !confirmed(v, "owner_cleanup", "gateway_cleanup") || !errors.Is(err, os.ErrNotExist) {
+		diag.fail(t, "run-refusal")
+	}
+	diag.at("run-allow")
+	if err := child.await(func(s Snapshot) bool { return s.Standby == "on" && s.Work == "idle" && s.Cleanup == "confirmed" }, 10*time.Second); err != nil {
+		diag.fail(t, "run-allow")
+	}
+	if allow, err := child.request("allow-run"); err != nil || child.accepted(allow, "allow-run") != nil {
+		diag.fail(t, "run-allow")
+	}
+	diag.at("run-command")
+	id := fmt.Sprintf("%032x", 4)
+	expected := "TETHER_RUN_BEGIN\n" + root + "\n"
+	v = settle(id)
+	exit, _ := v["exit"].(map[string]any)
+	if _, err := os.Lstat(marker); err != nil || v["error"] != "" || v["terminal"] != true || v["command_phase"] != "exited" || v["stop"] != "none" || exit["known"] != true || exit["code"] != float64(0) || !confirmed(v, "command_cleanup", "owner_cleanup", "gateway_cleanup") || ciOutput(t, v, diag) != expected {
+		diag.fail(t, "run-result")
+	}
+	diag.at("run-read")
+	page := map[string]any{"request_id": id, "cursor": 0, "max_bytes": 4096}
+	if read, failed := g.call("tether_fixed_read_output", page); failed || read["next_cursor"] != float64(len(expected)) || read["has_more"] != false || ciOutput(t, read, diag) != expected {
+		diag.fail(t, "run-read")
+	}
+	diag.at("run-release")
+	if released, failed := g.call("tether_fixed_release", map[string]any{"request_id": id}); failed || released["result_released"] != true || !confirmed(released, "owner_cleanup", "gateway_cleanup") {
+		diag.fail(t, "run-release")
+	}
+	if gone, _ := g.call("tether_fixed_read_output", page); gone["error"] != "result_released" {
+		diag.fail(t, "run-release")
+	}
 }
 
 // Classify only fixed protocol/error enums. Never emit response values, text,
