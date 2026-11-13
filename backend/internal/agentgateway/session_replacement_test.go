@@ -282,11 +282,26 @@ func TestReplacementWithinGenerationNeverEndsAnotherPrincipalsSession(t *testing
 	}
 }
 
-// Replacement exists only to admit a session that can work, and only at the
-// cost of one of the principal's own resident sessions. Discovery sessions,
-// sessions bound to an approved route, and requests that would only add a
-// discovery session keep the bound: the caller gets 429 and nothing is ended
-// on its behalf.
+// While the resident is away, a client that opens a session per call must be
+// told so by the tool reply of a catalog session, not locked out with 429 by
+// the resident sessions it left behind: the least recently used one makes
+// room, and only that one.
+func TestCatalogInitializeWhileResidentAwayReplacesOldestResidentSession(t *testing.T) {
+	c := newCapacityRig(t)
+	c.control.set(generationA)
+	ids := c.fill()
+	c.control.set("")
+
+	if status := c.initializeStatus(); status != http.StatusOK {
+		t.Fatalf("catalog initialize while the resident is away = %d, want 200", status)
+	}
+	c.assertReplacedOnlyOldest(ids)
+}
+
+// Replacement costs only one of the principal's own resident sessions.
+// Discovery sessions and sessions bound to an approved route keep the bound,
+// and an initialize that would bind to an approved route replaces nothing:
+// the caller gets 429 and nothing is ended on its behalf.
 func TestSessionBoundHoldsWithoutReplaceableSession(t *testing.T) {
 	// A catalog client may still be listing tools on a discovery session, so a
 	// rejected initialize must not silently end one.
@@ -299,13 +314,22 @@ func TestSessionBoundHoldsWithoutReplaceableSession(t *testing.T) {
 		}
 		c.assertAllAlive(ids)
 	})
-	t.Run("the resident disconnected", func(t *testing.T) {
+	t.Run("only discovery sessions while the resident is away", func(t *testing.T) {
+		c := newCapacityRig(t)
+		ids := c.fill()
+		if status := c.initializeStatus(); status != http.StatusTooManyRequests {
+			t.Fatalf("catalog initialize over discovery sessions = %d, want 429", status)
+		}
+		c.assertAllAlive(ids)
+	})
+	t.Run("the new session would bind to an approved route", func(t *testing.T) {
 		c := newCapacityRig(t)
 		c.control.set(generationA)
 		ids := c.fill()
 		c.control.set("")
+		c.approve(0, 30*time.Second)
 		if status := c.initializeStatus(); status != http.StatusTooManyRequests {
-			t.Fatalf("discovery initialize at the bound = %d, want 429", status)
+			t.Fatalf("route-bound initialize over resident sessions = %d, want 429", status)
 		}
 		c.assertAllAlive(ids)
 	})

@@ -39,15 +39,19 @@ func TestResidentCatalogAndBoundSessionsShareFourSlots(t *testing.T) {
 			t.Fatal("capacity ended a session that must be kept", got.Code)
 		}
 	}
-	// A resident catalog refusal does not upgrade or silently evict its SID.
+	// A resident catalog refusal never upgrades its SID. The refusal is the
+	// last reply of that session: it frees the slot, not anyone else's.
 	for _, sid := range catalog {
 		res := f.call(http.MethodPost, sid, lifecycleMetadata)
 		var envelope map[string]any
 		if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &envelope) != nil || envelope["error"] == nil {
 			t.Fatal("catalog unexpectedly observed work", res.Body.String())
 		}
+		if got := f.call(http.MethodPost, sid, lifecycleList); got.Code != 404 {
+			t.Fatal("refused catalog SID stayed live", got.Code)
+		}
 	}
-	f.count(t, 4)
+	f.count(t, 2)
 	// DELETE frees only the chosen transport slot, never results/replay/work.
 	if res := f.call(http.MethodDelete, bound[0], ""); res.Code != 204 {
 		t.Fatal(res.Code)
@@ -64,9 +68,9 @@ func TestResidentCatalogAndBoundSessionsShareFourSlots(t *testing.T) {
 	if res := f.call(http.MethodDelete, bound[0], ""); res.Code != 404 {
 		t.Fatal("repeated delete changed accounting")
 	}
-	f.count(t, 3)
+	f.count(t, 1)
 	f.open(t)
-	f.count(t, 4)
+	f.count(t, 2)
 	res := f.call(http.MethodPost, bound[1], lifecycleMetadata)
 	if v := lifecycleValue(t, res, false); v["request_id"] != w.binding.RequestID {
 		t.Fatal("remaining owner lost result", v)
@@ -119,13 +123,7 @@ func TestResidentIdleExpiryIsLazyAndPreservesRecentlyUsedSID(t *testing.T) {
 	f.g.mu.Lock()
 	f.now = f.now.Add(SessionIdle)
 	f.g.mu.Unlock()
-	// Equality is not expiry, and a rejected initialize cannot silently evict.
-	// The resident is away for this request: a catalog initialize replaces nothing.
-	f.control.set("")
-	if res := f.call(http.MethodPost, "", lifecycleInit); res.Code != 429 {
-		t.Fatal(res.Code)
-	}
-	f.control.set(f.s.generation)
+	// Equality is not expiry: a session used exactly at the idle bound answers.
 	if res := f.call(http.MethodPost, kept, lifecycleList); res.Code != 200 {
 		t.Fatal(res.Code)
 	}
@@ -144,4 +142,114 @@ func TestResidentIdleExpiryIsLazyAndPreservesRecentlyUsedSID(t *testing.T) {
 		t.Fatal("recently used SID lost", res.Code)
 	}
 	f.count(t, 2)
+}
+
+// A catalog session cannot call tools and never upgrades. Listing tools keeps
+// it; once it has refused a tools/call it holds nothing but a slot, and a
+// client that opens a session per call would fill the bound with such
+// sessions, so the refusal ends it.
+func TestResidentCatalogRefusalEndsOnlyItsOwnSession(t *testing.T) {
+	f := newLifecycleHTTP(t)
+	listing, calling := f.open(t), f.open(t)
+	if res := f.call(http.MethodPost, calling, lifecycleList); res.Code != 200 {
+		t.Fatal("catalog listing", res.Code)
+	}
+	f.count(t, 2)
+	res := f.call(http.MethodPost, calling, lifecycleMetadata)
+	if res.Code != 200 || !strings.Contains(res.Body.String(), "Resident catalog only") {
+		t.Fatal("refusal did not reach the client", res.Code, res.Body.String())
+	}
+	if res := f.call(http.MethodPost, calling, lifecycleList); res.Code != 404 {
+		t.Fatal("refused catalog SID stayed live", res.Code)
+	}
+	if res := f.call(http.MethodPost, listing, lifecycleList); res.Code != 200 {
+		t.Fatal("another catalog session ended", res.Code)
+	}
+	f.count(t, 1)
+}
+
+// The measured client (ChatGPT, 2026-11-13) opens a session for every tool
+// call and deletes none. Calls made while standby is off must each get the
+// catalog refusal, and must not leave the principal locked out with 429 once
+// standby is back on.
+func TestSessionPerCallClientRecoversAfterStandbyOff(t *testing.T) {
+	f := newLifecycleHTTP(t)
+	f.control.set(f.s.generation)
+	for i := 0; i < MaxSessionsPerPrincipal; i++ {
+		f.open(t)
+		f.tick()
+	}
+	f.control.set("")
+	for i := 0; i <= MaxSessionsPerPrincipal; i++ {
+		res := f.call(http.MethodPost, f.open(t), lifecycleMetadata)
+		if res.Code != 200 || !strings.Contains(res.Body.String(), "Resident catalog only") {
+			t.Fatal("call while standby is off", i, res.Code, res.Body.String())
+		}
+		f.tick()
+	}
+	f.control.set(strings.Repeat("b", 64))
+	f.open(t)
+}
+
+// Catalog sessions keep the bound: a rejected initialize ends none of them,
+// and a session used exactly SessionIdle ago has not expired.
+func TestRejectedCatalogInitializeAtIdleBoundEndsNothing(t *testing.T) {
+	f := newLifecycleHTTP(t)
+	var ids []string
+	for i := 0; i < MaxSessionsPerPrincipal; i++ {
+		ids = append(ids, f.open(t))
+	}
+	f.g.mu.Lock()
+	f.now = f.now.Add(SessionIdle)
+	f.g.mu.Unlock()
+	if res := f.call(http.MethodPost, "", lifecycleInit); res.Code != 429 || res.Header().Get(HeaderSession) != "" {
+		t.Fatal("initialize over catalog sessions", res.Code)
+	}
+	for _, sid := range ids {
+		if res := f.call(http.MethodPost, sid, lifecycleList); res.Code != 200 {
+			t.Fatal("rejected initialize ended a catalog session", res.Code)
+		}
+	}
+	f.count(t, MaxSessionsPerPrincipal)
+}
+
+// flipControl reports generation first for its first ResidentGeneration call
+// and then for every later one: the resident changes during one initialize.
+type flipControl struct {
+	*lifecycleControl
+	first, then string
+	calls       int // read and changed only under Gateway.mu
+}
+
+func (c *flipControl) ResidentGeneration(string, string) string {
+	c.calls++
+	if c.calls == 1 {
+		return c.first
+	}
+	return c.then
+}
+
+// An initialize decides what it may replace from the resident state it saw
+// first. If the resident connects before the session is admitted, the catalog
+// session built for "away" must not cost a resident session that can work.
+func TestInitializeEndsNothingWhenResidentChangesMidway(t *testing.T) {
+	f := newLifecycleHTTP(t)
+	f.control.set(f.s.generation)
+	var ids []string
+	for i := 0; i < MaxSessionsPerPrincipal; i++ {
+		ids = append(ids, f.open(t))
+		f.tick()
+	}
+	f.g.resident.control = &flipControl{lifecycleControl: f.control, first: "", then: f.s.generation}
+	res := f.call(http.MethodPost, "", lifecycleInit)
+	f.g.resident.control = f.control
+	if res.Code != 503 || res.Header().Get(HeaderSession) != "" || !strings.Contains(res.Body.String(), "resident control changed") {
+		t.Fatal("initialize across a resident change", res.Code, res.Body.String())
+	}
+	for _, sid := range ids {
+		if got := f.call(http.MethodPost, sid, lifecycleList); got.Code != 200 {
+			t.Fatal("a resident session was ended for a session that was not admitted", got.Code)
+		}
+	}
+	f.count(t, MaxSessionsPerPrincipal)
 }

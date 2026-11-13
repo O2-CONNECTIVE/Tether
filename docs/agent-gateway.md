@@ -85,9 +85,11 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 | POST（notification、またはclientのresponse） | 202、本文なし |
 | POST（parse error、batch、不正なid） | 400、JSON-RPC error |
 | POST（session headerのない`initialize`以外） | 400。sessionは作りません |
-| `initialize`時にrouteがない / session数が上限 | 認証済みdiscovery専用session / 429（常駐作業用の`initialize`は次の行） |
+| `initialize`時にrouteがない / session数が上限 | 認証済みdiscovery専用session / 429（常駐作業用の`initialize`と、常駐の登録があるprincipalのdiscovery専用の`initialize`は次の2行） |
 | 常駐作業用の`initialize`時にsession数が上限 | そのprincipalの常駐sessionを1件終了して受け付けます。接続世代が現行と異なるものがあれば、その中で最後の利用が最も古い1件。なければ、現行世代の中で最後の利用が最も古い1件。常駐sessionが1件もなければ429。discovery専用sessionとrouteへ束縛したsessionは終了しません。作業の結果は接続世代ごとに照会するため、現行世代のsessionを終了しても、同じ世代の別のsessionから照会できます。現行と異なる世代のsessionを終了すると、その世代の結果は、同じ世代のsessionが残っている間しか照会できません |
+| 常駐の登録があるprincipalの、常駐が未接続の間の`initialize`時にsession数が上限 | 新しいsessionがdiscovery専用になる場合に限り、そのprincipalの常駐sessionのうち、最後の利用が最も古い1件を終了して受け付けます。常駐sessionが1件もなければ429。承認済みrouteへ束縛される`initialize`は何も終了せず429です。`initialize` の途中で常駐の接続状態が変わった場合は、何も終了せず503です。常駐が未接続の間は、常駐sessionはすべて現行と異なる世代なので、終了したsessionの世代の結果は、同じ世代のsessionが残っている間しか照会できません |
 | discovery専用sessionの妥当なtools/call | backendへ到達せず404で同sessionを破棄。不正な要求は400等で拒否し得る。新規initializeが必要。grantへ後付け束縛せず、commandを配送しない |
+| 常駐専用（`resident_only`）の構成で、常駐が未接続の間に作ったdiscovery専用sessionのtools/call | 200で拒否の応答（`Resident catalog only`）を返し、同sessionを破棄します。`tools/list` では破棄しません。新規initializeが必要。常駐が接続した後も、このsessionは常駐作業用になりません |
 | `notifications/cancelled`で取り消された元のPOST | 200、元 id の JSON-RPC error -32800。HTTP の単一 JSON 応答を保ち、遠隔配送の不確定性を明記します。遠隔 command は止まりません。notification 自体は 202 です |
 | GET（SSE stream）、PUTなど | 405、`Allow: POST, DELETE` |
 | DELETE | その MCP session だけを終えて 204。進行中 POST は JSON-RPC 応答を捏造せず HTTP 404 となります。command と grant には影響しません |
