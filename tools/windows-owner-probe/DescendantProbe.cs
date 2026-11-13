@@ -40,7 +40,7 @@ namespace Tether.OwnerProbe {
             Marshal.WriteInt32(environment, 0);
             return environment;
         }
-        private static Native.ProcessInfo StartParent(IntPtr queryJob, bool cancel) {
+        private static Native.ProcessInfo StartParent(IntPtr queryJob, bool cancel, bool nested) {
             IntPtr size = IntPtr.Zero;
             Require(!DescendantNative.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size)
                 && Marshal.GetLastWin32Error() == 122 && size.ToInt64() > 0);
@@ -61,7 +61,7 @@ namespace Tether.OwnerProbe {
                 string image = Assembly.GetExecutingAssembly().Location;
                 var command = new StringBuilder("\"" + image + "\" parent " +
                     queryJob.ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture) +
-                    (cancel ? " cancel" : " normal"));
+                    (cancel ? " cancel" : " normal") + (nested ? " nested" : " direct"));
                 Native.ProcessInfo process;
                 Require(DescendantNative.CreateProcessW(image, command, IntPtr.Zero, IntPtr.Zero,
                     true, 0x08080404, environment, Environment.SystemDirectory, ref startup, out process));
@@ -73,12 +73,28 @@ namespace Tether.OwnerProbe {
                 Marshal.FreeHGlobal(list);
             }
         }
-        private static int Parent(IntPtr queryJob, bool cancel) {
+        // A self-assigned kill-on-close Job must stay open until the parent process exits.
+        // Closing it in a finally block would terminate this parent before its result.
+        private static IntPtr parentJob;
+        private static void JoinNestedJob(IntPtr outerJob) {
+            parentJob = Native.CreateJobObjectW(IntPtr.Zero, null);
+            Require(parentJob != IntPtr.Zero);
+            var limits = new Native.ExtendedLimits();
+            limits.basic.flags = 0x2000;
+            Require(Native.SetInformationJobObject(parentJob, 9, ref limits,
+                (uint)Marshal.SizeOf(typeof(Native.ExtendedLimits))));
+            IntPtr self = DescendantNative.GetCurrentProcess();
+            Require(Native.AssignProcessToJobObject(parentJob, self));
+            Member(self, outerJob);
+            Member(self, parentJob);
+        }
+        private static int Parent(IntPtr queryJob, bool cancel, bool nested) {
             var child = new Native.ProcessInfo();
             bool created = false, confirmed = false;
             IntPtr environment = EmptyEnvironment();
             try {
                 Member(DescendantNative.GetCurrentProcess(), queryJob);
+                if (nested) JoinNestedJob(queryJob);
                 string image = Path.Combine(Environment.SystemDirectory, "cmd.exe");
                 var startup = new Native.Startup { cb = (uint)Marshal.SizeOf(typeof(Native.Startup)) };
                 created = Native.CreateProcessW(image, new StringBuilder("\"" + image + "\" /d /c exit 0"),
@@ -87,6 +103,7 @@ namespace Tether.OwnerProbe {
                 Require(created);
                 // No child assignment: membership must come from real OS Job inheritance.
                 Member(child.process, queryJob);
+                if (nested) Member(child.process, parentJob);
                 Require(Native.WaitForSingleObject(child.process, 0) == 258);
                 if (cancel) {
                     Require(Native.TerminateProcess(child.process, 77));
@@ -117,7 +134,7 @@ namespace Tether.OwnerProbe {
                 Require(!created || confirmed);
             }
         }
-        private static void Run(bool cancel) {
+        private static void Run(bool cancel, bool nested) {
             IntPtr job = Native.CreateJobObjectW(IntPtr.Zero, null);
             Require(job != IntPtr.Zero);
             IntPtr queryJob = IntPtr.Zero;
@@ -130,7 +147,7 @@ namespace Tether.OwnerProbe {
                     (uint)Marshal.SizeOf(typeof(Native.ExtendedLimits))));
                 IntPtr self = DescendantNative.GetCurrentProcess();
                 Require(DescendantNative.DuplicateHandle(self, job, self, out queryJob, 4, true, 0));
-                parent = StartParent(queryJob, cancel);
+                parent = StartParent(queryJob, cancel, nested);
                 created = true;
                 Require(Native.AssignProcessToJobObject(job, parent.process));
                 Member(parent.process, job);
@@ -165,19 +182,24 @@ namespace Tether.OwnerProbe {
         }
         public static int Main(string[] args) {
             try {
-                if (args.Length == 3 && args[0] == "parent" &&
-                    (args[2] == "normal" || args[2] == "cancel")) {
+                if (args.Length == 4 && args[0] == "parent" &&
+                    (args[2] == "normal" || args[2] == "cancel") &&
+                    (args[3] == "direct" || args[3] == "nested")) {
                     long handle;
                     Require(long.TryParse(args[1], System.Globalization.NumberStyles.None,
                         System.Globalization.CultureInfo.InvariantCulture, out handle) && handle > 0);
-                    return Parent(new IntPtr(handle), args[2] == "cancel");
+                    return Parent(new IntPtr(handle), args[2] == "cancel", args[3] == "nested");
                 }
                 Require(args.Length == 0 && Environment.Is64BitProcess);
-                Run(false);
+                Run(false, false);
                 Console.WriteLine("descendant-normal-exit:passed");
-                Run(true);
+                Run(true, false);
                 Console.WriteLine("descendant-cancel-before-resume:passed");
-                Console.WriteLine("OWNER_PROBE_DESCENDANT_CASES_PASSED_2");
+                Run(false, true);
+                Console.WriteLine("nested-descendant-normal-exit:passed");
+                Run(true, true);
+                Console.WriteLine("nested-descendant-cancel-before-resume:passed");
+                Console.WriteLine("OWNER_PROBE_DESCENDANT_CASES_PASSED_4");
                 return 0;
             } catch (Exception) {
                 // No raw exception, PID, path, command line, absolute time, or OS error output.

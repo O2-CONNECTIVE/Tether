@@ -58,3 +58,17 @@ native caller へ接続する前に、上記 API 制約に対して具体的な�
 ## 独立したrunner互換性probe
 
 [固定command probe](../tools/windows-owner-probe/README.md) を別のWindows CI入口に分離しました。現在ユーザーの固定cmdのみを対象に、作成時handleの保持、resume前assignment、実API拒否とresume前取消しの回収を調べます。既存native smokeへの接続、driver/app役割の発行、子孫の完全な所有証明はありません。実行結果の受入は固定ケースと対象SHAに限定し、#45の解消とは扱いません。
+
+## 固定upstream sourceで確認した追加階層
+
+`tools.json` とhashが一致する `tauri-driver` 2.1.0 crateの `src/main.rs:31–45` は、
+自分をkill-on-close Jobへ割当てた後にEdge driverを生成します。harnessが外側Jobを
+追加する場合にはこの内側Jobとの共存が必要です。独立probeへ追加した固定2ケースは
+同じ自己割当て順序と子の両Job所属を調べるためのもので、実driverの受入ではありません。
+詳細と未確認範囲は [probe説明](../tools/windows-owner-probe/README.md) を参照してください。
+
+同crateの `src/server.rs:51–68,102–105` はapp生成をEdgeへ委譲します。
+現在のharnessには、その生成元からappの元handle・役割を受領する経路がありません。
+このため外側Jobの導入だけを根拠にCIM拒否を外さず、driver生存中のapp/子終了集合の
+独立契約を先に解決します。#341の `NATIVE_LINEAGE_OWNER_UNCONFIRMED` を通常close成功へ
+変換せず、今回のsource調査と固定fixture追加を根因解消とは扱いません。
