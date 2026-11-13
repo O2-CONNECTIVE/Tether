@@ -235,14 +235,31 @@ func (h *Handler) ResidentConnected(host, principal string) bool {
 // API. A future authenticated MCP adapter must retain principal/host mapping.
 // No adapter is enabled here. The connection-only host always refuses work.
 func (h *Handler) ProposeResidentFixed(ctx context.Context, host, principal, requestID string, deadline time.Time) error {
-	return h.proposeResidentFixed(ctx, host, principal, "", requestID, deadline)
+	return h.proposeResident(ctx, host, principal, "", requestID, deadline, residentRunScope{})
 }
-func (h *Handler) proposeResidentFixed(ctx context.Context, host, principal, generation, requestID string, deadline time.Time) error {
+
+// ProposeResidentRun sends a command-run intent on the same link, sequence and
+// replay set as the fixed operation. A scope the Mac would refuse is refused
+// here, before signing, without spending the request id or the link. Like
+// ProposeResidentFixed it is a trusted composition port, NOT an HTTP
+// authorization API, and no adapter calls it here.
+func (h *Handler) ProposeResidentRun(ctx context.Context, host, principal, requestID string, deadline time.Time, commandSHA256, cwd string, timeoutMillis uint32) error {
+	run := residentRunScope{commandSHA256: commandSHA256, cwd: cwd, timeoutMillis: timeoutMillis}
+	if run == (residentRunScope{}) {
+		return ErrRefused
+	}
+	return h.proposeResident(ctx, host, principal, "", requestID, deadline, run)
+}
+func (h *Handler) proposeResident(ctx context.Context, host, principal, generation, requestID string, deadline time.Time, run residentRunScope) error {
 	if h == nil || ctx == nil || ctx.Err() != nil || !residentHex(requestID, 16) {
 		return ErrRefused
 	}
 	now := h.clock()
-	if !now.Before(deadline) || deadline.After(now.Add(ResidentFixedTimeout)) || deadline.Nanosecond()%int(time.Millisecond) != 0 {
+	limit := ResidentFixedTimeout
+	if run != (residentRunScope{}) {
+		limit = time.Duration(run.timeoutMillis) * time.Millisecond
+	}
+	if !now.Before(deadline) || deadline.After(now.Add(limit)) || deadline.Nanosecond()%int(time.Millisecond) != 0 {
 		return ErrRefused
 	}
 	ctx, stop := context.WithDeadline(ctx, deadline)
@@ -267,9 +284,13 @@ func (h *Handler) proposeResidentFixed(ctx context.Context, host, principal, gen
 		p.mu.Unlock()
 		return ErrRefused
 	}
+	i := ResidentFixedIntent{generation: p.binding.generation, sequence: p.sequence + 1, requestID: requestID, deadline: deadline, run: run}
+	if i.isRun() && !i.runWellFormed(p.binding) {
+		p.mu.Unlock()
+		return ErrRefused
+	}
 	p.sequence++
 	p.seen[requestID] = true
-	i := ResidentFixedIntent{generation: p.binding.generation, sequence: p.sequence, requestID: requestID, deadline: deadline}
 	i.endpoint, i.host, i.principal = p.binding.endpoint, p.binding.host, p.binding.principal
 	p.intents[requestID] = i
 	pending := &residentPending{intent: i, reply: make(chan error, 1)}
@@ -282,7 +303,11 @@ func (h *Handler) proposeResidentFixed(ctx context.Context, host, principal, gen
 		}
 		p.mu.Unlock()
 	}()
-	msg, e := residentEncodeIntent(p.binding, i, p.signer)
+	encode := residentEncodeIntent
+	if i.isRun() {
+		encode = residentEncodeRun
+	}
+	msg, e := encode(p.binding, i, p.signer)
 	if e != nil {
 		p.cancel()
 		return e

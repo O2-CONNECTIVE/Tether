@@ -94,7 +94,7 @@ func TestResidentNativeCoreSeparatesOuterCorrelationFromFixedStart(t *testing.T)
 	s.entries[outer] = entry
 	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
-	owned, e := s.approveWithID(ctx, ctx, entry, outer, ResidentFixedRequestID, f.policy.operations[ResidentFixedRequestID], time.Now().Add(8*time.Second))
+	owned, e := s.approveWithID(ctx, ctx, entry, outer, agentexec.FixedStartConstraint{RequestID: ResidentFixedRequestID, Command: ResidentFixedCommand, TimeoutMillis: 15000}, time.Now().Add(8*time.Second))
 	if e != nil || owned == nil {
 		t.Fatal(e)
 	}

@@ -228,3 +228,42 @@ func TestRunAllowanceRefusesUnboundedStaleAndClosedRequests(t *testing.T) {
 		t.Fatal("nil standby allowed run")
 	}
 }
+
+// consume asks this once for every intent the gateway sends. A signed
+// command-run intent names a command nobody at the Mac has seen, so it gets
+// through only while a local allowance is live; without one it is refused and
+// standby keeps serving fixed work.
+func TestAdmissionLetsCommandRunThroughOnlyUnderLiveAllowance(t *testing.T) {
+	s, _ := standbyTurnedOn(t)
+	s.mu.Lock()
+	c := s.cycle
+	s.mu.Unlock()
+	admit := func(c *standbyCycle, run bool) admission {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.admissionLocked(c, run)
+	}
+	if admit(c, false) != admitFixed || admit(c, true) != admitNoRun {
+		t.Fatal("standby on alone admitted a command run, or refused fixed work")
+	}
+	allowRun(t, s, 2, time.Minute)
+	if admit(c, true) != admitRun || admit(c, false) != admitFixed {
+		t.Fatal("live allowance did not admit a command run")
+	}
+	if admit(&standbyCycle{}, true) != admitNothing || admit(&standbyCycle{}, false) != admitNothing {
+		t.Fatal("an intent of another standby cycle was admitted")
+	}
+	s.mu.Lock()
+	s.cycle.runUntil = time.Now().Add(-time.Millisecond)
+	s.mu.Unlock()
+	if admit(c, true) != admitNoRun || admit(c, false) != admitFixed {
+		t.Fatal("expired allowance still admitted a command run")
+	}
+	allowRun(t, s, 3, time.Minute)
+	s.mu.Lock()
+	s.observation.AdmissionSealed = true
+	s.mu.Unlock()
+	if admit(c, true) != admitNothing || admit(c, false) != admitNothing {
+		t.Fatal("sealed admission still admitted work")
+	}
+}

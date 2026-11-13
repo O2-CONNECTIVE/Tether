@@ -128,6 +128,11 @@ func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply := s.mcp.Handle(body)
+	if reply.EndSession {
+		g.mu.Lock()
+		g.dropLocked(ids[0], s)
+		g.mu.Unlock()
+	}
 	switch reply.Kind {
 	case mcpadapter.HTTPRequiresBinding:
 		g.mu.Lock()
@@ -230,10 +235,12 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	g.expireLocked()
 	rt, full, closed := p.route, p.sessions >= MaxSessionsPerPrincipal, g.closed
 	var resident *residentSession
+	var entry *residentEntry
+	gen := ""
 	residentDiscovery := false
 	if g.resident != nil {
-		if entry := g.resident.entries[p]; entry != nil {
-			if gen := g.resident.control.ResidentGeneration(entry.enrollment.HostLabel, p.label); gen != "" {
+		if entry = g.resident.entries[p]; entry != nil {
+			if gen = g.resident.control.ResidentGeneration(entry.enrollment.HostLabel, p.label); gen != "" {
 				resident = &residentSession{gateway: g, principal: p, entry: entry, generation: gen}
 				rt = nil
 			} else if g.residentOnly {
@@ -245,8 +252,12 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	if rt != nil && ended(rt) {
 		rt = nil
 	}
-	if full && resident != nil {
-		if _, s := g.oldestSupersededLocked(p, resident.generation); s != nil {
+	// A resident session, or the catalog session of an enrolled principal whose
+	// resident is away, may take the slot of one of that principal's resident
+	// sessions. A session bound to an approved route never does.
+	mayReplace := entry != nil && rt == nil
+	if full && mayReplace {
+		if _, s := g.replaceableLocked(p, gen); s != nil {
 			full = false
 		}
 	}
@@ -296,11 +307,14 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	id := hex.EncodeToString(raw)
 	g.mu.Lock()
 	ok := !g.closed && (rt == nil || (p.route == rt && !ended(rt))) && g.sessions[id] == nil
-	if ok && resident != nil {
-		if g.resident.control.ResidentGeneration(resident.entry.enrollment.HostLabel, p.label) != resident.generation {
-			ok = false
+	moved := false
+	if ok && mayReplace {
+		// The resident connected, reconnected or left during initialize: the
+		// session built above no longer matches, and nothing is ended for it.
+		if g.resident.control.ResidentGeneration(entry.enrollment.HostLabel, p.label) != gen {
+			ok, moved = false, true
 		} else if p.sessions >= MaxSessionsPerPrincipal {
-			if old, s := g.oldestSupersededLocked(p, resident.generation); s != nil {
+			if old, s := g.replaceableLocked(p, gen); s != nil {
 				g.dropLocked(old, s)
 			}
 		}
@@ -317,6 +331,10 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 		mcp.Close()
 		if full {
 			writeJSON(w, http.StatusTooManyRequests, rpcError("too many MCP sessions for this principal; DELETE an unused session"))
+			return
+		}
+		if moved {
+			writeJSON(w, http.StatusServiceUnavailable, rpcError("resident control changed during initialize; initialize again"))
 			return
 		}
 		writeJSON(w, http.StatusServiceUnavailable, rpcError("the approved grant ended during initialize"))
@@ -381,24 +399,28 @@ func (g *Gateway) dropLocked(id string, s *session) {
 	}
 }
 
-// oldestSupersededLocked returns p's least recently used session that can no longer
-// start work once a resident session of generation current exists: a resident
-// session of another generation. Discovery sessions and sessions bound to an
-// approved route are never returned; they keep the bound. A superseded resident
-// session may still read results of its own generation, so initialize replaces
-// one only when the principal is at MaxSessionsPerPrincipal.
-func (g *Gateway) oldestSupersededLocked(p *principal, current string) (string, *session) {
+// replaceableLocked returns the resident session of p that an initialize at
+// MaxSessionsPerPrincipal ends to make room: the least recently
+// used one of another generation, which can no longer start work, or else the
+// least recently used one of generation current. Resident work is read by
+// generation, not by session, so a later session of the same generation still
+// reads it. Discovery sessions and sessions bound to an approved route are
+// never returned; they keep the bound.
+func (g *Gateway) replaceableLocked(p *principal, current string) (string, *session) {
 	var id string
-	var oldest *session
+	var victim *session
+	victimSuperseded := false
 	for k, s := range g.sessions {
-		if s.owner != p || s.route != nil || s.resident == nil || s.resident.generation == current {
+		if s.owner != p || s.route != nil || s.resident == nil {
 			continue
 		}
-		if oldest == nil || s.lastUsed.Before(oldest.lastUsed) {
-			id, oldest = k, s
+		superseded := s.resident.generation != current
+		if victim == nil || (superseded && !victimSuperseded) ||
+			(superseded == victimSuperseded && s.lastUsed.Before(victim.lastUsed)) {
+			id, victim, victimSuperseded = k, s, superseded
 		}
 	}
-	return id, oldest
+	return id, victim
 }
 
 func (g *Gateway) expireLocked() {

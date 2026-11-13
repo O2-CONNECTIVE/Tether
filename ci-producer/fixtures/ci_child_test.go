@@ -263,7 +263,7 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 		}
 		var body map[string]json.RawMessage
 		_ = json.Unmarshal(root["receipt"], &body)
-		if !exactKeys(body, "protocolVersion", "requestId", "intent", "disposition") || e.Receipt.RequestID == 0 || e.Receipt.RequestID > MaxInteger || !oneOf(e.Receipt.Intent, "on", "off") || !oneOf(e.Receipt.Disposition, "accepted", "rejected", "stale", "unknown") {
+		if !exactKeys(body, "protocolVersion", "requestId", "intent", "disposition") || e.Receipt.RequestID == 0 || e.Receipt.RequestID > MaxInteger || !oneOf(e.Receipt.Intent, "on", "off", "allow-run") || !oneOf(e.Receipt.Disposition, "accepted", "rejected", "stale", "unknown") {
 			return ErrProtocol
 		}
 		if _, ok := p.receipts[e.Receipt.RequestID]; ok {
@@ -334,7 +334,11 @@ func (p *ciChild) request(intent string) (uint64, error) {
 		return id, e
 	}
 	if p.foreground {
-		raw = []byte(fmt.Sprintf("%s %d %d\n", intent, id, s.Revision))
+		verb := intent
+		if intent == "allow-run" {
+			verb = "allow" // The foreground dialect names the allowance by its verb.
+		}
+		raw = []byte(fmt.Sprintf("%s %d %d\n", verb, id, s.Revision))
 	}
 	if e = p.input.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
 		return id, e
@@ -358,6 +362,25 @@ func (p *ciChild) applied(id uint64, intent string) error {
 		return errors.New("applied transition missing accepted same-ID receipt")
 	}
 	return nil
+}
+
+// accepted waits for the same-ID receipt of the run allowance. The allowance
+// is not a standby transition, so no snapshot transition follows it.
+func (p *ciChild) accepted(id uint64, intent string) error {
+	until := time.Now().Add(10 * time.Second)
+	for time.Now().Before(until) {
+		p.mu.Lock()
+		r, ok := p.receipts[id]
+		p.mu.Unlock()
+		if ok {
+			if r.Disposition != "accepted" || r.Intent != intent {
+				return errors.New("allowance not accepted")
+			}
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return errors.New("allowance receipt missing")
 }
 func (p *ciChild) finish() error {
 	var inputErr error

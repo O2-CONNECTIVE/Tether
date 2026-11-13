@@ -212,6 +212,7 @@ func (c *fakeChild) write(t *testing.T, w *io.PipeWriter, data string) {
 type fakeSpawner struct {
 	mu        sync.Mutex
 	spawns    int
+	specs     []spawnSpec
 	children  chan *fakeChild
 	configure func(*fakeOS)
 	result    func(spawned) (spawned, error) // optional partial/no-process override
@@ -240,6 +241,7 @@ func (s *fakeSpawner) setHost(fdErr, sigErr error) {
 func (s *fakeSpawner) spawn(spec spawnSpec) (spawned, error) {
 	s.mu.Lock()
 	s.spawns++
+	s.specs = append(s.specs, spec)
 	configure, result, gate, entered, holdStdin := s.configure, s.result, s.gate, s.entered, s.holdStdin
 	s.mu.Unlock()
 	if entered != nil {

@@ -35,6 +35,15 @@ func (s *FixedSource) NewRequest(i agenttransport.ResidentFixedIntent) (*workero
 	}
 	return s.native.NewWireRequest(i)
 }
+
+// NewRunRequest admits a command run. Only consume calls it, after it has
+// checked the run allowance of the current standby cycle.
+func (s *FixedSource) NewRunRequest(i agenttransport.ResidentFixedIntent) (*workerowner.Request, error) {
+	if s == nil || s.native == nil {
+		return nil, maclaunch.ErrResident
+	}
+	return s.native.NewWireRunRequest(i)
+}
 func (s *FixedSource) Worker(id string) (*maclaunch.ResidentWorker, error) {
 	if s == nil || s.native == nil {
 		return nil, maclaunch.ErrResident

@@ -15,9 +15,12 @@ package macagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -46,6 +49,7 @@ var (
 	// table, or SIGCHLD ignored (which lets the kernel reap the leader).
 	ErrHostState = errors.New("macagent: host process state is unsafe for spawning")
 	errNoProcess = errors.New("macagent: spawn returned no process")
+	errWorkDir   = errors.New("macagent: working directory is not a directory inside the work root")
 )
 
 // hostChecks are read-only checks of the host process. They neither close,
@@ -80,6 +84,7 @@ type Config struct {
 	TerminalDisposition *TerminalDisposition // trusted local foreground owner only
 	WorkDir             string               // absolute cwd for every command; not a sandbox
 	Home                string               // the current user's home, exported as HOME
+	RunLog              string               // optional absolute path for directory-command history
 	TermGrace           time.Duration        // TERM to KILL; default 2s
 	KillWait            time.Duration        // KILL to confirmed reap; default 2s
 	IOWait              time.Duration        // reap to stdio EOF; default 2s
@@ -109,6 +114,7 @@ type Runtime struct {
 	terminalDisposition *TerminalDisposition
 	spec                spawnSpec
 	home                string
+	runLog              string
 	timing              timing
 	spawn               spawnFunc
 	checks              hostChecks
@@ -117,6 +123,7 @@ type Runtime struct {
 }
 
 var _ agentexec.ProfiledRuntime = (*Runtime)(nil)
+var _ agentexec.DirectoryRuntime = (*Runtime)(nil)
 var _ agentexec.GuestProcess = (*process)(nil)
 
 // New validates the local composition, refuses a host where SIGCHLD is ignored,
@@ -130,7 +137,7 @@ func New(cfg Config) (*Runtime, error) {
 }
 
 func newRuntime(cfg Config, spawn spawnFunc, checks hostChecks, poll time.Duration) (*Runtime, error) {
-	if spawn == nil || checks.inheritableFDs == nil || checks.childReaping == nil || poll <= 0 || !trustedDir(cfg.WorkDir) || !trustedDir(cfg.Home) {
+	if spawn == nil || checks.inheritableFDs == nil || checks.childReaping == nil || poll <= 0 || !trustedDir(cfg.WorkDir) || !trustedDir(cfg.Home) || (cfg.RunLog != "" && !trustedDir(cfg.RunLog)) {
 		return nil, ErrConfig
 	}
 	if err := checks.childReaping(); err != nil {
@@ -145,7 +152,7 @@ func newRuntime(cfg Config, spawn spawnFunc, checks hostChecks, poll time.Durati
 			*d = defaultGrace
 		}
 	}
-	return &Runtime{terminalDisposition: cfg.TerminalDisposition, spec: spawnSpec{path: shellPath, dir: cfg.WorkDir}, home: cfg.Home, timing: t, spawn: spawn, checks: checks, diagnostics: cfg.StartDiagnostics, cleanupDiagnostics: cfg.CleanupDiagnostics}, nil
+	return &Runtime{terminalDisposition: cfg.TerminalDisposition, spec: spawnSpec{path: shellPath, dir: cfg.WorkDir}, home: cfg.Home, runLog: cfg.RunLog, timing: t, spawn: spawn, checks: checks, diagnostics: cfg.StartDiagnostics, cleanupDiagnostics: cfg.CleanupDiagnostics}, nil
 }
 
 // trustedDir accepts only clean absolute slash paths other than the root.
@@ -153,11 +160,47 @@ func trustedDir(p string) bool {
 	return p != "" && p != "/" && path.IsAbs(p) && path.Clean(p) == p && !strings.ContainsAny(p, "\x00\n")
 }
 
+// resolveWorkDir maps a clean relative slash path to the real directory it
+// names and refuses anything that is not a directory at or below the resolved
+// work root. Resolution and spawn are not atomic, and the cwd is not a
+// filesystem sandbox: the command still runs with the user's own access.
+func resolveWorkDir(root, dir string) (string, error) {
+	if !filepath.IsLocal(dir) || path.Clean(dir) != dir {
+		return "", errWorkDir
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", errWorkDir
+	}
+	resolvedDir, err := filepath.EvalSymlinks(filepath.Join(resolvedRoot, dir))
+	if err != nil {
+		return "", errWorkDir
+	}
+	info, err := os.Stat(resolvedDir)
+	if err != nil || !info.IsDir() {
+		return "", errWorkDir
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", errWorkDir
+	}
+	return resolvedDir, nil
+}
+
 func (r *Runtime) AgentProfile() agentexec.Profile { return agentexec.ProfileMacCurrentUser }
 
 // StartShell spawns the fixed shell for one command. A process returned with
 // an error is still owned by the caller; no process means not started.
 func (r *Runtime) StartShell(ctx context.Context, grant supervisor.Binding, stdin []byte) (agentexec.GuestProcess, error) {
+	return r.startShell(ctx, grant, "", false, stdin)
+}
+
+// StartShellIn starts the fixed shell in an approved directory below WorkDir.
+func (r *Runtime) StartShellIn(ctx context.Context, grant supervisor.Binding, dir string, stdin []byte) (agentexec.GuestProcess, error) {
+	return r.startShell(ctx, grant, dir, true, stdin)
+}
+
+func (r *Runtime) startShell(ctx context.Context, grant supervisor.Binding, dir string, useDir bool, stdin []byte) (agentexec.GuestProcess, error) {
 	if r == nil || r.spawn == nil {
 		if r != nil {
 			r.diagnostics.record(StartFailureConfiguration)
@@ -187,6 +230,21 @@ func (r *Runtime) StartShell(ctx context.Context, grant supervisor.Binding, stdi
 	}
 	spec := r.spec
 	spec.argv, spec.env = shellArgv(), environment(r.home)
+	// useDir separates "no directory requested" from an empty, refused one.
+	// Resolution touches the filesystem, so it runs before the last stop check.
+	if useDir {
+		resolved, err := resolveWorkDir(r.spec.dir, dir)
+		if err != nil {
+			r.diagnostics.record(StartFailureWorkDir)
+			return nil, errors.Join(agentexec.ErrNotStarted, err)
+		}
+		spec.dir = resolved
+	}
+	if useDir && r.runLog != "" {
+		if err := appendRunLog(r.runLog, spec.dir, stdin); err != nil {
+			return nil, agentexec.ErrNotStarted
+		}
+	}
 	// Host checks can outlast the original command scope. Re-observe it at
 	// spawn admission rather than start new work after an already known stop.
 	// This is not atomic with fork: a later stop still owns any late process.
@@ -268,4 +326,49 @@ func retainPartialPipes(sp spawned) ([3]*ownedCloser, error) {
 		}
 	}
 	return owned, errors.Join(errs...)
+}
+
+// ponytail: one earlier file (name.1) is kept; add numbered rotation if a
+// longer history is needed. The record lives in a directory the commands
+// themselves can write, so it is a view for the person, not tamper evidence.
+const maxRunLogBytes = 1 << 20
+
+type runLogEntry struct {
+	At      string `json:"at"`
+	Dir     string `json:"dir"`
+	Command string `json:"command"`
+}
+
+func appendRunLog(name, dir string, command []byte) (retErr error) {
+	if info, err := os.Lstat(name); err == nil && info.Size() > maxRunLogBytes {
+		if err := os.Rename(name, name+".1"); err != nil {
+			return err
+		}
+	}
+	f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, f.Close()) }()
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	// The opened file must be the regular file at that name, not a link target.
+	if at, err := os.Lstat(name); err != nil || !at.Mode().IsRegular() || !os.SameFile(at, info) {
+		return errors.New("macagent: run history is not a regular file")
+	}
+	line, err := json.Marshal(runLogEntry{At: time.Now().UTC().Format(time.RFC3339), Dir: dir, Command: string(command)})
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	n, writeErr := f.Write(line)
+	if writeErr == nil && n != len(line) {
+		writeErr = io.ErrShortWrite
+	}
+	return writeErr
 }

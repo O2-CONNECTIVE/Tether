@@ -46,6 +46,9 @@ type HTTPReply struct {
 	Body []byte
 	// Error is true when Body is a JSON-RPC error response.
 	Error bool
+	// EndSession is true when Body is the last reply of this session: the HTTP
+	// owner sends it and then ends the session.
+	EndSession bool
 	// Initialized is true only for a successful initialize response; the HTTP
 	// owner assigns its session ID to that reply and to nothing else.
 	Initialized bool
@@ -223,7 +226,7 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 			return response(id, map[string]any{"tools": residentToolList(s.resident)})
 		}
 		if s.residentDiscovery {
-			return response(id, map[string]any{"tools": residentCatalog(true, true, true, true)})
+			return response(id, map[string]any{"tools": residentCatalog(true, true, true, true, true)})
 		}
 		return response(id, map[string]any{"tools": toolList()})
 	case "tools/call":
@@ -239,7 +242,11 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 // slot bound, in-flight ID refusal, timeout and suppression rules as run.
 func (s *HTTPSession) toolCall(id *requestID, params json.RawMessage) HTTPReply {
 	if s.residentDiscovery {
-		return failed(id, codeInvalidRequest, residentDiscoveryInstructions)
+		// The session never upgrades, so after this refusal it would hold
+		// nothing but one of the principal's session slots.
+		r := failed(id, codeInvalidRequest, residentDiscoveryInstructions)
+		r.EndSession = true
+		return r
 	}
 	if s.resident != nil {
 		return s.residentToolCall(id, params)

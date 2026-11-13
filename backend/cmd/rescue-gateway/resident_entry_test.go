@@ -111,26 +111,41 @@ func TestResidentOnlyEntryNeverFallsBackToGenericSession(t *testing.T) {
 			l := serveResidentEntry(t, doc)
 			auth := residentAuth(t, access, "synthetic-subject-1")
 			params := map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "fixture", "version": "1"}}
-			code, headers, body := residentRPC(t, l, auth, "", "initialize", params)
-			offlineSID := headers.Get(agentgateway.HeaderSession)
-			if code != 200 || offlineSID == "" || !strings.Contains(body, "Resident catalog only") {
-				t.Fatal("offline catalog unavailable", code, body)
-			}
-			if code, _, _ := residentRPC(t, l, auth, offlineSID, "notifications/initialized", nil); code != 202 {
-				t.Fatal("offline initialized", code)
-			}
-			assertOffline := func() {
+			openOffline := func() string {
 				t.Helper()
-				if code, _, body := residentRPC(t, l, auth, offlineSID, "tools/list", nil); code != 200 || !strings.Contains(body, "tether_fixed_get_execution") || strings.Contains(body, "rescue_start") {
+				code, headers, body := residentRPC(t, l, auth, "", "initialize", params)
+				sid := headers.Get(agentgateway.HeaderSession)
+				if code != 200 || sid == "" || !strings.Contains(body, "Resident catalog only") {
+					t.Fatal("offline catalog unavailable", code, body)
+				}
+				if code, _, _ := residentRPC(t, l, auth, sid, "notifications/initialized", nil); code != 202 {
+					t.Fatal("offline initialized", code)
+				}
+				return sid
+			}
+			assertCatalog := func(sid string) {
+				t.Helper()
+				if code, _, body := residentRPC(t, l, auth, sid, "tools/list", nil); code != 200 || !strings.Contains(body, "tether_fixed_get_execution") || strings.Contains(body, "rescue_start") {
 					t.Fatal("offline catalog", code, body)
 				}
-				for _, tool := range []string{"tether_fixed_start", "tether_fixed_status", "tether_fixed_cancel", "tether_fixed_release", "tether_fixed_list", "tether_fixed_read_output", "tether_fixed_get_execution", "rescue_start"} {
-					if code, body := residentTool(t, l, auth, offlineSID, tool, map[string]any{"request_id": strings.Repeat("a", 32)}); code != 200 || !strings.Contains(body, "Resident catalog only") || !strings.Contains(body, `"error"`) {
-						t.Fatal("offline call not refused", tool, code, body)
-					}
+			}
+			// The refusal is the last reply of a catalog session: it never
+			// upgrades, so it ends instead of holding a session slot.
+			assertRefusedAndEnded := func(sid, tool string) {
+				t.Helper()
+				if code, body := residentTool(t, l, auth, sid, tool, map[string]any{"request_id": strings.Repeat("a", 32)}); code != 200 || !strings.Contains(body, "Resident catalog only") || !strings.Contains(body, `"error"`) {
+					t.Fatal("offline call not refused", tool, code, body)
+				}
+				if code, _, _ := residentRPC(t, l, auth, sid, "tools/list", nil); code != 404 {
+					t.Fatal("refused catalog session survived", tool, code)
 				}
 			}
-			assertOffline()
+			offlineSID, keptSID := openOffline(), openOffline()
+			assertCatalog(offlineSID)
+			for _, tool := range []string{"tether_fixed_start", "tether_fixed_status", "tether_fixed_cancel", "tether_fixed_release", "tether_fixed_list", "tether_fixed_read_output", "tether_fixed_get_execution", "rescue_start"} {
+				assertRefusedAndEnded(openOffline(), tool)
+			}
+			assertCatalog(offlineSID) // Another session's refusal ends only that session.
 			wantUnauth := 401
 			if access {
 				wantUnauth = 403
@@ -162,7 +177,10 @@ func TestResidentOnlyEntryNeverFallsBackToGenericSession(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond)
 			}
-			assertOffline() // A later live control must not promote the old catalog session.
+			// A later live control must not promote the old catalog sessions.
+			assertCatalog(offlineSID)
+			assertCatalog(keptSID)
+			assertRefusedAndEnded(offlineSID, "tether_fixed_start")
 			if code, _, _ := residentRPC(t, l, auth, sid, "notifications/initialized", nil); code != 202 {
 				t.Fatal("initialized failed", code)
 			}
@@ -176,8 +194,8 @@ func TestResidentOnlyEntryNeverFallsBackToGenericSession(t *testing.T) {
 			if code, _, _ := residentRPC(t, l, other, "", "initialize", params); code != 503 {
 				t.Fatal("unenrolled principal created fallback session", code)
 			}
-			residentDelete(t, l, auth, offlineSID)
-			if code, _, _ := residentRPC(t, l, auth, offlineSID, "tools/list", nil); code != 404 {
+			residentDelete(t, l, auth, keptSID)
+			if code, _, _ := residentRPC(t, l, auth, keptSID, "tools/list", nil); code != 404 {
 				t.Fatal("deleted offline session survived", code)
 			}
 		})

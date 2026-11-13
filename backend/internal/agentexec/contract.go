@@ -281,6 +281,15 @@ type GuestRuntime interface {
 	StartShell(ctx context.Context, grant supervisor.Binding, stdin []byte) (GuestProcess, error)
 }
 
+// DirectoryRuntime is implemented by a runtime that can start the shell in an
+// approved directory below its work root, and that refuses any other dir. A
+// runtime without it keeps one fixed directory, and New refuses a constraint
+// that names a Dir rather than run it somewhere the approver never saw.
+type DirectoryRuntime interface {
+	GuestRuntime
+	StartShellIn(ctx context.Context, grant supervisor.Binding, dir string, stdin []byte) (GuestProcess, error)
+}
+
 // GuestProcess methods must honor ctx; Terminate must be idempotent and safe to
 // call concurrently with Next so that a revoked grant unblocks a pending read.
 // Release confirms process/Job exit and owned handle closure; it is retried on

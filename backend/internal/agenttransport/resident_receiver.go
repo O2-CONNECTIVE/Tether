@@ -116,7 +116,8 @@ func (r *ResidentReceiver) PrincipalKeyFingerprint() string {
 }
 
 // ReadFixed has one reader, as required by WebSocket. It verifies signature,
-// sequence, generation, replay and fixed scope before minting native bookkeeping.
+// sequence, generation, replay and the fixed or command-run scope before
+// minting native bookkeeping.
 func (r *ResidentReceiver) readFixed() (ResidentFixedIntent, error) {
 	if r == nil || r.self != r || r.ctx.Err() != nil {
 		return ResidentFixedIntent{}, ErrClosed
@@ -128,6 +129,10 @@ func (r *ResidentReceiver) readFixed() (ResidentFixedIntent, error) {
 	}
 	now := time.Now()
 	i, e := residentDecodeIntent(r.binding, msg, r.cfg.PrincipalKey, now, r.next, r.seen)
+	if e != nil {
+		// A command-run intent shares this reader's sequence and replay set.
+		i, e = residentDecodeRun(r.binding, msg, r.cfg.PrincipalKey, now, r.next, r.seen)
+	}
 	if e != nil {
 		r.Close()
 		return ResidentFixedIntent{}, e

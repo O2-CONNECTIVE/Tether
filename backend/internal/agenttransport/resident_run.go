@@ -1,20 +1,16 @@
 package agenttransport
 
 import (
-	"path"
 	"strconv"
-	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"golang.org/x/crypto/ssh"
 )
 
 const (
-	ResidentRunOperation  = "tether-run-command-v1"
-	ResidentRunMaxTimeout = 240000 * time.Millisecond
-	residentRunMaxCwd     = 1024
+	ResidentRunOperation  = agentgateway.ResidentRunID
+	ResidentRunMaxTimeout = agentgateway.ResidentRunMaxTimeoutMillis * time.Millisecond
 )
 
 // residentRunScope is the command scope the gateway signed for a command-run
@@ -45,11 +41,8 @@ func (i ResidentFixedIntent) runValues() []string {
 // Format controls are refused with control characters because the Mac shows cwd
 // to the person who allows the command.
 func (i ResidentFixedIntent) runWellFormed(b residentBinding) bool {
-	c := i.run.cwd
 	return i.generation == b.generation && i.sequence >= 1 && i.sequence <= residentMaxIntents && residentHex(i.requestID, 16) &&
-		len(strconv.FormatInt(i.deadline.UnixMilli(), 10)) == 13 && i.run.timeoutMillis >= 1 && time.Duration(i.run.timeoutMillis)*time.Millisecond <= ResidentRunMaxTimeout && residentHex(i.run.commandSHA256, 32) &&
-		c != "" && len(c) <= residentRunMaxCwd && utf8.ValidString(c) && strings.IndexFunc(c, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) < 0 &&
-		path.Clean(c) == c && c[0] != '/' && c != ".." && !strings.HasPrefix(c, "../")
+		len(strconv.FormatInt(i.deadline.UnixMilli(), 10)) == 13 && (agentgateway.ResidentRunScope{CommandSHA256: i.run.commandSHA256, Cwd: i.run.cwd, TimeoutMillis: i.run.timeoutMillis}).WellFormed()
 }
 
 func residentEncodeRun(b residentBinding, i ResidentFixedIntent, s ssh.Signer) ([]byte, error) {

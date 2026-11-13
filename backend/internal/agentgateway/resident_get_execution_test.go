@@ -167,6 +167,9 @@ func (*metadataNoContactControl) ResidentGeneration(string, string) string {
 func (*metadataNoContactControl) BeginResidentFixed(context.Context, string, string, string, string, time.Time) error {
 	panic("metadata read dispatched work")
 }
+func (*metadataNoContactControl) BeginResidentRun(context.Context, string, string, string, string, time.Time, ResidentRunScope) error {
+	panic("metadata read dispatched work")
+}
 
 type metadataCanceledAfterEntry struct {
 	context.Context

@@ -3,14 +3,20 @@ package agentgateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"net"
 	"net/url"
+	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
@@ -19,6 +25,39 @@ import (
 )
 
 const ResidentFixedID = "tether-fixed-command-v1"
+
+// ResidentRunID names the command-run operation in every signed transcript.
+const ResidentRunID = "tether-run-command-v1"
+
+// ResidentRunScope is what the gateway signed for a command run. The zero value
+// means fixed work. It is part of the work binding so the Mac's registration and
+// collection proofs name the command, directory and timeout it acted on.
+type ResidentRunScope struct {
+	CommandSHA256, Cwd string
+	TimeoutMillis      uint32
+}
+
+const ResidentRunMaxTimeoutMillis = 240000
+
+// ResidentRunMinTimeoutMillis is the shortest timeout this gateway accepts for a
+// command run: the fixed routine's whole budget. The timeout is also the work's
+// deadline, and work that expires before the Mac answers is never collected and
+// keeps its session busy.
+const ResidentRunMinTimeoutMillis = 15000
+
+// WellFormed holds every bound on a scope that needs no clock or link state.
+// The gateway checks it before any work exists and before signing, and the Mac
+// before accepting. Format controls and line separators are refused with
+// control characters because the Mac shows cwd to the person who allows the
+// command.
+func (s ResidentRunScope) WellFormed() bool {
+	c := s.Cwd
+	_, err := hex.DecodeString(s.CommandSHA256)
+	return s.TimeoutMillis >= 1 && s.TimeoutMillis <= ResidentRunMaxTimeoutMillis && len(s.CommandSHA256) == 64 && err == nil && strings.ToLower(s.CommandSHA256) == s.CommandSHA256 && c != "" && len(c) <= 1024 && utf8.ValidString(c) && strings.IndexFunc(c, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029'
+	}) < 0 && path.Clean(c) == c && c[0] != '/' && c != ".." && !strings.HasPrefix(c, "../")
+}
+
 const ResidentFixedCommand = "/usr/bin/printf 'TETHER_MCP_GUI_BEGIN\\n'; /bin/sleep 5; /usr/bin/printf 'TETHER_MCP_GUI_END\\n'"
 
 var ErrResidentWorkUnconfigured = errors.New("agentgateway: host refused without work acquisition")
@@ -29,6 +68,7 @@ var ErrResidentPending = errors.New("agentgateway: fixed work admitted, result p
 type ResidentControl interface {
 	ResidentGeneration(host, principal string) string
 	BeginResidentFixed(context.Context, string, string, string, string, time.Time) error
+	BeginResidentRun(context.Context, string, string, string, string, time.Time, ResidentRunScope) error
 }
 type ResidentEnrollment struct {
 	HostLabel, PrincipalLabel string
@@ -38,6 +78,7 @@ type ResidentWorkBinding struct {
 	Host, Principal, Generation, RequestID string
 	Sequence                               uint64
 	DeadlineMillis                         int64
+	Run                                    ResidentRunScope
 }
 type residentSetup struct {
 	endpoint string
@@ -73,6 +114,7 @@ type residentWork struct {
 	registrationDone   chan struct{}
 	registrationErr    error
 	registrationConn   *residentRegistrationConn
+	command            []byte
 }
 type residentSession struct {
 	gateway    *Gateway
@@ -150,6 +192,62 @@ func (s *residentSession) FixedStart(ctx context.Context, id string) map[string]
 	go g.runResident(s.entry, w)
 	return v
 }
+
+// RunCommand requests one command run. The scope it signs is derived only from
+// its arguments; a request id names one scope for as long as its record lives.
+func (s *residentSession) RunCommand(ctx context.Context, id, command, cwd string, timeoutMillis uint32) map[string]any {
+	commandHash := sha256.Sum256([]byte(command))
+	scope := ResidentRunScope{CommandSHA256: hex.EncodeToString(commandHash[:]), Cwd: cwd, TimeoutMillis: timeoutMillis}
+	if ctx == nil || ctx.Err() != nil {
+		return map[string]any{"error": "not_sent"}
+	}
+	if !agentwire.ValidCommandID(id) || len(command) == 0 || len(command) > agentwire.MaxCommandBytes || strings.ContainsRune(command, 0) || timeoutMillis < ResidentRunMinTimeoutMillis || !scope.WellFormed() {
+		return map[string]any{"error": "invalid_run_scope"}
+	}
+	g := s.gateway
+	g.mu.Lock()
+	if w := s.entry.works[id]; w != nil {
+		if w.binding.Generation != s.generation {
+			g.mu.Unlock()
+			return map[string]any{"error": "request_generation_mismatch"}
+		}
+		if w.binding.Run != scope {
+			g.mu.Unlock()
+			return map[string]any{"error": "request_scope_mismatch"}
+		}
+		v := residentValue(w)
+		g.mu.Unlock()
+		return v
+	}
+	if t, ok := s.entry.tombstones[id]; ok {
+		g.mu.Unlock()
+		if t.generation == s.generation && t.run != scope {
+			return map[string]any{"error": "request_scope_mismatch"}
+		}
+		return tombstoneValue(t, s.generation)
+	}
+	if g.residentRecordCountLocked() >= MaxResidentReplayRecords {
+		g.mu.Unlock()
+		return map[string]any{"error": "replay_ledger_full"}
+	}
+	if g.closed || g.residentResultCountLocked() >= MaxResidentResults || s.entry.current != nil || s.principal.route != nil || s.principal.connecting {
+		g.mu.Unlock()
+		return map[string]any{"error": "busy_or_refused", "owner_cleanup": "unknown"}
+	}
+	if g.resident.control.ResidentGeneration(s.entry.enrollment.HostLabel, s.principal.label) != s.generation {
+		g.mu.Unlock()
+		return map[string]any{"error": "control_ended", "owner_cleanup": "unknown", "reinitialize_required": true}
+	}
+	deadline := time.Now().Add(time.Duration(timeoutMillis) * time.Millisecond).Truncate(time.Millisecond)
+	w := &residentWork{binding: ResidentWorkBinding{Host: s.entry.enrollment.HostLabel, Principal: s.principal.label, Generation: s.generation, RequestID: id, DeadlineMillis: deadline.UnixMilli(), Run: scope}, command: []byte(command), completed: make(chan struct{}), ready: make(chan struct{}), collected: make(chan struct{}), wake: make(chan struct{}, 1), phase: "pending", ownerCleanup: "pending", gatewayCleanup: "pending"}
+	s.entry.works[id] = w
+	s.entry.current = w
+	g.watchers.Add(1)
+	v := residentValue(w)
+	g.mu.Unlock()
+	go g.runResident(s.entry, w)
+	return v
+}
 func (s *residentSession) FixedStatus(_ context.Context, id string) map[string]any {
 	g := s.gateway
 	g.mu.Lock()
@@ -215,7 +313,7 @@ func (g *Gateway) ConnectResident(label string, d Dispatch, b ResidentWorkBindin
 	if entry != nil {
 		w = entry.works[b.RequestID]
 	}
-	valid := !g.discoveryOnly && !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, entry.enrollment.HostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
+	valid := !g.discoveryOnly && !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Run == w.binding.Run && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, entry.enrollment.HostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
 	if valid {
 		w.binding.Sequence = b.Sequence
 		w.registering = true
@@ -268,7 +366,12 @@ func ResidentCollectionTranscript(p ResidentCollectionProof) []byte {
 	for _, v := range [][]byte{p.ClientNonce, p.ServerNonce, p.HostKey, p.PrincipalKey} {
 		field(v)
 	}
-	for _, v := range []string{b.Generation, strconv.FormatUint(b.Sequence, 10), b.RequestID, ResidentFixedID, strconv.FormatInt(b.DeadlineMillis, 10), "15000", p.Cleanup} {
+	// Fixed work keeps its original bytes; a command run names its own scope.
+	operation, timeout, scope := ResidentFixedID, "15000", []string(nil)
+	if b.Run != (ResidentRunScope{}) {
+		operation, timeout, scope = ResidentRunID, strconv.FormatUint(uint64(b.Run.TimeoutMillis), 10), []string{b.Run.CommandSHA256, b.Run.Cwd}
+	}
+	for _, v := range append(append([]string{b.Generation, strconv.FormatUint(b.Sequence, 10), b.RequestID, operation, strconv.FormatInt(b.DeadlineMillis, 10), timeout}, scope...), p.Cleanup) {
 		field([]byte(v))
 	}
 	return out
@@ -287,7 +390,7 @@ func (g *Gateway) ResidentCollected(proof ResidentCollectionProof) error {
 	w := e.works[proof.Binding.RequestID]
 	key, err := ssh.ParsePublicKey(e.enrollment.HostKey)
 	b := proof.Binding
-	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, e.enrollment.HostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
+	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Run != w.binding.Run || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, e.enrollment.HostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
 		return ErrRefused
 	}
 	w.binding.Sequence = b.Sequence
@@ -303,11 +406,23 @@ func validCollectionSignature(key ssh.PublicKey, proof ResidentCollectionProof) 
 
 // Scope/result limits apply independently of command timeout and grant expiry.
 func (g *Gateway) runResident(entry *residentEntry, w *residentWork) {
-	defer func() { g.watchers.Done(); close(w.completed) }()
+	defer func() {
+		// The command text is needed only to start the command once.
+		g.mu.Lock()
+		w.command = nil
+		g.mu.Unlock()
+		g.watchers.Done()
+		close(w.completed)
+	}()
 	deadline := time.UnixMilli(w.binding.DeadlineMillis)
 	operation, stop := context.WithDeadline(g.ctx, deadline)
 	defer stop()
-	e := g.resident.control.BeginResidentFixed(operation, w.binding.Host, w.binding.Principal, w.binding.Generation, w.binding.RequestID, deadline)
+	var e error
+	if w.binding.Run != (ResidentRunScope{}) {
+		e = g.resident.control.BeginResidentRun(operation, w.binding.Host, w.binding.Principal, w.binding.Generation, w.binding.RequestID, deadline, w.binding.Run)
+	} else {
+		e = g.resident.control.BeginResidentFixed(operation, w.binding.Host, w.binding.Principal, w.binding.Generation, w.binding.RequestID, deadline)
+	}
 	if !errors.Is(e, ErrResidentPending) {
 		g.mu.Lock()
 		w.failure = "admission_refused_or_uncertain"
@@ -407,7 +522,11 @@ func (g *Gateway) executeResident(ctx context.Context, w *residentWork) {
 	if cancelled {
 		return
 	}
-	status, err := rt.client.Start(ctx, ResidentFixedID, []byte(ResidentFixedCommand), 15000)
+	command, commandID, timeout := []byte(ResidentFixedCommand), ResidentFixedID, uint32(15000)
+	if w.binding.Run != (ResidentRunScope{}) {
+		command, commandID, timeout = w.command, ResidentRunID, w.binding.Run.TimeoutMillis
+	}
+	status, err := rt.client.Start(ctx, commandID, command, timeout)
 	if err != nil {
 		g.mu.Lock()
 		w.failure = "start_uncertain"

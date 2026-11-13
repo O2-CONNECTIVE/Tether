@@ -3,6 +3,7 @@ package agentexec
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -17,10 +18,15 @@ import (
 // Command is a string so a value copy has no caller-mutable byte backing store.
 // A non-nil constraint admits at most one exact request for this grant. It does
 // not sandbox that command or change its OS identity, binding or hard deadline.
+// Exactly one of Command (the exact text) and CommandSHA256 (lowercase hex of
+// the text that arrives later) is set. Dir is required with the hash and
+// refused with Command; it needs a runtime that implements DirectoryRuntime.
 type FixedStartConstraint struct {
 	RequestID     string
 	Command       string
 	TimeoutMillis uint32
+	CommandSHA256 string
+	Dir           string
 }
 
 // Validate checks the default request bounds before local consent. New also
@@ -29,7 +35,17 @@ func (c FixedStartConstraint) Validate() error {
 	return c.validate(Limits{}.normalized())
 }
 func (c FixedStartConstraint) validate(l Limits) error {
-	if !validRequestID(c.RequestID) || len(c.Command) == 0 || len(c.Command) > l.MaxCommandBytes || c.TimeoutMillis == 0 || c.TimeoutMillis > l.MaxTimeout {
+	if !validRequestID(c.RequestID) || c.TimeoutMillis == 0 || c.TimeoutMillis > l.MaxTimeout {
+		return ErrUnconfigured
+	}
+	if c.Command != "" {
+		if c.CommandSHA256 != "" || c.Dir != "" || len(c.Command) > l.MaxCommandBytes {
+			return ErrUnconfigured
+		}
+		return nil
+	}
+	decoded, err := hex.DecodeString(c.CommandSHA256)
+	if err != nil || len(c.CommandSHA256) != sha256.Size*2 || hex.EncodeToString(decoded) != c.CommandSHA256 || c.Dir == "" {
 		return ErrUnconfigured
 	}
 	return nil
@@ -154,6 +170,11 @@ func newSession(cfg Config, after func(time.Duration, func()) func() bool) (*Ses
 		copied := *cfg.FixedStart
 		if err := copied.validate(limits); err != nil {
 			return nil, err
+		}
+		if copied.Dir != "" {
+			if _, ok := cfg.Runtime.(DirectoryRuntime); !ok {
+				return nil, ErrUnconfigured
+			}
 		}
 		fixed = &copied
 		limits.MaxCommands = 1
@@ -489,7 +510,12 @@ func (s *Session) Start(r StartRequest) (Status, error) {
 	defer s.mu.Unlock()
 	if f := s.fixedStart; f != nil {
 		matchingID := r.RequestID == f.RequestID || (s.adapterPrefix != "" && r.RequestID == s.adapterPrefix+f.RequestID)
-		if !matchingID || string(r.Command) != f.Command || r.TimeoutMillis != f.TimeoutMillis {
+		commandMatches := string(r.Command) == f.Command
+		if f.CommandSHA256 != "" {
+			sum := sha256.Sum256(r.Command)
+			commandMatches = hex.EncodeToString(sum[:]) == f.CommandSHA256
+		}
+		if !matchingID || !commandMatches || r.TimeoutMillis != f.TimeoutMillis {
 			return Status{}, ErrPolicy
 		}
 	}

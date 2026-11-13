@@ -38,6 +38,9 @@ func (c *lifecycleControl) BeginResidentFixed(context.Context, string, string, s
 	c.mu.Unlock()
 	return ErrResidentWorkUnconfigured
 }
+func (c *lifecycleControl) BeginResidentRun(context.Context, string, string, string, string, time.Time, ResidentRunScope) error {
+	return ErrResidentWorkUnconfigured
+}
 
 type lifecycleHTTP struct {
 	g       *Gateway
@@ -100,6 +103,13 @@ func (f *lifecycleHTTP) open(t *testing.T) string {
 		t.Fatalf("initialized: %d %s", w.Code, w.Body.String())
 	}
 	return sid
+}
+
+// tick advances the gateway clock so "least recently used" is unambiguous.
+func (f *lifecycleHTTP) tick() {
+	f.g.mu.Lock()
+	f.now = f.now.Add(time.Second)
+	f.g.mu.Unlock()
 }
 
 func (f *lifecycleHTTP) count(t *testing.T, want int) {

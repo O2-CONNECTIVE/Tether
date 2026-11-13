@@ -11,6 +11,7 @@ const MaxResidentReplayRecords = MaxAttachments
 type residentTombstone struct {
 	generation string
 	value      map[string]any
+	run        ResidentRunScope // zero for the fixed routine
 }
 
 func tombstoneValue(t residentTombstone, generation string) map[string]any {
@@ -93,7 +94,7 @@ func (s *residentSession) FixedRelease(ctx context.Context, id string) map[strin
 	if s.entry.tombstones == nil {
 		s.entry.tombstones = map[string]residentTombstone{}
 	}
-	t := residentTombstone{generation: s.generation, value: v}
+	t := residentTombstone{generation: s.generation, value: v, run: w.binding.Run}
 	s.entry.tombstones[id] = t
 	delete(s.entry.works, id)
 	return tombstoneValue(t, s.generation)

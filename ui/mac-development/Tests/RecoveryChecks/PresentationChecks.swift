@@ -95,4 +95,21 @@ func checkPresentation() {
     let exitBeforeLaunch = RecoveryController(owner: beforeLaunch) { Owner("forbidden") }
     exitBeforeLaunch.requestQuit()
     check(exitBeforeLaunch.shouldTerminate && !exitBeforeLaunch.prepare() && beforeLaunch.starts == 0, "UI quit before launch blocks a queued prepare action")
+
+    // OFF must never look like a path to command execution permission.
+    let permissionOwner = Owner("run permission"); permissionOwner.launched = true
+    permissionOwner.feed.ingest(recoveryStatus(), at: 5000)
+    let permissionController = RecoveryController(owner: permissionOwner) { Owner("forbidden") }
+    check(!permissionController.presentation(at: 5000).canAllow, "UI cannot allow command execution while standby is OFF")
+    let permissionOn = String(decoding: recoveryStatus(standby: "on", canOn: false), as: UTF8.self)
+        .replacingOccurrences(of: "\"canRequestOff\":false", with: "\"canRequestOff\":true")
+    permissionOwner.feed = Feed(); permissionOwner.feed.ingest(Data(permissionOn.utf8), at: 5000)
+    check(permissionController.presentation(at: 5000).canAllow, "UI permits opening command permission only while standby is ON")
+    _ = permissionOwner.feed.command("allow", at: 5000)
+    permissionOwner.feed.ingest(Data("{\"protocolVersion\":1,\"type\":\"receipt\",\"receipt\":{\"protocolVersion\":1,\"requestId\":1,\"intent\":\"allow-run\",\"disposition\":\"accepted\"}}".utf8), at: 5000)
+    let permitted = permissionController.presentation(at: 5000)
+    check(permitted.run == "コマンド実行: 許可中（残り約15分）" && permitted.canDeny, "UI shows accepted permission lifetime and offers revoke")
+    permissionController.requestQuit()
+    let quittingPermission = permissionController.presentation(at: 5000)
+    check(!quittingPermission.canAllow && !quittingPermission.canDeny, "UI quit request disables both permission controls")
 }

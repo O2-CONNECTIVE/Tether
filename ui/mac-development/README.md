@@ -13,6 +13,9 @@ Developer ID の結果をモックに置換しません。別 bundle ID、常時
   改変への防御、コード署名・notarization の代替ではありません。
 - 新鮮な owner 状態に対する ON/OFF だけ。固定検証操作以外の command/path/env
   入力はありません。重複クリックと pending 中の操作を拒否します。
+- コマンド実行の許可（15分）と取り消し、実行したコマンドの本文（直近5件）の表示。
+  許可は receipt だけで確認し、待機が ON でなくなれば画面上も閉じます。記録の
+  制約は [development-resident](../../docs/development-resident.md) を参照。
 - 受領 receipt と状態変更、認証済み接続、停止回収を区別します。未知の状態、
   JSON 異常、時刻逆行、source age 3秒以上では操作を止めます。
 - 「ホストを停止」は元 owner に close を要求し、画面を残します。完全な回収証拠が

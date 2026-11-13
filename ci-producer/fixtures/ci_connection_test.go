@@ -232,6 +232,8 @@ func TestCIActualProducerConnection(t *testing.T) {
 		diag.at("work-cli-close")
 		if work.finish() != nil { diag.fail(t, "work-cli-join") }
 		if !gateway.workHTTP.confirmed(gateway.sid) { diag.fail(t, "work-cli-session") }
+		// The allowance has only a foreground verb, so the run path needs this lane.
+		gateway.runCommand(child, root)
 	}
 	diag.at("off-submit")
 	diag.beginProducerRequest("off")

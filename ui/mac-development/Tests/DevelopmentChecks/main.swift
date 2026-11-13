@@ -61,6 +61,76 @@ check(!refused.fault && refused.can("on", at: 1000), "refusal preceding receipt"
 check(refused.command("on", at: 1000) == "on 2 2\n", "explicit retry new ID")
 var unknown = Feed(); unknown.ingest(Data("{\"protocolVersion\":1,\"type\":\"closed\",\"sourceContinuousMs\":1000,\"outcome\":\"unknown\"}".utf8), at: 1000)
 check(unknown.fault && !unknown.closeConfirmed, "unknown is not closed")
+
+// Command-run allowance. Standby ON alone never lets an agent run a command;
+// the person at the Mac opens a 15-minute allowance, and this screen must not
+// show it as open before the owner accepted it or after anything ended it.
+func runReceipt(_ id: Int, _ intent: String, _ disposition: String) -> Data {
+    Data("{\"protocolVersion\":1,\"type\":\"receipt\",\"receipt\":{\"protocolVersion\":1,\"requestId\":\(id),\"intent\":\"\(intent)\",\"disposition\":\"\(disposition)\"}}".utf8)
+}
+func standingBy() -> Feed {
+    var feed = Feed(); feed.ingest(status(), at: 1000)
+    _ = feed.command("on", at: 1000); feed.ingest(receipt("accepted"), at: 1000)
+    feed.ingest(status(2, standby: "on", transition: applied), at: 1000)
+    return feed
+}
+var idle = Feed(); idle.ingest(status(), at: 1000)
+check(!idle.can("allow", at: 1000) && idle.command("allow", at: 1000) == nil, "allowance needs standby ON")
+var run = standingBy()
+check(run.can("allow", at: 1000) && !run.runAllowed(at: 1000), "standby ON alone is not an allowance")
+// This screen's view of the allowance can lag the owner's. Withdrawing must
+// stay possible whenever standby is ON, even if the screen shows none.
+check(run.can("deny", at: 1000), "withdrawal is always offered while standby is ON")
+check(run.command("allow", at: 1000) == "allow 2 2\n", "allow command")
+check(run.pending == nil, "allowance is not a standby transition")
+check(!run.runAllowed(at: 1000) && !run.can("off", at: 1000) && !run.can("allow", at: 1000), "a request is not an allowance; wait for its receipt")
+run.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000)
+check(!run.fault && run.runAllowed(at: 1000) && run.runAllowed(at: 900_999), "owner accepted the allowance")
+check(!run.runAllowed(at: 901_000), "allowance ends after 15 minutes")
+check(run.can("off", at: 1000) && run.can("deny", at: 1000), "allowance does not block standby OFF")
+check(run.command("deny", at: 1000) == "deny 3 2\n", "deny command")
+check(run.runAllowed(at: 1000), "still open until the owner accepts the withdrawal")
+run.ingest(runReceipt(3, "deny-run", "accepted"), at: 1000)
+check(!run.fault && !run.runAllowed(at: 1000) && run.can("allow", at: 1000), "withdrawn")
+var refusedRun = standingBy(); _ = refusedRun.command("allow", at: 1000)
+refusedRun.ingest(runReceipt(2, "allow-run", "rejected"), at: 1000)
+check(!refusedRun.fault && !refusedRun.runAllowed(at: 1000) && refusedRun.can("allow", at: 1000), "refused allowance stays closed and may be retried")
+var crossed = standingBy(); _ = crossed.command("allow", at: 1000)
+crossed.ingest(runReceipt(2, "deny-run", "accepted"), at: 1000)
+check(crossed.fault && !crossed.runAllowed(at: 1000), "receipt for another intent is not an allowance")
+var stopped = standingBy(); _ = stopped.command("allow", at: 1000)
+stopped.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000)
+stopped.ingest(status(3, standby: "off", transition: applied), at: 1000)
+check(!stopped.fault && !stopped.runAllowed(at: 1000), "standby OFF ends the allowance")
+stopped.ingest(status(4, standby: "on", transition: applied), at: 1000)
+check(!stopped.runAllowed(at: 1000), "a later standby ON does not bring an old allowance back")
+var faulted = standingBy(); _ = faulted.command("allow", at: 1000)
+faulted.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000); faulted.fail()
+check(!faulted.runAllowed(at: 1000), "a fault never shows an open allowance")
+
+// The record of what ran. The gateway signs only a hash, so this list is how
+// the person at the Mac sees the command text. A damaged line is shown as
+// damaged, never dropped: a hidden record would hide a command that ran.
+let history = Data("""
+{"at":"2026-11-12T01:00:00Z","dir":"/w/src","command":"make test\\n"}
+not json
+{"at":"2026-11-12T01:01:00Z","dir":"/w","command":"pwd\\n"}
+
+""".utf8)
+let unreadable = RunRecord(at: "", dir: "", command: RunRecord.unreadable)
+check(RunHistory.recent(history, limit: 5) == [
+    RunRecord(at: "2026-11-12T01:01:00Z", dir: "/w", command: "pwd\n"), unreadable,
+    RunRecord(at: "2026-11-12T01:00:00Z", dir: "/w/src", command: "make test\n"),
+], "newest first, damaged line kept")
+check(RunHistory.recent(history, limit: 1) == [RunRecord(at: "2026-11-12T01:01:00Z", dir: "/w", command: "pwd\n")], "limit keeps the newest")
+check(RunHistory.recent(Data(), limit: 5).isEmpty, "no record, nothing shown")
+// The screen shows a few records and the start of each. It must say so:
+// a silent cut would hide the rest of a long command, or an earlier one.
+let long = String(repeating: "x", count: 301)
+let shown = RunHistory.text(Data("{\"at\":\"t1\",\"dir\":\"/w\",\"command\":\"a\"}\n{\"at\":\"t2\",\"dir\":\"/w\",\"command\":\"b\"}\n{\"at\":\"t3\",\"dir\":\"/w\",\"command\":\"\(long)\"}\n".utf8), limit: 2)
+check(shown == "全3件のうち直近2件\n\nt3  /w\n" + String(repeating: "x", count: 300) + "\n…（全301文字。以下省略）\n\nt2  /w\nb", "count and cut are stated")
+check(RunHistory.text(Data(), limit: 5) == "実行したコマンドはありません", "empty record")
+check(RunHistory.recent(Data("{\"at\":\"x\",\"dir\":\"/w\",\"command\":\"id\\n\",\"extra\":1}\n{\"at\":\"x\",\"dir\":\"/w\"}\n".utf8), limit: 5) == [unreadable, unreadable], "unexpected shape is damaged, not trusted")
 print("DevelopmentChecks: \(checks) passed; synthetic protocol only, no host launched")
 
 var timely = LineBuffer()

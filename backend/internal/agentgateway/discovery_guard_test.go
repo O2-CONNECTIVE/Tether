@@ -16,6 +16,9 @@ func (discoveryControl) ResidentGeneration(string, string) string { panic("contr
 func (discoveryControl) BeginResidentFixed(context.Context, string, string, string, string, time.Time) error {
 	panic("control invoked")
 }
+func (discoveryControl) BeginResidentRun(context.Context, string, string, string, string, time.Time, ResidentRunScope) error {
+	panic("control invoked")
+}
 
 func TestDiscoveryResidentGuardPrecedesOtherwiseValidEnrollment(t *testing.T) {
 	signer, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x31}, 32)))

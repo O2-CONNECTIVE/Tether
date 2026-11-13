@@ -70,3 +70,27 @@ func TestResidentHTTPGenerationChangePreservesOriginalReadScope(t *testing.T) {
 	}
 	f.count(t, 2)
 }
+
+// Replacing a session of the current generation is safe only because results
+// belong to the generation: the session that started the work may be the one
+// that made room, and a later session must still read that work.
+func TestResidentReplacedSessionWorkStaysReadableInItsGeneration(t *testing.T) {
+	f := newLifecycleHTTP(t)
+	f.control.set(f.s.generation)
+	starter := f.open(t)
+	id := strings.Repeat("1", 32)
+	readWork(f.s, id)
+	for i := 1; i <= MaxSessionsPerPrincipal; i++ {
+		f.tick()
+		f.open(t)
+	}
+	f.count(t, MaxSessionsPerPrincipal)
+	if f.call(http.MethodPost, starter, lifecycleMetadata).Code == http.StatusOK {
+		t.Fatal("least recently used session survived")
+	}
+	latest := f.open(t)
+	if v := lifecycleValue(t, f.call(http.MethodPost, latest, lifecycleMetadata), false); v["request_id"] != id {
+		t.Fatal("work of the replaced session is no longer readable", v)
+	}
+	f.count(t, MaxSessionsPerPrincipal)
+}

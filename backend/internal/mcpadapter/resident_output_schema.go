@@ -12,6 +12,9 @@ func residentOutputSchema(name string) map[string]any {
 	if name != "tether_fixed_release" {
 		branches = append(branches, residentWorkSchema(false))
 	}
+	if name == "tether_run_command" {
+		branches = append(branches, closedObject(map[string]any{"error": stringEnum("invalid_run_scope", "request_scope_mismatch")}, "error"))
+	}
 	return map[string]any{"type": "object", "oneOf": branches}
 }
 

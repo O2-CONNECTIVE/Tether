@@ -155,6 +155,7 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 }
 func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receipt {
 	out := Receipt{1, r.RequestID, r.Intent, "rejected"}
+	allowance := r.Intent == "allow-run" || r.Intent == "deny-run"
 	if r.RequestID <= m.highID {
 		out.Disposition = "stale"
 		return out
@@ -169,16 +170,23 @@ func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receip
 	}
 	if m.revision == 0 || now < m.observedAt || now-m.observedAt >= m.view.ValidForMS || r.ExpectedRevision != m.revision || !reflect.DeepEqual(owner.Snapshot(), m.raw) {
 		out.Disposition = "stale"
-		m.refused = &Transition{r.RequestID, r.Intent, "rejected"}
+		if !allowance {
+			m.refused = &Transition{r.RequestID, r.Intent, "rejected"}
+		}
 		return out
 	}
 	if (r.Intent == "on" && !m.view.CanRequestOn) || (r.Intent == "off" && !m.view.CanRequestOff) {
 		return out
 	}
 	var receipt residentmac.StandbyReceipt
-	if r.Intent == "on" {
+	switch r.Intent {
+	case "on":
 		receipt = owner.RequestOn(r.RequestID, m.raw.Revision)
-	} else {
+	case "allow-run":
+		receipt = owner.AllowRun(r.RequestID, m.raw.Revision, residentmac.MaxRunAllowance)
+	case "deny-run":
+		receipt = owner.DenyRun(r.RequestID, m.raw.Revision)
+	default:
 		receipt = owner.RequestOff(r.RequestID, m.raw.Revision)
 	}
 	if receipt.RequestID != r.RequestID || receipt.Intent != r.Intent || !oneOf(receipt.Disposition, "accepted", "rejected", "stale", "unknown") {
@@ -187,7 +195,8 @@ func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receip
 		return out
 	}
 	out.Disposition = receipt.Disposition
-	if receipt.Disposition == "accepted" || receipt.Disposition == "unknown" {
+	// The allowance is not a standby transition: nothing to wait for.
+	if !allowance && (receipt.Disposition == "accepted" || receipt.Disposition == "unknown") {
 		copy := r
 		m.pending = &copy
 	}

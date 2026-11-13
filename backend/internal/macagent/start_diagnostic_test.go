@@ -128,7 +128,7 @@ func TestStartDiagnosticsFixedAndFirstOnly(t *testing.T) {
 	if d.Failure() != StartFailureInheritedDescriptor {
 		t.Fatal("first overwritten")
 	}
-	want := []string{"none", "configuration", "context", "binding", "sigchld", "descriptor_table", "inherited_descriptor", "stdin_pipe", "stdout_pipe", "stderr_pipe", "exec_permission", "exec_missing", "exec_resource", "exec_other", "spawn_other"}
+	want := []string{"none", "configuration", "context", "binding", "sigchld", "descriptor_table", "inherited_descriptor", "stdin_pipe", "stdout_pipe", "stderr_pipe", "exec_permission", "exec_missing", "exec_resource", "exec_other", "spawn_other", "work_dir"}
 	for i, s := range want {
 		if StartFailure(i).String() != s {
 			t.Fatal("nonfixed value")

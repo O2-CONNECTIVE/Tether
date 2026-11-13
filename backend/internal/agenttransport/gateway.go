@@ -319,9 +319,11 @@ func (h *Handler) register(ctx context.Context, ws *websocket.Conn) (string, age
 	host := h.hosts[reg.host]
 	data := transcript(h.endpoint, reg.host, reg.principal, reg.dispatch, nonce)
 	if reg.resident != nil {
-		if !h.workIsCurrent(*reg.resident) || reg.dispatch.Deadline.After(time.UnixMilli(reg.resident.DeadlineMillis)) {
+		current, ok := h.currentWork(*reg.resident)
+		if !ok || reg.dispatch.Deadline.After(time.UnixMilli(reg.resident.DeadlineMillis)) {
 			return "", agentgateway.Dispatch{}, nil, ErrRefused
 		}
+		*reg.resident = current
 		data = workTranscript(h.endpoint, reg.host, reg.principal, reg.dispatch, nonce, *reg.resident)
 	}
 	if host == nil || !host.principals[reg.principal] || !bytes.Equal(reg.dispatch.HostKey, host.wire) ||

@@ -344,6 +344,7 @@ jobs:
               'work-cli-dictionary-empty', 'work-cli-dictionary-list',
               'work-cli-dictionary-running', 'work-cli-dictionary-finished',
               'work-cli-dictionary-released',
+              'run-refused', 'run-allow', 'run-command', 'run-read', 'run-release',
           }
           failure_codes = {
               'cancel-expectation',
@@ -425,6 +426,7 @@ jobs:
               'producer-wait-deadline',
               'producer-wait-nonzero',
               'request-correlation',
+              'run-refusal', 'run-allow', 'run-result', 'run-read', 'run-release',
               'terminal-missing',
               'uncategorized',
               'work-admission-uncertain',

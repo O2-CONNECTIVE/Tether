@@ -4,7 +4,7 @@
 
 ## 既存経路との区別
 
-[resident adapter](../backend/internal/mcpadapter/resident_http.go) は `tether_fixed_start` / `tether_fixed_status` / `tether_fixed_cancel` を公開し、明示的なrelease対応backendだけ `tether_fixed_release` を追加します。これらの入力は32桁lowercase hexのrequest_idだけです。固定routine以外のcommandや任意hostは受け取りません。
+[resident adapter](../backend/internal/mcpadapter/resident_http.go) は `tether_fixed_start` / `tether_fixed_status` / `tether_fixed_cancel` を公開し、明示的なrelease対応backendだけ `tether_fixed_release` を追加します。これらの入力は32桁lowercase hexのrequest_idだけです。固定routine以外のcommandや任意hostは受け取りません。`ResidentRunBackend` 対応時は一覧の末尾に `tether_run_command` を追加します。引数は `request_id`、1〜65536 UTF-8 bytesの `command`、作業root内の相対 `cwd`、任意の整数 `timeout_ms`（既定60000、15000〜240000）です。任意hostは受け取りません。型・必須項目・長さ・`timeout_ms` の範囲の不正はinvalid paramsとなりbackendを呼びません。`cwd` の形式不正（絶対パス、`..`、正規化されていないパス、制御文字）とNULを含む `command` はbackendが `invalid_run_scope` で拒否し、作業を作りません。`request_scope_mismatch` は、同じrequest_idに異なる `command`・`cwd`・`timeout_ms` を指定した場合です。結果を解放した後も同じ照合をします。`timeout_ms` は作業全体の期限で、要求を受けた時点から数えます。
 
 一覧対応backendではさらに `tether_fixed_list` を公開します。入力cursor/limitとsummary出力の契約は[所有実行一覧](resident-execution-list.md)を参照してください。以下のwork結果schemaとは別のversion 1一覧schemaです。
 
@@ -14,7 +14,7 @@
 
 ## 公開名の統一
 
-常駐の7操作は `tether_fixed_start` / `tether_fixed_status` / `tether_fixed_cancel` / `tether_fixed_release` / `tether_fixed_list` / `tether_fixed_read_output` / `tether_fixed_get_execution` です。
+常駐の7固定操作は `tether_fixed_start` / `tether_fixed_status` / `tether_fixed_cancel` / `tether_fixed_release` / `tether_fixed_list` / `tether_fixed_read_output` / `tether_fixed_get_execution` です。対応backendではこれに `tether_run_command` が加わります。同じrequest_id・同じ引数は既存作業を観測し、異なる引数は `request_scope_mismatch` で拒否します。結果は `tether_fixed_start` と同じschemaと上限を使います。
 各backendの対応能力による公開範囲は従来と同じです。旧 `rescue_fixed_*` 名のaliasは残さず、旧名での呼出しはdispatch前にprotocol errorで拒否します。
 clientは保存したtool名を更新してください。実接続では、対象principalのenrollmentと認証済みstandbyのreadyを確認してから新規initializeし、同じMCP sessionで常駐のtool一覧を確認します。
 standby未接続かつ有効な単発grant経路もない場合は既存unbound discoveryとなり、単発派遣の旧4本を表示します。そのsessionは後から常駐へ昇格せず、ready後に一覧を再取得するだけでは切り替わりません。

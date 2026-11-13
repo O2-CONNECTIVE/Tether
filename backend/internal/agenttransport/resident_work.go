@@ -11,11 +11,19 @@ import (
 )
 
 func (i ResidentFixedIntent) workBinding() agentgateway.ResidentWorkBinding {
-	return agentgateway.ResidentWorkBinding{Host: i.host, Principal: i.principal, Generation: i.generation, RequestID: i.requestID, Sequence: i.sequence, DeadlineMillis: i.deadline.UnixMilli()}
+	return agentgateway.ResidentWorkBinding{Host: i.host, Principal: i.principal, Generation: i.generation, RequestID: i.requestID, Sequence: i.sequence, DeadlineMillis: i.deadline.UnixMilli(), Run: agentgateway.ResidentRunScope{CommandSHA256: i.run.commandSHA256, Cwd: i.run.cwd, TimeoutMillis: i.run.timeoutMillis}}
 }
+
+// workTranscript keeps the fixed-work bytes unchanged. A command run signs under
+// its own label and adds the scope, so neither proof can stand for the other.
 func workTranscript(endpoint, host, principal string, d agentgateway.Dispatch, nonce []byte, b agentgateway.ResidentWorkBinding) []byte {
 	out := transcript(endpoint, host, principal, d, nonce)
-	for _, v := range []string{"resident-fixed-work-v1", b.Generation, strconv.FormatUint(b.Sequence, 10), b.RequestID, strconv.FormatInt(b.DeadlineMillis, 10)} {
+	values := []string{"resident-fixed-work-v1", b.Generation, strconv.FormatUint(b.Sequence, 10), b.RequestID, strconv.FormatInt(b.DeadlineMillis, 10)}
+	if b.Run != (agentgateway.ResidentRunScope{}) {
+		values[0] = "resident-run-work-v1"
+		values = append(values, ResidentRunOperation, strconv.FormatUint(uint64(b.Run.TimeoutMillis), 10), b.Run.CommandSHA256, b.Run.Cwd)
+	}
+	for _, v := range values {
 		out = binary.BigEndian.AppendUint32(out, uint32(len(v)))
 		out = append(out, v...)
 	}
@@ -69,7 +77,7 @@ func (h *Handler) ResidentGeneration(host, principal string) string {
 	return p.binding.generation
 }
 func (h *Handler) BeginResidentFixed(ctx context.Context, host, principal, generation, id string, deadline time.Time) error {
-	e := h.proposeResidentFixed(ctx, host, principal, generation, id, deadline)
+	e := h.proposeResident(ctx, host, principal, generation, id, deadline, residentRunScope{})
 	if e == ErrWorkPending {
 		return agentgateway.ErrResidentPending
 	}
@@ -78,18 +86,39 @@ func (h *Handler) BeginResidentFixed(ctx context.Context, host, principal, gener
 	}
 	return e
 }
-func (h *Handler) workIsCurrent(b agentgateway.ResidentWorkBinding) bool {
+
+// BeginResidentRun is BeginResidentFixed for a command run. A zero scope is not
+// well formed, so it can never fall through to the fixed operation.
+func (h *Handler) BeginResidentRun(ctx context.Context, host, principal, generation, id string, deadline time.Time, scope agentgateway.ResidentRunScope) error {
+	if !scope.WellFormed() {
+		return ErrRefused
+	}
+	e := h.proposeResident(ctx, host, principal, generation, id, deadline, residentRunScope{commandSHA256: scope.CommandSHA256, cwd: scope.Cwd, timeoutMillis: scope.TimeoutMillis})
+	if e == ErrWorkPending {
+		return agentgateway.ErrResidentPending
+	}
+	if e == ErrWorkUnconfigured {
+		return agentgateway.ErrResidentWorkUnconfigured
+	}
+	return e
+}
+
+// currentWork reports whether b names an intent this gateway signed and still
+// holds, and returns b with the run scope of that intent. The scope never comes
+// from the Mac: the registration message does not carry one.
+func (h *Handler) currentWork(b agentgateway.ResidentWorkBinding) (agentgateway.ResidentWorkBinding, bool) {
 	h.mu.Lock()
 	p := h.residents[residentMapKey(b.Host, b.Principal)]
 	valid := !h.closed && p != nil && p.ready && p.ctx.Err() == nil && p.binding.generation == b.Generation
 	h.mu.Unlock()
 	if !valid {
-		return false
+		return b, false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	i, ok := p.intents[b.RequestID]
-	return ok && i.sequence == b.Sequence && i.deadline.UnixMilli() == b.DeadlineMillis
+	b.Run = i.workBinding().Run
+	return b, ok && i.sequence == b.Sequence && i.deadline.UnixMilli() == b.DeadlineMillis
 }
 func collectionProof(b residentBinding, i ResidentFixedIntent, cleanup string) agentgateway.ResidentCollectionProof {
 	return agentgateway.ResidentCollectionProof{Binding: i.workBinding(), Endpoint: b.endpoint, ClientNonce: b.clientNonce, ServerNonce: b.serverNonce, HostKey: b.hostKey, PrincipalKey: b.principalKey, Cleanup: cleanup}

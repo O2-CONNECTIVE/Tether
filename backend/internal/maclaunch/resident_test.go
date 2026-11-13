@@ -602,3 +602,14 @@ func TestResidentSourceConstructionRejectsCanceledOriginalContext(t *testing.T) 
 		t.Fatal("failed source construction started runtime")
 	}
 }
+
+// A command run shows its text to the person at the Mac only through the run
+// history. The path comes from where the protected policy lives, never from
+// the policy's content, so an edited policy cannot point the record elsewhere
+// or switch it off.
+func TestResidentRuntimeRecordsRunsBesideItsProtectedPolicy(t *testing.T) {
+	f, _, _, _ := residentFixture(t)
+	if got := f.policy.runtime.RunLog; got != "/Users/test/run-history.jsonl" {
+		t.Fatalf("run history path %q", got)
+	}
+}

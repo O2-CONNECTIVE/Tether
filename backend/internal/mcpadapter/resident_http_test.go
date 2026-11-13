@@ -91,10 +91,10 @@ func TestResidentDiscoveryHasCatalogButNoAuthority(t *testing.T) {
 		t.Fatal(string(reply.Body))
 	}
 	tools := result["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 7 {
+	if len(tools) != 8 {
 		t.Fatal(len(tools))
 	}
-	expected, _ := json.Marshal(residentCatalog(true, true, true, true))
+	expected, _ := json.Marshal(residentCatalog(true, true, true, true, true))
 	actual, _ := json.Marshal(tools)
 	if !reflect.DeepEqual(expected, actual) {
 		t.Fatal("catalog drift")

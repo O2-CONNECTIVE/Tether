@@ -20,6 +20,7 @@ public struct Feed {
     private var lastSource: UInt64 = 0
     private var nextID: UInt64 = 1
     private var awaitingReceipt: (id: UInt64, intent: String)?
+    public private(set) var runAllowedUntil: UInt64?
     public init() {}
     // Admission never resumes. Collection has a separate, monotonic trust gate.
     public mutating func fail(_ code: String = "protocol-invalid") {
@@ -43,11 +44,20 @@ public struct Feed {
     }
     public func can(_ intent: String, at now: UInt64) -> Bool {
         guard fresh(at: now), !closing, pending == nil, awaitingReceipt == nil, let o = observation else { return false }
+        if intent == "allow" { return o.standby == "on" }
+        if intent == "deny" { return o.standby == "on" } // offered even if this view shows none
         return intent == "on" ? o.canOn : intent == "off" && o.canOff
+    }
+    public func runAllowed(at now: UInt64) -> Bool {
+        guard !fault, !closed, let o = observation, o.standby == "on", let until = runAllowedUntil else { return false }
+        return now < until
     }
     public mutating func command(_ intent: String, at now: UInt64) -> String? {
         guard can(intent, at: now), let o = observation, nextID < 9_007_199_254_740_991 else { return nil }
-        let id = nextID; nextID += 1; pending = (id, intent); awaitingReceipt = (id, intent)
+        let id = nextID; nextID += 1
+        let receiptIntent = intent == "allow" ? "allow-run" : intent == "deny" ? "deny-run" : intent
+        if intent == "on" || intent == "off" { pending = (id, intent) }
+        awaitingReceipt = (id, receiptIntent)
         return "\(intent) \(id) \(o.revision)\n"
     }
     public mutating func ingest(_ data: Data, at now: UInt64) {
@@ -72,7 +82,7 @@ public struct Feed {
             let keys = kind == "status" ? ["protocolVersion", "type", "sourceContinuousMs", "snapshot"] : kind == "closed" ? ["protocolVersion", "type", "sourceContinuousMs", "outcome"] : ["protocolVersion", "type", "receipt"]
             let root = try Object(value, keys)
             guard try root.number("protocolVersion") == 1 else { throw Invalid.input }
-            if kind == "receipt" { try receiveReceipt(root.fields["receipt"]!) }
+            if kind == "receipt" { try receiveReceipt(root.fields["receipt"]!, at: now) }
             else {
                 let source = try root.number("sourceContinuousMs")
                 guard source <= now, source >= lastSource, now-source < 3000 else { throw Invalid.input }
@@ -131,13 +141,15 @@ public struct Feed {
             return try t.number("requestId") == p.id && t.text("intent", ["on"]) == "on" && t.text("outcome", ["pending"]) == "pending"
         } catch { return false }
     }
-    private mutating func receiveReceipt(_ value: Value) throws {
+    private mutating func receiveReceipt(_ value: Value, at now: UInt64) throws {
         let r = try Object(value, ["protocolVersion", "requestId", "intent", "disposition"])
         guard try r.number("protocolVersion") == 1, let p = awaitingReceipt,
-              try r.number("requestId") == p.id, try r.text("intent", ["on", "off"]) == p.intent else { throw Invalid.input }
+              try r.number("requestId") == p.id, try r.text("intent", ["on", "off", "allow-run", "deny-run"]) == p.intent else { throw Invalid.input }
         let disposition = try r.text("disposition", ["accepted", "rejected", "stale", "unknown"])
         if disposition == "unknown" { invalidateCleanup("owner-result-unknown"); throw Invalid.input }
         awaitingReceipt = nil
+        if disposition == "accepted", p.intent == "allow-run" { runAllowedUntil = now + 900_000 }
+        if disposition == "accepted", p.intent == "deny-run" { runAllowedUntil = nil }
         // Receipts never confirm ON/OFF. Only a correlated owner transition does.
         // A rejected/stale receipt confirms no dispatch and allows an explicit retry.
         if disposition == "rejected" || disposition == "stale" { pending = nil }
@@ -155,6 +167,7 @@ public struct Feed {
                   !caller.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw Invalid.input }
         } else if case .null? = s.fields["caller"] {} else { throw Invalid.input }
         let standby = try s.text("standby", ["off", "on", "stopping", "unknown"])
+        if standby != "on" { runAllowedUntil = nil }
         let registration = try s.text("registration", ["disconnected", "connecting", "authenticated", "unknown"])
         let work = try s.text("work", ["idle", "preparing", "running", "stopping", "unknown"])
         let cleanup = try s.text("cleanup", ["confirmed", "pending", "unknown"])
