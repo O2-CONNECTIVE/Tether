@@ -282,7 +282,13 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
 - **再接続から24時間を超えると `/mcp` が403になる。** Managed OAuth経由のassertionは、`iat` が最初の認証時刻のまま、`exp` だけがaccess tokenの更新（10分）で延びる。gatewayは `exp - iat` が24時間を超えるassertionを拒否する（`MaxTokenLifetime`）。観測値は `exp - iat` が142540秒で、再接続後は674秒。Accessのgrant sessionは1週間の設定なので、現状は24時間ごとに再接続が要る。
 - **gatewayは拒否の理由を記録しない。** 上の原因は、gatewayの応答本文（`the Cloudflare Access assertion is not valid`）と、assertionのclaim名・判定結果だけを取り出して特定した。
 - **最初の呼出しが `Resident catalog only` で拒否された。** 同じ会話の2回目の呼出しは通った。1回目の送信から約5秒後に、常駐が `connecting` へ落ちて約6秒で `authenticated` へ戻っている。因果は未調査。
-- **MCP sessionの上限（1名4件）に実ChatGPTが当たる。** ChatGPTは呼出しごとに新しいsessionを作るとみられ、待機ONの1周期で2〜3回呼び出すと429になった。項目2が通らない直接の原因で、G1の「429を解消」に当たる。何回目で429になるかは一定せず（2回の後、3回の後、待機OFF中は1回目）、内訳は未調査。
+- **MCP sessionの上限（1名4件）に実ChatGPTが当たる。** 項目2が通らない直接の原因で、G1の「429を解消」に当たる。gatewayの入口で要求の種類とsessionの発行だけを数えて確かめた（session IDは短いhashで照合）。
+  - ChatGPTはtool callのたびに `initialize` → `notifications/initialized` → `tools/call` を送り、毎回新しいsessionを受け取る。`DELETE` は送らない。1回のtool callが1件のsessionを消費する。
+  - 同じ応答の中の2回目以降は、session headerなしの `tools/call` を先に送って400を受け、そのあと `initialize` し直す。満杯のときは、このheaderなしの要求に429が返る。
+  - 同じ接続世代で順に5回呼ぶと、4回目まで通り、5回目が429になった。入れ替え（PR #353）は世代が現行と異なるsessionだけが対象なので、同じ世代のsessionは無通信30分まで残る。
+  - 待機OFFの間は接続世代がなく、入れ替えが働かない。前の世代のsessionで満杯なら、1回目から429になる（項目4の観測）。
+  - 受入のときは3回の後に429になった。入れ替えの対象外のsessionが1件残っていたとみられるが、種類は確かめていない。約20分後の計測では4回通っている。
+- 待機を入れ直した直後の `tether_run_command` が1回、`busy_or_refused`（`owner_cleanup` は `unknown`）で拒否された。直前の周期で、実行中のコマンドを待機OFFで止めている。原因は未調査。
 - **待機を入れ直すと、前の周期の `request_id` は `not_found` になる。** 429を避けるために待機を入れ直すと、実行済みの結果を読めなくなる。
 - ChatGPTの確認ダイアログは、同じツールでも出る回と出ない回があった。
 - Workerのrelayは300秒で切れるため、常駐は1回290秒以内で起動し直した。待機が再接続をまたいでも、許可は有効なままコマンドが実行された。
@@ -313,7 +319,7 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
 ## 未決・未確認
 
 - ChatGPT側のtool callの時間上限と、書込み系ツールへの確認表示の有無。
-- ChatGPTがsessionを閉じるかどうか、404を受けて接続を開始し直すかどうか（実接続で起きた429の原因の確定）。
+- ChatGPTはsessionを閉じず、tool callのたびに接続を開始し直す（2026-11-13に確認、「実機受入の記録」）。同じ世代のsessionをどう空けるかは未裁定。404を受けたときの挙動は未確認。
 - 新しいsessionから旧世代の結果を読めるようにするかどうか（「session上限の429」の残る課題）。
 - 作業rootをGUIで選べるようにするかどうか（[#359](https://github.com/O2-CONNECTIVE/Tether/issues/359)）。初版は既存のローカル構成を使います。
 - 許可の既定時間。上限は15分で実装しました（未裁定）。
