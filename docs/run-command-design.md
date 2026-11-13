@@ -231,6 +231,7 @@ build済みのappを渡すことになり、OSによる起動の制止と、発�
 - 作業の結果は接続世代ごとに照会するため、入れ替えたsessionが始めた作業は、同じ世代の別のsessionから照会できます。
 - 発見専用session、承認済みrouteに束縛されたsession、他の主体のsessionは入れ替えません。待機OFFの間の接続開始（発見専用）は何も入れ替えず、満杯なら429のままです。上限4件と無通信30分は変えていません。
 - 同時に生きているsessionは4件までですが、受け付ける接続開始の回数には上限がなくなります。
+- 実機で確認済みです（2026-11-13、`6a5a46d` のbuild、実ChatGPT）。同じ世代で6回呼び出して429は0件で、最初のsessionが始めた作業の結果を後のsessionから最後まで照会できました（受入の項目2）。
 - 残る制約（敵対的レビュー、2026-11-13）。認可の境界を越える経路は見つかっていません。
   - 同じ主体が別のクライアントでsessionを使い続けている場合、もう一方のクライアントが4回呼び出すと、そのsessionが終了して次の要求が404になります。接続を開始し直せば復帰でき、作業記録は失われません。
   - 同じ主体の4件のsessionが同時に要求を処理している間に5件目の接続開始が来ると、処理中の1件の応答が失われます。作業は始まっているので、同じ `request_id` で照会できます。
@@ -255,7 +256,7 @@ build済みのappを渡すことになり、OSによる起動の制止と、発�
 | 4c-1 | gatewayとMCPに `tether_run_command` を追加。引数の検査、署名する範囲、同じ要求IDの照合。状態照会と取消はgatewayの試験で確認 | 4b |
 | 4c-2 | MCPからMacの実行・回収までを通す結合試験。出力の読取と解放を含む既存ツールとの結合。**未実施。** CIの実producerのfixtureは、gatewayの `/mcp` が観測専用で実行のbackendにつながっておらず、そのままでは `tether_run_command` を通せない | 4c-1 |
 | 5 | 開発GUIに許可の切替とコマンド表示。pipeの入口。source試験まで。実機では、待機ONで `allow` が受理されること（CLIで駆動）と、実行したコマンドがGUIに表示されることを確認（2026-11-13、下の記録） | 3 |
-| 6 | 実機受入。**項目1・3・6は通過、項目2は未通過、項目4・5は一部だけ確認（2026-11-13、下の記録）** | 4c-2、5 |
+| 6 | 実機受入。**項目1・2・3・6は通過、項目4・5は一部だけ確認（2026-11-13、下の記録）** | 4c-2、5 |
 
 - 2〜4は認可の境界を変えます。独立レビューを通し、統合の判断は利用者に上げます。1〜3は利用者の指示で統合しました（2026-11-12）。4c-1でgatewayが汎用のintentを送るようになりました。Mac側で許可をONにする入口（5）がないため、Macは汎用コマンドを実行しません。
 - 6の実機受入が済むまで、機能を有効にする統合はしません。
@@ -280,7 +281,7 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
 | 項目 | 結果 |
 | --- | --- |
 | 1 | 通過。ただし作業ディレクトリは空で、実リポジトリの `git status` ではない。`pwd && uname -s && echo tether-acceptance-1`、`cwd` は `.`、`timeout_ms` は30000。ChatGPTが受け取った結果は、stdout 3行、`exit.code` 0、`command_cleanup`・`owner_cleanup`・`gateway_cleanup` がいずれも `confirmed`。常駐の作業状態は `preparing` → `running` → `idle`（回収 `confirmed`） |
-| 2 | **未通過。** `for i in 1 2 3 4 5 6 7 8; do echo tick-$i; sleep 4; done; echo done-2`（`timeout_ms` 60000）を2回試した。途中の状態照会は `running` で、`next_cursor` は14 → 42（1回目）、35（2回目）と進み、stdoutは `tick-1` から順に届いた。完了後の状態照会はどちらも `RATE_LIMITED: too many MCP sessions for this principal` で失敗し、ChatGPTは終了コードと回収の結果を受け取れなかった。Macの常駐は2回とも約31秒実行して `idle`（回収 `confirmed`）へ戻っている |
+| 2 | 通過（gatewayを `6a5a46d` のbuildへ差し替えた後の再試験）。同じコマンドを実行し、約13秒おきに状態照会を5回、合計6回呼び出して、すべて成功した。`next_cursor` は28 → 49 → 63と進み、3回目の照会で `phase` が `finished`、`command_phase` が `exited`、`terminal` が `true`。`exit.code` 0、3つのcleanupが `confirmed`、stdoutは `tick-1`〜`tick-8` と `done-2` の63バイト。gatewayの入口では6件のsessionが発行され、429は0件だった。差し替える前（`bc7018f` のbuild）は未通過だった: `for i in 1 2 3 4 5 6 7 8; do echo tick-$i; sleep 4; done; echo done-2`（`timeout_ms` 60000）を2回試した。途中の状態照会は `running` で、`next_cursor` は14 → 42（1回目）、35（2回目）と進み、stdoutは `tick-1` から順に届いた。完了後の状態照会はどちらも `RATE_LIMITED: too many MCP sessions for this principal` で失敗し、ChatGPTは終了コードと回収の結果を受け取れなかった。Macの常駐は2回とも約31秒実行して `idle`（回収 `confirmed`）へ戻っている |
 | 3 | 通過。`echo start-3; sleep 120; echo never-3` を開始し、約80秒後に `tether_fixed_cancel`。取消の応答は取消前の状態（`running`、`stop` は `none`）だった。常駐は `stopping` から3秒で `idle`（回収 `confirmed`）へ戻り、Macに `sleep 120` のprocessは残らなかった。続く状態照会は `phase` が `finished`、`command_phase` と `stop` が `canceled`、`terminal` が `true`、3つのcleanupが `confirmed`、stdoutは `start-3` だけ |
 | 4 | **一部。** `echo start-4; sleep 60; echo never-4` の実行中に待機OFFにすると、常駐は2秒で `off`・`idle`（回収 `confirmed`）になり、`sleep 60` のprocessは残らなかった。待機OFFのまま送った新規要求は実行されなかったが、返ったのは待機OFFの拒否ではなく上と同じ `RATE_LIMITED` で、待機OFFによる拒否の応答は観測できていない |
 | 5 | **一部。** 許可OFF: 実行の応答は `pending` で、状態照会は `error` が `admission_refused_or_uncertain`、`phase` が `finished`（`terminal` は `false` のまま）。常駐の作業状態は変わらず、実行記録にも載らなかった。作業root外の `cwd`（`/etc`）: `invalid_run_scope`。上限超過のtimeout（240001）: ChatGPT側のschema検証で拒否され、gatewayには届いていない。期限切れと署名の不一致は実機では未実施（source試験だけ） |
