@@ -246,7 +246,7 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 		rt = nil
 	}
 	if full && resident != nil {
-		if _, s := g.oldestSupersededLocked(p, resident.generation); s != nil {
+		if _, s := g.replaceableLocked(p, resident.generation); s != nil {
 			full = false
 		}
 	}
@@ -300,7 +300,7 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 		if g.resident.control.ResidentGeneration(resident.entry.enrollment.HostLabel, p.label) != resident.generation {
 			ok = false
 		} else if p.sessions >= MaxSessionsPerPrincipal {
-			if old, s := g.oldestSupersededLocked(p, resident.generation); s != nil {
+			if old, s := g.replaceableLocked(p, resident.generation); s != nil {
 				g.dropLocked(old, s)
 			}
 		}
@@ -381,24 +381,28 @@ func (g *Gateway) dropLocked(id string, s *session) {
 	}
 }
 
-// oldestSupersededLocked returns p's least recently used session that can no longer
-// start work once a resident session of generation current exists: a resident
-// session of another generation. Discovery sessions and sessions bound to an
-// approved route are never returned; they keep the bound. A superseded resident
-// session may still read results of its own generation, so initialize replaces
-// one only when the principal is at MaxSessionsPerPrincipal.
-func (g *Gateway) oldestSupersededLocked(p *principal, current string) (string, *session) {
+// replaceableLocked returns the resident session of p that a resident
+// initialize at MaxSessionsPerPrincipal ends to make room: the least recently
+// used one of another generation, which can no longer start work, or else the
+// least recently used one of generation current. Resident work is read by
+// generation, not by session, so a later session of the same generation still
+// reads it. Discovery sessions and sessions bound to an approved route are
+// never returned; they keep the bound.
+func (g *Gateway) replaceableLocked(p *principal, current string) (string, *session) {
 	var id string
-	var oldest *session
+	var victim *session
+	victimSuperseded := false
 	for k, s := range g.sessions {
-		if s.owner != p || s.route != nil || s.resident == nil || s.resident.generation == current {
+		if s.owner != p || s.route != nil || s.resident == nil {
 			continue
 		}
-		if oldest == nil || s.lastUsed.Before(oldest.lastUsed) {
-			id, oldest = k, s
+		superseded := s.resident.generation != current
+		if victim == nil || (superseded && !victimSuperseded) ||
+			(superseded == victimSuperseded && s.lastUsed.Before(victim.lastUsed)) {
+			id, victim, victimSuperseded = k, s, superseded
 		}
 	}
-	return id, oldest
+	return id, victim
 }
 
 func (g *Gateway) expireLocked() {

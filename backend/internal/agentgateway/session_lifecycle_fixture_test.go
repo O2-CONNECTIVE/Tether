@@ -105,6 +105,13 @@ func (f *lifecycleHTTP) open(t *testing.T) string {
 	return sid
 }
 
+// tick advances the gateway clock so "least recently used" is unambiguous.
+func (f *lifecycleHTTP) tick() {
+	f.g.mu.Lock()
+	f.now = f.now.Add(time.Second)
+	f.g.mu.Unlock()
+}
+
 func (f *lifecycleHTTP) count(t *testing.T, want int) {
 	t.Helper()
 	f.g.mu.Lock()

@@ -16,7 +16,9 @@ func TestResidentCatalogAndBoundSessionsShareFourSlots(t *testing.T) {
 	}
 	catalog := []string{f.open(t), f.open(t)}
 	f.control.set(f.s.generation)
-	bound := []string{f.open(t), f.open(t)}
+	bound := []string{f.open(t)}
+	f.tick()
+	bound = append(bound, f.open(t))
 	w := readWork(f.s, strings.Repeat("1", 32))
 	f.s.entry.current = w // synthetic active work, not a running command
 	tombID := strings.Repeat("2", 32)
@@ -24,13 +26,17 @@ func TestResidentCatalogAndBoundSessionsShareFourSlots(t *testing.T) {
 	releaseListWork(t, f.s, tombID, true)
 	tomb := f.s.entry.tombstones[tombID]
 	f.count(t, 4)
-	full := f.call(http.MethodPost, "", lifecycleInit)
-	if full.Code != 429 || full.Header().Get(HeaderSession) != "" {
-		t.Fatal("full initialization", full.Code)
+	// At the bound a resident initialize takes the slot of the least recently
+	// used resident session. Catalog sessions share the bound but keep theirs.
+	f.tick()
+	replacement := f.open(t)
+	if got := f.call(http.MethodPost, bound[0], lifecycleList); got.Code != 404 {
+		t.Fatal("least recently used resident session survived", got.Code)
 	}
+	bound[0] = replacement
 	for _, sid := range append(catalog, bound...) {
 		if got := f.call(http.MethodPost, sid, lifecycleList); got.Code != 200 {
-			t.Fatal("capacity rejected existing session", got.Code)
+			t.Fatal("capacity ended a session that must be kept", got.Code)
 		}
 	}
 	// A resident catalog refusal does not upgrade or silently evict its SID.
@@ -94,7 +100,9 @@ func TestResidentConcurrentInitializeNeverExceedsFourSlots(t *testing.T) {
 					t.Fatalf("unexpected initialize status %d", code)
 				}
 			}
-			if accepted != 4 {
+			// Resident initializes at the bound replace one another, so more
+			// than four may be admitted; four live sessions is the invariant.
+			if accepted < 4 || (!bound && accepted != 4) {
 				t.Fatalf("accepted %d sessions", accepted)
 			}
 			f.count(t, 4)
@@ -112,9 +120,12 @@ func TestResidentIdleExpiryIsLazyAndPreservesRecentlyUsedSID(t *testing.T) {
 	f.now = f.now.Add(SessionIdle)
 	f.g.mu.Unlock()
 	// Equality is not expiry, and a rejected initialize cannot silently evict.
+	// The resident is away for this request: a catalog initialize replaces nothing.
+	f.control.set("")
 	if res := f.call(http.MethodPost, "", lifecycleInit); res.Code != 429 {
 		t.Fatal(res.Code)
 	}
+	f.control.set(f.s.generation)
 	if res := f.call(http.MethodPost, kept, lifecycleList); res.Code != 200 {
 		t.Fatal(res.Code)
 	}

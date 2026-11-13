@@ -219,20 +219,75 @@ func TestNoSessionEndsWithoutAdmittingOne(t *testing.T) {
 	})
 }
 
-// Replacement exists only to admit a session that can work, and only at the
-// cost of a resident session whose generation is gone. Sessions that can still
-// start work, discovery sessions, and requests that would only add a discovery
-// session keep the bound: the caller gets 429 and nothing is ended on its behalf.
-func TestSessionBoundHoldsWithoutSupersededSession(t *testing.T) {
-	t.Run("all sessions are of the current generation", func(t *testing.T) {
-		c := newCapacityRig(t)
-		c.control.set(generationA)
-		ids := c.fill()
-		if status := c.initializeStatus(); status != http.StatusTooManyRequests {
-			t.Fatalf("initialize at the bound = %d, want 429", status)
+// A real client (ChatGPT, measured 2026-11-13) opens a new session for every
+// tool call and never deletes one. Work is read by generation, not by session,
+// so an abandoned session of the current generation holds nothing but a slot.
+// It must not lock the principal out of its fifth call until it idles out: the
+// least recently used one makes room, and only that one.
+func TestSessionPerCallClientIsNotLockedOutWithinOneGeneration(t *testing.T) {
+	c := newCapacityRig(t)
+	c.control.set(generationA)
+	ids := c.fill()
+
+	if status := c.initializeStatus(); status != http.StatusOK {
+		t.Fatalf("fifth initialize in one generation = %d, want 200", status)
+	}
+	c.assertReplacedOnlyOldest(ids)
+}
+
+// Within one generation too, a session a client still polls on outlives an
+// abandoned newer one.
+func TestReplacementWithinGenerationFollowsLastUse(t *testing.T) {
+	c := newCapacityRig(t)
+	c.control.set(generationA)
+	ids := c.fill()
+	if !c.alive(ids[0]) {
+		t.Fatal("first session not usable")
+	}
+
+	if status := c.initializeStatus(); status != http.StatusOK {
+		t.Fatalf("initialize = %d, want 200", status)
+	}
+	if !c.alive(ids[0]) {
+		t.Fatal("recently used session was replaced")
+	}
+	if c.alive(ids[1]) {
+		t.Fatal("least recently used session survived")
+	}
+}
+
+// Another member's sessions are older, whether discovery sessions or resident
+// sessions of the same generation, but they are not this principal's to end.
+func TestReplacementWithinGenerationNeverEndsAnotherPrincipalsSession(t *testing.T) {
+	c := newCapacityRig(t)
+	other := token(t, subjects[1])
+	var theirs []string
+	for i := 0; i < agentgateway.MaxSessionsPerPrincipal; i++ {
+		if i == agentgateway.MaxSessionsPerPrincipal/2 {
+			c.control.set(generationA)
 		}
-		c.assertAllAlive(ids)
-	})
+		theirs = append(theirs, c.open(other))
+		c.tick()
+	}
+	ids := c.fill()
+
+	if status := c.initializeStatus(); status != http.StatusOK {
+		t.Fatalf("initialize = %d, want 200", status)
+	}
+	c.assertReplacedOnlyOldest(ids)
+	for _, sid := range theirs {
+		if res := c.do(http.MethodPost, other, sid, rpc(1, "tools/list", nil), nil); res.status != http.StatusOK {
+			t.Fatal("another principal's session was replaced")
+		}
+	}
+}
+
+// Replacement exists only to admit a session that can work, and only at the
+// cost of one of the principal's own resident sessions. Discovery sessions,
+// sessions bound to an approved route, and requests that would only add a
+// discovery session keep the bound: the caller gets 429 and nothing is ended
+// on its behalf.
+func TestSessionBoundHoldsWithoutReplaceableSession(t *testing.T) {
 	// A catalog client may still be listing tools on a discovery session, so a
 	// rejected initialize must not silently end one.
 	t.Run("the principal holds only discovery sessions", func(t *testing.T) {
@@ -243,24 +298,6 @@ func TestSessionBoundHoldsWithoutSupersededSession(t *testing.T) {
 			t.Fatalf("initialize over discovery sessions = %d, want 429", status)
 		}
 		c.assertAllAlive(ids)
-	})
-	t.Run("only another principal holds discovery sessions", func(t *testing.T) {
-		c := newCapacityRig(t)
-		other := token(t, subjects[1])
-		var theirs []string
-		for i := 0; i < agentgateway.MaxSessionsPerPrincipal; i++ {
-			theirs = append(theirs, c.open(other))
-		}
-		c.control.set(generationA)
-		c.fill()
-		if status := c.initializeStatus(); status != http.StatusTooManyRequests {
-			t.Fatalf("initialize at the bound = %d, want 429", status)
-		}
-		for _, sid := range theirs {
-			if res := c.do(http.MethodPost, other, sid, rpc(1, "tools/list", nil), nil); res.status != http.StatusOK {
-				t.Fatal("another principal's session was replaced")
-			}
-		}
 	})
 	t.Run("the resident disconnected", func(t *testing.T) {
 		c := newCapacityRig(t)
