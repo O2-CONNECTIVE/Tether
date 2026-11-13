@@ -397,6 +397,14 @@ func (g *Gateway) ResidentCollected(proof ResidentCollectionProof) error {
 	w.collectionSeen = true
 	w.ownerCleanup = proof.Cleanup
 	close(w.collected)
+	// A proof that arrives after runResident stopped waiting settles the work
+	// on the same condition. Its connection is gone, so nothing is rotated.
+	if w.done && w.ownerCleanup == "confirmed" && w.gatewayCleanup == "confirmed" {
+		w.phase = "finished"
+		if e.current == w {
+			e.current = nil
+		}
+	}
 	return nil
 }
 func validCollectionSignature(key ssh.PublicKey, proof ResidentCollectionProof) bool {
