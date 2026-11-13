@@ -257,7 +257,7 @@ build済みのappを渡すことになり、OSによる起動の制止と、発�
 | 4a | intentを通信路の両端に通す。gatewayの送信関数とMacの受信。Macの受付は拒否のまま | 3 |
 | 4b | Mac側の受付と実行。実行層（hashの照合、`cwd` の確認）、受付（許可の確認）、登録と回収の署名 | 4a |
 | 4c-1 | gatewayとMCPに `tether_run_command` を追加。引数の検査、署名する範囲、同じ要求IDの照合。状態照会と取消はgatewayの試験で確認 | 4b |
-| 4c-2 | MCPからMacの実行・回収までを通す結合試験。出力の読取と解放を含む既存ツールとの結合。**未実施。** CIの実producerのfixtureは、gatewayの `/mcp` が観測専用で実行のbackendにつながっておらず、そのままでは `tether_run_command` を通せない | 4c-1 |
+| 4c-2 | MCPからMacの実行・回収までを通す結合試験。出力の読取と解放を含む既存ツールとの結合。**CIで通過（2026-11-13、`7209b43`、Actual producerのCLI laneのnormalとrace）。** 実producerのfixtureに、許可なしの拒否（`admission_refused_or_uncertain`、markerのfileができない）、`allow` の受理後の実行（作業rootの下の子dirを `cwd` に指定、exit 0、回収3つが `confirmed`、stdoutにそのdirの実path）、`tether_fixed_read_output` と `tether_fixed_release`（解放後は `result_released`）を足した。製品コードは変えていない。`allow` はforegroundの方言にしかないため、JSON laneでは動かさない。期限切れ、作業root外の `cwd`、署名の不一致、実行中の取消と待機OFFはこの試験の範囲外（source試験と実機受入の記録が根拠）。以前この行にあった「fixtureの `/mcp` が観測専用で実行のbackendにつながっていない」は誤りで、`/mcp` は実gatewayへそのまま渡っている | 4c-1 |
 | 5 | 開発GUIに許可の切替とコマンド表示。pipeの入口。source試験まで。実機では、待機ONで `allow` が受理されること（CLIで駆動）と、実行したコマンドがGUIに表示されることを確認（2026-11-13、下の記録） | 3 |
 | 6 | 実機受入。**項目1・2・3・4・6は通過。項目5は実機で確かめられる範囲を確認し、残りはsource試験で閉じた（2026-11-13、下の記録）** | 4c-2、5 |
 
