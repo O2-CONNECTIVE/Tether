@@ -54,6 +54,26 @@ type Standby struct {
 	lastRequest   uint64
 	cycle         *standbyCycle
 	closed        bool
+	// unsent is the one signed cleanup proof a closed control could not carry.
+	// It outlives the cycle and is lost with the process.
+	unsent struct {
+		sync.Mutex
+		proof []byte
+	}
+}
+
+// collect sends the cleanup proof and keeps one it could not write. The
+// gateway refuses this member's next work until it has that proof, so consume
+// sends it over the next authenticated control.
+func (s *Standby) collect(lease *agenttransport.ResidentSourceLease, i agenttransport.ResidentFixedIntent, result error) {
+	if lease.Collected(i, result) == nil {
+		return
+	}
+	if proof := lease.Unsent(); proof != nil {
+		s.unsent.Lock()
+		s.unsent.proof = proof
+		s.unsent.Unlock()
+	}
 }
 
 func LoadStandby(ctx context.Context, path string) (*Standby, error) {
@@ -369,6 +389,14 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 		}
 	}
 	s.mu.Unlock()
+	s.unsent.Lock()
+	proof := s.unsent.proof
+	s.unsent.Unlock()
+	if proof != nil && lease.Resend(proof) == nil {
+		s.unsent.Lock()
+		s.unsent.proof = nil
+		s.unsent.Unlock()
+	}
 	var source *FixedSource
 	var err error
 	if s.factory == nil {
@@ -419,7 +447,7 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 		last := c.intent
 		c.mu.Unlock()
 		if last != nil {
-			_ = lease.Collected(*last, collected)
+			s.collect(lease, *last, collected)
 		}
 	})
 	readStopped := make(chan struct{})
@@ -601,7 +629,7 @@ func (s *Standby) monitor(c *standbyCycle) {
 					collection = ErrStandbyUnknown
 				}
 			}
-			_ = lease.Collected(*intent, collection)
+			s.collect(lease, *intent, collection)
 		}
 		if stopForUnknown {
 			c.cancel()
