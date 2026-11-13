@@ -27,8 +27,16 @@ type residentRunCall struct {
 	scope          ResidentRunScope
 }
 type residentControlFixture struct {
-	begin chan struct{}
-	runs  chan residentRunCall
+	begin   chan struct{}
+	runs    chan residentRunCall
+	rotated chan string // request IDs reported as the last collected of a generation
+}
+
+func (c *residentControlFixture) RotateResident(_, _, _, id string) {
+	select {
+	case c.rotated <- id:
+	default:
+	}
 }
 
 func (c *residentControlFixture) BeginResidentRun(ctx context.Context, _ string, _ string, generation, id string, deadline time.Time, scope ResidentRunScope) error {
@@ -87,7 +95,7 @@ func residentEvidenceRig(t *testing.T) (*Gateway, *residentSession, ssh.Signer, 
 	if e != nil {
 		t.Fatal(e)
 	}
-	control := &residentControlFixture{begin: make(chan struct{}), runs: make(chan residentRunCall, 8)}
+	control := &residentControlFixture{begin: make(chan struct{}), runs: make(chan residentRunCall, 8), rotated: make(chan string, 8)}
 	e = g.ConfigureResident("wss://example.test/register", control, []ResidentEnrollment{{HostLabel: "host1", PrincipalLabel: "member1", HostKey: host.PublicKey().Marshal()}})
 	if e != nil {
 		t.Fatal(e)

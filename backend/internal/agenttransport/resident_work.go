@@ -147,11 +147,44 @@ func (s *ResidentSourceLease) Collected(i ResidentFixedIntent, originalResult er
 	if e != nil {
 		return e
 	}
+	defer s.ReleaseWork(i)
 	b := proof.Binding
 	msg := residentJSON(map[string]string{"type": "resident_collected", "generation": b.Generation, "sequence": strconv.FormatUint(b.Sequence, 10), "request_id": b.RequestID, "cleanup": cleanup, "signature": b64.EncodeToString(sig)})
 	ctx, stop := context.WithTimeout(s.receiver.Context(), 5*time.Second)
 	defer stop()
 	e = residentWrite(ctx, s.receiver.ws, msg)
-	s.ReleaseWork(i)
+	s.mu.Lock()
+	if e != nil {
+		s.unsent = append([]byte(nil), msg...)
+	} else {
+		s.unsent = nil
+	}
+	s.mu.Unlock()
 	return e
+}
+
+// Unsent returns the signed cleanup proof whose write failed, or nil.
+func (s *ResidentSourceLease) Unsent() []byte {
+	if s == nil || s.self != s {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.unsent...)
+}
+
+// Resend writes a proof kept from an earlier connection of the same host.
+func (s *ResidentSourceLease) Resend(proof []byte) error {
+	if s == nil || s.self != s || len(proof) == 0 {
+		return ErrRefused
+	}
+	s.mu.Lock()
+	valid := !s.finishing && !s.finished
+	s.mu.Unlock()
+	if !valid {
+		return ErrRefused
+	}
+	ctx, stop := context.WithTimeout(s.receiver.Context(), 5*time.Second)
+	defer stop()
+	return residentWrite(ctx, s.receiver.ws, proof)
 }

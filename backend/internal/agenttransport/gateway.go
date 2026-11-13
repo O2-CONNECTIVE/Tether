@@ -58,6 +58,7 @@ type Handler struct {
 	registrar       Registrar
 	residentSigners map[string]ssh.Signer
 	residents       map[string]*residentPeer
+	residentLast    map[string]residentLastWork
 	budgets         Budgets
 	clock           func() time.Time
 	slots           chan struct{}
@@ -71,6 +72,13 @@ type Handler struct {
 	inflight   int       // admitted requests whose ServeHTTP has not returned
 	idle       chan struct{}
 	idleClosed bool
+}
+
+// residentLastWork is the last intent of a closed control with that control's
+// binding: what a cleanup proof sent over a later control is verified against.
+type residentLastWork struct {
+	binding residentBinding
+	intent  ResidentFixedIntent
 }
 
 // admission is one admitted request's reservation. tracked is set, under

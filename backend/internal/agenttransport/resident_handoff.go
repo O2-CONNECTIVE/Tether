@@ -22,6 +22,7 @@ type ResidentSourceLease struct {
 	done                chan struct{}
 	replies             map[string]bool
 	collections         map[string]bool
+	unsent              []byte
 }
 
 // NewResidentConnector opts into EXCLUSIVE owning handoff. The existing

@@ -378,26 +378,57 @@ func ResidentCollectionTranscript(p ResidentCollectionProof) []byte {
 }
 func (g *Gateway) ResidentCollected(proof ResidentCollectionProof) error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	w, rotate, err := g.residentCollectedLocked(proof)
+	g.mu.Unlock()
+	if rotate {
+		// The caller may be the reader of the very control this closes.
+		go g.rotateResident(w)
+	}
+	return err
+}
+
+// residentSettleLocked decides a done work's phase from both cleanup results
+// and reports whether its whole generation is now collected.
+func (g *Gateway) residentSettleLocked(e *residentEntry, w *residentWork) bool {
+	if w.ownerCleanup == "confirmed" && w.gatewayCleanup == "confirmed" {
+		w.phase = "finished"
+		if e.current == w {
+			e.current = nil
+		}
+	} else {
+		w.phase = "unknown"
+	}
+	return g.residentGenerationCollectedLocked(e, w.binding.Generation)
+}
+func (g *Gateway) rotateResident(w *residentWork) {
+	if control, ok := g.resident.control.(interface {
+		RotateResident(string, string, string, string)
+	}); ok {
+		control.RotateResident(w.binding.Host, w.binding.Principal, w.binding.Generation, w.binding.RequestID)
+	}
+}
+func (g *Gateway) residentCollectedLocked(proof ResidentCollectionProof) (*residentWork, bool, error) {
 	if g.resident == nil {
-		return ErrRefused
+		return nil, false, ErrRefused
 	}
 	p := g.byLabel[proof.Binding.Principal]
 	e := g.resident.entries[p]
 	if e == nil {
-		return ErrRefused
+		return nil, false, ErrRefused
 	}
 	w := e.works[proof.Binding.RequestID]
 	key, err := ssh.ParsePublicKey(e.enrollment.HostKey)
 	b := proof.Binding
 	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Run != w.binding.Run || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, e.enrollment.HostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
-		return ErrRefused
+		return nil, false, ErrRefused
 	}
 	w.binding.Sequence = b.Sequence
 	w.collectionSeen = true
 	w.ownerCleanup = proof.Cleanup
 	close(w.collected)
-	return nil
+	// A proof that arrives after runResident stopped waiting settles the work
+	// exactly as runResident would have.
+	return w, w.done && g.residentSettleLocked(e, w), nil
 }
 func validCollectionSignature(key ssh.PublicKey, proof ResidentCollectionProof) bool {
 	var sig ssh.Signature
@@ -493,22 +524,10 @@ func (g *Gateway) runResident(entry *residentEntry, w *residentWork) {
 		w.ownerCleanup = "unknown"
 	}
 	w.done = true
-	if w.ownerCleanup == "confirmed" && gatewayCleanup == "confirmed" {
-		w.phase = "finished"
-		if entry.current == w {
-			entry.current = nil
-		}
-	} else {
-		w.phase = "unknown"
-	}
-	rotate := g.residentGenerationCollectedLocked(entry, w.binding.Generation)
+	rotate := g.residentSettleLocked(entry, w)
 	g.mu.Unlock()
 	if rotate {
-		if control, ok := g.resident.control.(interface {
-			RotateResident(string, string, string, string)
-		}); ok {
-			control.RotateResident(w.binding.Host, w.binding.Principal, w.binding.Generation, w.binding.RequestID)
-		}
+		g.rotateResident(w)
 	}
 }
 func (g *Gateway) executeResident(ctx context.Context, w *residentWork) {
