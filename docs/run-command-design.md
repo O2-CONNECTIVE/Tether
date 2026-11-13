@@ -234,6 +234,7 @@ build済みのappを渡すことになり、OSによる起動の制止と、発�
 - 待機OFFの間に作った発見専用sessionは、tool callを拒否したら、拒否の応答を返したうえで終了します（2026-11-13、利用者の裁定）。終了しないと、待機OFFの間に4回呼び出した時点で発見専用sessionだけで満杯になり、待機ONに戻しても無通信30分が切れるまで429が続くためです（敵対的レビューの指摘）。発見専用sessionを入れ替えの対象にしない裁定（2026-11-12）は変えていません。tool callの拒否まで進まない発見専用sessionは終了しないため、次の呼出し方では発見専用sessionで満杯になる経路が残ります: 接続開始だけで止める、`notifications/initialized` を送らずに呼ぶ、`tools/list` だけを繰り返す、解釈できない要求を送る、4件を並行に開く。実ChatGPTの呼出し順（接続開始 → `notifications/initialized` → tool call）では起きません。
 - 同時に生きているsessionは4件までですが、受け付ける接続開始の回数には上限がなくなります。
 - 実機で確認済みです（2026-11-13、`6a5a46d` のbuild、実ChatGPT）。同じ世代で6回呼び出して429は0件で、最初のsessionが始めた作業の結果を後のsessionから最後まで照会できました（受入の項目2）。
+- 待機OFFの間の拒否も実機で確認済みです（2026-11-13、`e1eb7c3` のbuild、実ChatGPT）。待機OFFのまま5回呼び出して、5回とも `Resident catalog only` の拒否が返り、429は0件でした。待機ONへ戻した後の呼出しも429にはなりませんでしたが、別の原因（`busy_or_refused`）で拒否されました（「実機受入の記録」）。
 - 残る制約（敵対的レビュー、2026-11-13）。認可の境界を越える経路は見つかっていません。
   - 同じ主体が別のクライアントでsessionを使い続けている場合、もう一方のクライアントが4回呼び出すと、そのsessionが終了して次の要求が404になります。接続を開始し直せば復帰でき、作業記録は失われません。
   - 同じ主体の4件のsessionが同時に要求を処理している間に5件目の接続開始が来ると、処理中の1件の応答が失われます。作業は始まっているので、同じ `request_id` で照会できます。
@@ -258,7 +259,7 @@ build済みのappを渡すことになり、OSによる起動の制止と、発�
 | 4c-1 | gatewayとMCPに `tether_run_command` を追加。引数の検査、署名する範囲、同じ要求IDの照合。状態照会と取消はgatewayの試験で確認 | 4b |
 | 4c-2 | MCPからMacの実行・回収までを通す結合試験。出力の読取と解放を含む既存ツールとの結合。**未実施。** CIの実producerのfixtureは、gatewayの `/mcp` が観測専用で実行のbackendにつながっておらず、そのままでは `tether_run_command` を通せない | 4c-1 |
 | 5 | 開発GUIに許可の切替とコマンド表示。pipeの入口。source試験まで。実機では、待機ONで `allow` が受理されること（CLIで駆動）と、実行したコマンドがGUIに表示されることを確認（2026-11-13、下の記録） | 3 |
-| 6 | 実機受入。**項目1・2・3・6は通過、項目4・5は一部だけ確認（2026-11-13、下の記録）** | 4c-2、5 |
+| 6 | 実機受入。**項目1・2・3・6は通過。項目4は停止と待機OFFの拒否まで確認し、待機ONへ戻した後の復帰が未通過。項目5は一部だけ確認（2026-11-13、下の記録）** | 4c-2、5 |
 
 - 2〜4は認可の境界を変えます。独立レビューを通し、統合の判断は利用者に上げます。1〜3は利用者の指示で統合しました（2026-11-12）。4c-1でgatewayが汎用のintentを送るようになりました。Mac側で許可をONにする入口（5）がないため、Macは汎用コマンドを実行しません。
 - 6の実機受入が済むまで、機能を有効にする統合はしません。
@@ -285,7 +286,7 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
 | 1 | 通過。ただし作業ディレクトリは空で、実リポジトリの `git status` ではない。`pwd && uname -s && echo tether-acceptance-1`、`cwd` は `.`、`timeout_ms` は30000。ChatGPTが受け取った結果は、stdout 3行、`exit.code` 0、`command_cleanup`・`owner_cleanup`・`gateway_cleanup` がいずれも `confirmed`。常駐の作業状態は `preparing` → `running` → `idle`（回収 `confirmed`） |
 | 2 | 通過（gatewayを `6a5a46d` のbuildへ差し替えた後の再試験）。同じコマンドを実行し、約13秒おきに状態照会を5回、合計6回呼び出して、すべて成功した。`next_cursor` は28 → 49 → 63と進み、3回目の照会で `phase` が `finished`、`command_phase` が `exited`、`terminal` が `true`。`exit.code` 0、3つのcleanupが `confirmed`、stdoutは `tick-1`〜`tick-8` と `done-2` の63バイト。gatewayの入口では6件のsessionが発行され、429は0件だった。差し替える前（`bc7018f` のbuild）は未通過だった: `for i in 1 2 3 4 5 6 7 8; do echo tick-$i; sleep 4; done; echo done-2`（`timeout_ms` 60000）を2回試した。途中の状態照会は `running` で、`next_cursor` は14 → 42（1回目）、35（2回目）と進み、stdoutは `tick-1` から順に届いた。完了後の状態照会はどちらも `RATE_LIMITED: too many MCP sessions for this principal` で失敗し、ChatGPTは終了コードと回収の結果を受け取れなかった。Macの常駐は2回とも約31秒実行して `idle`（回収 `confirmed`）へ戻っている |
 | 3 | 通過。`echo start-3; sleep 120; echo never-3` を開始し、約80秒後に `tether_fixed_cancel`。取消の応答は取消前の状態（`running`、`stop` は `none`）だった。常駐は `stopping` から3秒で `idle`（回収 `confirmed`）へ戻り、Macに `sleep 120` のprocessは残らなかった。続く状態照会は `phase` が `finished`、`command_phase` と `stop` が `canceled`、`terminal` が `true`、3つのcleanupが `confirmed`、stdoutは `start-3` だけ |
-| 4 | **一部。** `echo start-4; sleep 60; echo never-4` の実行中に待機OFFにすると、常駐は2秒で `off`・`idle`（回収 `confirmed`）になり、`sleep 60` のprocessは残らなかった。待機OFFのまま送った新規要求は実行されなかったが、返ったのは待機OFFの拒否ではなく上と同じ `RATE_LIMITED` で、待機OFFによる拒否の応答は観測できていない |
+| 4 | **一部。** `echo start-4; sleep 60; echo never-4` の実行中に待機OFFにすると、常駐は2秒で `off`・`idle`（回収 `confirmed`）になり、`sleep 60` のprocessは残らなかった。待機OFFのまま送った新規要求は実行されなかったが、返ったのは待機OFFの拒否ではなく上と同じ `RATE_LIMITED` で、待機OFFによる拒否の応答は観測できていない。**再試験（gatewayを `e1eb7c3` のbuildへ差し替えた後）:** 実行中の待機OFFは同じく2秒で停止した。待機OFFのまま5回呼び出すと、5回とも `Resident catalog only` の拒否が返り、429は0件で、実行記録にも載らなかった。待機ONと許可に戻した後の呼出しは、429ではなく `busy_or_refused` で拒否され、Macには届かなかった。約8分後に待機を入れ直しても同じで、gatewayのコンテナを再起動した後は1回目で通った（下の「受入の途中で分かったこと」） |
 | 5 | **一部。** 許可OFF: 実行の応答は `pending` で、状態照会は `error` が `admission_refused_or_uncertain`、`phase` が `finished`（`terminal` は `false` のまま）。常駐の作業状態は変わらず、実行記録にも載らなかった。作業root外の `cwd`（`/etc`）: `invalid_run_scope`。上限超過のtimeout（240001）: ChatGPT側のschema検証で拒否され、gatewayには届いていない。期限切れと署名の不一致は実機では未実施（source試験だけ） |
 | 6 | 通過。開発GUIに「全1件のうち直近1件」と、同じ時刻・ディレクトリ・コマンドが表示された。画面の読取はcodexのコンピュータユーズで行い、記録ファイルの内容と一致した |
 
@@ -305,7 +306,10 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
   - 同じ接続世代で順に5回呼ぶと、4回目まで通り、5回目が429になった。入れ替え（PR #353）は世代が現行と異なるsessionだけが対象なので、同じ世代のsessionは無通信30分まで残る。
   - 待機OFFの間は接続世代がなく、入れ替えが働かない。前の世代のsessionで満杯なら、1回目から429になる（項目4の観測）。
   - 受入のときは3回の後に429になった。入れ替えの対象外のsessionが1件残っていたとみられるが、種類は確かめていない。約20分後の計測では4回通っている。
-- 待機を入れ直した直後の `tether_run_command` が1回、`busy_or_refused`（`owner_cleanup` は `unknown`）で拒否された。直前の周期で、実行中のコマンドを待機OFFで止めている。原因は未調査。
+- **実行中のコマンドを待機OFFで止めると、gatewayを再起動するまで、その主体の新しい実行が `busy_or_refused`（`owner_cleanup` は `unknown`）で拒否される。** 2回の周期で観測した。2回目（`e1eb7c3` のbuild）は、待機ONに戻した直後と、約8分後に待機を入れ直した後の2回とも拒否され、gatewayのコンテナを再起動すると1回目で通った。
+  - コード上の事実: 作業は、常駐の回収とgatewayの回収の両方が `confirmed` のときだけ `finished` になり、次の作業を受け付ける（`runResident`）。どちらかが `confirmed` でない作業は `unknown` で終わり、主体の実行中の枠（`current`）を持ち続ける。枠を空ける経路は他になく、接続世代が変わっても残る。回収不明のあとに次の作業を拒否するのは既存の契約で、試験もある。
+  - 推定で、未確認: 待機OFFで接続が切れるため、常駐の回収の証明がgatewayへ届かず、gatewayから見て回収不明になった。Mac側の状態は回収 `confirmed` だった。gatewayは作業の最終状態を記録しないので、直接は確かめていない。
+  - 対処は未裁定。回収不明の扱いを変えるため、安全上の契約の変更になる。
 - **待機を入れ直すと、前の周期の `request_id` は `not_found` になる。** 429を避けるために待機を入れ直すと、実行済みの結果を読めなくなる。
 - ChatGPTの確認ダイアログは、同じツールでも出る回と出ない回があった。
 - Workerのrelayは300秒で切れるため、常駐は1回290秒以内で起動し直した。待機が再接続をまたいでも、許可は有効なままコマンドが実行された。
@@ -338,6 +342,7 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
 - ChatGPT側のtool callの時間上限と、書込み系ツールへの確認表示の有無。
 - ChatGPTはsessionを閉じず、tool callのたびに接続を開始し直す（2026-11-13に確認、「実機受入の記録」）。同じ世代のsessionは入れ替えることにした（「現行世代のsessionの入れ替え」）。404を受けたときの挙動は未確認。
 - 新しいsessionから旧世代の結果を読めるようにするかどうか（「session上限の429」の残る課題）。
+- 実行中に待機OFFで止めた後、gatewayの再起動なしで次の実行を受け付けられるようにするかどうか（「実機受入の記録」の `busy_or_refused`）。
 - 作業rootをGUIで選べるようにするかどうか（[#359](https://github.com/O2-CONNECTIVE/Tether/issues/359)）。初版は既存のローカル構成を使います。
 - 許可の既定時間。上限は15分で実装しました（未裁定）。
 - 実行中のコマンドを、許可の取り消しで止めるかどうか。
