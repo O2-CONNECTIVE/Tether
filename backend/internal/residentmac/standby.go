@@ -66,7 +66,9 @@ type Standby struct {
 // gateway refuses this member's next work until it has that proof, so consume
 // sends it over the next authenticated control.
 func (s *Standby) collect(lease *agenttransport.ResidentSourceLease, i agenttransport.ResidentFixedIntent, result error) {
-	if lease.Collected(i, result) == nil {
+	// Only a confirmed cleanup frees the gateway's slot, and only a failed
+	// write (not a refused repeat) leaves a proof worth sending again.
+	if e := lease.Collected(i, result); e == nil || result != nil || errors.Is(e, agenttransport.ErrRefused) {
 		return
 	}
 	if proof := lease.Unsent(); proof != nil {

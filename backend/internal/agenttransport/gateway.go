@@ -52,18 +52,18 @@ type enrolled struct {
 // Handler accepts host registrations and hands each verified stream to the
 // Registrar. It does not listen; the operator composition mounts it.
 type Handler struct {
-	endpoint         string
-	path             string
-	hosts            map[string]*enrolled
-	registrar        Registrar
-	residentSigners  map[string]ssh.Signer
-	residents        map[string]*residentPeer
-	residentReceipts map[string]residentReceipt
-	budgets          Budgets
-	clock            func() time.Time
-	slots            chan struct{}
-	ctx              context.Context
-	cancel           context.CancelFunc
+	endpoint        string
+	path            string
+	hosts           map[string]*enrolled
+	registrar       Registrar
+	residentSigners map[string]ssh.Signer
+	residents       map[string]*residentPeer
+	residentLast    map[string]residentLastWork
+	budgets         Budgets
+	clock           func() time.Time
+	slots           chan struct{}
+	ctx             context.Context
+	cancel          context.CancelFunc
 
 	mu         sync.Mutex
 	closed     bool
@@ -74,7 +74,9 @@ type Handler struct {
 	idleClosed bool
 }
 
-type residentReceipt struct {
+// residentLastWork is the last intent of a closed control with that control's
+// binding: what a cleanup proof sent over a later control is verified against.
+type residentLastWork struct {
 	binding residentBinding
 	intent  ResidentFixedIntent
 }

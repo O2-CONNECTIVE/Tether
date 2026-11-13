@@ -74,10 +74,10 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 			peer.mu.Unlock()
 			if last.sequence != 0 {
 				h.mu.Lock()
-				if h.residentReceipts == nil {
-					h.residentReceipts = map[string]residentReceipt{}
+				if h.residentLast == nil {
+					h.residentLast = map[string]residentLastWork{}
 				}
-				h.residentReceipts[residentMapKey(peer.binding.host, peer.binding.principal)] = residentReceipt{binding: peer.binding, intent: last}
+				h.residentLast[residentMapKey(peer.binding.host, peer.binding.principal)] = residentLastWork{binding: peer.binding, intent: last}
 				h.mu.Unlock()
 			}
 		}
@@ -205,7 +205,7 @@ func (p *residentPeer) readReceipts() error {
 				k := residentMapKey(p.binding.host, p.binding.principal)
 				h := p.handler
 				h.mu.Lock()
-				r, ok := h.residentReceipts[k]
+				r, ok := h.residentLast[k]
 				if ok && m["request_id"] == r.intent.requestID && m["generation"] == r.intent.generation && m["sequence"] == strconv.FormatUint(r.intent.sequence, 10) && bytes.Equal(r.binding.hostKey, p.binding.hostKey) && r.binding.host == p.binding.host && r.binding.principal == p.binding.principal {
 					i, binding, found = r.intent, r.binding, true
 				}
@@ -228,7 +228,7 @@ func (p *residentPeer) readReceipts() error {
 			if binding.generation != p.binding.generation {
 				h := p.handler
 				h.mu.Lock()
-				delete(h.residentReceipts, residentMapKey(binding.host, binding.principal))
+				delete(h.residentLast, residentMapKey(binding.host, binding.principal))
 				h.mu.Unlock()
 			}
 			continue
