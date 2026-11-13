@@ -14,6 +14,7 @@ import (
 
 const maxStandbyInteger = uint64(9007199254740991)
 const standbyCleanup = 40 * time.Second
+const standbyProofWait = 25 * time.Second      // collection (15s) and proof write (5s) before OFF ends the control
 const initialAuthentication = 30 * time.Second // ON result only, not service lifetime
 
 // Private lifecycle-only fake seam; it cannot mint authority or native work.
@@ -34,6 +35,7 @@ type standbyCycle struct {
 	source        *FixedSource
 	lease         *agenttransport.ResidentSourceLease
 	intent        *agenttransport.ResidentFixedIntent
+	proved        chan struct{} // closed once the open source's cleanup proof was attempted
 	result        error
 	initialUntil  time.Time
 	runUntil      time.Time // guarded by Standby.mu; zero means run is not allowed
@@ -152,7 +154,7 @@ func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
 		s.changedLocked()
 		s.sealSourceLocked()
-		s.cycle.cancel()
+		s.cycle.cancelAfterProof()
 	}
 	r.Disposition = "accepted"
 	r.Revision = s.observation.Revision
@@ -213,6 +215,30 @@ func (s *Standby) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		return errors.Join(ErrStandbyUnknown, ctx.Err())
 	}
+}
+
+// cancelAfterProof ends the cycle, and with it the control, once the open
+// source's cleanup proof was attempted. The gateway refuses every later run
+// while a run's cleanup is unknown, and the proof cannot travel on a closed
+// control. Admission is already sealed and the source already closed.
+func (c *standbyCycle) cancelAfterProof() {
+	c.mu.Lock()
+	proved := c.proved
+	c.mu.Unlock()
+	if proved == nil {
+		c.cancel()
+		return
+	}
+	go func() {
+		wait := time.NewTimer(standbyProofWait)
+		defer wait.Stop()
+		select {
+		case <-proved:
+		case <-wait.C:
+		case <-c.ctx.Done():
+		}
+		c.cancel()
+	}()
 }
 func (s *Standby) sealSourceLocked() {
 	if s.cycle == nil {
@@ -350,9 +376,14 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 	} else {
 		source, err = s.factory.OpenSource(lease.Receiver())
 	}
+	proved := make(chan struct{})
 	c.mu.Lock()
 	c.source, c.lease = source, lease
 	c.intent = nil
+	c.proved = nil
+	if err == nil {
+		c.proved = proved
+	}
 	c.mu.Unlock()
 	s.mu.Lock()
 	if s.cycle == c && !s.observation.AdmissionSealed {
@@ -372,9 +403,29 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 	// Native revocation precedes source cancellation. Propagate that end to the
 	// SAME receiver so its synchronous Next can unblock without OFF or traffic.
 	// Receiver cancellation is not collection: retain/join the waiter below.
+	// Closing the receiver closes the control under a blocked Next, so the
+	// cleanup proof for the last work goes out first.
+	var collected error
+	prove := sync.OnceFunc(func() {
+		defer close(proved)
+		wait, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stop()
+		select {
+		case collected = <-waitDone:
+		case <-wait.Done():
+			collected = workerowner.ErrUnknown
+		}
+		c.mu.Lock()
+		last := c.intent
+		c.mu.Unlock()
+		if last != nil {
+			_ = lease.Collected(*last, collected)
+		}
+	})
 	readStopped := make(chan struct{})
 	stopRead := context.AfterFunc(source.Context(), func() {
 		defer close(readStopped)
+		prove()
 		lease.Receiver().Close()
 	})
 	for c.ctx.Err() == nil && lease.Context().Err() == nil && source.Context().Err() == nil {
@@ -440,23 +491,12 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 	if stopRead() {
 		close(readStopped)
 	}
-	<-readStopped // Joined original cancellation callback, not cleanup proof.
+	<-readStopped // Joined original cancellation callback.
 	close(requests)
+	prove()
 	cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 	defer stop()
-	var collected error
-	select {
-	case collected = <-waitDone:
-	case <-cleanup.Done():
-		collected = workerowner.ErrUnknown
-	}
 	err = errors.Join(err, collected)
-	c.mu.Lock()
-	last := c.intent
-	c.mu.Unlock()
-	if last != nil {
-		_ = lease.Collected(*last, collected)
-	}
 	finish := lease.Finish(cleanup, collected)
 	if collected == nil && finish == nil {
 		c.mu.Lock()

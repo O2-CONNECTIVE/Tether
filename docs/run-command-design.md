@@ -259,7 +259,7 @@ build済みのappを渡すことになり、OSによる起動の制止と、発�
 | 4c-1 | gatewayとMCPに `tether_run_command` を追加。引数の検査、署名する範囲、同じ要求IDの照合。状態照会と取消はgatewayの試験で確認 | 4b |
 | 4c-2 | MCPからMacの実行・回収までを通す結合試験。出力の読取と解放を含む既存ツールとの結合。**未実施。** CIの実producerのfixtureは、gatewayの `/mcp` が観測専用で実行のbackendにつながっておらず、そのままでは `tether_run_command` を通せない | 4c-1 |
 | 5 | 開発GUIに許可の切替とコマンド表示。pipeの入口。source試験まで。実機では、待機ONで `allow` が受理されること（CLIで駆動）と、実行したコマンドがGUIに表示されることを確認（2026-11-13、下の記録） | 3 |
-| 6 | 実機受入。**項目1・2・3・6は通過。項目4は停止と待機OFFの拒否まで確認し、待機ONへ戻した後の復帰が未通過。項目5は一部だけ確認（2026-11-13、下の記録）** | 4c-2、5 |
+| 6 | 実機受入。**項目1・2・3・4・6は通過。項目5は一部だけ確認（2026-11-13、下の記録）** | 4c-2、5 |
 
 - 2〜4は認可の境界を変えます。独立レビューを通し、統合の判断は利用者に上げます。1〜3は利用者の指示で統合しました（2026-11-12）。4c-1でgatewayが汎用のintentを送るようになりました。Mac側で許可をONにする入口（5）がないため、Macは汎用コマンドを実行しません。
 - 6の実機受入が済むまで、機能を有効にする統合はしません。
@@ -286,7 +286,7 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
 | 1 | 通過。ただし作業ディレクトリは空で、実リポジトリの `git status` ではない。`pwd && uname -s && echo tether-acceptance-1`、`cwd` は `.`、`timeout_ms` は30000。ChatGPTが受け取った結果は、stdout 3行、`exit.code` 0、`command_cleanup`・`owner_cleanup`・`gateway_cleanup` がいずれも `confirmed`。常駐の作業状態は `preparing` → `running` → `idle`（回収 `confirmed`） |
 | 2 | 通過（gatewayを `6a5a46d` のbuildへ差し替えた後の再試験）。同じコマンドを実行し、約13秒おきに状態照会を5回、合計6回呼び出して、すべて成功した。`next_cursor` は28 → 49 → 63と進み、3回目の照会で `phase` が `finished`、`command_phase` が `exited`、`terminal` が `true`。`exit.code` 0、3つのcleanupが `confirmed`、stdoutは `tick-1`〜`tick-8` と `done-2` の63バイト。gatewayの入口では6件のsessionが発行され、429は0件だった。差し替える前（`bc7018f` のbuild）は未通過だった: `for i in 1 2 3 4 5 6 7 8; do echo tick-$i; sleep 4; done; echo done-2`（`timeout_ms` 60000）を2回試した。途中の状態照会は `running` で、`next_cursor` は14 → 42（1回目）、35（2回目）と進み、stdoutは `tick-1` から順に届いた。完了後の状態照会はどちらも `RATE_LIMITED: too many MCP sessions for this principal` で失敗し、ChatGPTは終了コードと回収の結果を受け取れなかった。Macの常駐は2回とも約31秒実行して `idle`（回収 `confirmed`）へ戻っている |
 | 3 | 通過。`echo start-3; sleep 120; echo never-3` を開始し、約80秒後に `tether_fixed_cancel`。取消の応答は取消前の状態（`running`、`stop` は `none`）だった。常駐は `stopping` から3秒で `idle`（回収 `confirmed`）へ戻り、Macに `sleep 120` のprocessは残らなかった。続く状態照会は `phase` が `finished`、`command_phase` と `stop` が `canceled`、`terminal` が `true`、3つのcleanupが `confirmed`、stdoutは `start-3` だけ |
-| 4 | **一部。** `echo start-4; sleep 60; echo never-4` の実行中に待機OFFにすると、常駐は2秒で `off`・`idle`（回収 `confirmed`）になり、`sleep 60` のprocessは残らなかった。待機OFFのまま送った新規要求は実行されなかったが、返ったのは待機OFFの拒否ではなく上と同じ `RATE_LIMITED` で、待機OFFによる拒否の応答は観測できていない。**再試験（gatewayを `e1eb7c3` のbuildへ差し替えた後）:** 実行中の待機OFFは同じく2秒で停止した。待機OFFのまま5回呼び出すと、5回とも `Resident catalog only` の拒否が返り、429は0件で、実行記録にも載らなかった。待機ONと許可に戻した後の呼出しは、429ではなく `busy_or_refused` で拒否され、Macには届かなかった。約8分後に待機を入れ直しても同じで、gatewayのコンテナを再起動した後は1回目で通った（下の「受入の途中で分かったこと」） |
+| 4 | 通過（常駐を修正した後の再試験。経緯は次のとおり）。`echo start-4; sleep 60; echo never-4` の実行中に待機OFFにすると、常駐は2秒で `off`・`idle`（回収 `confirmed`）になり、`sleep 60` のprocessは残らなかった。待機OFFのまま送った新規要求は実行されなかったが、返ったのは待機OFFの拒否ではなく上と同じ `RATE_LIMITED` で、待機OFFによる拒否の応答は観測できていない。**再試験（gatewayを `e1eb7c3` のbuildへ差し替えた後）:** 実行中の待機OFFは同じく2秒で停止した。待機OFFのまま5回呼び出すと、5回とも `Resident catalog only` の拒否が返り、429は0件で、実行記録にも載らなかった。待機ONと許可に戻した後の呼出しは、429ではなく `busy_or_refused` で拒否され、Macには届かなかった。約8分後に待機を入れ直しても同じで、gatewayのコンテナを再起動した後は1回目で通った（下の「受入の途中で分かったこと」）。**常駐の修正後（待機OFFで回収の証明を送ってから接続を閉じる）:** `echo start-4d; sleep 60; echo never-4d` の実行中に待機OFFにすると2秒で `off`・`idle`（回収 `confirmed`）になり、`sleep 60` のprocessは残らなかった。gatewayを再起動せずに待機ONと許可へ戻して `echo back-on-4d` を呼ぶと、`exit.code` 0、stdout `back-on-4d`、cleanupは3つとも `confirmed` で終わった |
 | 5 | **一部。** 許可OFF: 実行の応答は `pending` で、状態照会は `error` が `admission_refused_or_uncertain`、`phase` が `finished`（`terminal` は `false` のまま）。常駐の作業状態は変わらず、実行記録にも載らなかった。作業root外の `cwd`（`/etc`）: `invalid_run_scope`。上限超過のtimeout（240001）: ChatGPT側のschema検証で拒否され、gatewayには届いていない。期限切れと署名の不一致は実機では未実施（source試験だけ） |
 | 6 | 通過。開発GUIに「全1件のうち直近1件」と、同じ時刻・ディレクトリ・コマンドが表示された。画面の読取はcodexのコンピュータユーズで行い、記録ファイルの内容と一致した |
 
@@ -312,7 +312,10 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
   - 待機OFFのとき、常駐は受信側を閉じてからprocessの回収を待ち、そのあとで証明を送る（`standby.go` の `consume`）。送信の失敗は無視し、再送も保存もしない。正常終了のときは、接続が生きている間に監視の処理から証明を送るので届く。
   - 送る順番を入れ替えるだけでは直らない。読み取り待ちを解く手段が受信側を閉じることだけで、閉じると接続も閉じるため。待機OFFは接続の寿命も同時に取り消す見込みで、ここは未確認。
   - 実機のgatewayで作業が回収不明で終わったこと自体は、直接は観測していない。gatewayは作業の最終状態を記録しない。Mac側の状態は回収 `confirmed` だった。
-  - 対処は未裁定。待機OFFの後も証明を送るまで接続を残すか、次の接続で証明を送り直すかのどちらかで、いずれも接続の取り消しか証明の検証条件に触れる。
+  - 対処（2026-11-13、利用者の裁定）: 待機OFFのとき、受付の封鎖と実行中のprocessの停止はすぐ行い、接続を閉じるのは回収の証明を送った後にする。証明を待つ上限は25秒で、過ぎれば従来どおり接続を閉じる。実行中の作業がなければ、従来どおりすぐ閉じる。実機で確認済み（項目4）。
+  - 残る制約: 通信断、常駐の強制終了、常駐processの終了（待機OFFを経ない終了）では、証明が届かず、gatewayを再起動するまで拒否が続く。次の接続で証明を送り直す方式は、証明の検証条件を変えるため別の変更として設計する。
+  - 自動試験が覆うのは「証明を送り終えるまで接続を閉じない」「証明が来なくても上限で閉じる」の2点。常駐の中で証明を受信側より先に送る順番は、実物の接続なしに試験できないため、実機の確認に頼っている。
+  - レビューで見つかった既存の競合（今回の変更によるものではない）: 待機OFFと要求の受理が同時に起きると、受理したのに受理の応答も証明も出ないことがある。未対処。
 - **待機を入れ直すと、前の周期の `request_id` は `not_found` になる。** 429を避けるために待機を入れ直すと、実行済みの結果を読めなくなる。
 - ChatGPTの確認ダイアログは、同じツールでも出る回と出ない回があった。
 - Workerのrelayは300秒で切れるため、常駐は1回290秒以内で起動し直した。待機が再接続をまたいでも、許可は有効なままコマンドが実行された。
@@ -345,7 +348,7 @@ source `eeed0cc`、gatewayは `bc7018f` のbuild、Macの常駐は `eeed0cc` の
 - ChatGPT側のtool callの時間上限と、書込み系ツールへの確認表示の有無。
 - ChatGPTはsessionを閉じず、tool callのたびに接続を開始し直す（2026-11-13に確認、「実機受入の記録」）。同じ世代のsessionは入れ替えることにした（「現行世代のsessionの入れ替え」）。404を受けたときの挙動は未確認。
 - 新しいsessionから旧世代の結果を読めるようにするかどうか（「session上限の429」の残る課題）。
-- 実行中に待機OFFで止めた後、gatewayの再起動なしで次の実行を受け付けられるようにするかどうか（「実機受入の記録」の `busy_or_refused`）。
+- 通信断や常駐の終了で回収不明になった後、gatewayの再起動なしで次の実行を受け付けられるようにするかどうか（「実機受入の記録」の `busy_or_refused`）。待機OFFの場合は対処済み。
 - 作業rootをGUIで選べるようにするかどうか（[#359](https://github.com/O2-CONNECTIVE/Tether/issues/359)）。初版は既存のローカル構成を使います。
 - 許可の既定時間。上限は15分で実装しました（未裁定）。
 - 実行中のコマンドを、許可の取り消しで止めるかどうか。
