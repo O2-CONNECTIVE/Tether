@@ -380,8 +380,18 @@ func TestSIDRunInputCloseAndCleanupFailureKeepOperationUnknown(t *testing.T) {
 			if out, e := o.execute(testContext(t), []byte("request\n")); e == nil || out != nil || o.pipes != p {
 				t.Fatal("close failure returned output or dropped owner")
 			}
+			// execute 内の Close が期限切れで残した pipe close 試行は、故障を外す前の値を読み得て、
+			// 次の Close に join される。故障を読み終えるまで待ち、fixture と同じ p.mu の下で外す。
+			o.mu.Lock()
+			inFlight := o.pipeClose
+			o.mu.Unlock()
+			if inFlight != nil && !sidRunJoin(testContext(t), inFlight) {
+				t.Fatal("pipe close attempt did not finish", kind)
+			}
+			p.mu.Lock()
 			p.closeErr = nil
 			p.closeHook = nil
+			p.mu.Unlock()
 			if e := o.Close(testContext(t)); kind == "pipes-panic" && !errors.Is(e, ErrCleanup) || kind != "pipes-panic" && e != nil {
 				t.Fatal("cleanup confirmation mismatch", kind, e)
 			}
