@@ -20,11 +20,23 @@ void test('browserではRust未取得を明示し、keyboard・focus・拡大で
   assert.equal(await status.locator('svg[aria-hidden="true"][focusable="false"]').count(), 1);
   assert.equal(await status.getByRole('button').count(), 0);
   assert.equal(await page.getByRole('button', { name: 'サポートを開始' }).isDisabled(), true);
+  // 無効の理由は1つの文で伝えてボタンと関連づける。同じ説明の重複と、設計上の注記は画面に出さない。
+  const reasonId = await page.getByRole('button', { name: 'サポートを開始' }).getAttribute('aria-describedby');
+  assert.equal(await page.getByRole('button', { name: '接続を停止' }).getAttribute('aria-describedby'), reasonId);
+  assert.match(await page.locator(`#${reasonId ?? 'missing'}`).innerText(), /未配線です。開始や停止はできません。/);
+  // role 属性に頼らず section で領域を作る。見出しが領域の名前になることを保つ。
+  assert.equal(await page.getByRole('region', { name: '許可条件' }).count(), 1);
+  assert.equal(await page.getByRole('region', { name: '許可条件' }).getAttribute('role'), null);
+  assert.equal(await page.getByText(/未配線/).count(), 1);
+  assert.equal(await page.getByText(/認可/).count(), 0);
+  assert.equal(await page.locator('footer').innerText(), '画面を閉じる操作は、通信が終了した証明にはなりません。');
   assert.equal(await page.getByRole('button', { name: '接続を停止' }).isDisabled(), true);
   await page.keyboard.press('Tab');
   assert.equal(await page.locator(':focus').getAttribute('aria-expanded'), 'false');
   await page.keyboard.press('Enter');
   assert.equal(await page.getByRole('button', { name: '診断情報', exact: true }).getAttribute('aria-expanded'), 'true');
+  // 開いた診断情報には診断コードだけを出し、説明文を足さない。
+  assert.deepEqual(await page.locator('.diagnostics p').evaluateAll(nodes => nodes.map(node => node.id)), ['diagnostic']);
   await page.keyboard.press('Tab');
   assert.equal(await page.locator(':focus').getAttribute('id'), 'refresh');
   assert.equal(await page.locator(':focus').evaluate(node => getComputedStyle(node).outlineWidth), '3px');
