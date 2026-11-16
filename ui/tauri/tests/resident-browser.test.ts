@@ -40,6 +40,10 @@ void test('resident controls use shared IPC and wait for applied observations', 
   await page.setViewportSize({ width: 320, height: 1000 });
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  // 待機ONを許可と誤解させない1文だけを残す。
+  const panel = await page.locator('#resident-panel').innerText();
+  assert.match(panel, /待機ONは作業の許可ではありません。/);
+  assert.doesNotMatch(panel, /受付は変更完了/);
   await page.close();
 });
 void test('unknown source disables resident controls and does not expose caller or raw errors', async () => {

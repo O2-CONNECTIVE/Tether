@@ -23,7 +23,7 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
   if (!state.visible) return null;
   const o = state.observation;
   const view = presentResident(o, state.pending);
-  return <Card id="resident-panel" role="region" aria-labelledby="resident-heading"
+  return <Card id="resident-panel" aria-labelledby="resident-heading"
     data-resident-receipt={state.lastReceipt ?? 'none'} data-resident-request-id={state.lastRequestId}
     data-resident-registration={o?.registration ?? 'unknown'} data-resident-standby={o?.standby ?? 'unknown'}
     data-resident-transition-id={o?.transition?.requestId ?? 0} data-resident-transition-intent={o?.transition?.intent ?? 'none'}
@@ -35,7 +35,7 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
     </section>
     <div className="shell-actions"><Button id="resident-on" disabled={!state.canOn} onClick={() => { void controller.current?.request('on'); }}>待機をON</Button>
       <Button id="resident-off" variant="danger" disabled={!state.canOff} onClick={() => { void controller.current?.request('off'); }}>待機をOFF</Button></div>
-    <p className="caption">受付は変更完了ではありません。待機ONは作業の許可ではなく、OFF・画面閉鎖は全回収の証明ではありません。</p>
+    <p className="caption">待機ONは作業の許可ではありません。</p>
     <p id="resident-diagnostic" className="shell-code">{state.diagnostic}</p>
   </Card>;
 }
