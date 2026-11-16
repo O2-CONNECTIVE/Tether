@@ -11,6 +11,7 @@
 3. [agent CLI](agent-cli.md): 保護設定、前景起動、fresh同意、期限、終了、status pipeの契約。
 4. [Mac runtime](mac-agent-runtime.md): 現在ユーザー・隔離なし、process群とI/Oの所有、回収不明の扱い。
 5. [共通開発手順](agent-workflow.md): ファイル所有、検証、証跡、拒否と再開の扱い。
+6. [Issue トリアージラベル](issue-labels.md): Area/Kind 分類、actionable destination、Lifecycle と自動検査。
 
 ここでの「現行」はこの開発ソースの方針・契約です。公開main統合済み、一般配布可能、試験用入口が稼働中という意味ではありません。
 旧Python/Windowsの開始拒否、限定実演後の入口閉鎖、dot workspaceの403は、それぞれ別の状態です。
