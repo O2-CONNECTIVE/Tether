@@ -95,6 +95,7 @@ SSH途中実装の既知の公開WIP保存先は `wip/ssh-owned-shell-20261031` 
 
 以下は参照対象を限定した履歴・別方式の契約です。旧条件の合否を維持し、現在の提供状況には上記正本を優先します。旧44条件や失敗をMac評価の成功で達成扱いにしません。
 
+- [READMEにあった統合と検証の経緯](integration-history.md): 2026-11-13までのPRごとの統合記録と実接続の確認記録。現在の機能一覧は[README](../README.md)。
 - [旧検証状態](status.md)。
 - [旧構成図](architecture.md) / [旧SSH・Windows安全要件](security.md) / [旧脅威モデル](threat-model.md)。
 - [SSH backend基盤](../backend/README.md) / [旧通信契約](communication-contract.md) / [Windows評価手順](windows-evaluation-runbook.md)。
