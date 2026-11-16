@@ -200,7 +200,7 @@ pub fn run() {
             "main",
             tauri::WebviewUrl::App("index.html".into()),
         )
-        .title("Rescue Host（未配線 shell）")
+        .title("Tether Host（未配線 shell）")
         .inner_size(900.0, 780.0)
         .min_inner_size(360.0, 480.0)
         .on_navigation(|url| {

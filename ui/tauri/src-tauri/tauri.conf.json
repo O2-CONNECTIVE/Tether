@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Rescue Host Shell",
+  "productName": "Tether Host Shell",
   "version": "0.1.0",
   "identifier": "com.o2connective.rescue-host.shell",
   "build": { "frontendDist": "../dist" },
