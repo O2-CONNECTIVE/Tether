@@ -37,7 +37,7 @@ CSS の正本は [tokens.css](../ui/tauri/design/tokens.css) です。
 | Spacing | 0 / 4 / 8 / 12 / 16 / 24 / 32 / 48px 相当の rem | 4px 刻み。文字拡大と同じ単位で伸びる |
 | Radius | 4 / 8 / 12px 相当 | 入力・ボタン・状態領域のまとまり |
 | Shadow | none / `0 2px 8px rgb(23 40 54 / 8%)` | 補助的な奥行き。境界を影だけに依存させない |
-| Motion | 0 / 120ms、ease-out | hover の色変化のみ。停止・警告の点滅、常時アニメーションなし |
+| Motion | 0 / 120ms、ease-out、回転 1000ms | hover の色変化と、確認中の記号の回転のみ。停止・警告の点滅なし |
 
 | Semantic role | ライトテーマでの割当 |
 | --- | --- |
@@ -75,7 +75,7 @@ focus は 3px 相当の輪郭と 2px 相当の間隔で示します。
 ## 展開と検証基準
 
 - ライトのみ実装。dark theme は各 foreground / surface / border / focus の組合せを再測定してから追加する。
-- `prefers-reduced-motion: reduce` で transition を無効にする。状態の意味を motion に依存させない。
+- `prefers-reduced-motion: reduce` で transition と回転を無効にする。状態の意味を motion に依存させない。
 - `forced-colors: active` は OS の Canvas / CanvasText / ButtonText / Highlight を使い、色を失っても文言と記号、境界を残す。実 OS の高コントラスト表示は別途確認する。
 - ブラウザーの実 HTML/CSS を広幅・狭幅・200% 相当で確認し、横方向の欠落、重なり、停止操作の欠落がないこと。
 - keyboard で移動でき、focus が明瞭で、入力とエラー説明が対応すること。
