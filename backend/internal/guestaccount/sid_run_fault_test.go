@@ -155,7 +155,17 @@ func TestSIDRunShortWriteNeverSendsNormalEOFBeforeChildIsStopped(t *testing.T) {
 			if closedInput != 0 || p.closed != 0 || o.pipes != p || o.child != c {
 				t.Fatal("unconfirmed child received cleanup EOF or owner refs dropped", closedInput, p.closed)
 			}
+			// execute 内の Close が期限切れで残した child stop 試行は、故障を外す前の値を読み得て、
+			// 次の Close に join される。故障を読み終えるまで待ち、fixture と同じ c.mu の下で外す。
+			o.mu.Lock()
+			inFlight := o.stop
+			o.mu.Unlock()
+			if inFlight != nil && !sidRunJoin(testContext(t), inFlight) {
+				t.Fatal("child stop attempt did not finish", kind)
+			}
+			c.mu.Lock()
 			c.closeErr = nil
+			c.mu.Unlock()
 			if e := o.Close(testContext(t)); e != nil {
 				t.Fatal(e)
 			}
