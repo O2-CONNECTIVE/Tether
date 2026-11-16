@@ -3,6 +3,8 @@ import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { createResidentController, initialResidentState } from './controller.ts';
 import type { ResidentInvoke } from './model.ts';
+import { presentResident } from './presentation.ts';
+import { StatusContent } from '../host-status/StatusContent.tsx';
 export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }) {
   const [state, setState] = useState(initialResidentState);
   const controller = useRef<ReturnType<typeof createResidentController> | null>(null);
@@ -20,8 +22,7 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
   }, [invoke]);
   if (!state.visible) return null;
   const o = state.observation;
-  const heading = !o ? '常駐ホストの状態を確認できません' : state.pending ? '待機の変更を確認中'
-    : o.standby === 'on' ? '待機ONを確認' : o.standby === 'off' ? '待機OFFを確認' : '待機停止を確認中';
+  const view = presentResident(o, state.pending);
   return <Card id="resident-panel" role="region" aria-labelledby="resident-heading"
     data-resident-receipt={state.lastReceipt ?? 'none'} data-resident-request-id={state.lastRequestId}
     data-resident-registration={o?.registration ?? 'unknown'} data-resident-standby={o?.standby ?? 'unknown'}
@@ -29,8 +30,9 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
     data-resident-transition-outcome={o?.transition?.outcome ?? 'none'}
     data-resident-revision={o?.revision ?? 0}>
     <p className="caption">カレントの検証版 / 常駐ホスト</p>
-    <div role="status" aria-live="polite" aria-atomic="true"><h2 id="resident-heading">{heading}</h2>
-      <p id="resident-state">{o ? `待機: ${o.standby} / 接続: ${o.registration} / 作業: ${o.work} / 回収: ${o.cleanup}` : '未確認。接続・停止・回収の成功を示しません。'}</p></div>
+    <section className={`status${view.tone === 'neutral' ? '' : ` status--${view.tone}`}`} role="status" aria-live="polite" aria-atomic="true">
+      <StatusContent view={view} icon={view.icon} headingId="resident-heading" descriptionId="resident-state" />
+    </section>
     <div className="shell-actions"><Button id="resident-on" disabled={!state.canOn} onClick={() => { void controller.current?.request('on'); }}>待機をON</Button>
       <Button id="resident-off" variant="danger" disabled={!state.canOff} onClick={() => { void controller.current?.request('off'); }}>待機をOFF</Button></div>
     <p className="caption">受付は変更完了ではありません。待機ONは作業の許可ではなく、OFF・画面閉鎖は全回収の証明ではありません。</p>

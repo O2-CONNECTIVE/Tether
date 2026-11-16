@@ -29,13 +29,13 @@ void test('resident controls use shared IPC and wait for applied observations', 
   assert.match(await page.locator('#resident-heading').innerText(), /変更を確認中/);
   await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('#resident-off')?.disabled === false);
   assert.match(await page.locator('#resident-heading').innerText(), /ONを確認/);
-  assert.match(await page.locator('#resident-state').innerText(), /接続: connecting/);
+  assert.match(await page.locator('#resident-state').innerText(), /接続: 接続を確認中/);
   await page.waitForFunction(() => document.querySelector('#resident-panel')?.getAttribute('data-resident-registration') === 'authenticated');
-  assert.match(await page.locator('#resident-state').innerText(), /接続: authenticated/);
+  assert.match(await page.locator('#resident-state').innerText(), /接続: 認証済み/);
   await page.locator('#resident-off').click();
   await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('#resident-on')?.disabled === false);
   assert.match(await page.locator('#resident-heading').innerText(), /OFFを確認/);
-  assert.match(await page.locator('#resident-state').innerText(), /接続: disconnected/);
+  assert.match(await page.locator('#resident-state').innerText(), /接続: 未接続/);
   assert.equal(await page.locator('html').getAttribute('data-resident-calls'), '2');
   await page.setViewportSize({ width: 320, height: 1000 });
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
