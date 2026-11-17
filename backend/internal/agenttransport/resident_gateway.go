@@ -108,7 +108,11 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 	e = h.reserveResident(reserve, peer)
 	stopReserve()
 	if e != nil {
-		_ = ws.Close(websocket.StatusPolicyViolation, "resident identity refused")
+		if errors.Is(e, errResidentOccupied) {
+			_ = ws.Close(residentOccupiedClose, "resident control occupied")
+		} else {
+			_ = ws.Close(websocket.StatusPolicyViolation, "resident identity refused")
+		}
 		peer = nil
 		return
 	}
@@ -390,25 +394,44 @@ func (h *Handler) configureResidents(ps []ResidentPrincipal) error {
 	return nil
 }
 
+// errResidentOccupied refuses a registration only because another peer of the
+// same host/principal still holds the slot. The gateway cannot tell a live
+// duplicate from the same Mac reconnecting before the original's end was
+// observed here, so this refusal closes with residentOccupiedClose and the Mac
+// retries it for a bounded time. It never replaces the live peer.
+var errResidentOccupied = errors.New("agenttransport: resident control occupied")
+
+// residentOccupiedClose is in the private 4000-4999 range because the Worker
+// relay passes that range unchanged; 1013 would reach the Mac as 1011.
+const residentOccupiedClose websocket.StatusCode = 4013
+
 func (h *Handler) reserveResident(ctx context.Context, p *residentPeer) error {
 	k := residentMapKey(p.binding.host, p.binding.principal)
 	h.mu.Lock()
-	old := h.residents[k]
-	if !h.closed && old == nil && len(h.residents) < MaxHosts {
+	old, closed := h.residents[k], h.closed
+	if !closed && old == nil && len(h.residents) < MaxHosts {
 		h.residents[k] = p
 		h.mu.Unlock()
 		return nil
 	}
 	h.mu.Unlock()
-	if old == nil || old.ctx.Err() == nil {
+	if closed || old == nil {
 		return ErrRefused
 	}
-	if e := waitFor(ctx, old.finished); e != nil {
-		return e
+	if old.ctx.Err() == nil {
+		return errResidentOccupied
 	}
+	waited := waitFor(ctx, old.finished)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.closed || h.residents[k] != nil || len(h.residents) >= MaxHosts {
+	switch {
+	case h.closed:
+		return ErrRefused
+	case waited != nil:
+		return errors.Join(errResidentOccupied, waited)
+	case h.residents[k] != nil:
+		return errResidentOccupied
+	case len(h.residents) >= MaxHosts:
 		return ErrRefused
 	}
 	h.residents[k] = p

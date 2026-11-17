@@ -113,7 +113,8 @@ func TestExclusiveRelay4000RequiresOriginalFinishBeforeFreshGeneration(t *testin
 	}
 	_ = await(t, closed, 3*time.Second)
 	next := takeSource(t, r)
-	if next == old || next.Receiver().Generation() == first || r.m.trips.Load() != 2 || r.rec.count.Load() != 0 {
+	// Trips beyond the second are occupancy refusals retried (#380).
+	if next == old || next.Receiver().Generation() == first || r.m.trips.Load() < 2 || r.rec.count.Load() != 0 {
 		t.Fatal("fresh generation/re-auth/no-work contract failed")
 	}
 	r.c.Stop()
