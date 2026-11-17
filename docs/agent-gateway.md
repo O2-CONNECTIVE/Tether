@@ -47,7 +47,7 @@ gatewayはtokenを検証するだけで、authorization server、CA、token発�
 | 認可 | 検証済み`sub`が、設定した最大4人のprincipalのどれかと完全一致 | 403（challengeなし） |
 
 - auth-noneやbooleanで通すverifierはありません。自己申告のuser header（`X-Forwarded-User`など）は読みません。tokenはqueryで受けず（400）、Macやrelayへ渡しません。tokenやheaderをlogに出しません。
-- JWKSは設定文書に静的に置くか、HTTPSの`jwks_url`から取得します。URLを設定した場合、未登録の`kid`で取得し鍵をcacheします。取得開始は最低60秒間隔、timeoutは5秒、応答上限は64KiBです。取得失敗時は現在の鍵を保持し、新しい鍵が無ければtokenを拒否します。static JWKSは任意の初期鍵として併用できます。private member（`d`など）や対称鍵を含むJWKSは拒否します。
+- JWKSは設定文書に静的に置くか、HTTPSの`jwks_url`から取得します。URLを設定した場合、未登録の`kid`で取得し鍵をcacheします。取得開始は最低60秒間隔、timeoutは5秒、応答上限は64KiBです。取得失敗時は現在の鍵を保持し、新しい鍵が無ければtokenを拒否します。静的なJWKSと`jwks_url`はどちらか一方だけを設定します（併用は設定エラー。IdPがJWKSから外した鍵を静的設定が信頼し続けないため）。private member（`d`など）や対称鍵を含むJWKSは拒否します。
 - `/.well-known/oauth-protected-resource`と`/.well-known/oauth-protected-resource<資源path>`で、RFC 9728のmetadata（`resource`、`authorization_servers`、`scopes_supported`、`bearer_methods_supported`）を認証なしで返します（この方式だけ）。
 - 公開されたnative Workerでは、クライアントはtokenなしの`POST /mcp`に対する`401`と`resource_metadata` challengeから発見を始めます。
 - クライアントはchallengeのURLからRFC 9728 metadataを取得し、`authorization_servers`でOAuth認可サーバーを発見します。
@@ -171,7 +171,7 @@ Cloudflare Access assertion方式：
 | `audience` | OAuth tokenに要求する`aud`。省略時は`resource`と同じ値。resource URLである必要はありません |
 | `scope` | 要求するOAuth scope。空文字なら検査しません |
 | `token_types` | 必須のJOSE `typ`として受け入れる文字列の配列（例`["JWT"]`） |
-| `jwks` | 静的な公開JWKS。`jwks_url`と併用すれば初期cacheになります |
+| `jwks` | 静的な公開JWKS。`jwks_url`とはどちらか一方だけ |
 | `jwks_url` | JWKSのHTTPS URL。未知の`kid`で取得し、cacheを更新します。取得は最低60秒間隔に制限します |
 | `access_issuer` | team-domainのURL。小文字host、https、port・path・末尾`/`・query・fragmentなし。`iss`と完全一致で比較 |
 | `access_aud` | Access applicationのAUD tag。英数字・`-`・`_`の1〜256文字（URLは書けません）。資源URLとは別の値 |
@@ -220,7 +220,7 @@ Access applicationとAUDは、このMCP hostname/path専用にします。他ori
 
 - Close は acquisition 開始から Connect を所有・追跡し、handshake 中の回収を待たずに成功しません。未完了なら cleanup unknown を返し、同じ owner の次回 Close が回収を再確認します。並行 Close は同じ未確認回収試行を共有します。
 - CLI は登録 producer の終端を有限時間待ち、HTTP graceful shutdown が失敗したら接続を force-close し、その場合は終了値 1 とします。OS process 終了を graceful cleanup 成功に読み替えません。
-- JWKS は各 JWK の alg を必須とし、key_ops/vendor 独自 member は拒否します。OAuth token の typ は必須で、`token_types`で許可します。Access assertion だけは typ の欠落を許容し、存在する場合の JWT 型検査と全署名・claim 検査を維持します。限定したprovider互換の実績を他provider・新設定へ転用せず、必要な形式の検討を経ず任意変換・制約緩和しません。
+- JWKS は各 JWK の alg を必須とし、vendor 独自 member は拒否します。OAuth方式に限り、Supabase Authが載せる`ext`（真偽値）と`key_ops`（`["verify"]`だけ）を受け付けます。Access鍵では`key_ops`も拒否します。OAuth token の typ は必須で、`token_types`で許可します。Access assertion だけは typ の欠落を許容し、存在する場合の JWT 型検査と全署名・claim 検査を維持します。限定したprovider互換の実績を他provider・新設定へ転用せず、必要な形式の検討を経ず任意変換・制約緩和しません。
 - 静的 JWKS は設定変更と再起動が必要です。`jwks_url`を使う場合、新しい`kid`で自動取得しますが、既知`kid`の同じIDの公開鍵内容の差し替えは未知鍵を発生させません。
 - 取消通知では原則 JSON-RPC 応答を抑制する MCP の推奨と、JSON 単一応答型 HTTP の終了を両立させるため、元 POST に明示的 cancellation error を返します。実 client 互換は未確認です。開始の再確認には同じ request_id を使い、新 ID で再実行しません。
 

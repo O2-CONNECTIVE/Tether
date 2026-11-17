@@ -147,3 +147,45 @@ func TestVerifierWithoutJWKSAndWithoutURLIsRejected(t *testing.T) {
 		t.Fatalf("empty key sources = %v", err)
 	}
 }
+
+// o2c-identity（Supabase Auth）の JWKS は各鍵に ext と key_ops を載せる。これを拒否すると
+// JWKS の取得が毎回失敗し、正しい IdP トークンが本番で全部 401 になる。
+func idpShapedJWKS(t *testing.T, key *ecdsa.PrivateKey, kid string, keyOps []string) []byte {
+	t.Helper()
+	pub := key.PublicKey
+	raw, err := json.Marshal(map[string]any{"keys": []any{map[string]any{
+		"kty": "EC", "crv": "P-256", "kid": kid, "alg": "ES256", "use": "sig", "ext": true, "key_ops": keyOps,
+		"x": b64.EncodeToString(pub.X.FillBytes(make([]byte, 32))),
+		"y": b64.EncodeToString(pub.Y.FillBytes(make([]byte, 32))),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestIdPShapedJWKSWithExtAndVerifyKeyOpsIsAccepted(t *testing.T) {
+	keys, err := parseJWKS(idpShapedJWKS(t, refreshTestKey(t), "idp-kid", []string{"verify"}), false)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("IdP-shaped JWKS = %d keys, %v", len(keys), err)
+	}
+}
+
+// key_ops が署名など検証以外の用途を名乗る鍵は、公開鍵として配られたものではない。
+func TestJWKSKeyOpsOtherThanVerifyIsRejected(t *testing.T) {
+	for _, ops := range [][]string{{"sign"}, {"verify", "sign"}, {}} {
+		if _, err := parseJWKS(idpShapedJWKS(t, refreshTestKey(t), "idp-kid", ops), false); !errors.Is(err, ErrConfig) {
+			t.Fatalf("key_ops %v = %v, want ErrConfig", ops, err)
+		}
+	}
+}
+
+// 静的な鍵と URL を併用すると、IdP が JWKS から外した（失効させた）鍵も、設定に残る限り
+// 信頼され続ける。鍵の出所は URL か静的設定のどちらか一つに限る。
+func TestStaticJWKSTogetherWithURLIsRejected(t *testing.T) {
+	_, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: "tether", Types: []string{"JWT"},
+		JWKS: refreshTestJWKS(t, refreshTestKey(t), "static-kid"), JWKSURL: "https://issuer.example.invalid/jwks"})
+	if !errors.Is(err, ErrConfig) {
+		t.Fatalf("static JWKS with URL = %v, want ErrConfig", err)
+	}
+}

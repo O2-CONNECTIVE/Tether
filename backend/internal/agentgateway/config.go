@@ -111,7 +111,7 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 		if raw, has := m["jwks_url"]; has {
 			ok = ok && firstByte(raw) == '"' && decodeInto(raw, &c.Verifier.JWKSURL)
 		}
-		ok = ok && (len(c.Verifier.JWKS) != 0 || c.Verifier.JWKSURL != "")
+		ok = ok && (len(c.Verifier.JWKS) == 0) != (c.Verifier.JWKSURL == "")
 	} else {
 		ok = ok && decodeInto(m["access_issuer"], &c.Access.Issuer) && decodeInto(m["access_aud"], &c.Access.AUD)
 		if source, has := m["access_key_source"]; has {

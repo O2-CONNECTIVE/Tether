@@ -44,7 +44,8 @@ var (
 )
 
 // VerifierConfig names the trusted provider inputs. JWKSURL enables bounded
-// HTTPS refresh on an unknown kid; static JWKS may seed its cache.
+// HTTPS refresh on an unknown kid. Exactly one of JWKS and JWKSURL is set, so a
+// key the provider removed from its JWKS is not kept trusted by static config.
 type VerifierConfig struct {
 	Issuer   string        // exact "iss"; an https URL
 	Audience string        // exact expected "aud" value
@@ -89,7 +90,7 @@ type verificationKey struct {
 func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if !httpsURL(cfg.Issuer, false) || !printable(cfg.Audience) || (cfg.Scope != "" && !token68Text(cfg.Scope)) ||
 		(cfg.JWKSURL != "" && !httpsURL(cfg.JWKSURL, false)) || len(cfg.Types) == 0 || cfg.Leeway < 0 || cfg.Leeway > MaxLeeway ||
-		(len(cfg.JWKS) == 0 && cfg.JWKSURL == "") {
+		(len(cfg.JWKS) == 0) == (cfg.JWKSURL == "") {
 		return nil, ErrConfig
 	}
 	types := map[string]bool{}
@@ -440,7 +441,7 @@ func parseJWKS(raw []byte, rsaOnly bool) (map[string]verificationKey, error) {
 				return nil, errors.Join(ErrConfig, errors.New("agentgateway: the JWK Set contains private or symmetric key material"))
 			}
 		}
-		m, err := agentwire.Fields(item, "kty", "kid", "alg", "use", "n", "e", "crv", "x", "y", "x5t", "x5t#S256", "x5c")
+		m, err := agentwire.Fields(item, "kty", "kid", "alg", "use", "n", "e", "crv", "x", "y", "x5t", "x5t#S256", "x5c", "ext", "key_ops")
 		if err != nil {
 			return nil, ErrConfig
 		}
@@ -455,6 +456,26 @@ func parseJWKS(raw []byte, rsaOnly bool) (map[string]verificationKey, error) {
 		}
 		if use, ok := m["use"]; ok {
 			if s, ok := str(use); !ok || s != "sig" {
+				return nil, ErrConfig
+			}
+		}
+		// Supabase Auth publishes WebCrypto members: ext (boolean) and key_ops,
+		// which for a published verification key is exactly ["verify"]. The
+		// Access key contract keeps refusing both.
+		_, hasExt := m["ext"]
+		_, hasOps := m["key_ops"]
+		if rsaOnly && (hasExt || hasOps) {
+			return nil, ErrConfig
+		}
+		if ext, ok := m["ext"]; ok {
+			var b bool
+			if json.Unmarshal(ext, &b) != nil {
+				return nil, ErrConfig
+			}
+		}
+		if ops, ok := m["key_ops"]; ok {
+			var list []string
+			if json.Unmarshal(ops, &list) != nil || len(list) != 1 || list[0] != "verify" {
 				return nil, ErrConfig
 			}
 		}
