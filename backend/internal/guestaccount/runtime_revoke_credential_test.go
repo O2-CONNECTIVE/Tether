@@ -34,6 +34,7 @@ func TestRuntimeGuestRevokeBlocksCredentialHelperAfterPipeReturn(t *testing.T) {
 	if started || r.created.sid != "" || r.secret != nil {
 		t.Fatal("credential helper or account acquired after Revoke")
 	}
+	sidRunConfirmBudget(credential.owner)
 	if err := r.Close(testContext(t)); err != nil {
 		t.Fatal("Revoke disabled pipe cleanup", err)
 	}

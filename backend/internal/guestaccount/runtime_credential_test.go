@@ -70,6 +70,7 @@ func TestRuntimeGuestCannotClearOrAcknowledgePendingSecretWriter(t *testing.T) {
 		t.Fatal("pending writer lost owned secret memory")
 	}
 	close(w.release)
+	sidRunConfirmBudget(c.owner)
 	if err := r.Close(testContext(t)); err != nil {
 		t.Fatal("actual writer return not reclaimed", err)
 	}
