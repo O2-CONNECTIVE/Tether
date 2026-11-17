@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 type residentRig struct {
@@ -229,15 +231,13 @@ func TestResidentDuplicateLiveHostDoesNotReplaceOriginal(t *testing.T) {
 	done := residentRun(r.c)
 	residentReady(t, r)
 	generation := residentGeneration(r.h)
-	other, e := NewResidentClient(r.c.cfg)
-	if e != nil {
-		t.Fatal(e)
+	// One attempt observes the gateway's own refusal, apart from the retry policy.
+	e, clean, authenticated := residentSameIdentity(t, r).attempt(context.Background())
+	if websocket.CloseStatus(e) != occupiedClose || clean != nil || authenticated {
+		t.Fatal("duplicate was not refused as occupied", e, clean, authenticated)
 	}
-	m := newMemTransport(r.h)
-	other.transport = func(own acquirer) http.RoundTripper { m.own = own; m.track = own.attach; return m }
-	e = await(t, residentRun(other), 5*time.Second)
-	if !errors.Is(e, ErrRefused) || residentGeneration(r.h) != generation || !r.c.Connected() {
-		t.Fatal("duplicate replaced live source", e)
+	if residentGeneration(r.h) != generation || !r.c.Connected() || !r.h.ResidentConnected(hostLabel, member1) {
+		t.Fatal("duplicate replaced live source")
 	}
 	ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
 	defer stop()

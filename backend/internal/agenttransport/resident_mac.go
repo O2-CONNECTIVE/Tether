@@ -19,6 +19,12 @@ import (
 // It contains neither a grant nor consent, scope expansion or a worker factory.
 var errResidentUnavailable = errors.New("agenttransport: resident transport unavailable")
 
+// residentOccupiedLimit bounds retrying the gateway's occupancy refusal (4013),
+// counted from the first refusal since the last authentication. The gateway
+// notices a lost control within about 20s (heartbeat interval plus ping
+// timeout); this is three times that, so a real duplicate still stops.
+const residentOccupiedLimit = 60 * time.Second
+
 type ResidentClientConfig struct {
 	Endpoint, HostLabel, PrincipalLabel string
 	HostKey                             ssh.Signer
@@ -144,6 +150,7 @@ func (c *ResidentClient) Run(ctx context.Context) error {
 	}()
 	defer cancel()
 	delay := c.retryDelay
+	var occupiedSince time.Time
 	for {
 		if life.Err() != nil {
 			c.mu.Lock()
@@ -172,7 +179,17 @@ func (c *ResidentClient) Run(ctx context.Context) error {
 		if life.Err() != nil {
 			return life.Err()
 		}
-		if !residentRetryable(e, authenticated) {
+		if authenticated {
+			occupiedSince = time.Time{}
+		}
+		if !authenticated && websocket.CloseStatus(e) == residentOccupiedClose {
+			// The gateway still holds an earlier control of this identity.
+			if now := c.clock(); occupiedSince.IsZero() {
+				occupiedSince = now
+			} else if now.Sub(occupiedSince) > residentOccupiedLimit {
+				return errors.Join(ErrRefused, e)
+			}
+		} else if !residentRetryable(e, authenticated) {
 			return errors.Join(ErrRefused, e)
 		}
 		if authenticated {

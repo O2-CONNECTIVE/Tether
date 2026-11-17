@@ -34,7 +34,8 @@ func TestResident32IntentDrainRotatesOnlyExactLastCollectedRequest(t *testing.T)
 	verticalEventually(t, func() bool {
 		return r.c.Connected() && r.h.ResidentGeneration(hostLabel, member1) != "" && residentGeneration(r.h) != first
 	})
-	if r.rec.count.Load() != 0 || r.m.trips.Load() != 2 {
+	// Trips beyond the second are occupancy refusals retried (#380).
+	if r.rec.count.Load() != 0 || r.m.trips.Load() < 2 {
 		t.Fatal("rotation resumed/acquired work", r.rec.count.Load(), r.m.trips.Load())
 	}
 	r.h.RotateResident(hostLabel, member1, first, fmt.Sprintf("%032x", 32))

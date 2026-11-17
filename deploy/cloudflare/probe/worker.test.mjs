@@ -401,6 +401,15 @@ test("the relay closes on an oversized message, the frame budget or an error", (
   assert.equal(r.rt.timers.size, 0);
 });
 
+test("the resident occupancy refusal reaches the Mac unchanged", () => {
+  // The Go gateway closes with 4013 so the Mac can retry it for a bounded time;
+  // rewritten to 1011 it would look like relay loss and be retried forever.
+  assert.equal(closeCode(4013), 4013);
+  const { client, upstream } = relayed();
+  upstream.emit("close", { code: 4013, reason: "resident control occupied" });
+  assert.deepEqual(client.closed, { code: 4013, reason: "resident control occupied" });
+});
+
 test("close codes stay sendable", () => {
   assert.deepEqual([1000, 1001, 1008, 1009, 1011, 3000, 4999].map(closeCode), [1000, 1001, 1008, 1009, 1011, 3000, 4999]);
   assert.deepEqual([1005, 1006, 1015, 999, 5000, undefined].map(closeCode), [1000, 1011, 1011, 1011, 1011, 1011]);

@@ -121,7 +121,9 @@ func TestResidentRelayCloseCodesReauthenticateWithoutResumingWork(t *testing.T) 
 				case <-time.After(time.Millisecond):
 				}
 			}
-			if r.m.trips.Load() != 2 || r.rec.count.Load() != 0 {
+			// Trips beyond the second are occupancy refusals retried while the
+			// gateway still held the original (#380); none may resume work.
+			if r.m.trips.Load() < 2 || r.rec.count.Load() != 0 {
 				t.Fatal("relay reconnect resumed work", r.m.trips.Load())
 			}
 			ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
