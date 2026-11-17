@@ -91,6 +91,13 @@ func NewClient(cfg ClientConfig, owner Owner) (*Client, error) {
 	}
 	var intent *agentgateway.ResidentWorkBinding
 	if cfg.ResidentIntent != nil {
+		// Only the two minted intents: a type embedding one also satisfies
+		// ResidentIntent and could report a binding the Mac never received.
+		switch cfg.ResidentIntent.(type) {
+		case ResidentFixedIntent, ResidentRunIntent:
+		default:
+			return nil, ErrConfig
+		}
 		c := cfg.ResidentIntent.Correlation()
 		if c.OriginalContext() == nil || c.OriginalContext().Err() != nil || c.Receiver() == nil || c.Endpoint() != cfg.Endpoint || c.HostLabel() != cfg.HostLabel || c.PrincipalLabel() != cfg.PrincipalLabel || c.HostKeyFingerprint() != ssh.FingerprintSHA256(public) || d.Deadline.After(c.Deadline()) {
 			return nil, ErrConfig

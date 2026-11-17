@@ -113,7 +113,7 @@ func (s *ResidentSourceLease) Next() (ResidentIntent, error) {
 	s.mu.Lock()
 	if s.finishing || s.reading != nil {
 		s.mu.Unlock()
-		return ResidentFixedIntent{}, ErrUsed
+		return nil, ErrUsed
 	}
 	read := make(chan struct{})
 	s.reading = read

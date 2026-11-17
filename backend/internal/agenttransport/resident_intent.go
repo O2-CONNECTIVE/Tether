@@ -46,7 +46,9 @@ func (c ResidentCorrelation) binding(run agentgateway.ResidentRunScope) agentgat
 type residentCorrelation = ResidentCorrelation
 
 // ResidentIntent is one verified resident intent: a ResidentFixedIntent or a
-// ResidentRunIntent. The unexported method keeps the set closed.
+// ResidentRunIntent. The unexported method keeps other packages from declaring
+// their own, but a type embedding one of the two still satisfies it, so code
+// that signs an intent's binding accepts only those two concrete types.
 type ResidentIntent interface {
 	Correlation() ResidentCorrelation
 	WorkBinding() agentgateway.ResidentWorkBinding

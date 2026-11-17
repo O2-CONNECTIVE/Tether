@@ -1,12 +1,15 @@
 package agenttransport
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestResidentWorkRegistrationBindsEachCorrelationFieldInHostProof(t *testing.T) {
@@ -60,5 +63,36 @@ func TestResidentWorkRegistrationBindsEachCorrelationFieldInHostProof(t *testing
 		if _, e := decodeWorkRegister(bad); e == nil {
 			t.Fatal("unknown/duplicate registration field accepted")
 		}
+	}
+}
+
+// rebound embeds a real intent but reports another work binding. Embedding
+// also promotes the unexported encode, so it satisfies ResidentIntent.
+type rebound struct {
+	ResidentFixedIntent
+	other agentgateway.ResidentWorkBinding
+}
+
+func (r rebound) WorkBinding() agentgateway.ResidentWorkBinding { return r.other }
+
+// The registration signs the binding of the intent it was given. Only the two
+// intents this package mints may reach it, or a caller could pair a received
+// correlation with work the Mac never received and have the host key sign it.
+func TestResidentWorkRegistrationAcceptsOnlyMintedIntents(t *testing.T) {
+	host := fixtureSigner(t, 7)
+	original, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	received := ResidentFixedIntent{residentCorrelation: residentCorrelation{generation: strings.Repeat("a", 64), requestID: strings.Repeat("1", 32), endpoint: testEndpoint, host: hostLabel, principal: member1, sequence: 1, deadline: time.Now().Add(2 * time.Minute), original: original, receiver: &ResidentReceiver{}, hostFingerprint: ssh.FingerprintSHA256(host.PublicKey())}}
+	cfg := clientConfig(host)
+	cfg.ResidentIntent = received
+	if _, e := NewClient(cfg, newStubOwner(host, time.Now().Add(time.Minute))); e != nil {
+		t.Fatal("received intent refused", e)
+	}
+	other := received.WorkBinding()
+	other.RequestID = strings.Repeat("2", 32)
+	other.Run = agentgateway.ResidentRunScope{CommandSHA256: strings.Repeat("ab", 32), Cwd: ".", TimeoutMillis: 60000}
+	cfg.ResidentIntent = rebound{received, other}
+	if _, e := NewClient(cfg, newStubOwner(host, time.Now().Add(time.Minute))); !errors.Is(e, ErrConfig) {
+		t.Fatal("an intent with a substituted binding reached the registration", e)
 	}
 }
