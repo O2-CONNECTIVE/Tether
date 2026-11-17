@@ -108,6 +108,14 @@ func (s *HTTPSession) Close() {
 	}
 }
 
+// Ready reports whether the lifecycle completed (initialize, then
+// notifications/initialized). Before that the session serves no tool.
+func (s *HTTPSession) Ready() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state == stateReady
+}
+
 // Handle processes exactly one JSON-RPC message. Concurrent calls are allowed:
 // a tool call blocks only its own caller, at most for CallTimeout. Explicit
 // request cancellation receives a JSON-RPC cancellation error for HTTP framing;
