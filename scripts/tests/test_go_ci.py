@@ -171,6 +171,35 @@ class GoEventTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.check(events)
 
+    def test_timed_out_test_output_is_reported(self):
+        # A package timeout leaves the hung test without a terminal event; its
+        # panic and goroutine dump are the only evidence of what was waiting.
+        events = self.events()
+        package = events[0]['Package']
+        events += [{'Package': package, 'Test': 'TestHung', 'Action': 'run'},
+                   {'Package': package, 'Test': 'TestHung', 'Action': 'output',
+                    'Output': 'panic: test timed out after 5m0s\n\trunning tests:\n\t\tTestHung (5m0s)\n'},
+                   {'Package': package, 'Test': 'TestHung', 'Action': 'output',
+                    'Output': 'goroutine 7 [chan receive]:\n' * 2000}]
+        printed = io.StringIO()
+        with self.assertRaises(ValueError), contextlib.redirect_stdout(printed):
+            test_events('\n'.join(json.dumps(event) for event in events), 1)
+        self.assertIn('UNFINISHED: ' + package + ' TestHung', printed.getvalue())
+        self.assertIn('TestHung (5m0s)', printed.getvalue())
+
+    def test_package_level_timeout_keeps_panic_header_and_is_bounded(self):
+        # A hang outside any test (TestMain, cleanup) reports the panic at package level.
+        # The header names what was running; the dump is capped so it cannot flood the log.
+        events = self.events()
+        events.append({'Package': events[0]['Package'], 'Action': 'output',
+                       'Output': 'panic: test timed out after 5m0s\n\trunning tests:\n\t\tTestMain\n'
+                       + 'goroutine 7 [chan receive]:\n' * 10000})
+        printed = io.StringIO()
+        with self.assertRaises(ValueError), contextlib.redirect_stdout(printed):
+            test_events('\n'.join(json.dumps(event) for event in events), 1)
+        self.assertIn('running tests:', printed.getvalue())
+        self.assertLess(len(printed.getvalue()), 250000)
+
     def test_missing_package_is_rejected(self):
         with self.assertRaises(ValueError):
             self.check(self.events()[:-1])

@@ -366,6 +366,14 @@ def test_inventory():
     return expected
 
 
+def failure_excerpt(text):
+    # A timeout panic starts with the running tests and is followed by every goroutine;
+    # keep it from the header so the hung test's stack is not cut off by a tail slice.
+    start = text.find('panic: test timed out')
+    text = text[start:][:200000] if start >= 0 else text[-6000:]
+    return text.replace(str(ROOT), '<repo>')
+
+
 def test_events(source, returncode, expected_cpu=None, expected_tests=None):
     terminals = {}
     packages = {}
@@ -410,11 +418,15 @@ def test_events(source, returncode, expected_cpu=None, expected_tests=None):
         print(error.replace(str(ROOT), '<repo>'), flush=True)
     for key, status in terminals.items():
         if status in ('fail', 'skip'):
-            print(''.join(outputs.get(key, []))[-6000:].replace(str(ROOT), '<repo>'), flush=True)
+            print(failure_excerpt(''.join(outputs.get(key, []))), flush=True)
+    # A package timeout panic is attributed to the still-running test, which never gets a terminal event.
+    for key in sorted(started - terminals.keys()):
+        print('UNFINISHED:', *key, flush=True)
+        print(failure_excerpt(''.join(outputs.get(key, []))), flush=True)
     if returncode and not any(value == 'fail' for value in terminals.values()):
         for (package, test), lines in outputs.items():
             if not test:
-                print(''.join(lines)[-6000:].replace(str(ROOT), '<repo>'), flush=True)
+                print(failure_excerpt(''.join(lines)), flush=True)
     if expected_cpu is not None:
         print('Observed test GOMAXPROCS:', sorted(cpus), flush=True)
         if cpus != {int(expected_cpu)}:
