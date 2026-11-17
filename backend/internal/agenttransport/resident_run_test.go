@@ -7,14 +7,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 )
 
 var residentRunFields = []string{"generation", "sequence", "request_id", "operation", "deadline_unix_ms", "timeout_ms", "command_sha256", "cwd"}
 
-func residentRunFixture(t *testing.T) (residentBinding, ResidentFixedIntent, time.Time) {
+func residentRunFixture(t *testing.T) (residentBinding, ResidentRunIntent, time.Time) {
 	t.Helper()
 	b, fixed, now := residentProtocolFixture(t)
-	return b, ResidentFixedIntent{generation: b.generation, sequence: 1, requestID: fixed.requestID, deadline: now.Add(10 * time.Second), run: residentRunScope{timeoutMillis: 60000, commandSHA256: fmt.Sprintf("%064x", 0xabc), cwd: "src/app"}}, now
+	return b, ResidentRunIntent{residentCorrelation: residentCorrelation{generation: b.generation, sequence: 1, requestID: fixed.requestID, deadline: now.Add(10 * time.Second)}, run: residentRunScope{timeoutMillis: 60000, commandSHA256: fmt.Sprintf("%064x", 0xabc), cwd: "src/app"}}, now
 }
 
 // residentRunResigned edits one field and signs the result with the gateway role,
@@ -194,18 +196,25 @@ func TestResidentRunAndFixedIntentsAreNotInterchangeable(t *testing.T) {
 	if _, e := residentDecodeRun(b, fixedMsg, key.PublicKey(), now, 1, map[string]bool{}); !errors.Is(e, ErrRefused) {
 		t.Fatal("run decoder accepted a fixed intent", e)
 	}
-	// One type correlates both kinds of work, so the fixed-operation admission on
-	// the Mac tells them apart by these two values. A run intent must never
-	// report the fixed ones, and the gateway must never sign it as fixed.
+	// The types keep the two kinds apart, and the gateway sends what an
+	// intent's own encode signs. A run intent must never report the fixed
+	// values, and the gateway must never sign it as fixed.
 	got, e := residentDecodeRun(b, run, key.PublicKey(), now, 1, map[string]bool{})
 	if e != nil || got.Operation() != ResidentRunOperation || got.TimeoutMillis() != 60000 {
 		t.Fatal("run intent reports fixed-operation values", got.Operation(), got.TimeoutMillis(), e)
 	}
-	if msg, e := residentEncodeIntent(b, got, key); !errors.Is(e, ErrRefused) || msg != nil {
+	resent, e := got.encode(b, key)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e := residentDecodeIntent(b, resent, key.PublicKey(), now, 1, map[string]bool{}); !errors.Is(e, ErrRefused) {
 		t.Fatal("run intent signed as the fixed operation", e)
 	}
+	if again, e := residentDecodeRun(b, resent, key.PublicKey(), now, 1, map[string]bool{}); e != nil || again.WorkBinding() != got.WorkBinding() {
+		t.Fatal("run intent did not encode as the same run", e)
+	}
 	plain, e := residentDecodeIntent(b, fixedMsg, key.PublicKey(), now, 1, map[string]bool{})
-	if e != nil || plain.Operation() != ResidentFixedOperation || plain.TimeoutMillis() != 15000 || plain.CommandSHA256() != "" || plain.Cwd() != "" {
+	if e != nil || plain.Operation() != ResidentFixedOperation || plain.TimeoutMillis() != 15000 || plain.WorkBinding().Run != (agentgateway.ResidentRunScope{}) {
 		t.Fatal("fixed intent carries a command scope", e)
 	}
 	// Same values, but signed under the fixed-operation role.
@@ -218,20 +227,20 @@ func TestResidentRunAndFixedIntentsAreNotInterchangeable(t *testing.T) {
 func TestResidentRunEncodeRefusesToSignOutOfScopeIntent(t *testing.T) {
 	b, i, _ := residentRunFixture(t)
 	key := fixtureSigner(t, 0x21)
-	for name, edit := range map[string]func(*ResidentFixedIntent){
-		"zero-value":        func(i *ResidentFixedIntent) { *i = ResidentFixedIntent{} },
-		"zero-timeout":      func(i *ResidentFixedIntent) { i.run.timeoutMillis = 0 },
-		"timeout-above-cap": func(i *ResidentFixedIntent) { i.run.timeoutMillis = 240001 },
-		"escaping-cwd":      func(i *ResidentFixedIntent) { i.run.cwd = "../outside" },
-		"request-shape":     func(i *ResidentFixedIntent) { i.requestID = "arbitrary" },
-		"sequence-cap":      func(i *ResidentFixedIntent) { i.sequence = 33 },
-		"zero-sequence":     func(i *ResidentFixedIntent) { i.sequence = 0 },
-		"other-generation":  func(i *ResidentFixedIntent) { i.generation = fmt.Sprintf("%064x", 2) },
-		"zero-deadline":     func(i *ResidentFixedIntent) { i.deadline = time.Time{} },
-		"malformed-hash":    func(i *ResidentFixedIntent) { i.run.commandSHA256 = "abc" },
-		"oversized-message": func(i *ResidentFixedIntent) { i.run.cwd = strings.Repeat("<", 1024) },
+	for name, edit := range map[string]func(*ResidentRunIntent){
+		"zero-value":        func(i *ResidentRunIntent) { *i = ResidentRunIntent{} },
+		"zero-timeout":      func(i *ResidentRunIntent) { i.run.timeoutMillis = 0 },
+		"timeout-above-cap": func(i *ResidentRunIntent) { i.run.timeoutMillis = 240001 },
+		"escaping-cwd":      func(i *ResidentRunIntent) { i.run.cwd = "../outside" },
+		"request-shape":     func(i *ResidentRunIntent) { i.requestID = "arbitrary" },
+		"sequence-cap":      func(i *ResidentRunIntent) { i.sequence = 33 },
+		"zero-sequence":     func(i *ResidentRunIntent) { i.sequence = 0 },
+		"other-generation":  func(i *ResidentRunIntent) { i.generation = fmt.Sprintf("%064x", 2) },
+		"zero-deadline":     func(i *ResidentRunIntent) { i.deadline = time.Time{} },
+		"malformed-hash":    func(i *ResidentRunIntent) { i.run.commandSHA256 = "abc" },
+		"oversized-message": func(i *ResidentRunIntent) { i.run.cwd = strings.Repeat("<", 1024) },
 		// json.Marshal would replace the bytes, so the wire value would differ from the signed one.
-		"invalid-utf8": func(i *ResidentFixedIntent) { i.run.cwd = "src/\xff" },
+		"invalid-utf8": func(i *ResidentRunIntent) { i.run.cwd = "src/\xff" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			next := i

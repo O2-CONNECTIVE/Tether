@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 )
 
 // ResidentSourceLease is exclusive source ownership, not an authority/grant.
@@ -22,6 +24,7 @@ type ResidentSourceLease struct {
 	done                chan struct{}
 	replies             map[string]bool
 	collections         map[string]bool
+	received            map[string]agentgateway.ResidentWorkBinding
 	unsent              []byte
 }
 
@@ -103,9 +106,9 @@ func (s *ResidentSourceLease) Receiver() *ResidentReceiver {
 }
 
 // Next is the only public fixed-frame reader of a handed-off source.
-func (s *ResidentSourceLease) Next() (ResidentFixedIntent, error) {
+func (s *ResidentSourceLease) Next() (ResidentIntent, error) {
 	if s == nil || s.self != s {
-		return ResidentFixedIntent{}, ErrConfig
+		return nil, ErrConfig
 	}
 	s.mu.Lock()
 	if s.finishing || s.reading != nil {
@@ -124,16 +127,22 @@ func (s *ResidentSourceLease) Next() (ResidentFixedIntent, error) {
 		}
 		s.mu.Unlock()
 	}
+	if err == nil {
+		s.mu.Lock()
+		binding := i.WorkBinding()
+		s.received[binding.RequestID] = binding
+		s.mu.Unlock()
+	}
 	return i, err
 }
 
 // Refuse is the unchanged fail-closed response and ends only that work lease.
-func (s *ResidentSourceLease) Refuse(i ResidentFixedIntent) error { return s.reply(i, false) }
+func (s *ResidentSourceLease) Refuse(i ResidentCorrelation) error { return s.reply(i, false) }
 
 // Pending reports only common-owner request admission, NOT native approval,
 // command start/result or OFF completion. Call only after actual admission.
-func (s *ResidentSourceLease) Pending(i ResidentFixedIntent) error { return s.reply(i, true) }
-func (s *ResidentSourceLease) reply(i ResidentFixedIntent, pending bool) error {
+func (s *ResidentSourceLease) Pending(i ResidentCorrelation) error { return s.reply(i, true) }
+func (s *ResidentSourceLease) reply(i ResidentCorrelation, pending bool) error {
 	if s == nil || s.self != s || i.Receiver() != s.receiver || i.OriginalContext() == nil || i.OriginalContext().Err() != nil {
 		return ErrRefused
 	}
@@ -162,7 +171,7 @@ func (s *ResidentSourceLease) reply(i ResidentFixedIntent, pending bool) error {
 
 // ReleaseWork observes that the consumer no longer owns that work scope. It
 // does not close a native worker; the consumer retains/collects that same owner.
-func (s *ResidentSourceLease) ReleaseWork(i ResidentFixedIntent) {
+func (s *ResidentSourceLease) ReleaseWork(i ResidentCorrelation) {
 	if s != nil && s.self == s {
 		s.receiver.Release(i)
 	}
@@ -209,7 +218,7 @@ func (s *ResidentSourceLease) Finish(ctx context.Context, consumerResult error) 
 	return e
 }
 func (c *ResidentClient) handoff(ctx context.Context, r *ResidentReceiver, link *closer) error {
-	lease := &ResidentSourceLease{receiver: r, link: link, done: make(chan struct{}), replies: map[string]bool{}, collections: map[string]bool{}}
+	lease := &ResidentSourceLease{receiver: r, link: link, done: make(chan struct{}), replies: map[string]bool{}, collections: map[string]bool{}, received: map[string]agentgateway.ResidentWorkBinding{}}
 	lease.self = lease
 	select {
 	case <-ctx.Done():

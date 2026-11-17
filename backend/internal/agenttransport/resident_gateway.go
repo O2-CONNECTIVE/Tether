@@ -22,7 +22,7 @@ type ResidentPrincipal struct {
 	Signer ssh.Signer
 }
 type residentPending struct {
-	intent ResidentFixedIntent
+	intent ResidentCorrelation
 	reply  chan error
 }
 type residentPeer struct {
@@ -39,7 +39,7 @@ type residentPeer struct {
 	sequence  uint64
 	seen      map[string]bool
 	pending   *residentPending
-	intents   map[string]ResidentFixedIntent
+	intents   map[string]agentgateway.ResidentWorkBinding
 	ready     bool // guarded by Handler.mu
 	finished  chan struct{}
 	registrar Registrar
@@ -65,19 +65,19 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 		if peer != nil {
 			defer close(peer.finished)
 			peer.mu.Lock()
-			var last ResidentFixedIntent
-			for _, intent := range peer.intents {
-				if intent.sequence > last.sequence {
-					last = intent
+			var last agentgateway.ResidentWorkBinding
+			for _, work := range peer.intents {
+				if work.Sequence > last.Sequence {
+					last = work
 				}
 			}
 			peer.mu.Unlock()
-			if last.sequence != 0 {
+			if last.Sequence != 0 {
 				h.mu.Lock()
 				if h.residentLast == nil {
 					h.residentLast = map[string]residentLastWork{}
 				}
-				h.residentLast[residentMapKey(peer.binding.host, peer.binding.principal)] = residentLastWork{binding: peer.binding, intent: last}
+				h.residentLast[residentMapKey(peer.binding.host, peer.binding.principal)] = residentLastWork{binding: peer.binding, work: last}
 				h.mu.Unlock()
 			}
 		}
@@ -102,7 +102,7 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 	if e != nil {
 		return
 	}
-	peer = &residentPeer{handler: h, registrar: h.registrar, binding: b, ctx: life, cancel: cancel, ws: ws, link: c, key: key, signer: signer, gate: make(chan struct{}, 1), seen: map[string]bool{}, intents: map[string]ResidentFixedIntent{}, finished: make(chan struct{})}
+	peer = &residentPeer{handler: h, registrar: h.registrar, binding: b, ctx: life, cancel: cancel, ws: ws, link: c, key: key, signer: signer, gate: make(chan struct{}, 1), seen: map[string]bool{}, intents: map[string]agentgateway.ResidentWorkBinding{}, finished: make(chan struct{})}
 	peer.gate <- struct{}{}
 	reserve, stopReserve := context.WithTimeout(life, h.budgets.Registration)
 	e = h.reserveResident(reserve, peer)
@@ -210,12 +210,12 @@ func (p *residentPeer) readReceipts() error {
 				h := p.handler
 				h.mu.Lock()
 				r, ok := h.residentLast[k]
-				if ok && m["request_id"] == r.intent.requestID && m["generation"] == r.intent.generation && m["sequence"] == strconv.FormatUint(r.intent.sequence, 10) && bytes.Equal(r.binding.hostKey, p.binding.hostKey) && r.binding.host == p.binding.host && r.binding.principal == p.binding.principal {
-					i, binding, found = r.intent, r.binding, true
+				if ok && m["request_id"] == r.work.RequestID && m["generation"] == r.work.Generation && m["sequence"] == strconv.FormatUint(r.work.Sequence, 10) && bytes.Equal(r.binding.hostKey, p.binding.hostKey) && r.binding.host == p.binding.host && r.binding.principal == p.binding.principal {
+					i, binding, found = r.work, r.binding, true
 				}
 				h.mu.Unlock()
 			}
-			if !found || m["generation"] != i.generation || m["sequence"] != strconv.FormatUint(i.sequence, 10) {
+			if !found || m["generation"] != i.Generation || m["sequence"] != strconv.FormatUint(i.Sequence, 10) {
 				return ErrRefused
 			}
 			proof := collectionProof(binding, i, m["cleanup"])
@@ -322,16 +322,22 @@ func (h *Handler) proposeResident(ctx context.Context, host, principal, generati
 		p.mu.Unlock()
 		return ErrRefused
 	}
-	i := ResidentFixedIntent{generation: p.binding.generation, sequence: p.sequence + 1, requestID: requestID, deadline: deadline, run: run}
-	if i.isRun() && !i.runWellFormed(p.binding) {
-		p.mu.Unlock()
-		return ErrRefused
+	c := ResidentCorrelation{generation: p.binding.generation, sequence: p.sequence + 1, requestID: requestID, deadline: deadline, endpoint: p.binding.endpoint, host: p.binding.host, principal: p.binding.principal}
+	var intent ResidentIntent
+	if run == (residentRunScope{}) {
+		intent = ResidentFixedIntent{residentCorrelation: c}
+	} else {
+		runIntent := ResidentRunIntent{residentCorrelation: c, run: run}
+		if !runIntent.runWellFormed(p.binding) {
+			p.mu.Unlock()
+			return ErrRefused
+		}
+		intent = runIntent
 	}
 	p.sequence++
 	p.seen[requestID] = true
-	i.endpoint, i.host, i.principal = p.binding.endpoint, p.binding.host, p.binding.principal
-	p.intents[requestID] = i
-	pending := &residentPending{intent: i, reply: make(chan error, 1)}
+	p.intents[requestID] = intent.WorkBinding()
+	pending := &residentPending{intent: c, reply: make(chan error, 1)}
 	p.pending = pending
 	p.mu.Unlock()
 	defer func() {
@@ -341,11 +347,7 @@ func (h *Handler) proposeResident(ctx context.Context, host, principal, generati
 		}
 		p.mu.Unlock()
 	}()
-	encode := residentEncodeIntent
-	if i.isRun() {
-		encode = residentEncodeRun
-	}
-	msg, e := encode(p.binding, i, p.signer)
+	msg, e := intent.encode(p.binding, p.signer)
 	if e != nil {
 		p.cancel()
 		return e

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/workerowner"
@@ -34,7 +35,7 @@ type standbyCycle struct {
 	connector     residentConnector
 	source        *FixedSource
 	lease         *agenttransport.ResidentSourceLease
-	intent        *agenttransport.ResidentFixedIntent
+	work          *agentgateway.ResidentWorkBinding
 	proved        chan struct{} // closed once the open source's cleanup proof was attempted
 	result        error
 	initialUntil  time.Time
@@ -65,10 +66,10 @@ type Standby struct {
 // collect sends the cleanup proof and keeps one it could not write. The
 // gateway refuses this member's next work until it has that proof, so consume
 // sends it over the next authenticated control.
-func (s *Standby) collect(lease *agenttransport.ResidentSourceLease, i agenttransport.ResidentFixedIntent, result error) {
+func (s *Standby) collect(lease *agenttransport.ResidentSourceLease, w agentgateway.ResidentWorkBinding, result error) {
 	// Only a confirmed cleanup frees the gateway's slot, and only a failed
 	// write (not a refused repeat) leaves a proof worth sending again.
-	if e := lease.Collected(i, result); e == nil || result != nil || errors.Is(e, agenttransport.ErrRefused) {
+	if e := lease.Collected(w, result); e == nil || result != nil || errors.Is(e, agenttransport.ErrRefused) {
 		return
 	}
 	if proof := lease.Unsent(); proof != nil {
@@ -409,7 +410,7 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 	proved := make(chan struct{})
 	c.mu.Lock()
 	c.source, c.lease = source, lease
-	c.intent = nil
+	c.work = nil
 	c.proved = nil
 	if err == nil {
 		c.proved = proved
@@ -446,7 +447,7 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 			collected = workerowner.ErrUnknown
 		}
 		c.mu.Lock()
-		last := c.intent
+		last := c.work
 		c.mu.Unlock()
 		if last != nil {
 			s.collect(lease, *last, collected)
@@ -463,26 +464,28 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 		if e != nil {
 			break
 		}
-		run := i.Operation() == agenttransport.ResidentRunOperation
+		runIntent, run := i.(agenttransport.ResidentRunIntent)
 		s.mu.Lock()
 		admitted := s.admissionLocked(c, run)
 		s.mu.Unlock()
 		if admitted == admitNothing {
-			_ = lease.Refuse(i)
+			_ = lease.Refuse(i.Correlation())
 			break
 		}
 		if admitted == admitNoRun {
-			_ = lease.Refuse(i)
+			_ = lease.Refuse(i.Correlation())
 			continue
 		}
 		var request *workerowner.Request
 		if admitted == admitRun {
-			request, e = source.NewRunRequest(i)
+			request, e = source.NewRunRequest(runIntent)
+		} else if fixed, ok := i.(agenttransport.ResidentFixedIntent); ok {
+			request, e = source.NewRequest(fixed)
 		} else {
-			request, e = source.NewRequest(i)
+			e = maclaunch.ErrResident
 		}
 		if e != nil {
-			_ = lease.Refuse(i)
+			_ = lease.Refuse(i.Correlation())
 			continue
 		}
 		sent := false
@@ -500,14 +503,14 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 		case e = <-request.Reply:
 			if e == nil {
 				c.mu.Lock()
-				copy := i
-				c.intent = &copy
+				w := i.WorkBinding()
+				c.work = &w
 				c.mu.Unlock()
-				if e = lease.Pending(i); e != nil {
+				if e = lease.Pending(i.Correlation()); e != nil {
 					err = e
 				}
 			} else {
-				_ = lease.Refuse(i)
+				_ = lease.Refuse(i.Correlation())
 			}
 		case <-c.ctx.Done():
 		case <-lease.Context().Done():
@@ -532,7 +535,7 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 		c.mu.Lock()
 		c.source = nil
 		c.lease = nil
-		c.intent = nil
+		c.work = nil
 		c.mu.Unlock()
 	}
 	return errors.Join(err, finish)
@@ -547,7 +550,7 @@ func (s *Standby) monitor(c *standbyCycle) {
 		case <-ticker.C:
 		}
 		c.mu.Lock()
-		connector, source, intent, lease := c.connector, c.source, c.intent, c.lease
+		connector, source, work, lease := c.connector, c.source, c.work, c.lease
 		c.mu.Unlock()
 		if connector == nil {
 			continue
@@ -556,8 +559,8 @@ func (s *Standby) monitor(c *standbyCycle) {
 		control := connector.Snapshot()
 		owned := c.owner.Snapshot()
 		var w *maclaunch.ResidentWorker
-		if source != nil && intent != nil {
-			w, _ = source.Worker(intent.RequestID())
+		if source != nil && work != nil {
+			w, _ = source.Worker(work.RequestID)
 		}
 		s.mu.Lock()
 		before := cloneObservation(s.observation)
@@ -620,7 +623,7 @@ func (s *Standby) monitor(c *standbyCycle) {
 			s.changedLocked()
 		}
 		s.mu.Unlock()
-		if intent != nil && lease != nil && (owned.Unknown || owned.Owned == 0) {
+		if work != nil && lease != nil && (owned.Unknown || owned.Owned == 0) {
 			var collection error
 			if owned.Unknown {
 				collection = ErrStandbyUnknown
@@ -631,7 +634,7 @@ func (s *Standby) monitor(c *standbyCycle) {
 					collection = ErrStandbyUnknown
 				}
 			}
-			s.collect(lease, *intent, collection)
+			s.collect(lease, *work, collection)
 		}
 		if stopForUnknown {
 			c.cancel()

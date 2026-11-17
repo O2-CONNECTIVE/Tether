@@ -105,25 +105,25 @@ func TestGatewayTakesRunWorkScopeFromItsOwnIntent(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	claimed := i.workBinding()
+	claimed := i.WorkBinding()
 	if claimed.Run != (agentgateway.ResidentRunScope{CommandSHA256: residentRunWireHash, Cwd: "src/app", TimeoutMillis: 60000}) {
 		t.Fatal("the Mac's work binding lost the signed scope", claimed.Run)
 	}
 	claimed.Run = agentgateway.ResidentRunScope{} // what a registration message carries
 	current, ok := r.h.currentWork(claimed)
-	if !ok || current != i.workBinding() {
+	if !ok || current != i.WorkBinding() {
 		t.Fatal("gateway did not restore the scope it signed", ok, current.Run)
 	}
 	claimed.Run = agentgateway.ResidentRunScope{CommandSHA256: strings.Repeat("0", 64), Cwd: "elsewhere", TimeoutMillis: 1}
-	if current, ok = r.h.currentWork(claimed); !ok || current != i.workBinding() {
+	if current, ok = r.h.currentWork(claimed); !ok || current != i.WorkBinding() {
 		t.Fatal("gateway trusted a scope supplied by the caller", ok, current.Run)
 	}
-	wrong := i.workBinding()
+	wrong := i.WorkBinding()
 	wrong.Sequence++
 	if _, ok = r.h.currentWork(wrong); ok {
 		t.Fatal("stale sequence accepted as current work")
 	}
-	if e = s.Refuse(i); e != nil {
+	if e = s.Refuse(i.Correlation()); e != nil {
 		t.Fatal(e)
 	}
 	_ = await(t, result, 3*time.Second)
@@ -133,10 +133,10 @@ func TestGatewayTakesRunWorkScopeFromItsOwnIntent(t *testing.T) {
 	if i, e = s.Next(); e != nil {
 		t.Fatal(e)
 	}
-	if current, ok = r.h.currentWork(i.workBinding()); !ok || current.Run != (agentgateway.ResidentRunScope{}) {
+	if current, ok = r.h.currentWork(i.WorkBinding()); !ok || current.Run != (agentgateway.ResidentRunScope{}) {
 		t.Fatal("fixed work gained a run scope", ok, current.Run)
 	}
-	if e = s.Refuse(i); e != nil {
+	if e = s.Refuse(i.Correlation()); e != nil {
 		t.Fatal(e)
 	}
 	_ = await(t, result, 3*time.Second)

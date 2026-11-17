@@ -33,7 +33,7 @@ CLIは開発とCIの検証用として現状を維持します。
 
 | 事項 | 裁定 |
 | --- | --- |
-| intentの型 | 固定作業と汎用コマンドで型を1つにする。常駐経路がこの型を作業の相関として約10か所で受け渡すため。相関だけを共通の型に切り出す案は[#358](https://github.com/O2-CONNECTIVE/Tether/issues/358) |
+| intentの型 | 固定作業と汎用コマンドで型を1つにする。常駐経路がこの型を作業の相関として約10か所で受け渡すため。相関だけを共通の型に切り出す案は[#358](https://github.com/O2-CONNECTIVE/Tether/issues/358)。その後#358で、相関を共通の型に切り出し、固定作業と汎用コマンドのintentを別の型に分けた（通信形式と署名は変えていない） |
 | 作業root | 既存のローカル構成 `macagent.Config.WorkDir` を使う。GUIで選ぶ案は[#359](https://github.com/O2-CONNECTIVE/Tether/issues/359) |
 | Macの署名 | 汎用の作業の登録と回収だけ、操作名・コマンドのhash・`cwd`・timeoutを含む新しい署名にする。固定作業の通信形式は変えない |
 | `cwd` の確認 | 起動の直前にsymlinkを解決し、実体が作業rootの配下でなければ拒否する |

@@ -68,20 +68,21 @@ func TestResidentExclusiveHandoffMintsActualFiniteIntentAndPendingOnly(t *testin
 	if e != nil {
 		t.Fatal(e)
 	}
-	if i.Receiver() != s.Receiver() || i.OriginalContext() == nil || i.OriginalContext().Err() != nil || i.HostKeyFingerprint() != s.Receiver().HostKeyFingerprint() || i.Deadline() == i.Deadline().Round(0) {
+	c := i.Correlation()
+	if c.Receiver() != s.Receiver() || c.OriginalContext() == nil || c.OriginalContext().Err() != nil || c.HostKeyFingerprint() != s.Receiver().HostKeyFingerprint() || c.Deadline() == c.Deadline().Round(0) {
 		t.Fatal("intent lost observed original binding or monotonic lifetime")
 	}
-	if e = s.Pending(i); e != nil {
+	if e = s.Pending(c); e != nil {
 		t.Fatal(e)
 	}
 	if e = await(t, result, 3*time.Second); !errors.Is(e, ErrWorkPending) {
 		t.Fatal("admission receipt became execution success", e)
 	}
-	if e = s.Refuse(i); !errors.Is(e, ErrRefused) {
+	if e = s.Refuse(c); !errors.Is(e, ErrRefused) {
 		t.Fatal("duplicate response allowed", e)
 	}
-	s.ReleaseWork(i)
-	if i.OriginalContext().Err() == nil {
+	s.ReleaseWork(c)
+	if c.OriginalContext().Err() == nil {
 		t.Fatal("work not released")
 	}
 	r.c.Stop()

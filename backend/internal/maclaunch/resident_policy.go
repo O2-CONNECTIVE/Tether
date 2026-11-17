@@ -57,7 +57,7 @@ type ResidentClientConfig struct {
 	Binding    residentwork.Binding
 	HostKey    ssh.Signer
 	Cleanup    time.Duration
-	WireIntent *agenttransport.ResidentFixedIntent
+	WireIntent agenttransport.ResidentIntent
 }
 type ResidentTransport interface {
 	NewClient(ResidentClientConfig, *Approved) (ResidentClient, error)

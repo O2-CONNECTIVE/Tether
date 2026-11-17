@@ -37,7 +37,7 @@ type ClientConfig struct {
 	PrincipalLabel string
 	HostKey        ssh.Signer
 	Budgets        Budgets
-	ResidentIntent *ResidentFixedIntent
+	ResidentIntent ResidentIntent
 }
 
 // Client registers one approved owner once. It never reconnects, retries
@@ -48,7 +48,7 @@ type Client struct {
 	signer                    ssh.Signer
 	public                    ssh.PublicKey
 	dispatch                  agentgateway.Dispatch
-	resident                  *ResidentFixedIntent
+	resident                  *agentgateway.ResidentWorkBinding
 	owner                     Owner
 	budgets                   Budgets
 	clock                     func() time.Time
@@ -89,13 +89,14 @@ func NewClient(cfg ClientConfig, owner Owner) (*Client, error) {
 	if !bytes.Equal(d.HostKey, public.Marshal()) || checkDispatch(d, time.Now()) != nil {
 		return nil, ErrConfig
 	}
-	var intent *ResidentFixedIntent
+	var intent *agentgateway.ResidentWorkBinding
 	if cfg.ResidentIntent != nil {
-		i := *cfg.ResidentIntent
-		if i.OriginalContext() == nil || i.OriginalContext().Err() != nil || i.Receiver() == nil || i.Endpoint() != cfg.Endpoint || i.HostLabel() != cfg.HostLabel || i.PrincipalLabel() != cfg.PrincipalLabel || i.HostKeyFingerprint() != ssh.FingerprintSHA256(public) || d.Deadline.After(i.Deadline()) {
+		c := cfg.ResidentIntent.Correlation()
+		if c.OriginalContext() == nil || c.OriginalContext().Err() != nil || c.Receiver() == nil || c.Endpoint() != cfg.Endpoint || c.HostLabel() != cfg.HostLabel || c.PrincipalLabel() != cfg.PrincipalLabel || c.HostKeyFingerprint() != ssh.FingerprintSHA256(public) || d.Deadline.After(c.Deadline()) {
 			return nil, ErrConfig
 		}
-		intent = &i
+		binding := cfg.ResidentIntent.WorkBinding()
+		intent = &binding
 	}
 	return &Client{
 		endpoint: cfg.Endpoint, host: cfg.HostLabel, principal: cfg.PrincipalLabel, signer: cfg.HostKey, public: public,
@@ -200,7 +201,7 @@ func (c *Client) register(ctx context.Context, ws *websocket.Conn) error {
 	}
 	data := transcript(c.endpoint, c.host, c.principal, c.dispatch, nonce)
 	if c.resident != nil {
-		data = workTranscript(c.endpoint, c.host, c.principal, c.dispatch, nonce, c.resident.workBinding())
+		data = workTranscript(c.endpoint, c.host, c.principal, c.dispatch, nonce, *c.resident)
 	}
 	sig, err := sign(c.signer, c.public, data)
 	if err != nil {
@@ -208,7 +209,7 @@ func (c *Client) register(ctx context.Context, ws *websocket.Conn) error {
 	}
 	msg = encodeRegister(c.host, c.principal, c.dispatch, sig)
 	if c.resident != nil {
-		msg = encodeWorkRegister(c.host, c.principal, c.dispatch, sig, c.resident.workBinding())
+		msg = encodeWorkRegister(c.host, c.principal, c.dispatch, sig, *c.resident)
 	}
 	if err := ws.Write(ctx, websocket.MessageText, msg); err != nil {
 		return ErrRefused

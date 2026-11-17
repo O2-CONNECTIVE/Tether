@@ -6,18 +6,18 @@ import (
 	"golang.org/x/crypto/ssh"
 	"strconv"
 	"time"
+
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 )
 
 var ErrWorkPending = errors.New("agenttransport: request admitted; native work/result not confirmed")
 
 var ErrWorkUnconfigured = errors.New("agenttransport: resident work factory is not configured")
 
-// ResidentFixedIntent is validated wire correlation, never an execution grant.
-// Its zero value is invalid. No command, profile or approval flag is accepted.
-// The same type also correlates command-run work (see resident_run.go): then
-// run is set, and Operation and TimeoutMillis report the run values, which the
-// fixed-operation admission refuses.
-type ResidentFixedIntent struct {
+// ResidentCorrelation is validated wire correlation of one resident intent.
+// It names no operation or scope and is never an execution grant. Its zero
+// value is invalid; only this package mints one.
+type ResidentCorrelation struct {
 	generation, requestID                 string
 	endpoint, host, principal             string
 	sequence                              uint64
@@ -25,38 +25,51 @@ type ResidentFixedIntent struct {
 	original                              context.Context
 	receiver                              *ResidentReceiver
 	hostFingerprint, principalFingerprint string
-	run                                   residentRunScope
 }
 
-func (i ResidentFixedIntent) OriginalContext() context.Context { return i.original }
-func (i ResidentFixedIntent) Receiver() *ResidentReceiver      { return i.receiver }
-func (i ResidentFixedIntent) HostKeyFingerprint() string       { return i.hostFingerprint }
-func (i ResidentFixedIntent) PrincipalKeyFingerprint() string  { return i.principalFingerprint }
-func (i ResidentFixedIntent) HostLabel() string                { return i.host }
-func (i ResidentFixedIntent) PrincipalLabel() string           { return i.principal }
-func (i ResidentFixedIntent) Endpoint() string                 { return i.endpoint }
-func (i ResidentFixedIntent) TimeoutMillis() uint32 {
-	if i.isRun() {
-		return i.run.timeoutMillis
-	}
-	return 15000
+func (i ResidentCorrelation) OriginalContext() context.Context { return i.original }
+func (i ResidentCorrelation) Receiver() *ResidentReceiver      { return i.receiver }
+func (i ResidentCorrelation) HostKeyFingerprint() string       { return i.hostFingerprint }
+func (i ResidentCorrelation) PrincipalKeyFingerprint() string  { return i.principalFingerprint }
+func (i ResidentCorrelation) HostLabel() string                { return i.host }
+func (i ResidentCorrelation) PrincipalLabel() string           { return i.principal }
+func (i ResidentCorrelation) Endpoint() string                 { return i.endpoint }
+func (i ResidentCorrelation) RequestID() string                { return i.requestID }
+func (i ResidentCorrelation) Generation() string               { return i.generation }
+func (i ResidentCorrelation) Deadline() time.Time              { return i.deadline }
+func (c ResidentCorrelation) binding(run agentgateway.ResidentRunScope) agentgateway.ResidentWorkBinding {
+	return agentgateway.ResidentWorkBinding{Host: c.host, Principal: c.principal, Generation: c.generation, RequestID: c.requestID, Sequence: c.sequence, DeadlineMillis: c.deadline.UnixMilli(), Run: run}
 }
-func (i ResidentFixedIntent) RequestID() string   { return i.requestID }
-func (i ResidentFixedIntent) Generation() string  { return i.generation }
-func (i ResidentFixedIntent) Deadline() time.Time { return i.deadline }
-func (i ResidentFixedIntent) Operation() string {
-	if i.isRun() {
-		return ResidentRunOperation
-	}
-	return ResidentFixedOperation
+
+// residentCorrelation names the embedded correlation so that only this package
+// can build an intent, while the correlation accessors are still promoted.
+type residentCorrelation = ResidentCorrelation
+
+// ResidentIntent is one verified resident intent: a ResidentFixedIntent or a
+// ResidentRunIntent. The unexported method keeps the set closed.
+type ResidentIntent interface {
+	Correlation() ResidentCorrelation
+	WorkBinding() agentgateway.ResidentWorkBinding
+	encode(residentBinding, ssh.Signer) ([]byte, error)
 }
+
+// ResidentFixedIntent is the fixed operation's intent.
+type ResidentFixedIntent struct{ residentCorrelation }
+
+func (i ResidentFixedIntent) Correlation() ResidentCorrelation { return i.residentCorrelation }
+func (i ResidentFixedIntent) WorkBinding() agentgateway.ResidentWorkBinding {
+	return i.binding(agentgateway.ResidentRunScope{})
+}
+func (ResidentFixedIntent) Operation() string     { return ResidentFixedOperation }
+func (ResidentFixedIntent) TimeoutMillis() uint32 { return 15000 }
+func (i ResidentFixedIntent) encode(b residentBinding, s ssh.Signer) ([]byte, error) {
+	return residentEncodeIntent(b, i, s)
+}
+
 func (i ResidentFixedIntent) values() []string {
 	return []string{i.generation, strconv.FormatUint(i.sequence, 10), i.requestID, ResidentFixedOperation, strconv.FormatInt(i.deadline.UnixMilli(), 10), "15000"}
 }
 func residentEncodeIntent(b residentBinding, i ResidentFixedIntent, s ssh.Signer) ([]byte, error) {
-	if i.isRun() {
-		return nil, ErrRefused // never sign a command-run intent as the fixed operation
-	}
 	sig, e := sign(s, s.PublicKey(), residentTranscript(b, "gateway-fixed", i.values()...))
 	if e != nil {
 		return nil, e
@@ -71,14 +84,14 @@ func residentDecodeIntent(b residentBinding, msg []byte, key ssh.PublicKey, now 
 	}
 	seq, ok := residentDecimal(m["sequence"])
 	ms, okTime := residentDecimal(m["deadline_unix_ms"])
-	i := ResidentFixedIntent{endpoint: b.endpoint, host: b.host, principal: b.principal, generation: m["generation"], sequence: seq, requestID: m["request_id"], deadline: time.UnixMilli(int64(ms))}
+	i := ResidentFixedIntent{residentCorrelation: residentCorrelation{endpoint: b.endpoint, host: b.host, principal: b.principal, generation: m["generation"], sequence: seq, requestID: m["request_id"], deadline: time.UnixMilli(int64(ms))}}
 	sig, okSig := residentSignature(m)
 	if !ok || !okTime || !okSig || len(m["deadline_unix_ms"]) != 13 || i.generation != b.generation || seq != next || seq > residentMaxIntents || !residentHex(i.requestID, 16) || seen[i.requestID] || m["operation"] != ResidentFixedOperation || m["timeout_ms"] != "15000" || !now.Before(i.deadline) || i.deadline.After(now.Add(ResidentFixedTimeout)) || verify(key, residentTranscript(b, "gateway-fixed", i.values()...), sig) != nil {
 		return ResidentFixedIntent{}, ErrRefused
 	}
 	return i, nil
 }
-func residentEncodeRefusal(b residentBinding, i ResidentFixedIntent, s ssh.Signer) ([]byte, error) {
+func residentEncodeRefusal(b residentBinding, i ResidentCorrelation, s ssh.Signer) ([]byte, error) {
 	values := []string{i.generation, strconv.FormatUint(i.sequence, 10), i.requestID, "work_unconfigured"}
 	sig, e := sign(s, s.PublicKey(), residentTranscript(b, "host-refused", values...))
 	if e != nil {
@@ -86,7 +99,7 @@ func residentEncodeRefusal(b residentBinding, i ResidentFixedIntent, s ssh.Signe
 	}
 	return residentJSON(map[string]string{"type": "resident_refused", "generation": values[0], "sequence": values[1], "request_id": values[2], "code": values[3], "signature": b64.EncodeToString(sig)}), nil
 }
-func residentVerifyRefusal(b residentBinding, i ResidentFixedIntent, msg []byte, key ssh.PublicKey) error {
+func residentVerifyRefusal(b residentBinding, i ResidentCorrelation, msg []byte, key ssh.PublicKey) error {
 	m, ok := residentFields(msg, "resident_refused", "generation", "sequence", "request_id", "code", "signature")
 	if !ok {
 		return ErrRefused
@@ -98,8 +111,7 @@ func residentVerifyRefusal(b residentBinding, i ResidentFixedIntent, msg []byte,
 	}
 	return ErrWorkUnconfigured
 }
-
-func residentEncodePending(b residentBinding, i ResidentFixedIntent, s ssh.Signer) ([]byte, error) {
+func residentEncodePending(b residentBinding, i ResidentCorrelation, s ssh.Signer) ([]byte, error) {
 	values := []string{i.generation, strconv.FormatUint(i.sequence, 10), i.requestID, "admission_pending"}
 	sig, e := sign(s, s.PublicKey(), residentTranscript(b, "host-pending", values...))
 	if e != nil {
@@ -107,7 +119,7 @@ func residentEncodePending(b residentBinding, i ResidentFixedIntent, s ssh.Signe
 	}
 	return residentJSON(map[string]string{"type": "resident_pending", "generation": values[0], "sequence": values[1], "request_id": values[2], "code": values[3], "signature": b64.EncodeToString(sig)}), nil
 }
-func residentVerifyPending(b residentBinding, i ResidentFixedIntent, msg []byte, key ssh.PublicKey) error {
+func residentVerifyPending(b residentBinding, i ResidentCorrelation, msg []byte, key ssh.PublicKey) error {
 	m, ok := residentFields(msg, "resident_pending", "generation", "sequence", "request_id", "code", "signature")
 	if !ok {
 		return ErrRefused

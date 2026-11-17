@@ -306,14 +306,14 @@ func (c *ResidentClient) attempt(parent context.Context) (result, cleanup error,
 			return e, nil, true
 		}
 		// Connection-only safety floor: no Request/Authority/Session is created.
-		refused, e := residentEncodeRefusal(b, intent, c.cfg.HostKey)
+		refused, e := residentEncodeRefusal(b, intent.Correlation(), c.cfg.HostKey)
 		if e != nil {
 			return e, nil, true
 		}
-		write, stop := context.WithDeadline(life, intent.deadline)
+		write, stop := context.WithDeadline(life, intent.Correlation().Deadline())
 		e = residentWrite(write, ws, refused)
 		stop()
-		receiver.Release(intent)
+		receiver.Release(intent.Correlation())
 		if e != nil {
 			return e, nil, true
 		}

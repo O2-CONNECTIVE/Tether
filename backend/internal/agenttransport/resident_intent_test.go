@@ -91,11 +91,11 @@ func TestResidentFixedIntentRejectsSignedOutOfScopeReplayAndMalformedInput(t *te
 func TestResidentFixedRefusalRequiresExactHostSignatureAndCorrelation(t *testing.T) {
 	b, i, _ := residentProtocolFixture(t)
 	host := fixtureSigner(t, 0x11)
-	msg, e := residentEncodeRefusal(b, i, host)
+	msg, e := residentEncodeRefusal(b, i.Correlation(), host)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = residentVerifyRefusal(b, i, msg, host.PublicKey()); !errors.Is(e, ErrWorkUnconfigured) {
+	if e = residentVerifyRefusal(b, i.Correlation(), msg, host.PublicKey()); !errors.Is(e, ErrWorkUnconfigured) {
 		t.Fatal(e)
 	}
 	for _, field := range []string{"generation", "sequence", "request_id", "code", "signature"} {
@@ -103,12 +103,12 @@ func TestResidentFixedRefusalRequiresExactHostSignatureAndCorrelation(t *testing
 			var m map[string]string
 			_ = json.Unmarshal(msg, &m)
 			m[field] = "different"
-			if e := residentVerifyRefusal(b, i, residentJSON(m), host.PublicKey()); !errors.Is(e, ErrRefused) {
+			if e := residentVerifyRefusal(b, i.Correlation(), residentJSON(m), host.PublicKey()); !errors.Is(e, ErrRefused) {
 				t.Fatal("uncorrelated refusal accepted", e)
 			}
 		})
 	}
-	if e = residentVerifyRefusal(b, i, msg, fixtureSigner(t, 0x12).PublicKey()); !errors.Is(e, ErrRefused) {
+	if e = residentVerifyRefusal(b, i.Correlation(), msg, fixtureSigner(t, 0x12).PublicKey()); !errors.Is(e, ErrRefused) {
 		t.Fatal("wrong host receipt accepted")
 	}
 }

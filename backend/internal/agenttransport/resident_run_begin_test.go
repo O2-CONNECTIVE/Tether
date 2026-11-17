@@ -37,10 +37,14 @@ func TestBeginResidentRunDeliversTheScopeOnlyForTheCurrentGeneration(t *testing.
 	if e != nil {
 		t.Fatal(e)
 	}
-	if i.RequestID() != id || i.Operation() != ResidentRunOperation || i.workBinding().Run != scope {
-		t.Fatalf("the Mac received %s %s %+v", i.RequestID(), i.Operation(), i.workBinding().Run)
+	runIntent, ok := i.(ResidentRunIntent)
+	if !ok {
+		t.Fatal("Next returned a non-run intent")
 	}
-	if e = s.Refuse(i); e != nil {
+	if runIntent.RequestID() != id || runIntent.Operation() != ResidentRunOperation || runIntent.WorkBinding().Run != scope {
+		t.Fatalf("the Mac received %s %s %+v", runIntent.RequestID(), runIntent.Operation(), runIntent.WorkBinding().Run)
+	}
+	if e = s.Refuse(i.Correlation()); e != nil {
 		t.Fatal(e)
 	}
 	// The gateway's work owner reads the same outcomes as for the fixed routine.
