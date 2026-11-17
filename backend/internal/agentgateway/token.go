@@ -2,7 +2,9 @@ package agentgateway
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
@@ -40,16 +43,16 @@ var (
 	ErrScope = errors.New("agentgateway: bearer token lacks the required scope")
 )
 
-// VerifierConfig names the existing provider's trust inputs. Nothing here is
-// discovered, fetched or defaulted: the issuer, this resource's audience, the
-// scope, the accepted token types and the public verification keys must all
-// come from the provider registration that the operator already holds.
+// VerifierConfig names the trusted provider inputs. JWKSURL enables bounded
+// HTTPS refresh on an unknown kid. Exactly one of JWKS and JWKSURL is set, so a
+// key the provider removed from its JWKS is not kept trusted by static config.
 type VerifierConfig struct {
 	Issuer   string        // exact "iss"; an https URL
-	Audience string        // this resource's canonical URI; must appear in "aud"
-	Scope    string        // the one scope this resource requires
+	Audience string        // exact expected "aud" value
+	Scope    string        // the one required scope; empty disables the check
 	Types    []string      // accepted JOSE "typ" values, for example "at+jwt"
-	JWKS     []byte        // JWK Set with public RS256 or EdDSA (Ed25519) keys only
+	JWKS     []byte        // optional initial public JWK Set
+	JWKSURL  string        // optional HTTPS JWK Set endpoint
 	Leeway   time.Duration // clock skew tolerance, 0..MaxLeeway
 	Clock    func() time.Time
 }
@@ -63,11 +66,14 @@ type Identity struct {
 }
 
 // Verifier is a resource-server bearer token verifier for compact JWS access
-// tokens. It never issues tokens, contacts the provider or forwards a token.
+// tokens. It never issues or forwards tokens; it fetches JWKS only when an
+// unknown kid arrives and a JWKS URL is configured.
 type Verifier struct {
 	issuer, audience, scope string
 	types                   map[string]bool
+	keysMu                  sync.RWMutex
 	keys                    map[string]verificationKey
+	refresh                 *jwksRefresh
 	leeway                  time.Duration
 	clock                   func() time.Time
 }
@@ -75,14 +81,16 @@ type Verifier struct {
 type verificationKey struct {
 	alg string
 	rsa *rsa.PublicKey
+	ec  *ecdsa.PublicKey
 	ed  ed25519.PublicKey
 }
 
 // NewVerifier validates every input and refuses a JWK Set that contains
-// private key members, symmetric keys or algorithms other than RS256/EdDSA.
+// private key members, symmetric keys or unsupported signing algorithms.
 func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
-	if !httpsURL(cfg.Issuer, false) || !httpsURL(cfg.Audience, true) || !token68Text(cfg.Scope) ||
-		len(cfg.Types) == 0 || cfg.Leeway < 0 || cfg.Leeway > MaxLeeway {
+	if !httpsURL(cfg.Issuer, false) || !printable(cfg.Audience) || (cfg.Scope != "" && !token68Text(cfg.Scope)) ||
+		(cfg.JWKSURL != "" && !httpsURL(cfg.JWKSURL, false)) || len(cfg.Types) == 0 || cfg.Leeway < 0 || cfg.Leeway > MaxLeeway ||
+		(len(cfg.JWKS) == 0) == (cfg.JWKSURL == "") {
 		return nil, ErrConfig
 	}
 	types := map[string]bool{}
@@ -92,36 +100,51 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		}
 		types[normalType(t)] = true
 	}
-	keys, err := parseJWKS(cfg.JWKS, false)
-	if err != nil {
-		return nil, err
+	keys := map[string]verificationKey{}
+	if len(cfg.JWKS) != 0 {
+		var err error
+		keys, err = parseJWKS(cfg.JWKS, false)
+		if err != nil {
+			return nil, err
+		}
 	}
 	clock := cfg.Clock
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Verifier{issuer: cfg.Issuer, audience: cfg.Audience, scope: cfg.Scope, types: types, keys: keys, leeway: cfg.Leeway, clock: clock}, nil
+	v := &Verifier{issuer: cfg.Issuer, audience: cfg.Audience, scope: cfg.Scope, types: types, keys: keys, leeway: cfg.Leeway, clock: clock}
+	if cfg.JWKSURL != "" {
+		v.refresh = newJWKSRefresh(cfg.JWKSURL)
+	}
+	return v, nil
 }
 
-// Audience is the resource URI that tokens must name.
+// Audience is the exact value tokens must name in "aud".
 func (v *Verifier) Audience() string { return v.audience }
 
 // Issuer is the one trusted authorization server.
 func (v *Verifier) Issuer() string { return v.issuer }
 
-// Scope is the scope this resource requires.
+// Scope is the required scope; empty means no scope check.
 func (v *Verifier) Scope() string { return v.scope }
 
 var b64 = base64.RawURLEncoding.Strict()
 
 // Verify authenticates one compact JWS. The signature is checked with the key
-// selected by "kid" from the configured set only, and "alg" must equal that
-// key's configured algorithm; header-supplied keys and URLs are refused.
+// selected by "kid" from the configured or explicitly refreshed set, and "alg"
+// must equal that key's configured algorithm; header-supplied keys and URLs are refused.
 func (v *Verifier) Verify(token string) (Identity, error) {
 	if v == nil {
 		return Identity{}, ErrToken
 	}
-	typ, payload, ok := verifyJWS(token, v.keys, true, "alg", "kid", "typ", "x5t", "x5t#S256")
+	keys := v.keySnapshot()
+	if kid, ok := jwsKeyID(token); ok && v.refresh != nil {
+		if _, known := keys[kid]; !known {
+			v.refreshUnknownKey(kid)
+			keys = v.keySnapshot()
+		}
+	}
+	typ, payload, ok := verifyJWS(token, keys, true, "alg", "kid", "typ", "x5t", "x5t#S256")
 	if !ok || !v.types[normalType(typ)] {
 		return Identity{}, ErrToken
 	}
@@ -168,6 +191,11 @@ func verifyJWS(token string, keys map[string]verificationKey, typeRequired bool,
 		if len(sig) != key.rsa.Size() || rsa.VerifyPKCS1v15(key.rsa, crypto.SHA256, digest[:], sig) != nil {
 			return "", nil, false
 		}
+	case "ES256":
+		digest := sha256.Sum256(signed)
+		if len(sig) != 64 || key.ec == nil || !ecdsa.Verify(key.ec, digest[:], new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])) {
+			return "", nil, false
+		}
 	case "EdDSA":
 		if len(sig) != ed25519.SignatureSize || !ed25519.Verify(key.ed, signed, sig) {
 			return "", nil, false
@@ -203,12 +231,14 @@ func (v *Verifier) claims(payload []byte) (Identity, error) {
 			return Identity{}, ErrToken
 		}
 	}
-	scopes, ok := scopeSet(c)
-	if !ok {
-		return Identity{}, ErrToken
-	}
-	if !scopes[v.scope] {
-		return Identity{}, ErrScope
+	if v.scope != "" {
+		scopes, ok := scopeSet(c)
+		if !ok {
+			return Identity{}, ErrToken
+		}
+		if !scopes[v.scope] {
+			return Identity{}, ErrScope
+		}
 	}
 	return Identity{Issuer: iss, Subject: sub, Expiry: exp}, nil
 }
@@ -278,8 +308,8 @@ func scopeSet(c map[string]json.RawMessage) (map[string]bool, bool) {
 // token. The header alone proves nothing; only its signature does.
 const HeaderAccessAssertion = "Cf-Access-Jwt-Assertion"
 
-// AccessVerifierConfig names the Access application's trust inputs. Like
-// VerifierConfig nothing is discovered or fetched: the team issuer, the
+// AccessVerifierConfig names the Access application's trust inputs. Unlike
+// OAuth bearer mode, nothing is discovered or fetched: the team issuer, the
 // application AUD tag and the team's public keys come from the operator's
 // Access application, and key rotation is a protected configuration update.
 type AccessVerifierConfig struct {
@@ -411,7 +441,7 @@ func parseJWKS(raw []byte, rsaOnly bool) (map[string]verificationKey, error) {
 				return nil, errors.Join(ErrConfig, errors.New("agentgateway: the JWK Set contains private or symmetric key material"))
 			}
 		}
-		m, err := agentwire.Fields(item, "kty", "kid", "alg", "use", "n", "e", "crv", "x", "x5t", "x5t#S256", "x5c")
+		m, err := agentwire.Fields(item, "kty", "kid", "alg", "use", "n", "e", "crv", "x", "y", "x5t", "x5t#S256", "x5c", "ext", "key_ops")
 		if err != nil {
 			return nil, ErrConfig
 		}
@@ -429,10 +459,32 @@ func parseJWKS(raw []byte, rsaOnly bool) (map[string]verificationKey, error) {
 				return nil, ErrConfig
 			}
 		}
+		// Supabase Auth publishes WebCrypto members: ext (boolean) and key_ops,
+		// which for a published verification key is exactly ["verify"]. The
+		// Access key contract keeps refusing both.
+		_, hasExt := m["ext"]
+		_, hasOps := m["key_ops"]
+		if rsaOnly && (hasExt || hasOps) {
+			return nil, ErrConfig
+		}
+		if ext, ok := m["ext"]; ok {
+			var b bool
+			if json.Unmarshal(ext, &b) != nil {
+				return nil, ErrConfig
+			}
+		}
+		if ops, ok := m["key_ops"]; ok {
+			var list []string
+			if json.Unmarshal(ops, &list) != nil || len(list) != 1 || list[0] != "verify" {
+				return nil, ErrConfig
+			}
+		}
 		var key verificationKey
 		switch {
 		case kty == "RSA" && alg == "RS256":
 			key.rsa, err = rsaKey(m["n"], m["e"])
+		case kty == "EC" && alg == "ES256" && !rsaOnly:
+			key.ec, err = p256Key(m["crv"], m["x"], m["y"])
 		case kty == "OKP" && alg == "EdDSA" && !rsaOnly:
 			key.ed, err = edKey(m["crv"], m["x"])
 		default:
@@ -445,6 +497,26 @@ func parseJWKS(raw []byte, rsaOnly bool) (map[string]verificationKey, error) {
 		keys[kid] = key
 	}
 	return keys, nil
+}
+
+func p256Key(rawCrv, rawX, rawY json.RawMessage) (*ecdsa.PublicKey, error) {
+	crv, ok1 := str(rawCrv)
+	xs, ok2 := str(rawX)
+	ys, ok3 := str(rawY)
+	if !ok1 || !ok2 || !ok3 || crv != "P-256" {
+		return nil, ErrConfig
+	}
+	x, err1 := b64.DecodeString(xs)
+	y, err2 := b64.DecodeString(ys)
+	curve := elliptic.P256()
+	if err1 != nil || err2 != nil || len(x) != 32 || len(y) != 32 {
+		return nil, ErrConfig
+	}
+	public := &ecdsa.PublicKey{Curve: curve, X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
+	if !curve.IsOnCurve(public.X, public.Y) {
+		return nil, ErrConfig
+	}
+	return public, nil
 }
 
 func rsaKey(rawN, rawE json.RawMessage) (*rsa.PublicKey, error) {

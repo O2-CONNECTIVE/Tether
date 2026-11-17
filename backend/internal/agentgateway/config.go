@@ -61,7 +61,7 @@ type FileConfig struct {
 // Members of each mode. The sets share only the mode-neutral members, so a
 // document can never mix the two modes' trust inputs.
 var (
-	oauthMembers  = []string{"listen", "deployment_profile", "auth_mode", "resource", "issuer", "scope", "token_types", "leeway_seconds", "jwks", "principals", "allowed_origins"}
+	oauthMembers  = []string{"listen", "deployment_profile", "auth_mode", "resource", "audience", "issuer", "scope", "token_types", "leeway_seconds", "jwks", "jwks_url", "principals", "allowed_origins"}
 	accessMembers = []string{"listen", "deployment_profile", "auth_mode", "resource", "access_issuer", "access_aud", "access_keys", "access_key_source", "leeway_seconds", "principals", "allowed_origins"}
 )
 
@@ -99,9 +99,19 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 	ok := decodeInto(m["listen"], &c.Listen) && decodeInto(m["resource"], &c.Resource) && decodeInto(m["leeway_seconds"], &leeway)
 	if c.Mode == ModeOAuthBearer {
 		ok = ok && decodeInto(m["issuer"], &c.Verifier.Issuer) && decodeInto(m["scope"], &c.Verifier.Scope) &&
-			decodeInto(m["token_types"], &c.Verifier.Types) && firstByte(m["jwks"]) == '{'
+			decodeInto(m["token_types"], &c.Verifier.Types)
 		c.Verifier.Audience = c.Resource
-		c.Verifier.JWKS = append([]byte(nil), m["jwks"]...)
+		if raw, has := m["audience"]; has {
+			ok = ok && firstByte(raw) == '"' && decodeInto(raw, &c.Verifier.Audience)
+		}
+		if raw, has := m["jwks"]; has {
+			ok = ok && firstByte(raw) == '{'
+			c.Verifier.JWKS = append([]byte(nil), raw...)
+		}
+		if raw, has := m["jwks_url"]; has {
+			ok = ok && firstByte(raw) == '"' && decodeInto(raw, &c.Verifier.JWKSURL)
+		}
+		ok = ok && (len(c.Verifier.JWKS) == 0) != (c.Verifier.JWKSURL == "")
 	} else {
 		ok = ok && decodeInto(m["access_issuer"], &c.Access.Issuer) && decodeInto(m["access_aud"], &c.Access.AUD)
 		if source, has := m["access_key_source"]; has {
@@ -155,11 +165,11 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 // Config naming it, the principals (without signers) and the origins. Trusted
 // composition adds signers and budgets before New.
 func (c FileConfig) GatewayConfig() (Config, error) {
-	cfg := Config{Principals: append([]Principal(nil), c.Principals...), AllowedOrigins: c.AllowedOrigins}
+	cfg := Config{Resource: c.Resource, Principals: append([]Principal(nil), c.Principals...), AllowedOrigins: c.AllowedOrigins}
 	var err error
 	switch c.Mode {
 	case ModeOAuthBearer:
-		if c.Verifier.Audience != c.Resource || c.AccessKeySource != "" {
+		if c.Verifier.Audience == "" || c.AccessKeySource != "" {
 			return Config{}, ErrConfig
 		}
 		cfg.Verifier, err = NewVerifier(c.Verifier)
@@ -172,7 +182,6 @@ func (c FileConfig) GatewayConfig() (Config, error) {
 		default:
 			err = ErrConfig
 		}
-		cfg.Resource = c.Resource
 	default:
 		err = ErrConfig
 	}

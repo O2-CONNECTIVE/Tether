@@ -42,13 +42,16 @@ gatewayはtokenを検証するだけで、authorization server、CA、token発�
 
 | 段階 | 内容 | 失敗時 |
 | --- | --- | --- |
-| 認証（`Verifier`） | compact JWS。alg `RS256`（2048〜8192 bit）または`EdDSA`（Ed25519）。`kid`で設定済みJWKSから選んだ鍵の`alg`と一致すること。headerは`alg`/`kid`/`typ`/`x5t`/`x5t#S256`だけを許可（`jwk`・`jku`・`x5u`・`crit`などは拒否）。`typ`は設定値（例`at+jwt`）。`iss`は完全一致、`aud`（文字列か配列）に資源URIを含む、`exp`・`iat`は必須の整数、`nbf`は任意、許容誤差は最大60秒、寿命（exp−iat）は24時間以下 | 401 `WWW-Authenticate: Bearer resource_metadata="…", error="invalid_token"`（tokenがないときは`error`なし） |
-| scope | `scope`（空白区切り）または`scp`（文字列か配列）に設定scopeを含む。両方あるtokenは曖昧なため拒否 | 403 `error="insufficient_scope", scope="…"` |
+| 認証（`Verifier`） | compact JWS。alg `RS256`（2048〜8192 bit）、`EdDSA`（Ed25519）、または`ES256`（P-256）。`kid`で設定済みJWKSから選んだ鍵の`alg`と一致すること。headerは`alg`/`kid`/`typ`/`x5t`/`x5t#S256`だけを許可（`jwk`・`jku`・`x5u`・`crit`などは拒否）。`typ`は設定値（例`at+jwt`または`JWT`）。`iss`は完全一致、`aud`（文字列か配列）に設定したaudienceを含む。audience省略時はresource URI。`exp`・`iat`は必須の整数、`nbf`は任意、許容誤差は最大60秒、寿命（exp−iat）は24時間以下 | 401 `WWW-Authenticate: Bearer resource_metadata="…", error="invalid_token"`（tokenがないときは`error`なし） |
+| scope | 設定時は`scope`（空白区切り）または`scp`（文字列か配列）にその値を含むこと。両方あるtokenは曖昧なため拒否。空文字ならscope claimを検査しません | 設定時に不足すると403 `error="insufficient_scope", scope="…"` |
 | 認可 | 検証済み`sub`が、設定した最大4人のprincipalのどれかと完全一致 | 403（challengeなし） |
 
 - auth-noneやbooleanで通すverifierはありません。自己申告のuser header（`X-Forwarded-User`など）は読みません。tokenはqueryで受けず（400）、Macやrelayへ渡しません。tokenやheaderをlogに出しません。
-- JWKSは設定文書に静的に置きます。取得（fetch）やdiscoveryはしません。private member（`d`など）や対称鍵を含むJWKSは拒否します。
+- JWKSは設定文書に静的に置くか、HTTPSの`jwks_url`から取得します。URLを設定した場合、未登録の`kid`で取得し鍵をcacheします。取得開始は最低60秒間隔、timeoutは5秒、応答上限は64KiBです。取得失敗時は現在の鍵を保持し、新しい鍵が無ければtokenを拒否します。静的なJWKSと`jwks_url`はどちらか一方だけを設定します（併用は設定エラー。IdPがJWKSから外した鍵を静的設定が信頼し続けないため）。private member（`d`など）や対称鍵を含むJWKSは拒否します。
 - `/.well-known/oauth-protected-resource`と`/.well-known/oauth-protected-resource<資源path>`で、RFC 9728のmetadata（`resource`、`authorization_servers`、`scopes_supported`、`bearer_methods_supported`）を認証なしで返します（この方式だけ）。
+- 公開されたnative Workerでは、クライアントはtokenなしの`POST /mcp`に対する`401`と`resource_metadata` challengeから発見を始めます。
+- クライアントはchallengeのURLからRFC 9728 metadataを取得し、`authorization_servers`でOAuth認可サーバーを発見します。
+- OAuth認可後、クライアントは`Authorization: Bearer`付きで`/mcp`を再要求し、Go gatewayがtokenを検証します。
 
 ### Cloudflare Access assertion方式（`cloudflare_access`）
 
@@ -127,15 +130,22 @@ OAuth bearer方式：
 {
   "listen": "127.0.0.1:<port>",
   "auth_mode": "oauth_bearer_jwt",
-  "issuer": "https://<existing-provider-issuer>/",
+  "issuer": "https://syiadkekkobdkplpnivl.supabase.co/auth/v1",
   "resource": "https://<gateway-public-host>/mcp",
-  "scope": "<scope-registered-for-this-resource>",
-  "token_types": ["at+jwt"],
+  "audience": "tether",
+  "scope": "",
+  "token_types": ["JWT"],
   "leeway_seconds": 30,
-  "jwks": { "keys": [ { "kty": "RSA", "kid": "<provider-kid>", "alg": "RS256", "use": "sig", "n": "<base64url>", "e": "AQAB" } ] },
-  "principals": [ { "label": "member-1", "subject": "<provider-subject-of-member-1>" } ],
+  "jwks_url": "https://syiadkekkobdkplpnivl.supabase.co/auth/v1/.well-known/jwks.json",
+  "principals": [ { "label": "member-1", "subject": "<o2c-identity-sub>" } ],
   "allowed_origins": []
 }
+```
+
+Cloudflare Worker の native binding に `TETHER_NATIVE_AUTH_MODE=oauth_bearer_jwt` を設定すると、MCP request の`Authorization`をgatewayへ転送します。この変数が未設定または別の値なら、従来どおり`Cf-Access-Jwt-Assertion`を必須とします。registration経路の認証header処理は変わりません。
+
+```sh
+TETHER_NATIVE_AUTH_MODE=oauth_bearer_jwt
 ```
 
 Cloudflare Access assertion方式：
@@ -156,7 +166,13 @@ Cloudflare Access assertion方式：
 
 | member | 規則 |
 | --- | --- |
-| `resource` | 公開MCP資源URL（https、pathあり）。routingと登録endpointのhost照合だけに使い、assertionの`aud`とは比較しません |
+| `resource` | 公開MCP資源URL（https、pathあり）。routingと登録endpointのhost照合に使います。OAuth tokenの`aud`検証値は`audience`です |
+| `issuer` | OAuth issuer URL。tokenの`iss`と完全一致で比較します |
+| `audience` | OAuth tokenに要求する`aud`。省略時は`resource`と同じ値。resource URLである必要はありません |
+| `scope` | 要求するOAuth scope。空文字なら検査しません |
+| `token_types` | 必須のJOSE `typ`として受け入れる文字列の配列（例`["JWT"]`） |
+| `jwks` | 静的な公開JWKS。`jwks_url`とはどちらか一方だけ |
+| `jwks_url` | JWKSのHTTPS URL。未知の`kid`で取得し、cacheを更新します。取得は最低60秒間隔に制限します |
 | `access_issuer` | team-domainのURL。小文字host、https、port・path・末尾`/`・query・fragmentなし。`iss`と完全一致で比較 |
 | `access_aud` | Access applicationのAUD tag。英数字・`-`・`_`の1〜256文字（URLは書けません）。資源URLとは別の値 |
 | `access_keys` | teamのcerts文書（`https://<team-domain>/cdn-cgi/access/certs`）の`keys` memberをそのまま`{"keys":[…]}`として転記したもの。RSA（2048〜8192 bit）だけ、`alg`は省略可だが書くなら`RS256`、`use`は書くなら`sig`、1〜16鍵、kid重複・private member・`key_ops`などは拒否。`public_cert`/`public_certs`は含めません（top-levelの未知memberとして拒否） |
@@ -180,18 +196,18 @@ Access applicationとAUDは、このMCP hostname/path専用にします。他ori
 - agenttransport.Handler/Clientはhost鍵のnonce proofと同じWSS streamをchannelへ渡し、両CLIへ接続しています。maclaunchの今回の同意をgatewayが代行する経路はありません。
 - signerはagentkeysの保護path/fingerprint検査から供給します。新しい端末の鍵発行・配置・enrollmentはsource取得で自動的に成立しません。
 - issuer、audience、scope、署名鍵、token type、subjectとclient登録は実環境ごとの入力です。4名向けpolicyは4名の登録完了を意味しません。実identityを公開sampleへ埋めません。
-- OAuth JWKSと静的Access鍵は自動取得・更新しません。未知kidは拒否し、保護された経路で独立確認した新旧鍵（最大16鍵）を設定して再起動します。再起動では既存routeと承認を失い、本人の新しい同意が必要です。無停止rotationは保証しません。`azp`/`client_id`の照合はありません。
+- OAuth JWKSは静的設定か`jwks_url`で管理します。`jwks_url`がある場合は未知kidで更新するため、新しいkidへのrotationを再起動なしで検証できます。取得に失敗しても既存鍵を保持し、新しいkidのtokenは拒否します。Access鍵の更新は別設定`access_key_source`の動作です。`azp`/`client_id`の照合はありません。
 - 限定実演の入口は閉鎖・停止済みです。Claude HTTP/OAuthの4tool discoveryはcommand実行ではなく、dot workspaceのplugin作成403も別の未達です。現在の実績は[正本](tether-pilot-status.md)に集約します。
 
 ## source/memory試験が確認する範囲
 
-- 試験は`backend/internal/agentgateway`の`_test.go`と`backend/cmd/rescue-gateway`の`main_test.go`・`config_test.go`・`access_test.go`です。`httptest.NewRecorder`と`ServeHTTP`の直接呼出し、buffer付きmemory conn上の実SSH agent channel、実`agentlink.Host`と実`agentexec.Session`、起動しないfake Mac runtime、固定seedの合成Ed25519鍵と試験内で生成した合成RSA鍵を使います。`httptest.NewServer`、Listen、Dial、shell、OS変更、実認証、network、実providerは使いません。
+- 試験は`backend/internal/agentgateway`の`_test.go`と`backend/cmd/rescue-gateway`の`main_test.go`・`config_test.go`・`access_test.go`です。`httptest.NewRecorder`と`ServeHTTP`の直接呼出し、JWKS更新用`httptest.NewTLSServer`、buffer付きmemory conn上の実SSH agent channel、実`agentlink.Host`と実`agentexec.Session`、起動しないfake Mac runtime、合成Ed25519/RSA/P-256鍵を使います。外部provider、実token、外部network、shell、OS変更は使いません。
 - 対象は次のとおりです。
   - 4 toolの正常経路（stdin、同じrequest_idの再送と不一致、出力、終了、cancelと回収の区別）
   - tokenの拒否：署名、改ざん、kid、`alg: none`、alg混同、header鍵、crit、typ、issuer、audience、期限、nbf、iat、寿命、exp欠落・小数、sub欠落、scope欠落・曖昧、未設定subject、過大、Authorization形式・重複
   - Access assertion（`access_test.go`）：別鍵の署名、改ざん、未知kid、`alg: none`/HS256/EdDSA、OAuth tokenの流用、`jku`/`x5u`/`jwk`/`x5t`、header・claimの重複member、typ、issuer（末尾`/`・別team・OAuth issuer）、文字列・空・資源URL・別applicationの`aud`、`type`、service token（`common_name`、空`sub`）、`sub`欠落・空・数値、email欠落・形式、有効emailでも未設定subjectの場合と、検証結果がemailでなくsubを保持すること、期限・nbf・iat・寿命・欠落・小数・文字列、過大、未設定subject、header重複・1行に2つ、Bearerだけ・cookieだけ・識別headerだけ（fallbackなし）、opaque edge tokenとの併存、challenge・metadataを出さないこと、OAuth方式がassertionを読まないこと、Access方式でのprincipal・session・grantの束縛とroute喪失時の失効、設定の拒否（方式の欠落・不明・混在、必須値の欠落、issuer・AUD・鍵の形式、`Config`の方式重複・資源URL）
   - CLI（`cmd/rescue-gateway/access_test.go`）：Access文書からの構成、合成assertionでの認証通過とrouteなしdiscovery、欠落・Bearerだけ・未設定subject・未設定鍵・識別header・重複が403でchallengeなし、metadataが404
-  - RS256の受理、principal間とsessionの分離、自己申告headerの無視、routeのないprincipal
+  - RS256/EdDSA/ES256の受理、ES256署名1 byte改変の拒否、audience・issuer・期限・未知kidの拒否、JWKSの鍵rotation・失敗時のcache維持・未知kid取得頻度制限、principal間とsessionの分離、自己申告headerの無視、routeのないprincipal
   - backendの喪失とhard deadlineでのsession終了と非再開、再起動後の非再開、登録の拒否（二重route、LaunchIDの再利用、未知label、Windows profile、signerなし）
   - 開始の不確定とJSON-RPC IDの衝突、出力の停滞と`notifications/cancelled`、DELETEとsession上限
   - 常駐作業用の接続開始が上限へ達したときの、常駐sessionの入替と、入替えない条件（`session_replacement_test.go`）。入替えたsessionが始めた作業を同じ世代の別のsessionから照会できること（`session_generation_http_test.go`）
@@ -204,8 +220,8 @@ Access applicationとAUDは、このMCP hostname/path専用にします。他ori
 
 - Close は acquisition 開始から Connect を所有・追跡し、handshake 中の回収を待たずに成功しません。未完了なら cleanup unknown を返し、同じ owner の次回 Close が回収を再確認します。並行 Close は同じ未確認回収試行を共有します。
 - CLI は登録 producer の終端を有限時間待ち、HTTP graceful shutdown が失敗したら接続を force-close し、その場合は終了値 1 とします。OS process 終了を graceful cleanup 成功に読み替えません。
-- JWKS は各 JWK の alg を必須とし、key_ops/vendor 独自 member は拒否します。OAuth token の typ は必須です。Access assertion だけは typ の欠落を許容し、存在する場合の JWT 型検査と全署名・claim 検査を維持します。限定したprovider互換の実績を他provider・新設定へ転用せず、必要な形式の検討を経ず任意変換・制約緩和しません。
-- 静的 JWKS 更新に再起動が必要な現在の構成では、既存 route と承認が失われ、各受け手の再承認が必要です。
+- JWKS は各 JWK の alg を必須とし、vendor 独自 member は拒否します。OAuth方式に限り、Supabase Authが載せる`ext`（真偽値）と`key_ops`（`["verify"]`だけ）を受け付けます。Access鍵では`key_ops`も拒否します。OAuth token の typ は必須で、`token_types`で許可します。Access assertion だけは typ の欠落を許容し、存在する場合の JWT 型検査と全署名・claim 検査を維持します。限定したprovider互換の実績を他provider・新設定へ転用せず、必要な形式の検討を経ず任意変換・制約緩和しません。
+- 静的 JWKS は設定変更と再起動が必要です。`jwks_url`を使う場合、新しい`kid`で自動取得しますが、既知`kid`の同じIDの公開鍵内容の差し替えは未知鍵を発生させません。
 - 取消通知では原則 JSON-RPC 応答を抑制する MCP の推奨と、JSON 単一応答型 HTTP の終了を両立させるため、元 POST に明示的 cancellation error を返します。実 client 互換は未確認です。開始の再確認には同じ request_id を使い、新 ID で再実行しません。
 
 2026-10-31 local verification update: the official cloudflared CLI application token may omit JOSE typ. A separately authorized local inspector successfully verified a real human assertion against the pinned public keys, issuer, AUD, lifetime and expected-person binding. No token or actual identity is included in this source. This does not establish other users, live gateway authorization, Managed OAuth or dot MCP connectivity.
