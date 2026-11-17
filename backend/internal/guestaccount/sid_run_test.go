@@ -117,6 +117,11 @@ func sidRunFixture(t *testing.T) (*sidRunOwner, *sidRunPipesFixture, *sidRunChil
 	return o, p, c
 }
 
+// sidRunConfirmBudget は、清掃の成否と理由を確かめる Close（execute の延期 Close を含む）の予算を、fixture の 50ms から
+// testContext と同じ 1 秒に延ばす。join は done を受けた時点で戻るので成功時の所要は変わらず、清掃が待つ goroutine が
+// 2 コアの runner で遅れて動いても、期限切れの ErrCleanup と取り違えない。期限切れを確かめる検査がある試験では、その後で呼ぶ。
+func sidRunConfirmBudget(o *sidRunOwner) { o.config.spec.CleanupTimeout = time.Second }
+
 func TestSIDRunReturnsOnlyAfterEOFWaitAndPipeCleanup(t *testing.T) {
 	o, p, c := sidRunFixture(t)
 	request := []byte("canonical-request\n")

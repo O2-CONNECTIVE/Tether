@@ -47,6 +47,7 @@ func TestSIDRunRejectsIncompleteEOFAndCancellationDoesNotBecomeEOF(t *testing.T)
 	for _, stream := range []string{"stdout", "stderr"} {
 		t.Run(stream, func(t *testing.T) {
 			o, p, _ := sidRunFixture(t)
+			sidRunConfirmBudget(o)
 			entered, release := make(chan struct{}), make(chan struct{})
 			var once sync.Once
 			first := true
@@ -166,6 +167,7 @@ func TestSIDRunShortWriteNeverSendsNormalEOFBeforeChildIsStopped(t *testing.T) {
 			c.mu.Lock()
 			c.closeErr = nil
 			c.mu.Unlock()
+			sidRunConfirmBudget(o)
 			if e := o.Close(testContext(t)); e != nil {
 				t.Fatal(e)
 			}
@@ -177,6 +179,7 @@ func TestSIDRunRetainsPartialConstructorsAndReleaseFailure(t *testing.T) {
 	for _, stage := range []string{"open", "start", "release"} {
 		t.Run(stage, func(t *testing.T) {
 			o, p, c := sidRunFixture(t)
+			sidRunConfirmBudget(o)
 			starts := 0
 			original := o.ops.start
 			o.ops.start = func(ctx context.Context, s childjob.Spec) (sidRunChild, error) {
@@ -234,6 +237,7 @@ func TestSIDRunLateConstructorCannotAcknowledgeCloseOrContinueAcquiring(t *testi
 				t.Fatal("unreturned constructor was cleaned as completed")
 			}
 			close(release)
+			sidRunConfirmBudget(o)
 			if e := o.Close(testContext(t)); e != nil {
 				t.Fatal(e)
 			}
@@ -320,6 +324,7 @@ func TestSIDRunCloseWaitsForCleanupActualReturnAndAllReaderJoins(t *testing.T) {
 				t.Fatal("pipe EOF sent before physical child cleanup")
 			}
 			close(release)
+			sidRunConfirmBudget(o)
 			if e = o.Close(testContext(t)); e != nil {
 				t.Fatal(e)
 			}
@@ -402,6 +407,7 @@ func TestSIDRunInputCloseAndCleanupFailureKeepOperationUnknown(t *testing.T) {
 			p.closeErr = nil
 			p.closeHook = nil
 			p.mu.Unlock()
+			sidRunConfirmBudget(o)
 			if e := o.Close(testContext(t)); kind == "pipes-panic" && !errors.Is(e, ErrCleanup) || kind != "pipes-panic" && e != nil {
 				t.Fatal("cleanup confirmation mismatch", kind, e)
 			}
