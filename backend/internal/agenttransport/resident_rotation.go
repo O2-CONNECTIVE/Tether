@@ -12,7 +12,7 @@ func (h *Handler) RotateResident(host, principal, generation, requestID string) 
 	}
 	p.mu.Lock()
 	intent, found := p.intents[requestID]
-	rotate := found && intent.sequence == residentMaxIntents && p.sequence == residentMaxIntents && p.pending == nil
+	rotate := found && intent.Sequence == residentMaxIntents && p.sequence == residentMaxIntents && p.pending == nil
 	if rotate {
 		p.ready = false
 	}

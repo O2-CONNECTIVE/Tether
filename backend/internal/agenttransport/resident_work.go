@@ -10,10 +10,6 @@ import (
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 )
 
-func (i ResidentFixedIntent) workBinding() agentgateway.ResidentWorkBinding {
-	return agentgateway.ResidentWorkBinding{Host: i.host, Principal: i.principal, Generation: i.generation, RequestID: i.requestID, Sequence: i.sequence, DeadlineMillis: i.deadline.UnixMilli(), Run: agentgateway.ResidentRunScope{CommandSHA256: i.run.commandSHA256, Cwd: i.run.cwd, TimeoutMillis: i.run.timeoutMillis}}
-}
-
 // workTranscript keeps the fixed-work bytes unchanged. A command run signs under
 // its own label and adds the scope, so neither proof can stand for the other.
 func workTranscript(endpoint, host, principal string, d agentgateway.Dispatch, nonce []byte, b agentgateway.ResidentWorkBinding) []byte {
@@ -116,38 +112,38 @@ func (h *Handler) currentWork(b agentgateway.ResidentWorkBinding) (agentgateway.
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	i, ok := p.intents[b.RequestID]
-	b.Run = i.workBinding().Run
-	return b, ok && i.sequence == b.Sequence && i.deadline.UnixMilli() == b.DeadlineMillis
+	stored, ok := p.intents[b.RequestID]
+	b.Run = stored.Run
+	return b, ok && stored.Sequence == b.Sequence && stored.DeadlineMillis == b.DeadlineMillis
 }
-func collectionProof(b residentBinding, i ResidentFixedIntent, cleanup string) agentgateway.ResidentCollectionProof {
-	return agentgateway.ResidentCollectionProof{Binding: i.workBinding(), Endpoint: b.endpoint, ClientNonce: b.clientNonce, ServerNonce: b.serverNonce, HostKey: b.hostKey, PrincipalKey: b.principalKey, Cleanup: cleanup}
+func collectionProof(b residentBinding, w agentgateway.ResidentWorkBinding, cleanup string) agentgateway.ResidentCollectionProof {
+	return agentgateway.ResidentCollectionProof{Binding: w, Endpoint: b.endpoint, ClientNonce: b.clientNonce, ServerNonce: b.serverNonce, HostKey: b.hostKey, PrincipalKey: b.principalKey, Cleanup: cleanup}
 }
 
 // Collected signs only the original work binding after the consumer observes
 // SAME common owner's original cleanup and Run join. It confers no execution
 // authority; cleanup can be reported after the finite operation has expired.
-func (s *ResidentSourceLease) Collected(i ResidentFixedIntent, originalResult error) error {
-	if s == nil || s.self != s || i.Receiver() != s.receiver {
+func (s *ResidentSourceLease) Collected(w agentgateway.ResidentWorkBinding, originalResult error) error {
+	if s == nil || s.self != s {
 		return ErrRefused
 	}
 	s.mu.Lock()
-	if s.finishing || !s.replies[i.RequestID()] || s.collections[i.RequestID()] {
+	if s.finishing || !s.replies[w.RequestID] || s.collections[w.RequestID] || s.received[w.RequestID] != w {
 		s.mu.Unlock()
 		return ErrRefused
 	}
-	s.collections[i.RequestID()] = true
+	s.collections[w.RequestID] = true
 	s.mu.Unlock()
 	cleanup := "confirmed"
 	if originalResult != nil {
 		cleanup = "unknown"
 	}
-	proof := collectionProof(s.receiver.binding, i, cleanup)
+	proof := collectionProof(s.receiver.binding, w, cleanup)
 	sig, e := sign(s.receiver.cfg.HostKey, s.receiver.cfg.HostKey.PublicKey(), agentgateway.ResidentCollectionTranscript(proof))
 	if e != nil {
 		return e
 	}
-	defer s.ReleaseWork(i)
+	defer s.receiver.release(w.RequestID)
 	b := proof.Binding
 	msg := residentJSON(map[string]string{"type": "resident_collected", "generation": b.Generation, "sequence": strconv.FormatUint(b.Sequence, 10), "request_id": b.RequestID, "cleanup": cleanup, "signature": b64.EncodeToString(sig)})
 	ctx, stop := context.WithTimeout(s.receiver.Context(), 5*time.Second)

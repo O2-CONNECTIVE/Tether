@@ -27,7 +27,7 @@ type residentEntry struct {
 	started, done bool
 	worker        *ResidentWorker
 	result        error
-	wireIntent    *agenttransport.ResidentFixedIntent
+	wireIntent    agenttransport.ResidentIntent
 }
 
 // ResidentSource is one held standby/control generation, not a granted Session.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/ssh"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 )
 
 const residentRunWireHash = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
@@ -36,13 +36,17 @@ func TestResidentRunIntentReachesHandedOffSourceWithSignedScope(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if i.Operation() != ResidentRunOperation || i.CommandSHA256() != residentRunWireHash || i.Cwd() != "src/app" || i.TimeoutMillis() != 60000 || i.RequestID() != runID {
-		t.Fatalf("run intent lost its signed scope: %q %q %q %d %q", i.Operation(), i.CommandSHA256(), i.Cwd(), i.TimeoutMillis(), i.RequestID())
+	runIntent, ok := i.(ResidentRunIntent)
+	if !ok {
+		t.Fatal("Next returned a non-run intent")
 	}
-	if i.Receiver() != s.Receiver() || i.OriginalContext() == nil || i.OriginalContext().Err() != nil {
+	if runIntent.Operation() != ResidentRunOperation || runIntent.CommandSHA256() != residentRunWireHash || runIntent.Cwd() != "src/app" || runIntent.TimeoutMillis() != 60000 || runIntent.RequestID() != runID {
+		t.Fatalf("run intent lost its signed scope: %q %q %q %d %q", runIntent.Operation(), runIntent.CommandSHA256(), runIntent.Cwd(), runIntent.TimeoutMillis(), runIntent.RequestID())
+	}
+	if runIntent.Receiver() != s.Receiver() || runIntent.OriginalContext() == nil || runIntent.OriginalContext().Err() != nil {
 		t.Fatal("run intent lost the observed original binding")
 	}
-	if e = s.Refuse(i); e != nil {
+	if e = s.Refuse(i.Correlation()); e != nil {
 		t.Fatal(e)
 	}
 	if e = await(t, result, 3*time.Second); !errors.Is(e, ErrWorkUnconfigured) {
@@ -55,10 +59,14 @@ func TestResidentRunIntentReachesHandedOffSourceWithSignedScope(t *testing.T) {
 	if i, e = s.Next(); e != nil {
 		t.Fatal("fixed intent after a run intent ended the link", e)
 	}
-	if i.Operation() != ResidentFixedOperation || i.TimeoutMillis() != 15000 || i.CommandSHA256() != "" || i.Cwd() != "" || i.RequestID() != fixedID {
+	fixedIntent, ok := i.(ResidentFixedIntent)
+	if !ok {
+		t.Fatal("Next returned a non-fixed intent")
+	}
+	if fixedIntent.Operation() != ResidentFixedOperation || fixedIntent.TimeoutMillis() != 15000 || fixedIntent.WorkBinding().Run != (agentgateway.ResidentRunScope{}) || fixedIntent.RequestID() != fixedID {
 		t.Fatal("fixed intent after a run intent carries a run scope")
 	}
-	if e = s.Refuse(i); e != nil {
+	if e = s.Refuse(i.Correlation()); e != nil {
 		t.Fatal(e)
 	}
 	if e = await(t, result, 3*time.Second); !errors.Is(e, ErrWorkUnconfigured) {
@@ -142,20 +150,21 @@ func TestResidentReceiverSharesReplaySetAcrossIntentKinds(t *testing.T) {
 	id := fmt.Sprintf("%032x", 1)
 	for name, c := range map[string]struct {
 		first  func(*residentRig, context.Context) error
-		replay func(residentBinding, ResidentFixedIntent, ssh.Signer) ([]byte, error)
-		scope  residentRunScope
+		replay func(residentCorrelation) ResidentIntent
 	}{
 		"fixed id replayed as run": {
 			func(r *residentRig, ctx context.Context) error {
 				return r.h.ProposeResidentFixed(ctx, hostLabel, member1, id, residentRunWireDeadline())
 			},
-			residentEncodeRun, residentRunScope{commandSHA256: residentRunWireHash, cwd: ".", timeoutMillis: 60000},
+			func(c residentCorrelation) ResidentIntent {
+				return ResidentRunIntent{residentCorrelation: c, run: residentRunScope{commandSHA256: residentRunWireHash, cwd: ".", timeoutMillis: 60000}}
+			},
 		},
 		"run id replayed as fixed": {
 			func(r *residentRig, ctx context.Context) error {
 				return r.h.ProposeResidentRun(ctx, hostLabel, member1, id, residentRunWireDeadline(), residentRunWireHash, ".", 60000)
 			},
-			residentEncodeIntent, residentRunScope{},
+			func(c residentCorrelation) ResidentIntent { return ResidentFixedIntent{residentCorrelation: c} },
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -170,7 +179,7 @@ func TestResidentReceiverSharesReplaySetAcrossIntentKinds(t *testing.T) {
 			r.h.mu.Lock()
 			p := r.h.residents[residentMapKey(hostLabel, member1)]
 			r.h.mu.Unlock()
-			msg, e := c.replay(p.binding, ResidentFixedIntent{generation: p.binding.generation, sequence: 2, requestID: id, deadline: residentRunWireDeadline(), run: c.scope}, p.signer)
+			msg, e := c.replay(residentCorrelation{generation: p.binding.generation, sequence: 2, requestID: id, deadline: residentRunWireDeadline()}).encode(p.binding, p.signer)
 			if e != nil {
 				t.Fatal(e)
 			}

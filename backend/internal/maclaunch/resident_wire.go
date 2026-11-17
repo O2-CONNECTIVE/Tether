@@ -83,33 +83,33 @@ func (s *ResidentSource) NewWireRequest(i agenttransport.ResidentFixedIntent) (*
 // and timeout is the scope, and the worker is held to exactly those values.
 // The caller must first check the local run allowance, which this package
 // cannot see; that is why NewWireRequest never admits a command run.
-func (s *ResidentSource) NewWireRunRequest(i agenttransport.ResidentFixedIntent) (*workerowner.Request, error) {
+func (s *ResidentSource) NewWireRunRequest(i agenttransport.ResidentRunIntent) (*workerowner.Request, error) {
 	if s == nil || s.self != s || i.Operation() != agenttransport.ResidentRunOperation || i.CommandSHA256() == "" || i.Cwd() == "" || i.TimeoutMillis() == 0 {
 		return nil, ErrResident
 	}
 	return s.newWireRequest(i, agentexec.FixedStartConstraint{RequestID: agenttransport.ResidentRunOperation, CommandSHA256: i.CommandSHA256(), Dir: i.Cwd(), TimeoutMillis: i.TimeoutMillis()})
 }
 
-func (s *ResidentSource) newWireRequest(i agenttransport.ResidentFixedIntent, fixed agentexec.FixedStartConstraint) (*workerowner.Request, error) {
-	if !finiteResident(i.OriginalContext()) || i.Receiver() == nil || i.Receiver() != s.wireReceiver || !s.factory.matchesWire(i.Receiver()) || i.HostKeyFingerprint() != s.factory.policy.key.Fingerprint || i.PrincipalKeyFingerprint() != ssh.FingerprintSHA256(s.factory.policy.peer) || i.Generation() != s.wireReceiver.Generation() || fixed.Validate() != nil {
+func (s *ResidentSource) newWireRequest(i agenttransport.ResidentIntent, fixed agentexec.FixedStartConstraint) (*workerowner.Request, error) {
+	c := i.Correlation()
+	if !finiteResident(c.OriginalContext()) || c.Receiver() == nil || c.Receiver() != s.wireReceiver || !s.factory.matchesWire(c.Receiver()) || c.HostKeyFingerprint() != s.factory.policy.key.Fingerprint || c.PrincipalKeyFingerprint() != ssh.FingerprintSHA256(s.factory.policy.peer) || c.Generation() != s.wireReceiver.Generation() || fixed.Validate() != nil {
 		return nil, ErrResident
 	}
-	deadline := i.Deadline()
-	original := i.OriginalContext()
+	deadline := c.Deadline()
+	original := c.OriginalContext()
 	if d, _ := original.Deadline(); d.Before(deadline) {
 		deadline = d
 	}
 	if !time.Now().Before(deadline) {
 		return nil, ErrResident
 	}
-	id := i.RequestID()
+	id := c.RequestID()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.liveLocked() || s.entries[id] != nil || len(s.entries) >= maxResidentIntents {
 		return nil, ErrResident
 	}
-	copy := i
-	entry := &residentEntry{wireIntent: &copy}
+	entry := &residentEntry{wireIntent: i}
 	s.entries[id] = entry
 	return &workerowner.Request{SourceContext: original, Deadline: deadline, Reply: make(chan error, 1), Approve: func(ctx context.Context) (*workerowner.Worker, error) {
 		return s.approveWithID(ctx, original, entry, id, fixed, deadline)

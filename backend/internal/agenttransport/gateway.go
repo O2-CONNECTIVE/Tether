@@ -78,7 +78,7 @@ type Handler struct {
 // binding: what a cleanup proof sent over a later control is verified against.
 type residentLastWork struct {
 	binding residentBinding
-	intent  ResidentFixedIntent
+	work    agentgateway.ResidentWorkBinding
 }
 
 // admission is one admitted request's reservation. tracked is set, under

@@ -118,59 +118,82 @@ func (r *ResidentReceiver) PrincipalKeyFingerprint() string {
 // ReadFixed has one reader, as required by WebSocket. It verifies signature,
 // sequence, generation, replay and the fixed or command-run scope before
 // minting native bookkeeping.
-func (r *ResidentReceiver) readFixed() (ResidentFixedIntent, error) {
+func (r *ResidentReceiver) readFixed() (ResidentIntent, error) {
 	if r == nil || r.self != r || r.ctx.Err() != nil {
-		return ResidentFixedIntent{}, ErrClosed
+		return nil, ErrClosed
 	}
 	msg, e := residentRead(r.ctx, r.ws)
 	if e != nil {
 		r.Close()
-		return ResidentFixedIntent{}, e
+		return nil, e
 	}
 	now := time.Now()
 	i, e := residentDecodeIntent(r.binding, msg, r.cfg.PrincipalKey, now, r.next, r.seen)
+	var intent ResidentIntent
+	if e == nil {
+		intent = i
+	}
 	if e != nil {
 		// A command-run intent shares this reader's sequence and replay set.
-		i, e = residentDecodeRun(r.binding, msg, r.cfg.PrincipalKey, now, r.next, r.seen)
+		var run ResidentRunIntent
+		run, e = residentDecodeRun(r.binding, msg, r.cfg.PrincipalKey, now, r.next, r.seen)
+		if e == nil {
+			intent = run
+		}
 	}
 	if e != nil {
 		r.Close()
-		return ResidentFixedIntent{}, e
+		return nil, e
 	}
+	c := intent.Correlation()
 	// Signed Unix serialization stays unchanged; the native deadline retains
 	// receipt-time monotonic elapsed lifetime and is never reconstructed later.
-	i.deadline = now.Add(i.deadline.Sub(now))
-	original, cancel := context.WithDeadline(r.ctx, i.deadline)
+	c.deadline = now.Add(c.deadline.Sub(now))
+	original, cancel := context.WithDeadline(r.ctx, c.deadline)
 	if original.Err() != nil {
 		cancel()
 		r.Close()
-		return ResidentFixedIntent{}, ErrClosed
+		return nil, ErrClosed
 	}
-	i.original = original
-	i.receiver = r
-	i.hostFingerprint = r.hostFingerprint
-	i.principalFingerprint = r.principalFingerprint
+	c.original = original
+	c.receiver = r
+	c.hostFingerprint = r.hostFingerprint
+	c.principalFingerprint = r.principalFingerprint
+	switch v := intent.(type) {
+	case ResidentFixedIntent:
+		v.residentCorrelation = c
+		intent = v
+	case ResidentRunIntent:
+		v.residentCorrelation = c
+		intent = v
+	}
 	r.workMu.Lock()
 	if r.ctx.Err() != nil {
 		r.workMu.Unlock()
 		cancel()
-		return ResidentFixedIntent{}, ErrClosed
+		return nil, ErrClosed
 	}
-	r.work[i.requestID] = cancel
+	r.work[c.requestID] = cancel
 	r.workMu.Unlock()
-	r.seen[i.requestID] = true
+	r.seen[c.requestID] = true
 	r.next++
-	return i, nil
+	return intent, nil
 }
 
 // Release ends only this received work lease, not the control source.
-func (r *ResidentReceiver) Release(i ResidentFixedIntent) {
-	if r == nil || r.self != r || i.receiver != r {
+func (r *ResidentReceiver) Release(c ResidentCorrelation) {
+	if c.receiver != r {
+		return
+	}
+	r.release(c.requestID)
+}
+func (r *ResidentReceiver) release(id string) {
+	if r == nil || r.self != r {
 		return
 	}
 	r.workMu.Lock()
-	cancel := r.work[i.requestID]
-	delete(r.work, i.requestID)
+	cancel := r.work[id]
+	delete(r.work, id)
 	r.workMu.Unlock()
 	if cancel != nil {
 		cancel()

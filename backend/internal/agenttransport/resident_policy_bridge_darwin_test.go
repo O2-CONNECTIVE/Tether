@@ -330,18 +330,19 @@ func protectedPolicyBridge(t *testing.T, scenario string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if request, err := source.NewWireRequest(intent); request != nil || !errors.Is(err, maclaunch.ErrResident) {
-			t.Fatal("fixed-work entry point admitted a command run", err)
+		runIntent, ok := intent.(agenttransport.ResidentRunIntent)
+		if !ok {
+			t.Fatal("Next returned a non-run intent")
 		}
-		request, err := source.NewWireRunRequest(intent)
-		if err != nil || request == nil || request.SourceContext != intent.OriginalContext() || !request.Deadline.Equal(intent.Deadline()) {
+		request, err := source.NewWireRunRequest(runIntent)
+		if err != nil || request == nil || request.SourceContext != runIntent.OriginalContext() || !request.Deadline.Equal(runIntent.Deadline()) {
 			t.Fatal("signed command-run scope was not retained", err)
 		}
-		if repeated, err := source.NewWireRunRequest(intent); repeated != nil || !errors.Is(err, maclaunch.ErrResident) {
+		if repeated, err := source.NewWireRunRequest(runIntent); repeated != nil || !errors.Is(err, maclaunch.ErrResident) {
 			t.Fatal("same command-run intent was admitted twice", err)
 		}
 		// Stop at input acceptance, as the fixed scenario does.
-		if err := lease.Refuse(intent); err != nil {
+		if err := lease.Refuse(intent.Correlation()); err != nil {
 			t.Fatal(err)
 		}
 		select {
@@ -365,21 +366,22 @@ func protectedPolicyBridge(t *testing.T, scenario string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run, err := source.NewWireRunRequest(intent); run != nil || !errors.Is(err, maclaunch.ErrResident) {
-		t.Fatal("fixed intent was admitted as a command run", err)
+	fixed, ok := intent.(agenttransport.ResidentFixedIntent)
+	if !ok {
+		t.Fatal("Next returned a non-fixed intent")
 	}
-	request, err := source.NewWireRequest(intent)
-	if err != nil || request == nil || request.SourceContext != intent.OriginalContext() || !request.Deadline.Equal(intent.Deadline()) {
+	request, err := source.NewWireRequest(fixed)
+	if err != nil || request == nil || request.SourceContext != fixed.OriginalContext() || !request.Deadline.Equal(fixed.Deadline()) {
 		t.Fatal("actual received scope was not retained", err)
 	}
-	if repeated, err := source.NewWireRequest(intent); repeated != nil || !errors.Is(err, maclaunch.ErrResident) {
+	if repeated, err := source.NewWireRequest(fixed); repeated != nil || !errors.Is(err, maclaunch.ErrResident) {
 		t.Fatal("same source repeated its native request", err)
 	}
 	for index, candidate := range []*maclaunch.ResidentFactory{factory, secondFactory} {
 		duplicate, err := candidate.OpenWireSource(lease.Receiver())
 		if duplicate != nil {
 			t.Cleanup(duplicate.Close)
-			_, repeated := duplicate.NewWireRequest(intent)
+			_, repeated := duplicate.NewWireRequest(fixed)
 			t.Errorf("same receiver created a replacement source: factory=%d repeated_intent_accepted=%t", index, repeated == nil)
 		}
 		if duplicate != nil || !errors.Is(err, maclaunch.ErrResident) {
@@ -388,7 +390,7 @@ func protectedPolicyBridge(t *testing.T, scenario string) {
 	}
 	// Stop at input acceptance. Approve and Run are deliberately never called;
 	// there is no native grant/session/command or work-registration success.
-	if err := lease.Refuse(intent); err != nil {
+	if err := lease.Refuse(intent.Correlation()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -399,7 +401,7 @@ func protectedPolicyBridge(t *testing.T, scenario string) {
 	case <-ctx.Done():
 		t.Fatal("original proposal did not finish")
 	}
-	if _, err := source.NewWireRequest(intent); !errors.Is(err, maclaunch.ErrResident) {
+	if _, err := source.NewWireRequest(fixed); !errors.Is(err, maclaunch.ErrResident) {
 		t.Fatal("released original scope revived", err)
 	}
 	source.Close()
