@@ -347,14 +347,21 @@ func TestProfileReceiverCancellationRetainsExactOwnerUntilCancelHandshakeJoins(t
 	if err := <-done; !errors.Is(err, ErrUnconfirmed) {
 		t.Fatalf("unjoined consume=%v", err)
 	}
-	<-cancelEntered
 	exact := r.pending
 	if exact == nil || r.handle != 77 || len(r.buffer) == 0 || f.closed != 0 {
 		t.Fatal("pending owner or endpoint lost")
 	}
+	// consume may return after recording the stop but before requesting
+	// cancellation (TestProfileSyncWaitExitRecordsStopBeforeReturningUnknown);
+	// the bounded close of the same owner then requests it.
 	short, stop := context.WithTimeout(ctx, 20*time.Millisecond)
 	err := r.close(short)
 	stop()
+	select {
+	case <-cancelEntered:
+	case <-ctx.Done():
+		t.Fatal("cancellation never requested for the pending owner")
+	}
 	if !errors.Is(err, ErrUnconfirmed) || r.pending != exact || r.handle != 77 || f.closed != 0 {
 		t.Fatal("cancel success/return substituted for join")
 	}
