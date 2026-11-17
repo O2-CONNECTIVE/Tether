@@ -443,7 +443,6 @@ func TestAccessVerifierAndGatewayConfigRefusals(t *testing.T) {
 		{"Access without resource", agentgateway.Config{Access: access}},
 		{"Access resource without path", agentgateway.Config{Access: access, Resource: "https://gateway.example.invalid/"}},
 		{"Access http resource", agentgateway.Config{Access: access, Resource: "http://gateway.example.invalid/mcp"}},
-		{"OAuth with a separate resource", agentgateway.Config{Verifier: oauth, Resource: testResource}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.cfg.Principals = ps

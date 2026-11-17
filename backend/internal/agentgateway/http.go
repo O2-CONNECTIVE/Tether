@@ -25,9 +25,13 @@ const (
 
 func protectedResourceMetadata(resource *url.URL, v *Verifier) (string, []byte, error) {
 	u := url.URL{Scheme: resource.Scheme, Host: resource.Host, Path: MetadataPrefix + resource.Path}
+	scopes := []string{}
+	if v.Scope() != "" {
+		scopes = append(scopes, v.Scope())
+	}
 	body, err := json.Marshal(map[string]any{
-		"resource": v.Audience(), "authorization_servers": []string{v.Issuer()},
-		"scopes_supported": []string{v.Scope()}, "bearer_methods_supported": []string{"header"},
+		"resource": resource.String(), "authorization_servers": []string{v.Issuer()},
+		"scopes_supported": scopes, "bearer_methods_supported": []string{"header"},
 	})
 	if err != nil {
 		return "", nil, ErrConfig

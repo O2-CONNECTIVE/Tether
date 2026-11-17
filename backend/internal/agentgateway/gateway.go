@@ -57,9 +57,9 @@ type Config struct {
 	// Signers are forbidden, rather than silently ignored in this mode.
 	ResidentOnly   bool // only correlated fixed work, never generic Connect or MCP binding
 	DiscoveryOnly  bool
-	Verifier       *Verifier       // OAuth bearer JWT mode; the resource is its audience
+	Verifier       *Verifier       // OAuth bearer JWT mode
 	Access         *AccessVerifier // Cloudflare Access assertion mode
-	Resource       string          // Access mode only: the public MCP resource URL, distinct from the AUD tag
+	Resource       string          // public MCP resource URL; OAuth audience may differ
 	Principals     []Principal
 	AllowedOrigins []string             // exact Origin values; requests with any other Origin are refused
 	Budgets        agentchannel.Budgets // every agent channel's budgets; see ChannelBudgets
@@ -145,8 +145,14 @@ func New(cfg Config) (*Gateway, error) {
 	}
 	var raw string
 	switch {
-	case cfg.Verifier != nil && cfg.Access == nil && cfg.Resource == "":
-		raw = cfg.Verifier.Audience()
+	case cfg.Verifier != nil && cfg.Access == nil:
+		raw = cfg.Resource
+		if raw == "" {
+			raw = cfg.Verifier.Audience()
+		}
+		if !httpsURL(raw, true) {
+			return nil, ErrConfig
+		}
 	case cfg.Access != nil && cfg.Verifier == nil && httpsURL(cfg.Resource, true):
 		raw = cfg.Resource
 	default:

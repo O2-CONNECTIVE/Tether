@@ -132,9 +132,8 @@ func TestVerifierAndGatewayConfigRefusals(t *testing.T) {
 		edit func(*agentgateway.VerifierConfig)
 	}{
 		{"http issuer", func(c *agentgateway.VerifierConfig) { c.Issuer = "http://issuer.example.invalid/" }},
-		{"audience without endpoint path", func(c *agentgateway.VerifierConfig) { c.Audience = "https://gateway.example.invalid/" }},
-		{"audience with query", func(c *agentgateway.VerifierConfig) { c.Audience = testResource + "?x=1" }},
-		{"empty scope", func(c *agentgateway.VerifierConfig) { c.Scope = "" }},
+		{"empty audience", func(c *agentgateway.VerifierConfig) { c.Audience = "" }},
+		{"nonprintable audience", func(c *agentgateway.VerifierConfig) { c.Audience = "tether\naudience" }},
 		{"no token types", func(c *agentgateway.VerifierConfig) { c.Types = nil }},
 		{"leeway too long", func(c *agentgateway.VerifierConfig) { c.Leeway = 2 * time.Minute }},
 		{"no keys", func(c *agentgateway.VerifierConfig) { c.JWKS = []byte(`{"keys":[]}`) }},
@@ -169,6 +168,11 @@ func TestVerifierAndGatewayConfigRefusals(t *testing.T) {
 	v, err := agentgateway.NewVerifier(good)
 	if err != nil {
 		t.Fatal(err)
+	}
+	disabledScope := good
+	disabledScope.Scope = ""
+	if _, err := agentgateway.NewVerifier(disabledScope); err != nil {
+		t.Fatalf("empty scope should disable scope checks: %v", err)
 	}
 	five := append(append([]string(nil), subjects...), "synthetic-subject-5")
 	for _, tc := range []struct {
@@ -223,8 +227,22 @@ func TestParseConfig(t *testing.T) {
 		c.Mode != agentgateway.ModeOAuthBearer || c.Resource != testResource || c.Verifier.Audience != testResource {
 		t.Fatalf("ParseConfig = %+v, %v", c, err)
 	}
-	if g, err := c.GatewayConfig(); err != nil || g.Verifier == nil || g.Access != nil || g.Resource != "" {
+	if g, err := c.GatewayConfig(); err != nil || g.Verifier == nil || g.Access != nil || g.Resource != testResource {
 		t.Fatalf("GatewayConfig = %+v, %v", g, err)
+	}
+	custom, err := agentgateway.ParseConfig(configDoc(t, func(d map[string]any) { d["audience"], d["scope"] = "tether", "" }))
+	if err != nil || custom.Verifier.Audience != "tether" || custom.Verifier.Scope != "" {
+		t.Fatalf("custom audience / empty scope = %+v, %v", custom.Verifier, err)
+	}
+	customGateway, err := custom.GatewayConfig()
+	if err != nil || customGateway.Resource != testResource {
+		t.Fatalf("custom audience changed resource metadata = %+v, %v", customGateway, err)
+	}
+	if _, err := agentgateway.ParseConfig(configDoc(t, func(d map[string]any) {
+		delete(d, "jwks")
+		d["jwks_url"] = "https://issuer.example.invalid/.well-known/jwks.json"
+	})); err != nil {
+		t.Fatalf("JWKS URL without a static set = %v", err)
 	}
 	for _, tc := range []struct {
 		name string
@@ -246,6 +264,7 @@ func TestParseConfig(t *testing.T) {
 		{"Access member mixed in", func(d map[string]any) { d["access_aud"] = testAUD }},
 		{"Access mode with OAuth members", func(d map[string]any) { d["auth_mode"] = "cloudflare_access" }},
 		{"missing resource", func(d map[string]any) { delete(d, "resource") }},
+		{"null audience", func(d map[string]any) { d["audience"] = nil }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := agentgateway.ParseConfig(configDoc(t, tc.edit)); err == nil {

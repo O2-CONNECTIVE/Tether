@@ -197,6 +197,120 @@ test("MCP needs one bounded assertion; bearer, cookie or identity headers alone 
   assert.equal(backend.calls.length, 1);
 });
 
+test("OAuth mode forwards Authorization without requiring an Access assertion", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const challenge = `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp", error="invalid_token"`;
+  const binding = fakeBinding((_url, init) => init.headers.Authorization === undefined
+    ? new Response("Unauthorized\n", { status: 401, headers: { "Content-Type": "text/plain; charset=utf-8", "WWW-Authenticate": challenge } })
+    : json());
+  const env = { ...openEnv(binding), TETHER_NATIVE_AUTH_MODE: "oauth_bearer_jwt" };
+  const authorization = "Bearer synthetic-access-token";
+  const postHeaders = { Authorization: authorization, "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
+
+  assert.equal((await worker.fetch(request(MCP_PATH, { headers: postHeaders, body: INIT }), env)).status, 200);
+  assert.deepEqual(binding.calls[0].init.headers, {
+    Authorization: authorization, "Content-Type": "application/json", Accept: "application/json, text/event-stream",
+  });
+
+  assert.equal((await worker.fetch(request(MCP_PATH, {
+    method: "DELETE", headers: { Authorization: authorization, "Mcp-Session-Id": SESSION },
+  }), env)).status, 200);
+  assert.deepEqual(binding.calls[1].init.headers, { Authorization: authorization, "Mcp-Session-Id": SESSION });
+
+  // A tokenless MCP initialize must reach Go so Claude can start OAuth discovery.
+  const noAuth = { "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
+  const unauthenticated = await worker.fetch(request(MCP_PATH, { headers: noAuth, body: INIT }), env);
+  assert.equal(unauthenticated.status, 401);
+  assert.equal(unauthenticated.headers.get("WWW-Authenticate"), challenge);
+  assert.equal(binding.calls[2].init.headers.Authorization, undefined);
+  const duplicate = new Headers(postHeaders);
+  duplicate.append("Authorization", "Bearer second-token");
+  for (const headers of [duplicate, { ...postHeaders, Authorization: "Bearer one, Bearer two" },
+    { ...postHeaders, Authorization: "a".repeat(LIMITS.authorization + 1) }]) {
+    assert.equal((await worker.fetch(request(MCP_PATH, { headers, body: INIT }), env)).status, 403);
+  }
+  assert.equal((await worker.fetch(request(MCP_PATH, { headers: postHeaders, body: INIT }), {
+    ...openEnv(binding), TETHER_NATIVE_AUTH_MODE: "unknown",
+  })).status, 403);
+  assert.equal(binding.calls.length, 3);
+});
+
+test("OAuth mode serves both protected-resource metadata paths as bounded JSON GETs", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const payload = JSON.stringify({ resource: `${ORIGIN}/mcp`, authorization_servers: ["https://issuer.example.invalid"] });
+  const binding = fakeBinding(() => new Response(payload, { headers: {
+    "Content-Type": "application/json", "Set-Cookie": "s=synthetic", Location: "https://elsewhere.invalid/",
+  } }));
+  const env = { ...openEnv(binding), TETHER_NATIVE_AUTH_MODE: "oauth_bearer_jwt" };
+  const paths = ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"];
+
+  // MCP clients fetch either RFC 9728 location after the tokenless /mcp challenge.
+  for (const path of paths) {
+    const response = await worker.fetch(request(path, { method: "GET" }), env);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("Content-Type"), "application/json");
+    assert.equal(response.headers.get("Set-Cookie"), null);
+    assert.equal(response.headers.get("Location"), null);
+    assert.equal(text(response), payload);
+  }
+  assert.deepEqual(binding.calls.map(({ url, init }) => [url, init.method, init.body, init.redirect, init.headers]), paths.map((path) => [UPSTREAM_ORIGIN + path, "GET", undefined, "manual", {}]));
+
+  for (const [path, options, status] of [
+    [paths[0] + "?x=1", { method: "GET" }, 400],
+    [paths[0], { method: "GET", headers: { Origin: ORIGIN } }, 403],
+    [paths[0], { method: "POST", body: "{}" }, 405],
+    [paths[0], { method: "HEAD" }, 405],
+  ]) {
+    assert.equal((await worker.fetch(request(path, options), env)).status, status);
+  }
+  assert.equal(binding.calls.length, 2);
+
+  for (const respond of [
+    () => new Response(payload, { status: 201, headers: { "Content-Type": "application/json" } }),
+    () => new Response(payload, { headers: { "Content-Type": "application/json; charset=utf-8" } }),
+    () => new Response("x".repeat(LIMITS.reply + 1), { headers: { "Content-Type": "application/json" } }),
+  ]) {
+    const invalid = fakeBinding(respond);
+    assert.equal((await worker.fetch(request(paths[0], { method: "GET" }), { ...env, TETHER_NATIVE_VPC: invalid })).status, 502);
+    assert.equal(invalid.calls.length, 1);
+  }
+});
+
+test("OAuth mode refuses malformed, non-HTTPS, duplicate or oversized challenges", async () => {
+  const worker = createNativeWorker(fakeRuntime());
+  const env = { TETHER_NATIVE_GATE: GATE_VALUE, TETHER_NATIVE_AUTH_MODE: "oauth_bearer_jwt" };
+  const send = async (challenge) => {
+    const binding = fakeBinding(() => ({
+      status: 401,
+      headers: { get: (name) => name.toLowerCase() === "content-type" ? "text/plain; charset=utf-8" : name.toLowerCase() === "www-authenticate" ? challenge : null },
+      body: new Response("Unauthorized\n").body,
+    }));
+    return worker.fetch(request(MCP_PATH, { headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: INIT }), {
+      ...env, TETHER_NATIVE_VPC: binding,
+    });
+  };
+
+  // The relay accepts only one bounded HTTPS resource-metadata challenge from Go.
+  for (const challenge of [
+    'Bearer resource_metadata="http://elsewhere.invalid/.well-known/oauth-protected-resource/mcp"',
+    'Bearer resource_metadata="https://elsewhere.invalid/.well-known/oauth-protected-resource/mcp"\r\nBasic realm="other"',
+    'Bearer resource_metadata="https://elsewhere.invalid/.well-known/oauth-protected-resource/mcp", Basic realm="other"',
+    `Bearer resource_metadata="https://elsewhere.invalid/${"x".repeat(LIMITS.authorization)}"`,
+  ]) assert.equal((await send(challenge)).status, 502);
+});
+
+test("default mode keeps both protected-resource metadata paths hidden", async () => {
+  const rt = fakeRuntime();
+  const binding = fakeBinding(() => json());
+  const worker = createNativeWorker(rt);
+  for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
+    assert.equal((await worker.fetch(request(path, { method: "GET" }), openEnv(binding))).status, 404);
+  }
+  assert.equal(binding.calls.length, 0);
+});
+
 test("MCP POST forwards only the fixed URL, assertion, MCP headers and bounded body; no credential or identity spoof", async () => {
   const rt = fakeRuntime();
   const binding = fakeBinding(() => json(undefined, 200, { "Mcp-Session-Id": SESSION, "Set-Cookie": "s=synthetic", "WWW-Authenticate": "Bearer x", Location: "https://elsewhere.invalid/" }));
@@ -527,7 +641,7 @@ test("throwing bindings and failing streams leave no timer, socket or open reade
 test("the source imports only the probe relay and has no global fetch, logging, cookie or CORS handling", () => {
   const source = readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
   assert.deepEqual(source.match(/^import .*$/gm), ['import { relay } from "../probe/worker.mjs";']);
-  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding."]);
+  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding."]);
   assert.doesNotMatch(source, /console\.|globalThis\.fetch|Access-Control|"Set-Cookie"|caches\.|\.connect\(/);
   assert.ok(!source.includes("tether-echo-probe.internal"));
 });

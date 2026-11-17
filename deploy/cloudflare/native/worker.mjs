@@ -2,11 +2,13 @@
 // rescue-gateway.
 //
 // DENY ALL unless env.TETHER_NATIVE_GATE equals GATE_VALUE exactly. Even then
-// only POST/DELETE MCP_PATH and a GET WebSocket upgrade at REGISTER_PATH are
-// forwarded, to fixed upstream paths, through the ONE VPC Service binding
-// env.TETHER_NATIVE_VPC. There is no global fetch, no request-selected target
-// and no redirect. This Worker authenticates nobody and issues no grant: for
-// MCP the Go agentgateway verifies the Access assertion and maps its subject;
+// only POST/DELETE MCP_PATH, OAuth protected-resource metadata GETs, and a GET
+// WebSocket upgrade at REGISTER_PATH are forwarded, to fixed upstream paths,
+// through the ONE VPC Service binding env.TETHER_NATIVE_VPC. There is no global
+// fetch, no request-selected target and no redirect. This Worker authenticates
+// nobody and issues no grant: for
+// MCP the Go agentgateway verifies the configured Access assertion or OAuth
+// bearer token and maps its subject;
 // for registration the Go agenttransport verifies the enrolled host-key proof
 // and the agent channel checks the same grant before any command. Nothing is
 // logged.
@@ -22,6 +24,8 @@ export const RESIDENT_SUBPROTOCOL = "rescue-agent-resident.v1";
 export const RESIDENT_GATE_VALUE = "open-resident-tether-control";
 export const ASSERTION_HEADER = "Cf-Access-Jwt-Assertion";
 export const GATE_VALUE = "open-native-tether-gateway";
+const OAUTH_BEARER_MODE = "oauth_bearer_jwt";
+const OAUTH_METADATA_PATHS = ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"];
 // URL for binding.fetch. The VPC Service sends to its own fixed host and port,
 // so this supplies the path only; the Go gateway routes by exact path.
 export const UPSTREAM_ORIGIN = "http://rescue-gateway.internal";
@@ -32,23 +36,23 @@ export const UPSTREAM_ORIGIN = "http://rescue-gateway.internal";
 // enforced by Go). lifetimeMs is the absolute pilot relay lifetime; nothing
 // reconnects or extends it.
 export const LIMITS = Object.freeze({
-  assertion: 8192, body: 512 * 1024, reply: 512 * 1024, bodyMs: 10_000, upstreamMs: 35_000, upgradeMs: 10_000,
+  assertion: 8192, authorization: 8199, challenge: 8192, body: 512 * 1024, reply: 512 * 1024, bodyMs: 10_000, upstreamMs: 35_000, upgradeMs: 10_000,
   message: 32 * 1024, frames: 4096, lifetimeMs: 300_000,
 });
 
-// Request headers forwarded to MCP, per method, with their length bound. Every
-// other header (Authorization, Cookie, identity or forwarding headers) is
-// dropped. The Go gateway still validates each value.
+// Request headers forwarded to MCP, per method, with their length bound.
+// Credentials are added separately for the selected mode; other identity and
+// forwarding headers are dropped. The Go gateway still validates each value.
 const MCP_HEADERS = {
   POST: [["Content-Type", 128], ["Accept", 256], ["Mcp-Session-Id", 128], ["Mcp-Protocol-Version", 32]],
   DELETE: [["Mcp-Session-Id", 128], ["Mcp-Protocol-Version", 32]],
 };
-// Statuses the Go gateway answers in Access mode. Anything else, including a
-// redirect or 401, becomes 502.
+// Statuses the Go gateway answers for MCP requests. OAuth 401 challenges are
+// handled separately and must pass their own validation.
 const MCP_STATUSES = new Set([200, 202, 204, 400, 403, 404, 405, 406, 413, 415, 429, 500, 503]);
 const MCP_TYPES = ["application/json", "text/plain; charset=utf-8"];
-// Response headers relayed when well-formed. Location, Set-Cookie,
-// WWW-Authenticate and every other header are never relayed.
+// Response headers relayed when well-formed. Location, Set-Cookie and every
+// other header are dropped; OAuth 401 challenges use a separate allowlist.
 const MCP_REPLY_HEADERS = [
   ["Mcp-Session-Id", /^[0-9a-f]{32}$/], ["Mcp-Protocol-Version", /^\d{4}-\d{2}-\d{2}$/],
   ["Retry-After", /^\d{1,4}$/], ["Allow", /^POST, DELETE$/],
@@ -90,12 +94,16 @@ async function route(request, env, rt) {
   const binding = env.TETHER_NATIVE_VPC;
   if (!binding || typeof binding.fetch !== "function") return deny(rt, 503, "native route not configured");
   const url = new URL(request.url);
-  if (url.pathname !== MCP_PATH && url.pathname !== REGISTER_PATH) return deny(rt, 404, "not found");
+  const authMode = env.TETHER_NATIVE_AUTH_MODE;
+  const metadataPath = authMode === OAUTH_BEARER_MODE ? OAUTH_METADATA_PATHS.find((path) => path === url.pathname) : undefined;
+  if (url.pathname !== MCP_PATH && url.pathname !== REGISTER_PATH && metadataPath === undefined) return deny(rt, 404, "not found");
   if (url.search !== "" || request.url.includes("?")) return deny(rt, 400, "query parameters are not accepted");
   // Reject observable raw-path aliases before normalized URL routing.
   if (request.url.slice(url.origin.length) !== url.pathname) return deny(rt, 404, "not found");
   const mcp = url.pathname === MCP_PATH;
-  if (mcp) {
+  if (metadataPath !== undefined) {
+    if (request.method !== "GET") return deny(rt, 405, "method not allowed", { Allow: "GET" });
+  } else if (mcp) {
     // No GET stream is offered and no upgrade or CORS preflight is answered.
     if ((request.method !== "POST" && request.method !== "DELETE") || request.headers.has("Upgrade")) {
       return deny(rt, 405, "method not allowed", { Allow: "POST, DELETE" });
@@ -106,17 +114,28 @@ async function route(request, env, rt) {
   // No Origin is configured for either Go handler, so it is refused here
   // rather than dropped.
   if (request.headers.has("Origin")) return deny(rt, 403, "origin not allowed");
-  return mcp ? forwardMcp(request, binding, rt) : forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
+  if (metadataPath !== undefined) return forwardProtectedResourceMetadata(metadataPath, binding, rt);
+  return mcp ? forwardMcp(request, binding, rt, authMode) : forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
 }
 
-async function forwardMcp(request, binding, rt) {
-  // Presence is an early refusal only, never authentication: the Go gateway
-  // verifies the signature, issuer, AUD, lifetime and maps the subject.
-  const assertion = request.headers.get(ASSERTION_HEADER);
-  if (!assertion || assertion.length > LIMITS.assertion || assertion.includes(",")) {
-    return deny(rt, 403, "exactly one Cloudflare Access assertion is required");
+async function forwardMcp(request, binding, rt, authMode) {
+  let credential;
+  if (authMode === OAUTH_BEARER_MODE) {
+    credential = request.headers.get("Authorization");
+    if (credential !== null && (!credential || credential.length > LIMITS.authorization || credential.includes(","))) {
+      return deny(rt, 403, "exactly one bounded OAuth bearer credential is required");
+    }
+  } else {
+    credential = request.headers.get(ASSERTION_HEADER);
+    if (!credential || credential.length > LIMITS.assertion || credential.includes(",")) {
+      return deny(rt, 403, "exactly one Cloudflare Access assertion is required");
+    }
   }
-  const headers = { [ASSERTION_HEADER]: assertion };
+  // Presence is an early refusal only, never authentication: the Go gateway
+  // verifies the selected credential's signature, issuer, audience and lifetime.
+  const headers = authMode === OAUTH_BEARER_MODE
+    ? (credential === null ? {} : { Authorization: credential })
+    : { [ASSERTION_HEADER]: credential };
   for (const [name, max] of MCP_HEADERS[request.method]) {
     const value = request.headers.get(name);
     if (value === null) continue;
@@ -139,7 +158,10 @@ async function forwardMcp(request, binding, rt) {
     });
     // A response that arrives after the deadline (the binding may ignore the
     // abort) is cancelled, never read.
-    const out = signal.aborted || !MCP_STATUSES.has(response.status) ? null : replyHeaders(response.headers);
+    const oauthChallenge = authMode === OAUTH_BEARER_MODE && response.status === 401;
+    const out = signal.aborted || (!MCP_STATUSES.has(response.status) && !oauthChallenge)
+      ? null
+      : (oauthChallenge ? oauthChallengeHeaders(response.headers) : replyHeaders(response.headers));
     if (out === null) {
       await cancelBody(response);
       return null;
@@ -151,6 +173,26 @@ async function forwardMcp(request, binding, rt) {
   if (result === TIMED_OUT) return deny(rt, 504, "MCP upstream timed out");
   if (result === null) return deny(rt, 502, "MCP upstream reply refused");
   return new rt.Response(result.reply.byteLength === 0 ? null : result.reply, { status: result.status, headers: result.headers });
+}
+
+async function forwardProtectedResourceMetadata(path, binding, rt) {
+  const result = await withDeadline(rt, LIMITS.upstreamMs, async (signal) => {
+    const response = await binding.fetch(UPSTREAM_ORIGIN + path, {
+      method: "GET", headers: {}, redirect: "manual", signal,
+    });
+    if (signal.aborted || response.status !== 200 || response.headers.get("Content-Type") !== "application/json") {
+      await cancelBody(response);
+      return null;
+    }
+    const reply = await readBounded(response.body, LIMITS.reply, signal);
+    if (reply === null) return null;
+    return { reply };
+  });
+  if (result === TIMED_OUT) return deny(rt, 504, "protected resource metadata upstream timed out");
+  if (result === null) return deny(rt, 502, "protected resource metadata upstream reply refused");
+  return new rt.Response(result.reply.byteLength === 0 ? null : result.reply, {
+    status: 200, headers: { ...SAFE, "Content-Type": "application/json" },
+  });
 }
 
 // replyHeaders returns the relayed response headers, or null when the media
@@ -168,6 +210,22 @@ function replyHeaders(upstream) {
     if (!pattern.test(value)) return null;
     out[name] = value;
   }
+  return out;
+}
+
+function oauthChallengeHeaders(upstream) {
+  const out = replyHeaders(upstream);
+  const challenge = upstream.get("WWW-Authenticate");
+  if (out === null || challenge === null || challenge.length > LIMITS.challenge) return null;
+  const match = /^Bearer resource_metadata="([^"\x00-\x20\x7f]+)"(?:, [!#$%&'*+.^_`|~0-9A-Za-z-]+="[^"\x00-\x1f\x7f]*")*$/.exec(challenge);
+  if (!match) return null;
+  try {
+    const metadataURL = new URL(match[1]);
+    if (metadataURL.protocol !== "https:" || metadataURL.hostname === "" || metadataURL.username !== "" || metadataURL.password !== "" || metadataURL.hash !== "") return null;
+  } catch {
+    return null;
+  }
+  out["WWW-Authenticate"] = challenge;
   return out;
 }
 
