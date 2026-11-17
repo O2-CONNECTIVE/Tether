@@ -96,7 +96,7 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 | `notifications/cancelled`で取り消された元のPOST | 200、元 id の JSON-RPC error -32800。HTTP の単一 JSON 応答を保ち、遠隔配送の不確定性を明記します。遠隔 command は止まりません。notification 自体は 202 です |
 | GET（SSE stream）、PUTなど | 405、`Allow: POST, DELETE` |
 | DELETE | その MCP session だけを終えて 204。進行中 POST は JSON-RPC 応答を捏造せず HTTP 404 となります。command と grant には影響しません |
-| `Mcp-Protocol-Version` | `initialize`以後は必須で、`2025-06-18`だけを受け付けます。省略時に旧版を仮定しません（400） |
+| `Mcp-Protocol-Version` | `initialize`以後は必須で、`2025-06-18`と`2026-07-28`だけを受け付けます。`2026-07-28`は版の名札としてだけ受け付け、版は`initialize`の本文で交渉し、sessionは`2025-06-18`で応答します。`2026-07-28`の状態を持たない方式（`initialize`なし、要求ごとの`_meta`）は実装していません。省略時に旧版を仮定しません（400）。この版の不一致で拒否した要求が、lifecycleを終えていない（`notifications/initialized`前の）自分のsessionを指していれば、そのsessionを終了します。clientはDELETEせずに作り直すことが多く、放置するとsession数の上限を占めて429になるためです |
 | Content-Type / Accept | `application/json`（charsetはutf-8だけ） / `application/json`を受理できること（それ以外は415 / 406） |
 | Origin | 存在する場合は、設定値と完全一致すること（それ以外は403） |
 

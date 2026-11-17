@@ -112,6 +112,68 @@ func TestLifecycleIsPerSession(t *testing.T) {
 	}
 }
 
+// A dual-era client (ChatGPT's connector) labels every POST, initialize
+// included, with Mcp-Protocol-Version 2026-07-28 and then speaks the legacy
+// session lifecycle. The version is negotiated in the initialize body, so the
+// gateway answers its own version and serves the session; refusing the label
+// left the connector unable to connect at all.
+func TestProtocolVersion20260728LabelIsServed(t *testing.T) {
+	r := newRig(t, 0)
+	r.approve(0, 30*time.Second)
+	bearer := token(t, subjects[0])
+	label := func(q *http.Request) { q.Header.Set(agentgateway.HeaderProtocol, "2026-07-28") }
+	params := initParams()
+	params["protocolVersion"] = "2026-07-28"
+	res := r.do(http.MethodPost, bearer, "", rpc(0, "initialize", params), label)
+	sid := res.header.Get(agentgateway.HeaderSession)
+	if res.status != http.StatusOK || sid == "" {
+		t.Fatalf("initialize labelled 2026-07-28 = %d %s", res.status, res.body)
+	}
+	if v := res.message["result"].(map[string]any)["protocolVersion"]; v != mcpadapter.ProtocolVersion {
+		t.Fatalf("negotiated version = %v, want the served %s", v, mcpadapter.ProtocolVersion)
+	}
+	if n := r.do(http.MethodPost, bearer, sid, rpc(nil, "notifications/initialized", nil), label); n.status != http.StatusAccepted {
+		t.Fatalf("initialized labelled 2026-07-28 = %d %s", n.status, n.body)
+	}
+	if l := r.do(http.MethodPost, bearer, sid, rpc(1, "tools/list", nil), label); l.status != http.StatusOK || l.message["result"] == nil {
+		t.Fatalf("tools/list labelled 2026-07-28 = %d %s", l.status, l.body)
+	}
+	if d := r.do(http.MethodDelete, bearer, sid, "", label); d.status != http.StatusNoContent {
+		t.Fatalf("DELETE labelled 2026-07-28 = %d %s", d.status, d.body)
+	}
+}
+
+// A client that gives up on a session before completing the lifecycle (its
+// follow-up was refused, or it disliked the negotiated version) seldom sends
+// DELETE. Such half-open sessions must not hold the per-principal bound, or
+// the principal is locked out with 429 until they idle out; sessions that
+// completed the lifecycle still do.
+func TestFailedSessionsDoNotExhaustThePrincipalBound(t *testing.T) {
+	r := newRig(t, 0)
+	r.approve(0, 30*time.Second)
+	bearer := token(t, subjects[0])
+	foreign := func(q *http.Request) { q.Header.Set(agentgateway.HeaderProtocol, "2099-01-01") }
+	for i := 0; i < 2*agentgateway.MaxSessionsPerPrincipal; i++ {
+		res := r.do(http.MethodPost, bearer, "", rpc(0, "initialize", initParams()), nil)
+		sid := res.header.Get(agentgateway.HeaderSession)
+		if res.status != http.StatusOK || sid == "" {
+			t.Fatalf("initialize #%d after failed sessions = %d %s", i, res.status, res.body)
+		}
+		if n := r.do(http.MethodPost, bearer, sid, rpc(nil, "notifications/initialized", nil), foreign); n.status != http.StatusBadRequest {
+			t.Fatalf("initialized with an unsupported version = %d", n.status)
+		}
+		if bad := r.do(http.MethodPost, bearer, "", rpc(0, "initialize", map[string]any{"protocolVersion": "2099-01-01"}), nil); bad.status != http.StatusBadRequest {
+			t.Fatalf("incomplete initialize = %d", bad.status)
+		}
+	}
+	for i := 0; i < agentgateway.MaxSessionsPerPrincipal; i++ {
+		r.open(bearer)
+	}
+	if res := r.do(http.MethodPost, bearer, "", rpc(0, "initialize", initParams()), nil); res.status != http.StatusTooManyRequests {
+		t.Fatalf("initialize over the bound of live sessions = %d", res.status)
+	}
+}
+
 func TestProtectedResourceMetadata(t *testing.T) {
 	r := newRig(t, 0)
 	for _, path := range []string{agentgateway.MetadataPrefix + "/mcp", agentgateway.MetadataPrefix} {

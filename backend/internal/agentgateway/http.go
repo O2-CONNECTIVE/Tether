@@ -86,7 +86,18 @@ func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
-	if versions := r.Header.Values(HeaderProtocol); len(versions) > 1 || (len(versions) == 1 && versions[0] != mcpadapter.ProtocolVersion) {
+	// labelVersion is accepted only as a label: a dual-era client that sends it
+	// still initializes, the initialize body negotiates
+	// mcpadapter.ProtocolVersion, and the session is served under that version.
+	// The stateless 2026-07-28 protocol itself (no initialize, per-request
+	// _meta) is not implemented.
+	const labelVersion = "2026-07-28"
+	if versions := r.Header.Values(HeaderProtocol); len(versions) > 1 || (len(versions) == 1 && versions[0] != mcpadapter.ProtocolVersion && versions[0] != labelVersion) {
+		// A client refused here mid-handshake cannot finish it and seldom
+		// sends DELETE; its half-open session must not hold a slot.
+		if ids := r.Header.Values(HeaderSession); len(ids) == 1 {
+			g.endHalfOpen(p, ids[0])
+		}
 		plain(w, http.StatusBadRequest, "unsupported "+HeaderProtocol+"; only "+mcpadapter.ProtocolVersion+" is served")
 		return
 	}
@@ -393,6 +404,16 @@ func (g *Gateway) terminate(w http.ResponseWriter, r *http.Request, p *principal
 	g.dropLocked(ids[0], s)
 	g.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// endHalfOpen ends p's session id if it has not completed the lifecycle, so
+// has served no tool. Another principal's session is left untouched.
+func (g *Gateway) endHalfOpen(p *principal, id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if s := g.sessions[id]; s != nil && s.owner == p && !s.mcp.Ready() {
+		g.dropLocked(id, s)
+	}
 }
 
 func (g *Gateway) dropLocked(id string, s *session) {
