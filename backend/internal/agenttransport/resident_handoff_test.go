@@ -33,6 +33,12 @@ func takeSource(t *testing.T, r *residentRig) *ResidentSourceLease {
 	if e != nil {
 		t.Fatal(e)
 	}
+	// The gateway marks a resident ready only after sending resident_accepted,
+	// so the Mac can hold its source while a proposal is still refused as
+	// unconfigured. The callers then wait in Next for an intent never sent.
+	verticalEventually(t, func() bool {
+		return r.h.ResidentGeneration(hostLabel, member1) == source.Receiver().Generation()
+	})
 	return source
 }
 func finishSource(t *testing.T, s *ResidentSourceLease, err error) error {
