@@ -87,6 +87,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mac-agent': {'main.go', 'config.go', 'status.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-mcp': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-host': {'main.go', 'entry.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-host-pair': {'main.go', 'login.go', 'install.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/resident-pipe': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent': {'runtime.go', 'process.go', 'cleanup_diagnostic.go', 'groupobserver.go', 'start_diagnostic.go', 'terminal_disposition.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch': {'approval.go', 'resident_policy.go', 'resident_source.go', 'resident_wire.go', 'resident_worker.go', 'startup_policy.go'},
@@ -237,6 +238,9 @@ def product_files_for(goos, cgo_enabled=True):
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch'].add('terminal_darwin.go' if goos == 'darwin' else 'terminal_other.go')
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-gateway'].add(
         'pairing_store_other.go' if goos == 'windows' else 'pairing_store_unix.go')
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-host-pair'].update({
+        'platform_unix.go' if goos in ('linux', 'darwin') else 'platform_other.go',
+        'platform_darwin.go' if goos == 'darwin' else 'platform_other_browser.go'})
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac'].add(
         'enrollment_darwin.go' if goos == 'darwin' and cgo_enabled else 'enrollment_other.go')
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys'].add(

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -54,6 +56,7 @@ func TestNewCallbackAcceptsOnlyOneMatchingLoopbackLogin(t *testing.T) {
 		}
 	}
 	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/callback?state=state&code=code", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || w.Body.String() != "ログインが完了しました。このページを閉じてください" {
@@ -113,6 +116,15 @@ func newLoopbackTLSServer(h http.Handler) *httptest.Server {
 func newFlowFixture(t *testing.T, discoveryIssuer string, gatewayStatus int) *flowFixture {
 	t.Helper()
 	f := &flowFixture{}
+	principal, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principalSSH, err := ssh.NewPublicKey(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principalWire := "ssh-ed25519 " + base64.StdEncoding.EncodeToString(principalSSH.Marshal())
 	f.gateway = newLoopbackTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.gatewayCalls++
 		if f.gatewayDelay > 0 {
@@ -165,7 +177,8 @@ func newFlowFixture(t *testing.T, discoveryIssuer string, gatewayStatus int) *fl
 			if f.malformed {
 				io.WriteString(w, `{"unexpected":true}`)
 			} else {
-				io.WriteString(w, `{"registration_endpoint":"wss://gw.test/register","host_label":"host","principal_label":"principal","principal_public_key":"ssh-ed25519 AAAA"}`)
+				response, _ := json.Marshal(map[string]string{"registration_endpoint": "wss://gw.test/register", "host_label": "host", "principal_label": "principal", "principal_public_key": principalWire})
+				_, _ = w.Write(response)
 			}
 			return
 		}

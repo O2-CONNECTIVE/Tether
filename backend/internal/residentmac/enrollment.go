@@ -10,7 +10,11 @@ import (
 
 // EnrolledLocation returns the fixed per-account enrollment location.
 func EnrolledLocation(ctx context.Context) (home, policyPath string, err error) {
-	return "", "", ErrStandbyUnavailable
+	policyPath, err = currentEnrolledPolicy(ctx)
+	if err != nil || !strings.HasSuffix(policyPath, "/"+enrolledPolicyRelative) {
+		return "", "", ErrStandbyUnavailable
+	}
+	return strings.TrimSuffix(policyPath, "/"+enrolledPolicyRelative), policyPath, nil
 }
 
 // One current-account location, not discovery, enrollment or a trust witness.
