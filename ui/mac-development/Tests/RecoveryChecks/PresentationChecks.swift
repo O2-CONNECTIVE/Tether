@@ -45,6 +45,32 @@ func checkPresentation() {
     check(blocked.detail.contains("診断情報") && blocked.diagnostic.contains("unknown owner"), "UI unknown gives diagnosis instead of false recovery")
     unknown.requestQuit(); unknown.requestQuit()
     check(!unknown.shouldTerminate && !unknown.presentation(at: 5000).canPrepare, "UI quit cannot bypass unknown")
+    // Quit, Cmd-Q and the close button share this refusal. An unchanged screen
+    // was reported as no response, so the refusal itself must become visible.
+    let refused = unknown.presentation(at: 5000)
+    check(!blocked.detail.contains("終了できません"), "UI unknown claims no refusal before quit is asked")
+    check(refused.status == blocked.status && refused.detail.hasPrefix("回収を確認できないため終了できません。"), "UI refused quit on unknown states why the app stays open")
+
+    // The helper's own 15-minute expiry closes the original owner without a GUI
+    // request or fault. With all four proofs, quit and fresh preparation use the
+    // existing paths; nothing here relaxes the proof itself.
+    func expiredOwner() -> Owner {
+        let owner = Owner("expired original"); owner.launched = true
+        owner.feed.ingest(recoveryStatus(), at: 5000)
+        owner.feed.ingest(terminal("confirmed"), at: 5000)
+        owner.reaped = true; owner.eof = true; owner.exitOK = true
+        return owner
+    }
+    let expired = expiredOwner()
+    var expiryOwners = 0
+    let expiry = RecoveryController(owner: expired) { expiryOwners += 1; return Owner("after expiry") }
+    let afterExpiry = expiry.presentation(at: 5000)
+    check(!expired.feed.fault && afterExpiry.status == "停止・回収を確認しました" && afterExpiry.canPrepare && afterExpiry.quitTitle == "終了", "UI confirmed expiry offers preparation and plain quit")
+    check(expiry.prepare() && expiryOwners == 1 && expiry.previousDiagnostic == "expired original", "UI confirmed expiry prepares one fresh owner")
+    let expiredQuit = expiredOwner()
+    let expiryQuit = RecoveryController(owner: expiredQuit) { Owner("forbidden") }
+    expiryQuit.requestQuit()
+    check(expiryQuit.shouldTerminate && expiredQuit.closes == 0, "UI quit after confirmed expiry ends without another close")
 
     let transition = Owner("pending ON"); transition.launched = true
     transition.feed.ingest(recoveryStatus(), at: 5000)

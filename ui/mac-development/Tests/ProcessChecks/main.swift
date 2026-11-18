@@ -42,6 +42,19 @@ for mode in ["recovery", "missing", "malformed", "unknown", "trailing", "partial
     precondition(recovering.reaped)
     precondition(recovering.diagnostic.contains("helper PID=") && recovering.diagnostic.contains("reason="))
 }
+// Helper-initiated expiry over the real pipe. Exit 0 completes the unchanged
+// four proofs; the former exit 1 reproduces the reported unconfirmed state.
+for (mode, collected) in [("expiry", true), ("expiry-nonzero", false)] {
+    try mode.write(to: macos.appendingPathComponent("fixture-mode"), atomically: true, encoding: .ascii)
+    let expired = ResidentProcess(fixtureBundle: root)
+    expired.start()
+    let until = Date().addingTimeInterval(10)
+    while (!expired.reaped || !expired.eof) && Date() < until { expired.poll(); Thread.sleep(forTimeInterval: 0.01) }
+    precondition(expired.reaped && expired.eof && expired.mayQuit == collected)
+    precondition(collected
+        ? !expired.feed.fault && expired.feed.closeConfirmed
+        : expired.diagnostic.hasSuffix("reason=child-exit-failed collection=child-exit-failed terminal=false EOF=true reaped=true exit0=false"))
+}
 let mismatch = ResidentProcess(fixtureBundle: root)
 try "bad".write(to: resources.appendingPathComponent("resident.sha256"), atomically: true, encoding: .ascii)
 mismatch.start()
@@ -57,4 +70,4 @@ while (!empty.reaped || !empty.eof) && Date() < emptyDeadline { empty.poll(); Th
 precondition(empty.reaped && empty.eof && empty.feed.fault && !empty.mayQuit)
 // Test-owned directory only, after confirmed child collection.
 try manager.removeItem(at: root)
-print("ProcessChecks: real synthetic child/pipe close+EOF+reap, duplicate start/close, fault recovery, terminal rejection and hash rejection passed; no resident host executed")
+print("ProcessChecks: real synthetic child/pipe close+EOF+reap, duplicate start/close, fault recovery, helper expiry, terminal rejection and hash rejection passed; no resident host executed")

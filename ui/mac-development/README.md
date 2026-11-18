@@ -24,10 +24,15 @@ Developer ID の結果をモックに置換しません。別 bundle ID、常時
 - Quit とウィンドウ閉鎖は同じ元 owner に close を一度要求します。
   confirmed 終了frame、EOF、元 child の正常終了/回収が揃うまで終了を許可しません。
   unknown を kill・再起動・時間切れで成功へ変更しません。Quit 要求後は再準備を拒否し、
-  回収確認後に終了します。「ホストを停止」とアプリの終了は別の操作です。
+  回収確認後に終了します。回収未確認で拒否した Quit とウィンドウ閉鎖は、拒否の理由を
+  画面に表示します。「ホストを停止」とアプリの終了は別の操作です。
 - **起動から15分で終了を要求する限定CLIです。永続運転ではありません。**
-  LaunchAgent、ログイン起動、自動再起動はありません。期限終了時の非0 exit は
-  保守的に回収未確認として残します。server-side bounded pilot は別途必要です。
+  LaunchAgent、ログイン起動、自動再起動はありません。期限で元 owner の close が
+  confirmed になり、終了frameも書けた場合だけ、helper は明示 close と同じ exit 0 で
+  終わります。GUI はそのうえで従来の4点の証拠が揃った場合だけ回収を確認します。
+  close が unknown なら helper は終了せず元 owner を保持します。終了frameの書込み失敗、
+  期限以外の serve 失敗、signal による終了は非0のままです。いずれも回収未確認として残します。
+  server-side bounded pilot は別途必要です。
 - 起動失敗の診断や caller、credential、endpoint、生JSONを表示・保存しません。
   実ユーザーでの実行は現在ユーザー権限です。専用OSユーザーは自動作成しません。
 

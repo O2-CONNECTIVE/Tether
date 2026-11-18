@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 	"golang.org/x/sys/unix"
 )
 
@@ -85,7 +87,11 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 		name    string
 		dialect inputDialect
 		cancel  bool
-	}{{"json-eof", jsonInput, false}, {"foreground-close", foregroundInput, false}, {"foreground-cancel", foregroundInput, true}} {
+		expire  bool
+	}{{"json-eof", jsonInput, false, false}, {"foreground-close", foregroundInput, false, false}, {"foreground-cancel", foregroundInput, true, false},
+		// The development lifetime's own expiry closes the original owner like
+		// a requested close; only then may the GUI's exit-0 proof be complete.
+		{"foreground-expiry", foregroundInput, false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := idleProtectedOwner(t)
 			inR, inW, err := os.Pipe()
@@ -109,6 +115,11 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			if tc.expire {
+				var stop context.CancelFunc
+				ctx, stop = context.WithTimeout(ctx, 200*time.Millisecond)
+				defer stop()
+			}
 			done := make(chan error, 1)
 			go func() { done <- runOwnedInput(ctx, owner, pipes, tc.dialect) }()
 			joined := false
@@ -130,6 +141,8 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			}
 			if tc.cancel {
 				cancel()
+			} else if tc.expire {
+				// No input: the original lifetime ends the run by itself.
 			} else if tc.dialect == jsonInput {
 				if err := inW.Close(); err != nil {
 					t.Fatal(err)
@@ -142,6 +155,9 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 				joined = true
 				if (tc.cancel && !errors.Is(err, context.Canceled)) || (!tc.cancel && err != nil) {
 					t.Fatal("shared lifetime result", err)
+				}
+				if tc.cancel == (ExitCode(err) == 0) {
+					t.Fatal("process result", ExitCode(err))
 				}
 			case <-time.After(3 * time.Second):
 				t.Fatal("shared lifetime did not finish")
@@ -174,5 +190,37 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 				t.Fatal("missing physical output EOF", err)
 			}
 		})
+	}
+}
+
+// The GUI reads exit 0 as one of its four collection proofs. Only the original
+// lifetime's own expiry, after a confirmed close whose terminal was written,
+// may end that way. A signal, an unknown close, a lost terminal or any other
+// serve failure stays non-zero and so remains unconfirmed in the GUI.
+func TestOwnedResultExitsCleanlyOnlyAfterConfirmedExpiry(t *testing.T) {
+	expired, stop := context.WithTimeout(context.Background(), 0)
+	defer stop()
+	<-expired.Done()
+	signalled, cancel := context.WithCancel(context.Background())
+	cancel()
+	live := context.Background()
+	for _, tc := range []struct {
+		name                          string
+		lifetime                      context.Context
+		served, closeErr, terminalErr error
+		want                          int
+	}{
+		{"expiry with confirmed close", expired, context.DeadlineExceeded, nil, nil, 0},
+		{"expiry with unknown close", expired, context.DeadlineExceeded, residentmac.ErrStandbyUnknown, nil, 1},
+		{"expiry with lost terminal", expired, context.DeadlineExceeded, nil, unix.EPIPE, 1},
+		{"expiry then other serve failure", expired, ErrProtocol, nil, nil, 1},
+		{"wrapped deadline is not the lifetime result", expired, fmt.Errorf("read: %w", context.DeadlineExceeded), nil, nil, 1},
+		{"deadline without lifetime expiry", live, context.DeadlineExceeded, nil, nil, 1},
+		{"signal", signalled, context.Canceled, nil, nil, 1},
+		{"input EOF", live, os.ErrClosed, nil, nil, 0},
+	} {
+		if got := ExitCode(ownedResult(tc.lifetime, tc.served, tc.closeErr, tc.terminalErr)); got != tc.want {
+			t.Errorf("%s: exit %d, want %d", tc.name, got, tc.want)
+		}
 	}
 }

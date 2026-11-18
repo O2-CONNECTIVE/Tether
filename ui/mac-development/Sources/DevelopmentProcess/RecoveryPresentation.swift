@@ -10,7 +10,9 @@ extension RecoveryController {
         let status: String, detail: String
         if f.cleanupInvalid {
             status = "回収未確認・再準備できません"
-            detail = "新しい操作は受け付けません。元のホストの回収を確認できないため、画面を保持します。下の診断情報を確認してください。終了の連打や再準備では解消できません。"
+            // Quit, Cmd-Q and the close button are refused here; say so instead of an unchanged screen.
+            detail = (quitRequested ? "回収を確認できないため終了できません。" : "")
+                + "新しい操作は受け付けません。元のホストの回収を確認できないため、画面を保持します。下の診断情報を確認してください。終了の連打や再準備では解消できません。"
         } else if shouldTerminate {
             status = "終了します"
             detail = launched ? "元のホストの停止・回収を確認しました。" : "ホストは起動していません。"
