@@ -91,6 +91,20 @@ func TestCallbackRejectsPresentEmptyError(t *testing.T) {
 	}
 }
 
+func TestCallbackRejectsMalformedQueryBeforeTokenExchange(t *testing.T) {
+	h, result := newCallback("state")
+	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/callback?state=state&code=code&error=%zz", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed query status=%d", w.Code)
+	}
+	if got := <-result; got.err == nil || got.code != "" {
+		t.Fatalf("malformed query accepted: %+v", got)
+	}
+}
+
 func TestParsePairResultRequiresExactJSONMediaTypeAndMembers(t *testing.T) {
 	valid := []byte(`{"registration_endpoint":"wss://gw.test/register","host_label":"host","principal_label":"principal","principal_public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAvzQ9BrCC5xE1lQfM4NXu7CwJwE74lfM2nCHx9+spk8"}`)
 	duplicate := strings.Replace(string(valid), `,"host_label"`, `,"registration_endpoint":"wss://gw.test/register","host_label"`, 1)
@@ -287,6 +301,11 @@ func invokeFlowAt(t *testing.T, f *flowFixture, callbackMode, home string) (int,
 			if callbackMode == "wrong-state" {
 				q.Set("state", "wrong")
 			}
+			if callbackMode == "malformed-query" {
+				redirect.RawQuery = "state=" + url.QueryEscape(u.Query().Get("state")) + "&code=AUTH_CODE&error=%zz"
+				_, _ = f.client.Get(redirect.String())
+				return
+			}
 			redirect.RawQuery = q.Encode()
 			_, _ = f.client.Get(redirect.String())
 			if callbackMode == "twice" {
@@ -301,6 +320,14 @@ func invokeFlowAt(t *testing.T, f *flowFixture, callbackMode, home string) (int,
 	var stdout, stderr strings.Builder
 	code := execute(context.Background(), []string{"--gateway", f.gateway.URL, "--issuer", f.issuer.URL, "--client-id", "client"}, &stdout, &stderr, d)
 	return code, stdout.String(), stderr.String(), authURL
+}
+
+func TestExecuteMalformedCallbackDoesNotExchangeToken(t *testing.T) {
+	f := newFlowFixture(t, "MATCH", 200)
+	code, _, stderr, _ := invokeFlow(t, f, "malformed-query")
+	if code != 1 || f.tokenForm != nil || f.gatewayCalls != 0 || !strings.Contains(stderr, diagLoginCancelled) {
+		t.Fatalf("status=%d token=%v gateway=%d stderr=%q", code, f.tokenForm, f.gatewayCalls, stderr)
+	}
 }
 
 func TestExecuteCompletesPKCEPairAndWritesNoTokens(t *testing.T) {
@@ -336,6 +363,15 @@ func TestExecuteCompletesPKCEPairAndWritesNoTokens(t *testing.T) {
 	}
 	if err = maclaunch.ValidateFixedResidentPolicy(policyBytes, policyPath); err != nil {
 		t.Fatalf("written policy rejected: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(policyPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".pair-probe-") {
+			t.Fatalf("successful pair left probe: %s", entry.Name())
+		}
 	}
 	var doc struct {
 		HostKeyPath string `json:"host_key_path"`
@@ -438,6 +474,38 @@ func TestExecuteProtectedReadFailureStopsBeforeBrowserOrNetwork(t *testing.T) {
 	}
 }
 
+func TestExecuteProbeReadFailureStopsAndRemovesProbe(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "enrollment")
+	policy := filepath.Join(dir, "resident-policy.json")
+	args := []string{"--gateway", "https://gw.test", "--issuer", "https://id.test", "--client-id", "client"}
+	reads := 0
+	auth, network := 0, 0
+	d := deps{client: http.DefaultClient, location: func(context.Context) (string, string, error) { return home, policy, nil }, readProtected: func(ctx context.Context, path string) ([]byte, error) {
+		if strings.HasPrefix(filepath.Base(path), ".pair-probe-") {
+			reads++
+			return nil, os.ErrPermission
+		}
+		return os.ReadFile(path)
+	}, openBrowser: func(string) error { auth++; return nil }}
+	transport := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) { network++; return nil, os.ErrPermission }}
+	d.client = &http.Client{Transport: transport}
+	var stdout, stderr strings.Builder
+	code := execute(context.Background(), args, &stdout, &stderr, d)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".pair-probe-") {
+			t.Fatalf("probe left behind: %s", entry.Name())
+		}
+	}
+	if code != 1 || reads != 1 || auth != 0 || network != 0 || !strings.Contains(stderr.String(), diagLocationUnsafe) {
+		t.Fatalf("status=%d probe reads=%d auth=%d network=%d stderr=%q", code, reads, auth, network, stderr.String())
+	}
+}
+
 func TestAuthorizationEndpointQueryIsPreservedExceptScope(t *testing.T) {
 	f := newFlowFixture(t, "MATCH", 200)
 	f.authorizationEndpoint = f.issuer.URL + "/authorize?audience=existing&scope=discard"
@@ -532,6 +600,45 @@ func TestExecuteSuccessRemovesOnlyPairOwnedOldKey(t *testing.T) {
 				t.Fatalf("status=%d old-key error=%v", code, err)
 			}
 		})
+	}
+}
+
+func TestExecuteSuccessDoesNotRemoveNonCanonicalOldKeyPath(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "enrollment")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(home, "host-key-old")
+	if err := os.WriteFile(outside, []byte("outside key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(home, "nested")
+	if err := os.Mkdir(nested, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(nested, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	oldKey := dir + "/sub/../host-key-old"
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := ssh.NewPublicKey(private.Public().(ed25519.PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := pairResult{RegistrationEndpoint: "wss://gw.test/register", HostLabel: "host", PrincipalLabel: "principal", PrincipalPublicKey: "ssh-ed25519 " + base64.StdEncoding.EncodeToString(public.Marshal())}
+	if _, err := install(dir, filepath.Join(dir, "resident-policy.json"), home, private, signer, result, []byte(`{"host_key_path":"`+oldKey+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("outside key removed: %v", err)
 	}
 }
 

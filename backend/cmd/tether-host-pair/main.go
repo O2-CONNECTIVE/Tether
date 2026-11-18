@@ -141,6 +141,20 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 		fmt.Fprintln(stderr, diagLocationUnsafe)
 		return 1
 	}
+	probePath, err := writeTemp(dir, ".pair-probe-", []byte("pair probe\n"))
+	if err != nil {
+		fmt.Fprintln(stderr, diagLocationUnsafe)
+		return 1
+	}
+	defer os.Remove(probePath)
+	protectCtx, cancelProtect = context.WithTimeout(ctx, 10*time.Second)
+	_, probeErr := d.readProtected(protectCtx, probePath)
+	cancelProtect()
+	removeErr := os.Remove(probePath)
+	if probeErr != nil || removeErr != nil {
+		fmt.Fprintln(stderr, diagLocationUnsafe)
+		return 1
+	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		fmt.Fprintln(stderr, diagLoginCancelled)
@@ -290,8 +304,8 @@ func newCallback(state string) (http.Handler, <-chan callbackResult) {
 			return
 		}
 		done = true
-		q := r.URL.Query()
-		if q.Get("state") != state || q.Has("error") {
+		q, queryErr := url.ParseQuery(r.URL.RawQuery)
+		if queryErr != nil || q.Get("state") != state || q.Has("error") {
 			http.Error(w, "", http.StatusBadRequest)
 			ch <- callbackResult{err: errors.New("cancelled")}
 			return

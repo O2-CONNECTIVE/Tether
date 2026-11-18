@@ -102,7 +102,7 @@ func install(dir, policyPath, home string, priv ed25519.PrivateKey, signer ssh.S
 		var previous struct {
 			KeyPath string `json:"host_key_path"`
 		}
-		if json.Unmarshal(oldPolicy, &previous) == nil && filepath.Dir(previous.KeyPath) == dir && strings.HasPrefix(filepath.Base(previous.KeyPath), "host-key-") && previous.KeyPath != keyPath {
+		if json.Unmarshal(oldPolicy, &previous) == nil && previous.KeyPath == filepath.Clean(previous.KeyPath) && filepath.Dir(previous.KeyPath) == dir && strings.HasPrefix(filepath.Base(previous.KeyPath), "host-key-") && previous.KeyPath != keyPath {
 			_ = os.Remove(previous.KeyPath)
 		}
 	}
