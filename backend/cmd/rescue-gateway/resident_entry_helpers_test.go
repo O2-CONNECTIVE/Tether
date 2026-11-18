@@ -147,10 +147,13 @@ func residentPeerAttempt(t *testing.T, l *fakeListener, seed byte) (*websocket.C
 	enc := base64.RawURLEncoding
 	nonce := bytes.Repeat([]byte{7}, 32)
 	residentWriteMessage(t, ws, map[string]string{"type": "resident_hello", "host": "mac-1", "principal": "member-1", "client_nonce": enc.EncodeToString(nonce)})
-	challenge := residentReadMessage(t, ws)
+	challenge, err := residentReadMessageAttempt(t, ws)
+	if err != nil {
+		return nil, nil, err
+	}
 	server, err := enc.DecodeString(challenge["server_nonce"])
 	if err != nil || len(server) != 32 || len(challenge["generation"]) != 64 || challenge["type"] != "resident_challenge" {
-		t.Fatal("invalid challenge")
+		return nil, nil, errors.New("resident challenge refused")
 	}
 	transcript := func(role string, values ...string) []byte {
 		var out []byte
@@ -166,7 +169,9 @@ func residentPeerAttempt(t *testing.T, l *fakeListener, seed byte) (*websocket.C
 		}
 		return out
 	}
-	residentVerifyMessage(t, challenge, transcript("gateway-challenge"))
+	if !residentMessageValid(challenge, transcript("gateway-challenge"), publicOf(t, 0x11)) {
+		return nil, nil, errors.New("resident challenge was not pinned")
+	}
 	sig, err := signerOf(t, seed).Sign(nil, transcript("host-proof"))
 	if err != nil {
 		return nil, nil, err
@@ -215,11 +220,15 @@ func residentWriteMessage(t *testing.T, ws *websocket.Conn, m map[string]string)
 
 func residentVerifyMessage(t *testing.T, m map[string]string, transcript []byte) {
 	t.Helper()
-	raw, err := base64.RawURLEncoding.DecodeString(m["signature"])
-	var sig ssh.Signature
-	if err != nil || ssh.Unmarshal(raw, &sig) != nil || sig.Format != ssh.KeyAlgoED25519 || len(sig.Rest) != 0 || publicOf(t, 0x11).Verify(transcript, &sig) != nil {
+	if !residentMessageValid(m, transcript, publicOf(t, 0x11)) {
 		t.Fatal("gateway signature not pinned")
 	}
+}
+
+func residentMessageValid(m map[string]string, transcript []byte, key ssh.PublicKey) bool {
+	raw, err := base64.RawURLEncoding.DecodeString(m["signature"])
+	var sig ssh.Signature
+	return err == nil && ssh.Unmarshal(raw, &sig) == nil && sig.Format == ssh.KeyAlgoED25519 && len(sig.Rest) == 0 && key.Verify(transcript, &sig) == nil
 }
 
 func residentTool(t *testing.T, l *fakeListener, auth, sid, name string, args map[string]any) (int, string) {

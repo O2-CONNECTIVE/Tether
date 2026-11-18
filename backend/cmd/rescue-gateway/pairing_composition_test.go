@@ -166,6 +166,17 @@ func TestEntryKeepsOldSessionStatusReadOnlyAfterReplacementA8(t *testing.T) {
 		t.Fatal(err)
 	}
 	residentWriteMessage(t, ws, map[string]string{"type": "resident_refused", "generation": refusal[0], "sequence": refusal[1], "request_id": refusal[2], "code": refusal[3], "signature": base64.RawURLEncoding.EncodeToString(ssh.Marshal(sig))})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		code, body := residentTool(t, l, auth, sid, "tether_fixed_status", args)
+		if code == 200 && strings.Contains(body, `"phase":"finished"`) && strings.Contains(body, `"owner_cleanup":"confirmed"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("old work cleanup did not settle before replacement: %d %s", code, body)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if code, body := registerPair(t, l, 0x42); code != http.StatusOK {
 		t.Fatalf("replacement pair status = %d, want 200 (%s)", code, body)
 	}

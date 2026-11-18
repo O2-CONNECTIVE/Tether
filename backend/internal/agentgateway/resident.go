@@ -142,7 +142,14 @@ func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, en
 		p := g.byLabel[e.PrincipalLabel]
 		hostKey := g.HostKey(e.HostLabel)
 		key, err := ssh.ParsePublicKey(hostKey)
-		if p == nil || p.signer == nil || !validLabel(e.HostLabel) || err != nil || key.Type() != ssh.KeyAlgoED25519 || setup.entries[p] != nil {
+		pairedSlot := false
+		g.mu.Lock()
+		if slot := g.hosts[e.HostLabel]; slot != nil {
+			pairedSlot = slot.paired == p && g.pairing != nil
+		}
+		g.mu.Unlock()
+		validStaticKey := err == nil && key.Type() == ssh.KeyAlgoED25519
+		if p == nil || p.signer == nil || !validLabel(e.HostLabel) || (!validStaticKey && !pairedSlot) || setup.entries[p] != nil {
 			return ErrConfig
 		}
 		setup.entries[p] = &residentEntry{enrollment: e, works: map[string]*residentWork{}}
