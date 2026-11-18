@@ -888,3 +888,27 @@ test("B3: opting into pairing leaves registration and MCP credential handling un
   assert.equal((await worker.fetch(request(PAIR_PATH, { method: "GET", headers: regHeaders }), pairEnv(binding))).status, 405);
   assert.equal(binding.calls.length, 0);
 });
+
+test("B1: every pairing answer carries the gateway's media type, and Allow or a challenge only on their own status", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const send = async (respond) => worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: PAIR_BODY }), pairEnv(fakeBinding(respond)));
+  // The gateway always names its media type; an empty, untyped answer is not
+  // a pairing result the host could trust.
+  for (const status of [200, 409]) {
+    assert.equal((await send(() => ({ status, headers: new Headers(), body: null }))).status, 502, String(status));
+  }
+  const ok = await send(() => pairReply(200, { "WWW-Authenticate": "Bearer", Allow: "POST" }));
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("WWW-Authenticate"), null);
+  assert.equal(ok.headers.get("Allow"), null);
+  const conflict = await send(() => pairRefusal(409, { Allow: "POST", "WWW-Authenticate": 'Bearer error="invalid_token"' }));
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.headers.get("Allow"), null);
+  assert.equal(conflict.headers.get("WWW-Authenticate"), null);
+  const unauthorized = await send(() => pairRefusal(401, { "WWW-Authenticate": "Bearer", Allow: "POST" }));
+  assert.equal(unauthorized.headers.get("Allow"), null);
+  const method = await send(() => pairRefusal(405, { Allow: "POST", "WWW-Authenticate": "Bearer" }));
+  assert.equal(method.headers.get("WWW-Authenticate"), null);
+  assert.equal(rt.timers.size, 0);
+});

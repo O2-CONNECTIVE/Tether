@@ -4,8 +4,9 @@
 // DENY ALL unless env.TETHER_NATIVE_GATE equals GATE_VALUE exactly. Even then
 // only POST/DELETE MCP_PATH, OAuth protected-resource metadata GETs, a GET
 // WebSocket upgrade at REGISTER_PATH and, when TETHER_NATIVE_PAIRING opts in,
-// POST PAIR_PATH are forwarded, to fixed upstream paths, through the ONE VPC Service binding env.TETHER_NATIVE_VPC. There is no global
-// fetch, no request-selected target and no redirect. This Worker authenticates
+// POST PAIR_PATH are forwarded, to fixed upstream paths, through the ONE VPC
+// Service binding env.TETHER_NATIVE_VPC. There is no global fetch, no
+// request-selected target and no redirect. This Worker authenticates
 // nobody and issues no grant: for
 // MCP the Go agentgateway verifies the configured Access assertion or OAuth
 // bearer token and maps its subject;
@@ -60,10 +61,10 @@ const MCP_REPLY_HEADERS = [
   ["Mcp-Session-Id", /^[0-9a-f]{32}$/], ["Mcp-Protocol-Version", /^\d{4}-\d{2}-\d{2}$/],
   ["Retry-After", /^\d{1,4}$/], ["Allow", /^POST, DELETE$/],
 ];
-// The pair route's answers and the only headers they carry; the body bound is
-// agentgateway.MaxPairBody.
+// The pair route's answers and, per status, the headers each one must carry;
+// every answer names its media type. The body bound is agentgateway.MaxPairBody.
 const PAIR_STATUSES = new Set([200, 400, 401, 403, 404, 405, 409, 413, 503]);
-const PAIR_REPLY_HEADERS = [["Allow", /^POST$/], ["WWW-Authenticate", /^Bearer(?: error="invalid_token")?$/]];
+const PAIR_REPLY_HEADERS = { 401: [["WWW-Authenticate", /^Bearer(?: error="invalid_token")?$/]], 405: [["Allow", /^POST$/]] };
 const REGISTER_REFUSALS = [400, 403, 404, 405, 503];
 // Registration is outside human OAuth: no ambient credential and no Access
 // assertion is accepted or forwarded.
@@ -152,13 +153,14 @@ async function forwardPair(request, binding, rt) {
       method: "POST", headers, body, redirect: "manual", signal,
     });
     // A response that arrives after the deadline is cancelled, never read.
-    const out = signal.aborted || !PAIR_STATUSES.has(response.status) ? null : replyHeaders(response.headers, PAIR_REPLY_HEADERS);
-    if (out === null || (response.status === 401 && !out["WWW-Authenticate"]) || (response.status === 405 && !out.Allow)) {
+    const required = PAIR_REPLY_HEADERS[response.status] ?? [];
+    const out = signal.aborted || !PAIR_STATUSES.has(response.status) ? null : replyHeaders(response.headers, required);
+    if (out === null || !out["Content-Type"] || required.some(([name]) => !out[name])) {
       await cancelBody(response);
       return null;
     }
     const reply = await readBounded(response.body, LIMITS.reply, signal);
-    if (reply === null || (reply.byteLength > 0 && !out["Content-Type"])) return null;
+    if (reply === null) return null;
     return { status: response.status, headers: out, reply };
   });
   if (result === TIMED_OUT) return deny(rt, 504, "pair upstream timed out");
