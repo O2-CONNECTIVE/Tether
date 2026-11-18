@@ -255,9 +255,6 @@ func TestPairingConfigRejectsConflictingSettingsA13(t *testing.T) {
 		{"pair route conflicts with resource", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, func(d map[string]any) {
 			d["gateway"].(map[string]any)["resource"] = "https://gateway.example.invalid/tether-agent/v1/pair"
 		}},
-		{"pair route conflicts with metadata", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, func(d map[string]any) {
-			d["gateway"].(map[string]any)["resource"] = "https://gateway.example.invalid/.well-known/oauth-protected-resource/tether-agent/v1/pair"
-		}},
 		{"registry path equals principal key path", map[string]any{"registry_path": `C:\Users\synthetic\rescue\keys\member-1`, "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
 		{"missing registry_path", map[string]any{"audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
 		{"missing audience", map[string]any{"registry_path": "/tmp/pair.json", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},

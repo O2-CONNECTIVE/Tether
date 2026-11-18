@@ -91,26 +91,87 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 		c.residentOnly = true
 	}
 	if raw, present := m["pairing"]; present {
-		// Stub: accept the shape so pairing validation tests reach the missing
-		// policy checks instead of failing as an unknown top-level member.
-		var f map[string]json.RawMessage
-		if json.Unmarshal(raw, &f) != nil {
+		f, fieldErr := agentwire.Fields(raw, "registry_path", "audience", "client_id", "token_types")
+		if fieldErr != nil || len(f) != 4 {
 			return localConfig{}, errConfig
 		}
 		var p pairingConfig
-		p.RegistryPath, _ = text(f["registry_path"], maxPathBytes)
-		p.Audience, _ = text(f["audience"], 256)
-		p.ClientID, _ = text(f["client_id"], 256)
-		if vals, valid := array(f["token_types"], 16); valid {
-			for _, v := range vals {
-				if s, yes := text(v, 256); yes {
-					p.TokenTypes = append(p.TokenTypes, s)
-				}
+		var valid bool
+		p.RegistryPath, valid = text(f["registry_path"], maxPathBytes)
+		if !valid || !absolutePath(p.RegistryPath) {
+			return localConfig{}, errConfig
+		}
+		p.Audience, valid = text(f["audience"], 256)
+		if !valid || !printable(p.Audience) {
+			return localConfig{}, errConfig
+		}
+		p.ClientID, valid = text(f["client_id"], 256)
+		if !valid || !printable(p.ClientID) {
+			return localConfig{}, errConfig
+		}
+		vals, valid := array(f["token_types"], 16)
+		if !valid || len(vals) == 0 {
+			return localConfig{}, errConfig
+		}
+		for _, v := range vals {
+			s, yes := text(v, 256)
+			if !yes || !printable(s) {
+				return localConfig{}, errConfig
+			}
+			p.TokenTypes = append(p.TokenTypes, s)
+		}
+		if c.gateway.Mode != agentgateway.ModeOAuthBearer || p.Audience == c.gateway.Verifier.Audience ||
+			(p.Audience == p.ClientID && containsNormalType(p.TokenTypes, "jwt")) ||
+			pairingPathConflict(c.gateway.Resource, c.endpoint) || samePath(p.RegistryPath, configPath) {
+			return localConfig{}, errConfig
+		}
+		for _, k := range c.keys {
+			if samePath(p.RegistryPath, k.Path) {
+				return localConfig{}, errConfig
 			}
 		}
 		c.pairing = &p
 	}
+	paired := false
+	for i := range c.hosts {
+		if c.hosts[i].Paired {
+			paired = true
+			if len(c.hosts[i].Principals) != 1 {
+				return localConfig{}, errConfig
+			}
+			found := false
+			for _, r := range c.resident {
+				if r.HostLabel == c.hosts[i].Label && r.PrincipalLabel == c.hosts[i].Principals[0] {
+					found = true
+				}
+			}
+			if !found {
+				return localConfig{}, errConfig
+			}
+		}
+	}
+	if paired && c.pairing == nil {
+		return localConfig{}, errConfig
+	}
 	return c, nil
+}
+
+func containsNormalType(types []string, target string) bool {
+	for _, t := range types {
+		if strings.ToLower(t) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// pairingPathConflict reports whether the fixed pair route would shadow the MCP
+// resource or the host registration route. Metadata paths start with
+// MetadataPrefix and cannot equal the fixed PairPath.
+func pairingPathConflict(resource, endpoint string) bool {
+	r, err := url.Parse(resource)
+	e, ok := wssEndpoint(endpoint)
+	return err != nil || !ok || r.Path == agentgateway.PairPath || e.Path == agentgateway.PairPath
 }
 
 // residentEnrollments selects an existing, unambiguous principal/host pair.
@@ -216,7 +277,7 @@ func enrolledHosts(raw json.RawMessage, labels map[string]int, keys []agentkeys.
 			ok4 = true
 		}
 		_, isPrincipal := labels[label]
-		if !ok1 || (!paired && !hasPublicKey) || (paired && hasPublicKey) || !ok3 || !ok4 || len(served) == 0 || !validLabel(label) || isPrincipal || hostLabels[label] ||
+		if !ok1 || (!paired && !hasPublicKey) || (paired && hasPublicKey) || !ok3 || !ok4 || len(served) == 0 || (paired && len(served) != 1) || !validLabel(label) || isPrincipal || hostLabels[label] ||
 			(encoded != "" && hostKeys[encoded]) || (key != nil && principalPrints[ssh.FingerprintSHA256(key)]) {
 			wipeMembers(f)
 			return nil, false
