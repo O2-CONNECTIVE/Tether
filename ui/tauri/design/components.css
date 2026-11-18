@@ -13,6 +13,10 @@ h1 { font-size: var(--sys-type-title); }
 h2, h3 { font-size: var(--sys-type-heading); }
 a { color: var(--sys-action-primary); text-underline-offset: 0.2em; }
 button, input { font: inherit; }
+.brand { display: flex; align-items: center; gap: var(--sys-space-md); }
+.brand__mark { width: 2rem; height: 2rem; flex: none; }
+.brand__name { display: grid; font-weight: 800; letter-spacing: 0.015em; line-height: var(--sys-leading-heading); color: var(--sys-text-primary); }
+.brand__name small { color: var(--sys-action-primary); font-size: var(--sys-type-caption); font-weight: var(--sys-weight-heading); letter-spacing: 0; }
 :focus-visible {
   outline: var(--sys-focus-width) solid var(--sys-focus-ring);
   outline-offset: var(--sys-focus-gap);
@@ -34,6 +38,10 @@ button, input { font: inherit; }
   transition: background-color var(--sys-motion-duration) var(--sys-motion-ease);
 }
 .button:hover { background: var(--cmp-button-primary-hover); }
+.button:not(.button--danger, .button--quiet, :disabled, [aria-disabled="true"]) { box-shadow: var(--cmp-button-shadow); }
+.button:not(.button--danger, .button--quiet, :disabled, [aria-disabled="true"]):focus-visible {
+  box-shadow: 0 0 0 var(--sys-focus-gap) var(--sys-focus-offset), var(--cmp-button-shadow);
+}
 .button:not(:disabled, [aria-disabled="true"]):active { scale: 0.98; }
 .button--danger { background: var(--cmp-button-danger-bg); color: var(--cmp-button-danger-fg); }
 .button--danger:hover { background: var(--cmp-button-danger-hover); }
