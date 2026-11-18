@@ -122,7 +122,7 @@ func residentPeerWith(t *testing.T, l *fakeListener, seed byte) (*websocket.Conn
 
 func residentPeerAttempt(t *testing.T, l *fakeListener, seed byte) (*websocket.Conn, func(string, ...string) []byte, error) {
 	t.Helper()
-	tr := &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+	return residentPeerAttemptWith(t, "ws://gateway.example.invalid/agent-register", "wss://gateway.example.invalid/agent-register", seed, &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 		if addr != "gateway.example.invalid:80" {
 			t.Error("non-fixture dial refused")
 			return nil, net.ErrClosed
@@ -136,17 +136,32 @@ func residentPeerAttempt(t *testing.T, l *fakeListener, seed byte) (*websocket.C
 			_ = server.Close()
 			return nil, ctx.Err()
 		}
-	}}
+	}})
+}
+
+func residentPeerAttemptWith(t *testing.T, wsURL, endpoint string, seed byte, tr *http.Transport) (*websocket.Conn, func(string, ...string) []byte, error) {
+	t.Helper()
+	return residentPeerAttemptWithKeys(t, wsURL, endpoint, "mac-1", "member-1", signerOf(t, seed), publicOf(t, 0x11), tr)
+}
+
+func residentPeerAttemptWithKeys(t *testing.T, wsURL, endpoint, hostLabel, principalLabel string, hostSigner ssh.Signer, gatewayKey ssh.PublicKey, tr *http.Transport) (*websocket.Conn, func(string, ...string) []byte, error) {
+	t.Helper()
 	t.Cleanup(tr.CloseIdleConnections)
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	ws, _, err := websocket.Dial(ctx, "ws://gateway.example.invalid/agent-register", &websocket.DialOptions{HTTPClient: &http.Client{Transport: tr}, Subprotocols: []string{agenttransport.ResidentSubprotocol}})
+	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: &http.Client{Transport: tr}, Subprotocols: []string{agenttransport.ResidentSubprotocol}})
 	if err != nil {
 		return nil, nil, err
 	}
+	connected := false
+	defer func() {
+		if !connected {
+			_ = ws.CloseNow()
+		}
+	}()
 	enc := base64.RawURLEncoding
 	nonce := bytes.Repeat([]byte{7}, 32)
-	residentWriteMessage(t, ws, map[string]string{"type": "resident_hello", "host": "mac-1", "principal": "member-1", "client_nonce": enc.EncodeToString(nonce)})
+	residentWriteMessage(t, ws, map[string]string{"type": "resident_hello", "host": hostLabel, "principal": principalLabel, "client_nonce": enc.EncodeToString(nonce)})
 	challenge, err := residentReadMessageAttempt(t, ws)
 	if err != nil {
 		return nil, nil, err
@@ -158,10 +173,10 @@ func residentPeerAttempt(t *testing.T, l *fakeListener, seed byte) (*websocket.C
 	transcript := func(role string, values ...string) []byte {
 		var out []byte
 		field := func(v []byte) { out = binary.BigEndian.AppendUint32(out, uint32(len(v))); out = append(out, v...) }
-		for _, s := range []string{"rescue-host.agenttransport.resident\x00v1\x00", role, "wss://gateway.example.invalid/agent-register", "mac-1", "member-1", challenge["generation"]} {
+		for _, s := range []string{"rescue-host.agenttransport.resident\x00v1\x00", role, endpoint, hostLabel, principalLabel, challenge["generation"]} {
 			field([]byte(s))
 		}
-		for _, b := range [][]byte{nonce, server, publicOf(t, seed).Marshal(), publicOf(t, 0x11).Marshal()} {
+		for _, b := range [][]byte{nonce, server, hostSigner.PublicKey().Marshal(), gatewayKey.Marshal()} {
 			field(b)
 		}
 		for _, s := range values {
@@ -169,10 +184,10 @@ func residentPeerAttempt(t *testing.T, l *fakeListener, seed byte) (*websocket.C
 		}
 		return out
 	}
-	if !residentMessageValid(challenge, transcript("gateway-challenge"), publicOf(t, 0x11)) {
+	if !residentMessageValid(challenge, transcript("gateway-challenge"), gatewayKey) {
 		return nil, nil, errors.New("resident challenge was not pinned")
 	}
-	sig, err := signerOf(t, seed).Sign(nil, transcript("host-proof"))
+	sig, err := hostSigner.Sign(nil, transcript("host-proof"))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -184,7 +199,10 @@ func residentPeerAttempt(t *testing.T, l *fakeListener, seed byte) (*websocket.C
 	if accepted["type"] != "resident_accepted" {
 		return nil, nil, errors.New("resident proof refused")
 	}
-	residentVerifyMessage(t, accepted, transcript("gateway-accepted"))
+	if !residentMessageValid(accepted, transcript("gateway-accepted"), gatewayKey) {
+		t.Fatal("gateway signature not pinned")
+	}
+	connected = true
 	return ws, transcript, nil
 }
 

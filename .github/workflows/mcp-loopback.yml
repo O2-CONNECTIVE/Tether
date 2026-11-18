@@ -100,9 +100,43 @@ jobs:
               raise SystemExit('MCP_LOOPBACK_NOT_VERIFIED')
           PY
           done
+      - name: Run host pairing and resident replacement over loopback TLS
+        if: steps.ci-scope.outputs.selected == 'true'
+        id: ci-work-6
+        working-directory: backend
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+        run: |
+          child="$RUNNER_TEMP/pair-child.test"
+          go test -mod=readonly -tags=pair_loopback -c -o "$child" ./cmd/tether-host-pair
+          for lane in normal race; do
+            flags=()
+            if [ "$lane" = race ]; then flags=(-race); fi
+            report="$RUNNER_TEMP/pair-loopback-$lane.jsonl"
+            code=0
+            TETHER_PAIR_CHILD_BINARY="$child" go test -mod=readonly -count=1 -json -p=1 -parallel=1 -timeout=90s \
+              -tags=pair_loopback -run '^TestPairLoopbackE2E$' "${flags[@]}" ./cmd/rescue-gateway > "$report" || code=$?
+            python3 - "$report" "$code" "$lane" <<'PY'
+          import json, pathlib, sys
+          rows = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+          package = 'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-gateway'
+          name = 'TestPairLoopbackE2E'
+          tests = [r for r in rows if r.get('Test') == name and r.get('Package') == package]
+          run = sum(r.get('Action') == 'run' for r in tests)
+          passed = sum(r.get('Action') == 'pass' for r in tests)
+          bad = any(r.get('Action') in ('fail', 'skip') for r in rows)
+          package_pass = sum(r.get('Action') == 'pass' and r.get('Package') == package and not r.get('Test') for r in rows)
+          unexpected = any(r.get('Test') and r['Test'] != name for r in rows)
+          result = {'lane': sys.argv[3], 'started': run, 'passed': passed, 'package_pass': package_pass, 'failed_or_skipped': bad}
+          print(json.dumps(result, sort_keys=True))
+          if int(sys.argv[2]) or run != 1 or passed != 1 or package_pass != 1 or bad or unexpected:
+              raise SystemExit('PAIR_LOOPBACK_NOT_VERIFIED')
+          PY
+          done
       - name: Require applicable work or explicit non-applicability
         if: always()
         working-directory: ${{ github.workspace }}
         env:
           CI_SCOPE_STEPS: ${{ toJSON(steps) }}
-        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5
+        run: python scripts/ci_scope.py gate --required ci-work-1,ci-work-2,ci-work-3,ci-work-4,ci-work-5,ci-work-6

@@ -404,7 +404,15 @@ func invokeFlowAt(t *testing.T, f *flowFixture, callbackMode, home string) (int,
 	dir := home + "/Library/Application Support/com.o2connective.rescue-host.shell"
 	policy := dir + "/resident-policy.json"
 	var authURL string
-	d := deps{client: f.client, location: func(context.Context) (string, string, error) { return home, policy, nil }, callbackWait: 40 * time.Millisecond, pairTimeout: 40 * time.Millisecond, readProtected: f.readProtected, openBrowser: func(raw string) error {
+	// Only the deadline tests use short limits; the rest must not race a slow CI runner.
+	callbackWait, pairTimeout := 5*time.Second, 5*time.Second
+	if callbackMode == "no-callback" {
+		callbackWait = 40 * time.Millisecond
+	}
+	if f.gatewayDelay > 0 {
+		pairTimeout = 40 * time.Millisecond
+	}
+	d := deps{client: f.client, location: func(context.Context) (string, string, error) { return home, policy, nil }, callbackWait: callbackWait, pairTimeout: pairTimeout, readProtected: f.readProtected, openBrowser: func(raw string) error {
 		authURL = raw
 		go func() {
 			u, _ := url.Parse(raw)
