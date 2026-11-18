@@ -687,6 +687,22 @@ func (s *Session) Cleanup(ctx context.Context, r CleanupRequest) (Status, error)
 	return c.statusLocked(), nil
 }
 
+// StopReason is the first reason this Session recorded when it revoked its
+// grant, or StopNone before that. When the Session ends the grant itself, the
+// reason is recorded before Done closes. When the grant ends outside it (issuer
+// Revoke, or Lookup at the wall deadline), Done closes first and watch or the
+// next observation records the reason later, so StopNone can be read between
+// the two. It does not observe the clock, revoke or wait for anything but the
+// Session lock.
+func (s *Session) StopReason() StopReason {
+	if s == nil {
+		return StopNone
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reason
+}
+
 // Revoke irreversibly revokes the grant before cancelling guest workload.
 func (s *Session) Revoke() { s.revoke(StopRevoked) }
 

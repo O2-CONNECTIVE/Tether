@@ -47,11 +47,23 @@ type grantEnv struct {
 	keys      []ssh.PublicKey
 	binding   Binding
 	deadline  time.Time
+	// notBefore is the HardDeadline handed to the issuer, with its monotonic
+	// reading kept. deadline is the same instant without one (the Authority
+	// rounds it). The deadline owners end the grant on the wall clock or on a
+	// monotonic budget, so "not early" is checked against both values.
+	notBefore time.Time
 }
 
 // newEnv issues one Mac current-user grant through the existing in-memory
 // issuer and binds a real agentexec.Session to it.
 func newEnv(t *testing.T, lifetime time.Duration) *grantEnv {
+	t.Helper()
+	return newEnvElapsed(t, lifetime, 0)
+}
+
+// newEnvElapsed also gives the Session an elapsed deadline, as maclaunch does,
+// so the Session can end the grant before the wall clock reaches its deadline.
+func newEnvElapsed(t *testing.T, lifetime, elapsed time.Duration) *grantEnv {
 	t.Helper()
 	host, client := fixtureSigner(t, 0x11), fixtureSigner(t, 0x22)
 	keys := []ssh.PublicKey{client.PublicKey()}
@@ -63,9 +75,10 @@ func newEnv(t *testing.T, lifetime time.Duration) *grantEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	notBefore := time.Now().Add(lifetime)
 	challenge, err := issuer.Prepare(ephemeral.ApprovedPolicy{
 		PolicyDigest: agentexec.MacCurrentUserPolicyDigest(), KeySetDigest: digest, GuestBoundary: supervisor.CurrentUserNoIsolation,
-		HardDeadline: time.Now().Add(lifetime), BackendLeaseCeiling: time.Millisecond,
+		HardDeadline: notBefore, BackendLeaseCeiling: time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +87,11 @@ func newEnv(t *testing.T, lifetime time.Duration) *grantEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := agentexec.New(agentexec.Config{Issuer: issuer, Authority: authority, Runtime: macRuntime{}, Clock: time.Now, CleanupTimeout: time.Second})
+	cfg := agentexec.Config{Issuer: issuer, Authority: authority, Runtime: macRuntime{}, Clock: time.Now, CleanupTimeout: time.Second}
+	if elapsed > 0 {
+		cfg.ElapsedDeadline = time.Now().Add(elapsed)
+	}
+	session, err := agentexec.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +105,7 @@ func newEnv(t *testing.T, lifetime time.Duration) *grantEnv {
 	return &grantEnv{
 		issuer: issuer, authority: authority, session: session, host: host, client: client, keys: keys,
 		binding: Binding{Grant: grant.Binding, KeySetDigest: digest, Profile: agentexec.ProfileMacCurrentUser}, deadline: grant.HardDeadline,
+		notBefore: notBefore,
 	}
 }
 

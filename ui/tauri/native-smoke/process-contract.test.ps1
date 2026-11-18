@@ -171,3 +171,6 @@ Write-Output 'STARTUP_DIAGNOSTIC_FAILURE_CONTRACT_PASS checks=2 (fixtures only; 
 
 # Separate scope keeps synthetic fixture helpers from changing the existing contract.
 & "$PSScriptRoot/lineage-baseline.test.ps1"
+
+# 起動前のruntime読込も、合成fileだけで別scopeとして検査する。
+& "$PSScriptRoot/runtime-prewarm.test.ps1"

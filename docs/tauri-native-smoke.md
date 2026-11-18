@@ -192,3 +192,42 @@ snapshotが4096行を超える場合や生成時刻を取得できない場合�
 合成fixtureの成功と実Windowsの原因特定・通常close成功は別の証拠です。
 
 2026-11-09 の #295 merge 後も debug 診断は ownership-confirmation で拒否されました。固定 artifact の事実と、未採用の作成時 owner producer 案は[Windows lineage の証拠と次の所有契約](windows-lineage-ownership-plan.md)を参照してください。PID 再利用や既存失敗の解消は断定しません。
+
+## session作成timeoutの原因と起動前のruntime読込
+
+2026-11-18のmain `cd0f00a` の [run 44345536449](https://github.com/O2-CONNECTIVE/Tether/actions/runs/44345536449) はattempt 1・2とも、session作成が15秒の`NATIVE_DRIVER_TIMEOUT`で失敗しました。
+同日の #403 の評価package [run 44324152143](https://github.com/O2-CONNECTIVE/Tether/actions/runs/44324152143) attempt 1と、起動診断release [run 44318159514](https://github.com/O2-CONNECTIVE/Tether/actions/runs/44318159514) attempt 1も同じ失敗です。
+#74以来のsession作成timeoutも、同じ段階での失敗です。
+
+### 証拠
+
+期限内の証跡305件を集計しました（2026-11-11〜18、runner image 3種）。
+起動診断variantでは、session作成の時間はほぼ全てapp内のWebView構築（`webview-build-start`→`webview-build-ok`）でした。
+WebView構築の中央値はimage `20261101.353.1` で6.1秒、`20261112.366.7` で6.3秒、最大は13.1秒です。
+session作成のtimeoutは、旧2 imageでも計5件ありました。image `20261116.370.1` では4件中3件がtimeoutで、残り1件も13.8秒でした。
+どのimageでもWebView2 Runtimeは`131.0.2903.86`、OS buildは新旧2 imageで同じ`20348.5870`です。
+
+計測用の一時workflow [run 44413520443](https://github.com/O2-CONNECTIVE/Tether/actions/runs/44413520443)（attempt 1・2、計12 job）で、同じrunnerの中で起動の順序を変えて比べました。
+
+| 条件 | WebView構築 |
+| --- | --- |
+| VMで最初の起動（直接・EdgeDriver経由とも） | 5.2〜8.6秒 |
+| 2回目以降（新しいprofileでも同じ） | 0.28〜0.81秒 |
+| runtimeのdirectory全体（728MB、4.2〜4.7秒）を先に一度読んだ後の最初の起動 | 0.90〜1.41秒 |
+
+Defenderのリアルタイム保護は無効で、CPUの競合もありませんでした。
+遅さは、作りたてのVMでWebView2 Runtimeのfileを初めて読むときのdisk待ちです。EdgeDriverやtauri-driver、appのsourceの差ではありません。
+image `20261116.370.1` のjobは2回目の計測で1件だけ取れ、最初の起動は6.6秒でした。新imageで必ず15秒を超えるとは言えません。初回読込の時間のばらつきが15秒を超えた結果と判断します。
+
+### 対処
+
+`supervise.ps1` は、driverを起動する前に `runtime-prewarm.ps1` で、`tools.json` にpinした版のruntime directory（WebView2のloaderが読む版のdirectory）の全fileを一度だけ読みます。
+計測では上位のdirectory全体を読みました。版のdirectoryだけで足りることは、この変更のCIの起動診断で確かめます。
+読むだけで、runtimeの更新、OS・Defender設定の変更、appやWebViewの事前起動はしません。
+予算は45秒です。超えたら読込を打ち切り、未完了として記録してそのまま試験へ進みます。
+`native-result.json` の `runtimePrewarm` に、file数、MB、所要時間、完了したかを記録します。pathは出しません。
+
+request 15秒、session要求1回、試験の再実行なし、Node 60秒、通常closeの判定は変えません。
+変わるのは、VMの初回disk読込の時間が、session作成の15秒の中に入らなくなることです。
+冷えたVMでのWebView2の初回起動時間は、この試験では測りません。製品の起動性能の検証とは別です。
+`runtime-prewarm.test.ps1` は合成fileで、全件読込、予算切れの未完了、対象の欠落の失敗を確かめます。実装後に足した回帰試験で、先行したredはありません。

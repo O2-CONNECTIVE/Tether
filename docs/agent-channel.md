@@ -58,6 +58,7 @@
 - 外から観測できる順序は次のとおりです。最初の`Reason`の記録 → （server）Sessionの失効 → `Done`のclose、`Read`/`Write`のerror → 所有connのclose。`Close`は、さらにconnのcloseと全workerの合流を確認します。相手はconnのcloseか、自分の心拍・停滞の上限で後から知るだけで、同期した通知はありません。
 - admission後にSSHライブラリが自らconnを閉じた場合は、失効の前に`transport`を理由として記録します。そのため、自分の失効を外部の`revoked`と取り違えません。handshake中は、AcceptとOpenが分類した理由（`handshake`、`rejected`、`violation`など）を記録します。
 - hard deadlineは単調時計のtimerに加え、`WallRecheck`（1秒）ごとに壁時計を読み直して判定します。sleepや壁時計の前進の後でも、要求なしに1秒以内に終わります。
+- Sessionは経過予算（単調時計）でもgrantを終えるため、壁時計がまだ期限前でも`StopHardDeadline`で失効させることがあります（`ElapsedDeadline`、壁時計の遅れ）。serverはその失効を、`Session.StopReason()`が`StopHardDeadline`なら`hard-deadline`とし、外部の`revoked`と取り違えません。
 - 再接続・再試行・再開はありません。次のcommandには新しい承認・Authority・Session・channelが必要です。
 - Accept前の認証失敗でもgrantを失効させます（fail closed）。relayへ届いた未認証の接続1本で、そのgrantが使えなくなることは既知の制約です。
 

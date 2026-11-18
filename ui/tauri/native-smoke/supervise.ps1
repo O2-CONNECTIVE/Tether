@@ -6,6 +6,7 @@ Set-StrictMode -Version Latest
 . "$PSScriptRoot/close-observation.ps1"
 . "$PSScriptRoot/startup-observation.ps1"
 . "$PSScriptRoot/app-startup-observation.ps1"
+. "$PSScriptRoot/runtime-prewarm.ps1"
 New-Item -ItemType Directory -Path $OutputDirectory -ErrorAction Stop | Out-Null
 $appPath = (Resolve-Path $(if ($ApplicationPath) { $ApplicationPath } else { "$PSScriptRoot/../src-tauri/target/debug/rescue-host-shell.exe" })).Path
 $edgePath = (Resolve-Path "$ToolsDirectory/edge/msedgedriver.exe").Path
@@ -35,6 +36,8 @@ try {
     $before = Get-Snapshot
     if (@($before | Where-Object ExecutablePath -eq $appPath).Count -ne 0) { throw 'NATIVE_PREEXISTING_APP_REJECTED' }
     if (@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -in @(4444, 4445)).Count -ne 0) { throw 'NATIVE_PORT_ALREADY_IN_USE' }
+    # runnerの初回disk読込をsession要求の15秒の外へ出す。期限・判定・要求数は変えない。
+    $report.runtimePrewarm = Read-PinnedRuntime (Get-Content "$PSScriptRoot/tools.json" -Raw | ConvertFrom-Json).runtimeVersion 45000
     $stageProvenance = Get-Content "$ToolsDirectory/driver-provenance.json" -Raw | ConvertFrom-Json
     if ($stageProvenance.variant -ne 'tauri-driver-2.1.0-stage-1' -or $stageProvenance.binarySha256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileHash $tauriPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $stageProvenance.binarySha256) { throw 'NATIVE_DIAGNOSTIC_BINARY_DRIFT' }
     $env:RESCUE_DRIVER_TRACE = Join-Path $ToolsDirectory 'driver-stage.jsonl'
