@@ -28,9 +28,9 @@ enum TetherPalette {
     static let muted = color(TetherPaletteValue.muted, dark: .secondaryLabelColor)
     /// 注意の文字色。ライトでは AA（4.5:1）を満たす暗い琥珀、ダークは今までの systemOrange。
     static let warning = color(TetherPaletteValue.warning, dark: .systemOrange)
-    /// O2 の書体指定の順（ヒラギノ丸ゴシック → ヒラギノ角ゴ）。丸ゴシックは W4 だけなので、太い字は角ゴの W6。無ければ OS 標準へ戻る。
+    /// OS 標準の書体（SF Pro とヒラギノ角ゴ）。書体だけは O2 に合わせない（Issue #397）。
+    /// 太字は tokens.css の見出しと mac-status に揃えて semibold（600）。
     static func font(_ size: CGFloat, bold: Bool = false) -> NSFont {
-        NSFont(name: bold ? "HiraKakuProN-W6" : "HiraMaruProN-W4", size: size)
-            ?? (bold ? .boldSystemFont(ofSize: size) : .systemFont(ofSize: size))
+        .systemFont(ofSize: size, weight: bold ? .semibold : .regular)
     }
 }

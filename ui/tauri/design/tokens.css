@@ -19,8 +19,8 @@
   --ref-red-800: #832c2c;
   --ref-amber-50: #fff5d8;
   --ref-amber-800: #805000;
-  --ref-font-sans: "Hiragino Maru Gothic ProN", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
-  --ref-font-mono: "Cascadia Code", "Consolas", monospace;
+  --ref-font-sans: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Segoe UI", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  --ref-font-mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace;
   --ref-type-sm: 0.875rem;
   --ref-type-md: 1rem;
   --ref-type-lg: 1.25rem;

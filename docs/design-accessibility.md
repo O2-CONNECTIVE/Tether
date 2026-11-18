@@ -25,7 +25,7 @@ WCAG 2.2 の A と AA を WebView 内 UI の目標基準案にします。
 | [WAI-ARIA APG、継続更新版](https://www.w3.org/WAI/ARIA/apg/about/introduction/) | 該当 widget を採用するときの推奨パターン。APG 自体に準拠モデルはない。HTML 標準部品で足りる操作を独自 widget にしない |
 | [Windows accessibility、2026-04-08 更新版](https://learn.microsoft.com/en-us/windows/apps/develop/accessibility)と[試験手引き](https://learn.microsoft.com/en-us/windows/apps/design/accessibility/accessibility-testing) | Windows の名前、役割、状態、keyboard、コントラストと支援技術の実機確認に使う必須案。WinUI の API 例を Tauri にそのまま移植しない |
 | [Tauri v2 WebView 差](https://v2.tauri.app/reference/webview-versions/) | Windows の WebView2、macOS の WKWebView、Linux の WebKitGTK を分けて確認する技術上の参照。単一ブラウザーの成功を他 OS へ読み替えない |
-| [既存のトークン仕様](tauri-design-tokens.md)、[通信契約](communication-contract.md)、[脅威モデル](threat-model.md) | palette の具体値と状態の根拠は各正本を参照。色・書体の出どころは O2 の Derivation-Products（[#392](https://github.com/O2-CONNECTIVE/Tether/issues/392)）。認可と期限の責務、接続ゲートの維持は既存必須 |
+| [既存のトークン仕様](tauri-design-tokens.md)、[通信契約](communication-contract.md)、[脅威モデル](threat-model.md) | palette の具体値と状態の根拠は各正本を参照。色の出どころは O2 の Derivation-Products（[#392](https://github.com/O2-CONNECTIVE/Tether/issues/392)）、書体は OS 標準（[#397](https://github.com/O2-CONNECTIVE/Tether/issues/397)）。認可と期限の責務、接続ゲートの維持は既存必須 |
 
 継続更新資料の閲覧日は 2026-10-27 です。
 WCAG は Web の基準なので、アプリ全体への適用では OS のウィンドウ、メニュー、ダイアログ、アクセシビリティ API も別に確認します。
