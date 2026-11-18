@@ -153,6 +153,12 @@ func residentPeerAttemptWithKeys(t *testing.T, wsURL, endpoint, hostLabel, princ
 	if err != nil {
 		return nil, nil, err
 	}
+	connected := false
+	defer func() {
+		if !connected {
+			_ = ws.CloseNow()
+		}
+	}()
 	enc := base64.RawURLEncoding
 	nonce := bytes.Repeat([]byte{7}, 32)
 	residentWriteMessage(t, ws, map[string]string{"type": "resident_hello", "host": hostLabel, "principal": principalLabel, "client_nonce": enc.EncodeToString(nonce)})
@@ -196,6 +202,7 @@ func residentPeerAttemptWithKeys(t *testing.T, wsURL, endpoint, hostLabel, princ
 	if !residentMessageValid(accepted, transcript("gateway-accepted"), gatewayKey) {
 		t.Fatal("gateway signature not pinned")
 	}
+	connected = true
 	return ws, transcript, nil
 }
 
