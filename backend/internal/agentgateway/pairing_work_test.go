@@ -97,3 +97,102 @@ func residentPairAttempt(t *testing.T, g *Gateway, host ssh.Signer) *httptest.Re
 	g.ServePair(rr, req)
 	return rr
 }
+
+// pairOnlyRig is a gateway with one empty pairing slot and no resident setup,
+// so the generic session route is the only work the slot can have.
+func pairOnlyRig(t *testing.T) (*Gateway, *principal) {
+	t.Helper()
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
+	jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": "test", "alg": "EdDSA", "x": base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey))}}})
+	verifier, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: "https://example.test/mcp", Scope: "scope", Types: []string{"at+jwt"}, JWKS: jwks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairVerifier, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: "https://example.test" + PairPath, Types: []string{"at+jwt"}, JWKS: jwks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, _ := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{8}, 32)))
+	g, err := New(Config{Verifier: verifier, Principals: []Principal{{Label: "member1", Subject: "subject", Signer: signer}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = g.Close(context.Background()) })
+	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Principals: []string{"member1"}, Paired: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.ConfigurePairing(PairingConfig{Verifier: pairVerifier, Endpoint: "https://example.test" + PairPath, RegistrationEndpoint: "wss://example.test/register"}); err != nil {
+		t.Fatal(err)
+	}
+	return g, g.byLabel["member1"]
+}
+
+func servePairForTest(t *testing.T, g *Gateway, host ssh.Signer) int {
+	t.Helper()
+	pairAud := "https://example.test" + PairPath
+	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
+	now := time.Now().Unix()
+	h, _ := json.Marshal(map[string]any{"alg": "EdDSA", "kid": "test", "typ": "at+jwt"})
+	c, _ := json.Marshal(map[string]any{"iss": "https://issuer.example.invalid/", "aud": pairAud, "sub": "subject", "iat": now, "exp": now + 60})
+	input := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(c)
+	token := input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerKey, []byte(input)))
+	sig, err := host.Sign(nil, pairTranscriptBytesForTest(pairAud, host.PublicKey().Marshal(), sha256.Sum256([]byte(token))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := ssh.MarshalAuthorizedKey(host.PublicKey())
+	body, _ := json.Marshal(map[string]string{"host_public_key": string(encoded[:len(encoded)-1]), "proof": base64.RawURLEncoding.EncodeToString(ssh.Marshal(sig))})
+	req := httptest.NewRequest("POST", "http://gateway.internal"+PairPath, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	g.ServePair(rr, req)
+	return rr.Code
+}
+
+func TestServePairRejectsLiveSessionRouteWithoutResidentA7(t *testing.T) {
+	// Replacing the key would cut a host that is mid-connect or carrying a
+	// session route, even when no resident setup exists for the slot.
+	host, _ := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32)))
+	for _, tc := range []struct {
+		name string
+		busy func(*principal)
+	}{
+		{"connecting", func(p *principal) { p.connecting = true }},
+		{"live route", func(p *principal) { p.route = &route{owner: p} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g, p := pairOnlyRig(t)
+			g.mu.Lock()
+			tc.busy(p)
+			g.mu.Unlock()
+			if code := servePairForTest(t, g, host); code != 409 {
+				t.Fatalf("busy slot status = %d, want 409", code)
+			}
+			if key := g.HostKey("host1"); len(key) != 0 {
+				t.Fatal("a refused pairing must leave the slot empty")
+			}
+			g.mu.Lock()
+			p.connecting, p.route = false, nil
+			g.mu.Unlock()
+		})
+	}
+}
+
+func TestConfigureHostsRejectsPairingSlotWithoutPrincipalKeyA3(t *testing.T) {
+	// The pair response hands the host the principal's public key; a slot whose
+	// principal has no signing key could never complete a registration.
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
+	jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": "test", "alg": "EdDSA", "x": base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey))}}})
+	verifier, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: "https://example.test/mcp", Scope: "scope", Types: []string{"at+jwt"}, JWKS: jwks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := New(Config{Verifier: verifier, Principals: []Principal{{Label: "member1", Subject: "subject"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close(context.Background())
+	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Principals: []string{"member1"}, Paired: true}}); err == nil {
+		t.Fatal("a pairing slot without a principal signing key was accepted")
+	}
+}

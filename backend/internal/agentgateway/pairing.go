@@ -75,7 +75,7 @@ func (g *Gateway) ConfigureHosts(hosts []HostEntry) error {
 		slot := &hostSlot{principals: map[string]bool{}}
 		for _, label := range h.Principals {
 			p := g.byLabel[label]
-			if p == nil || slot.principals[label] {
+			if p == nil || slot.principals[label] || (h.Paired && p.signer == nil) {
 				return ErrConfig
 			}
 			slot.principals[label] = true
@@ -282,7 +282,7 @@ func (g *Gateway) ServePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entry := g.residentEntryForPrincipalLocked(p)
-	if target.replacing || (entry != nil && (entry.current != nil || p.route != nil || p.connecting)) {
+	if target.replacing || p.route != nil || p.connecting || (entry != nil && entry.current != nil) {
 		g.mu.Unlock()
 		g.pairMu.Unlock()
 		http.Error(w, "", http.StatusConflict)
