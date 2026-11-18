@@ -2,16 +2,17 @@
 // rescue-gateway.
 //
 // DENY ALL unless env.TETHER_NATIVE_GATE equals GATE_VALUE exactly. Even then
-// only POST/DELETE MCP_PATH, OAuth protected-resource metadata GETs, and a GET
-// WebSocket upgrade at REGISTER_PATH are forwarded, to fixed upstream paths,
-// through the ONE VPC Service binding env.TETHER_NATIVE_VPC. There is no global
+// only POST/DELETE MCP_PATH, OAuth protected-resource metadata GETs, a GET
+// WebSocket upgrade at REGISTER_PATH and, when TETHER_NATIVE_PAIRING opts in,
+// POST PAIR_PATH are forwarded, to fixed upstream paths, through the ONE VPC Service binding env.TETHER_NATIVE_VPC. There is no global
 // fetch, no request-selected target and no redirect. This Worker authenticates
 // nobody and issues no grant: for
 // MCP the Go agentgateway verifies the configured Access assertion or OAuth
 // bearer token and maps its subject;
 // for registration the Go agenttransport verifies the enrolled host-key proof
 // and the agent channel checks the same grant before any command. Nothing is
-// logged.
+// logged. For pairing the Go agentgateway verifies the bearer token and the
+// new host key's proof.
 
 // The WebSocket relay is the reviewed probe relay (explicit ArrayBuffer
 // binaryType, one close, one lifetime timer); only the limits differ.
@@ -19,11 +20,13 @@ import { relay } from "../probe/worker.mjs";
 
 export const MCP_PATH = "/mcp";
 export const REGISTER_PATH = "/tether-agent/v1/register";
+export const PAIR_PATH = "/tether-agent/v1/pair";
 export const SUBPROTOCOL = "rescue-agent-register.v1";
 export const RESIDENT_SUBPROTOCOL = "rescue-agent-resident.v1";
 export const RESIDENT_GATE_VALUE = "open-resident-tether-control";
 export const ASSERTION_HEADER = "Cf-Access-Jwt-Assertion";
 export const GATE_VALUE = "open-native-tether-gateway";
+export const PAIRING_GATE_VALUE = "open-native-tether-pairing";
 const OAUTH_BEARER_MODE = "oauth_bearer_jwt";
 const OAUTH_METADATA_PATHS = ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"];
 // URL for binding.fetch. The VPC Service sends to its own fixed host and port,
@@ -36,7 +39,7 @@ export const UPSTREAM_ORIGIN = "http://rescue-gateway.internal";
 // enforced by Go). lifetimeMs is the absolute pilot relay lifetime; nothing
 // reconnects or extends it.
 export const LIMITS = Object.freeze({
-  assertion: 8192, authorization: 8199, challenge: 8192, body: 512 * 1024, reply: 512 * 1024, bodyMs: 10_000, upstreamMs: 35_000, upgradeMs: 10_000,
+  assertion: 8192, authorization: 8199, challenge: 8192, body: 512 * 1024, pairBody: 4 * 1024, reply: 512 * 1024, bodyMs: 10_000, upstreamMs: 35_000, upgradeMs: 10_000,
   message: 32 * 1024, frames: 4096, lifetimeMs: 300_000,
 });
 
@@ -57,6 +60,10 @@ const MCP_REPLY_HEADERS = [
   ["Mcp-Session-Id", /^[0-9a-f]{32}$/], ["Mcp-Protocol-Version", /^\d{4}-\d{2}-\d{2}$/],
   ["Retry-After", /^\d{1,4}$/], ["Allow", /^POST, DELETE$/],
 ];
+// The pair route's answers and the only headers they carry; the body bound is
+// agentgateway.MaxPairBody.
+const PAIR_STATUSES = new Set([200, 400, 401, 403, 404, 405, 409, 413, 503]);
+const PAIR_REPLY_HEADERS = [["Allow", /^POST$/], ["WWW-Authenticate", /^Bearer(?: error="invalid_token")?$/]];
 const REGISTER_REFUSALS = [400, 403, 404, 405, 503];
 // Registration is outside human OAuth: no ambient credential and no Access
 // assertion is accepted or forwarded.
@@ -96,7 +103,8 @@ async function route(request, env, rt) {
   const url = new URL(request.url);
   const authMode = env.TETHER_NATIVE_AUTH_MODE;
   const metadataPath = authMode === OAUTH_BEARER_MODE ? OAUTH_METADATA_PATHS.find((path) => path === url.pathname) : undefined;
-  if (url.pathname !== MCP_PATH && url.pathname !== REGISTER_PATH && metadataPath === undefined) return deny(rt, 404, "not found");
+  const pair = env.TETHER_NATIVE_PAIRING === PAIRING_GATE_VALUE && url.pathname === PAIR_PATH;
+  if (url.pathname !== MCP_PATH && url.pathname !== REGISTER_PATH && !pair && metadataPath === undefined) return deny(rt, 404, "not found");
   if (url.search !== "" || request.url.includes("?")) return deny(rt, 400, "query parameters are not accepted");
   // Reject observable raw-path aliases before normalized URL routing.
   if (request.url.slice(url.origin.length) !== url.pathname) return deny(rt, 404, "not found");
@@ -108,6 +116,8 @@ async function route(request, env, rt) {
     if ((request.method !== "POST" && request.method !== "DELETE") || request.headers.has("Upgrade")) {
       return deny(rt, 405, "method not allowed", { Allow: "POST, DELETE" });
     }
+  } else if (pair) {
+    if (request.method !== "POST" || request.headers.has("Upgrade")) return deny(rt, 405, "method not allowed", { Allow: "POST" });
   } else if (request.method !== "GET" || (request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket") {
     return deny(rt, 405, "method not allowed", { Allow: "GET" });
   }
@@ -115,7 +125,45 @@ async function route(request, env, rt) {
   // rather than dropped.
   if (request.headers.has("Origin")) return deny(rt, 403, "origin not allowed");
   if (metadataPath !== undefined) return forwardProtectedResourceMetadata(metadataPath, binding, rt);
-  return mcp ? forwardMcp(request, binding, rt, authMode) : forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
+  if (mcp) return forwardMcp(request, binding, rt, authMode);
+  return pair ? forwardPair(request, binding, rt) : forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
+}
+
+async function forwardPair(request, binding, rt) {
+  const authorization = request.headers.get("Authorization");
+  if (!authorization || authorization.length > LIMITS.authorization || authorization.includes(",")) {
+    return deny(rt, 403, "exactly one bounded bearer credential is required");
+  }
+  const headers = { Authorization: authorization };
+  const contentType = request.headers.get("Content-Type");
+  if (contentType !== null) {
+    if (contentType.length > 128 || !VISIBLE.test(contentType)) return deny(rt, 400, "Content-Type is not accepted");
+    headers["Content-Type"] = contentType;
+  }
+  const declared = request.headers.get("Content-Length");
+  if (declared !== null && !(/^\d{1,4}$/.test(declared) && Number(declared) <= LIMITS.pairBody)) {
+    return deny(rt, 413, "pair body exceeds the size limit");
+  }
+  const body = await withDeadline(rt, LIMITS.bodyMs, (signal) => readBounded(request.body, LIMITS.pairBody, signal));
+  if (body === TIMED_OUT) return deny(rt, 408, "pair body read timed out");
+  if (body === null) return deny(rt, 413, "pair body exceeds the size limit");
+  const result = await withDeadline(rt, LIMITS.upstreamMs, async (signal) => {
+    const response = await binding.fetch(UPSTREAM_ORIGIN + PAIR_PATH, {
+      method: "POST", headers, body, redirect: "manual", signal,
+    });
+    // A response that arrives after the deadline is cancelled, never read.
+    const out = signal.aborted || !PAIR_STATUSES.has(response.status) ? null : replyHeaders(response.headers, PAIR_REPLY_HEADERS);
+    if (out === null || (response.status === 401 && !out["WWW-Authenticate"]) || (response.status === 405 && !out.Allow)) {
+      await cancelBody(response);
+      return null;
+    }
+    const reply = await readBounded(response.body, LIMITS.reply, signal);
+    if (reply === null || (reply.byteLength > 0 && !out["Content-Type"])) return null;
+    return { status: response.status, headers: out, reply };
+  });
+  if (result === TIMED_OUT) return deny(rt, 504, "pair upstream timed out");
+  if (result === null) return deny(rt, 502, "pair upstream reply refused");
+  return new rt.Response(result.reply.byteLength === 0 ? null : result.reply, { status: result.status, headers: result.headers });
 }
 
 async function forwardMcp(request, binding, rt, authMode) {
@@ -197,14 +245,14 @@ async function forwardProtectedResourceMetadata(path, binding, rt) {
 
 // replyHeaders returns the relayed response headers, or null when the media
 // type or a relayed header is not the Go gateway's.
-function replyHeaders(upstream) {
+function replyHeaders(upstream, allowedHeaders = MCP_REPLY_HEADERS) {
   const out = { ...SAFE };
   const type = upstream.get("Content-Type");
   if (type !== null) {
     if (!MCP_TYPES.includes(type)) return null;
     out["Content-Type"] = type;
   }
-  for (const [name, pattern] of MCP_REPLY_HEADERS) {
+  for (const [name, pattern] of allowedHeaders) {
     const value = upstream.get(name);
     if (value === null) continue;
     if (!pattern.test(value)) return null;
