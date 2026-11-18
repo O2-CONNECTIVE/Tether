@@ -88,7 +88,7 @@ def read_mac_palette(path):
     source = path.read_text(encoding="utf-8")
     block = source.split("// palette:start", 1)[1].split("// palette:end", 1)[0]
     return block, {name: "#" + value.lower()
-                   for name, value in re.findall(r"static let (\w+) = 0x([0-9A-Fa-f]{6})", block)}
+                   for name, value in re.findall(r"static let (\w+) = 0x([0-9A-Fa-f]{6})(?![0-9A-Fa-f_])", block)}
 
 
 def check_mac_palette(tokens):

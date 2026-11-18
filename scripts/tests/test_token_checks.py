@@ -94,6 +94,14 @@ class TokenCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('Mac palette differs from tokens.css: ink', result.stderr)
 
+    def test_mac_palette_literal_with_an_extra_digit_is_not_read_as_a_match(self):
+        # 0x33413D0 は Swift では別の色 (#3413D0)。先頭 6 桁だけ読んで一致と判定してはいけない。
+        self.mutate(self.palettes[0], 'static let ink = 0x33413D', 'static let ink = 0x33413D0')
+        self.mutate(self.palettes[1], 'static let ink = 0x33413D', 'static let ink = 0x33413D0')
+        result = self.run_tokens()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('Mac palette names differ from MAC_REFS', result.stderr)
+
     def test_two_mac_apps_must_share_one_palette(self):
         self.mutate(self.palettes[1], 'static let line = 0xDFE9E5', 'static let line = 0xDFE9E6')
         result = self.run_tokens()
