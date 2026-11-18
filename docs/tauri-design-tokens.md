@@ -10,7 +10,9 @@
 初回はデザイントークン → 最小の共通部品 → 状態見本の順に実装します。
 
 この案はライトテーマのみです。
-色・書体・部品の形・ブランドの表示は、O2 CONNECTIVE の Derivation-Products（private リポジトリ `O2-CONNECTIVE/O2-CONNECTIVE-Derivation-Products` の main）を踏襲します（2026-11-18 決定、[#392](https://github.com/O2-CONNECTIVE/Tether/issues/392)）。
+色・部品の形・ブランドの表示は、O2 CONNECTIVE の Derivation-Products（private リポジトリ `O2-CONNECTIVE/O2-CONNECTIVE-Derivation-Products` の main）を踏襲します（2026-11-18 決定、[#392](https://github.com/O2-CONNECTIVE/Tether/issues/392)）。
+書体だけは踏襲せず、OS 標準にします（2026-11-18 決定、[#397](https://github.com/O2-CONNECTIVE/Tether/issues/397)）。
+O2 の丸ゴシックは、OS 標準の書体で描くタイトルバー・メニュー・ダイアログから浮いて見えたためです。
 以前の暫定案（`src/rescue_host.py` の色を参照し、O2 の他製品の色を要件としない）は、この決定で置き換えました。
 出どころは `src/mvp.css` の「C2 friendly enterprise theme」、`src/Brand.jsx`、`public/gateway-mark.svg` です。
 Derivation-Products にダークテーマが無いため、ダークテーマは範囲外です（Mac のネイティブ GUI は OS 標準の色のまま）。
@@ -35,7 +37,7 @@ CSS の正本は [tokens.css](../ui/tauri/design/tokens.css) です。
 | Palette: 文字と線 | ink `#33413D`、ink-muted `#56645F`、line `#DFE9E5`、line-control `#66887E` | ink・muted・line は O2 の値。line-control は操作部品の枠用に AA のため寄せた値（後述） |
 | Palette: 操作 | green 700 `#167A65` / 800 `#106B59` | O2 の primary と hover。操作・focus・リンク・ブランドの副題だけに使い、状態色にしない |
 | Palette: 状態 | blue 50 `#E8F1F4` / 700 `#065292`、purple 50 `#F0EBF7` / 700 `#6E5C83`、amber 50 `#FFF5D8` / 800 `#805000`、red 50 `#FDF3F3` / 700 `#9D3434` / 800 `#832C2C` | blue 700 は gateway-mark の青、blue 50 と purple は O2 のバッジ色、amber 50 は O2 の accent、red 50・700 は O2 の danger。amber 800 は今までの値（O2 に警告の文字色の定義が無いため据え置き）。red 800 は hover 用に red 700 を暗くした値で、O2 に対応が無い |
-| Typography | `Hiragino Maru Gothic ProN`, `Hiragino Kaku Gothic ProN`, `Yu Gothic`, `Yu Gothic UI`, `Meiryo`, system-ui, sans-serif | O2 の書体（前の 3 つ）。Windows の WebView2 向けに今までの `Yu Gothic UI`・`Meiryo` を後ろに残す。外部 font 通信なし |
+| Typography | 本文: `-apple-system`, `BlinkMacSystemFont`, `Hiragino Sans`, `Hiragino Kaku Gothic ProN`, `Segoe UI`, `Yu Gothic UI`, `Meiryo`, system-ui, sans-serif。等幅: `ui-monospace`, `SF Mono`, `Menlo`, `Cascadia Mono`, `Consolas`, monospace | OS 標準の書体（[#397](https://github.com/O2-CONNECTIVE/Tether/issues/397)）。本文は Mac が SF Pro とヒラギノ角ゴ、Windows が Segoe UI と Yu Gothic UI。等幅（鍵の指紋・コード）は Mac が SF Mono → Menlo、Windows が Cascadia Mono → Consolas。書体は同梱せず、外部 font 通信なし |
 | Type scale | 0.875 / 1 / 1.25 / 1.75 rem、本文 line-height 1.7、見出しと button の weight 600 | O2 の本文の行間 1.7 と見出しの 600。本文は 16px 相当を基準 |
 | Spacing | 0 / 4 / 8 / 12 / 16 / 24 / 32 / 48px 相当の rem | 変更なし。4px 刻みで、文字拡大と同じ単位で伸びる |
 | Radius | 4px（inline）/ 10px（button）/ 11px（input）/ 16px（panel・状態の領域） | O2 の値。button は `.primary`・`.ghost`、input は入力欄、panel は `.panelCard` |
@@ -130,7 +132,8 @@ O2 の値のままでは満たさない組は、近い値に寄せ、理由を�
 | warning | amber-800 | mac-development の注意バッジ |
 
 ライトの外観だけ O2 の値にします。ダークの外観は、今までの OS 標準の色のままです。
-書体は O2 の指定の順（ヒラギノ丸ゴシック → ヒラギノ角ゴ）で、丸ゴシックは W4 だけなので、太字はヒラギノ角ゴ ProN W6 を使います。どちらも無ければ OS 標準に戻ります。
+書体は OS 標準（SF Pro とヒラギノ角ゴ）です（[#397](https://github.com/O2-CONNECTIVE/Tether/issues/397)）。
+SwiftUI は `.system(size:weight:)`、AppKit は `NSFont.systemFont(ofSize:weight:)` で描きます。
 カウントダウンの数値だけは桁がずれないよう、今までの等幅数字のままです。
 
 ## コントラスト比の一覧

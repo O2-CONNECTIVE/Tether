@@ -33,8 +33,8 @@ public struct TetherPalette {
 }
 
 extension Font {
-    /// O2 の書体指定の順（ヒラギノ丸ゴシック → ヒラギノ角ゴ）。丸ゴシックは W4 だけなので、太い字は角ゴの W6。無ければ OS 標準へ戻る。
+    /// OS 標準の書体（SF Pro とヒラギノ角ゴ）。書体だけは O2 に合わせない（Issue #397）。
     static func tether(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .custom(weight == .semibold || weight == .bold || weight == .heavy ? "HiraKakuProN-W6" : "HiraMaruProN-W4", fixedSize: size)
+        .system(size: size, weight: weight)
     }
 }

@@ -130,8 +130,8 @@ public struct StatusView: View {
     private func metric(_ label:String,_ value:String) -> some View {
         VStack(alignment:.leading,spacing:8) {
             Text(label).font(.tether(12*textScale)).foregroundStyle(palette.muted)
-            // Keep rounded monospaced digits so countdown columns do not shift.
-            Text(value).font(.system(size:30*textScale,weight:.medium,design:.rounded)).monospacedDigit()
+            // Keep monospaced digits so countdown columns do not shift.
+            Text(value).font(.tether(30*textScale,weight:.medium)).monospacedDigit()
         }.frame(minWidth:140*textScale,maxWidth:.infinity,alignment:.leading).padding(16)
             .background {
                 if palette.dark {
