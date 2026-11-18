@@ -54,7 +54,7 @@ type deps struct {
 	pilotLifetime     time.Duration
 	refreshAccessKeys func(context.Context, *agentgateway.AccessVerifier) error
 	waitAccessRefresh func(context.Context, time.Duration) bool
-	openRegistry      func(context.Context, string) (registry, error)
+	openRegistry      func(context.Context, string, io.Writer) (registry, error)
 }
 
 type registry interface {

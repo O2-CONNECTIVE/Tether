@@ -118,7 +118,7 @@ func (r *recorder) deadlines() []time.Time {
 func (r *recorder) deps() deps {
 	return deps{
 		pilotLifetime: r.lifetime,
-		openRegistry: func(context.Context, string) (registry, error) {
+		openRegistry: func(context.Context, string, io.Writer) (registry, error) {
 			return &memoryRegistry{raw: append([]byte(nil), r.registryBytes...), save: func(raw []byte) {
 				r.mu.Lock()
 				r.registryBytes = append(r.registryBytes[:0], raw...)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ type registryOps struct {
 	readTrust func(context.Context, string) ([]byte, error)
 	rename    func(string, string) error
 	syncDir   func(string) error
+	// diagnostic receives fixed operator text; it never carries paths or identities.
+	diagnostic io.Writer
 }
 
 type storedPairRecord struct {
@@ -137,8 +140,8 @@ func encodePairingRegistry(records []agentgateway.PairRecord) ([]byte, error) {
 }
 
 // openNativeRegistry is a compile-time stub for the unix protected store.
-func openNativeRegistry(ctx context.Context, path string) (registry, error) {
-	return openRegistryWith(ctx, path, registryOps{})
+func openNativeRegistry(ctx context.Context, path string, diagnostic io.Writer) (registry, error) {
+	return openRegistryWith(ctx, path, registryOps{diagnostic: diagnostic})
 }
 
 // openRegistryWith is the injection point for protected reads and atomic commit operations.
