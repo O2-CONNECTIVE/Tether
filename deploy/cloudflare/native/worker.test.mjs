@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import {
   createNativeWorker, MCP_PATH, REGISTER_PATH, SUBPROTOCOL, ASSERTION_HEADER, GATE_VALUE, UPSTREAM_ORIGIN, LIMITS,
 } from "./worker.mjs";
+import * as native from "./worker.mjs";
 import * as probe from "../probe/worker.mjs";
 
 const ORIGIN = "https://tether-native.example.invalid";
@@ -641,7 +642,7 @@ test("throwing bindings and failing streams leave no timer, socket or open reade
 test("the source imports only the probe relay and has no global fetch, logging, cookie or CORS handling", () => {
   const source = readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
   assert.deepEqual(source.match(/^import .*$/gm), ['import { relay } from "../probe/worker.mjs";']);
-  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding."]);
+  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding.", "binding."]);
   assert.doesNotMatch(source, /console\.|globalThis\.fetch|Access-Control|"Set-Cookie"|caches\.|\.connect\(/);
   assert.ok(!source.includes("tether-echo-probe.internal"));
 });
@@ -696,5 +697,218 @@ test("resident opt-in preserves forbidden headers and exact request/reply protoc
     assert.equal(mismatch.upstream.closed.code, 1002);
   }
   assert.equal(rt.pairs.length, 0);
+  assert.equal(rt.timers.size, 0);
+});
+
+// Host pairing (#391). The path and the 4 KiB body bound are the Go
+// gateway's (agentgateway.PairPath, MaxPairBody); they are spelled out here so
+// a drift on either side fails this file instead of a pilot.
+const PAIR_PATH = "/tether-agent/v1/pair";
+const PAIRING_GATE = "open-native-tether-pairing";
+const PAIR_BODY_LIMIT = 4 * 1024;
+const PAIR_TOKEN = "Bearer synthetic.pair.token";
+const PAIR_BODY = '{"host_public_key":"ssh-ed25519 AAAAsynthetic","proof":"c3ludGhldGlj"}';
+const pairHeaders = { Authorization: PAIR_TOKEN, "Content-Type": "application/json" };
+const pairEnv = (binding) => ({ ...openEnv(binding), TETHER_NATIVE_PAIRING: PAIRING_GATE });
+const pairReply = (status = 200, extra = {}, body = '{"registration_endpoint":"wss://tether-native.example.invalid/tether-agent/v1/register","host_label":"mac-1"}') =>
+  new Response(body, { status, headers: { "Content-Type": "application/json", ...extra } });
+const pairRefusal = (status, extra = {}) => new Response("\n", { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...extra } });
+
+test("pairing exports the gateway's fixed path and an explicit opt-in value", () => {
+  assert.equal(native.PAIR_PATH, PAIR_PATH);
+  assert.equal(native.PAIRING_GATE_VALUE, PAIRING_GATE);
+  assert.notEqual(native.PAIRING_GATE_VALUE, GATE_VALUE);
+  assert.notEqual(native.PAIRING_GATE_VALUE, native.RESIDENT_GATE_VALUE);
+});
+
+test("B2: without the explicit pairing opt-in the pair path stays 404 and nothing is read or forwarded", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => pairReply());
+  for (const flag of [undefined, "", "true", PAIRING_GATE + " ", GATE_VALUE, native.RESIDENT_GATE_VALUE]) {
+    const { stream, state } = trackedBody([PAIR_BODY]);
+    const r = await worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: stream }), { ...openEnv(binding), TETHER_NATIVE_PAIRING: flag });
+    assert.equal(r.status, 404, String(flag));
+    assert.equal(state.pulls, 0, String(flag));
+  }
+  // The opt-in never opens the Worker by itself: the native gate still applies.
+  assert.equal((await worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: PAIR_BODY }), { ...pairEnv(binding), TETHER_NATIVE_GATE: undefined })).status, 404);
+  assert.equal(binding.calls.length, 0);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("B1: pairing forwards one POST with its bearer and bounded JSON body to the fixed upstream path, and nothing else", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => pairReply());
+  const spoof = { Cookie: "s=synthetic", [ASSERTION_HEADER]: TOKEN, "Proxy-Authorization": "Basic c3ludGhldGlj", "X-Forwarded-For": "192.0.2.1", Host: "elsewhere.invalid" };
+  const r = await worker.fetch(request(PAIR_PATH, { headers: { ...pairHeaders, ...spoof }, body: PAIR_BODY }), pairEnv(binding));
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("Content-Type"), "application/json");
+  assert.equal(r.headers.get("Cache-Control"), "no-store");
+  assert.match(text(r), /"host_label":"mac-1"/);
+  assert.equal(binding.calls.length, 1);
+  const { url, init } = binding.calls[0];
+  assert.equal(url, UPSTREAM_ORIGIN + PAIR_PATH);
+  assert.equal(init.method, "POST");
+  assert.equal(init.redirect, "manual");
+  // The bearer reaches the gateway, which verifies it; ambient and identity
+  // headers do not.
+  assert.deepEqual(init.headers, pairHeaders);
+  assert.equal(new TextDecoder().decode(init.body), PAIR_BODY);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("B1: the pair path answers only POST at its exact spelling; other methods are 405 and aliases or queries are refused", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => pairReply());
+  for (const method of ["GET", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) {
+    const r = await worker.fetch(request(PAIR_PATH, { method, headers: pairHeaders }), pairEnv(binding));
+    assert.equal(r.status, 405, method);
+    assert.equal(r.headers.get("Allow"), "POST", method);
+  }
+  assert.equal((await worker.fetch(request(PAIR_PATH, { headers: { ...pairHeaders, Upgrade: "websocket" }, body: PAIR_BODY }), pairEnv(binding))).status, 405);
+  for (const path of [PAIR_PATH + "/", "/tether-agent/v1/Pair", "/x/../tether-agent/v1/pair", "/tether-agent/v1/%70air"]) {
+    assert.equal((await worker.fetch(request(path, { headers: pairHeaders, body: PAIR_BODY }), pairEnv(binding))).status, 404, path);
+  }
+  assert.equal((await worker.fetch(request(PAIR_PATH + "?token=synthetic", { headers: pairHeaders, body: PAIR_BODY }), pairEnv(binding))).status, 400);
+  assert.equal((await worker.fetch(request(PAIR_PATH, { headers: { ...pairHeaders, Origin: ORIGIN }, body: PAIR_BODY }), pairEnv(binding))).status, 403);
+  assert.equal(binding.calls.length, 0);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("B1: pairing needs exactly one bounded bearer credential and a bounded Content-Type before forwarding", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => pairReply());
+  for (const authorization of [null, "", `${PAIR_TOKEN}, ${PAIR_TOKEN}`, "Bearer " + "x".repeat(LIMITS.authorization)]) {
+    const headers = { "Content-Type": "application/json", ...(authorization === null ? {} : { Authorization: authorization }) };
+    assert.equal((await worker.fetch(request(PAIR_PATH, { headers, body: PAIR_BODY }), pairEnv(binding))).status, 403, String(authorization).slice(0, 20));
+  }
+  for (const type of ["application/json\u0001", "x".repeat(129)]) {
+    assert.equal((await worker.fetch(request(PAIR_PATH, { headers: { ...pairHeaders, "Content-Type": type }, body: PAIR_BODY }), pairEnv(binding))).status, 400);
+  }
+  assert.equal(binding.calls.length, 0);
+});
+
+test("B1: pairing bodies are bounded at the gateway's 4 KiB and a stalled body times out with its reader cancelled", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => pairReply());
+  assert.equal((await worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: "x".repeat(PAIR_BODY_LIMIT + 1) }), pairEnv(binding))).status, 413);
+  for (const declared of ["999999999", "-1", "1e3", String(PAIR_BODY_LIMIT + 1)]) {
+    assert.equal((await worker.fetch(request(PAIR_PATH, { headers: { ...pairHeaders, "Content-Length": declared }, body: "x" }), pairEnv(binding))).status, 413, declared);
+  }
+  assert.equal(binding.calls.length, 0);
+  assert.equal((await worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: "x".repeat(PAIR_BODY_LIMIT) }), pairEnv(binding))).status, 200);
+  assert.equal(binding.calls[0].init.body.byteLength, PAIR_BODY_LIMIT);
+
+  const { stream, state } = trackedBody(["partial"], { hang: true });
+  const pending = worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: stream }), pairEnv(binding));
+  await until("body read pending", () => state.pulls === 2);
+  assert.deepEqual([...rt.timers.values()].map((t) => t.ms), [LIMITS.bodyMs]);
+  rt.fireAll();
+  assert.equal((await pending).status, 408);
+  await until("reader cancelled", () => state.cancelled);
+  assert.equal(binding.calls.length, 1);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("B1: pairing relays only the gateway's own answers: its refusals and challenge survive, anything else is 502", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const send = async (respond) => worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: PAIR_BODY }), pairEnv(fakeBinding(respond)));
+  for (const status of [400, 403, 404, 409, 413, 503]) {
+    const r = await send(() => pairRefusal(status, { "Set-Cookie": "s=synthetic", Location: "https://elsewhere.invalid/" }));
+    assert.equal(r.status, status, String(status));
+    assert.equal(r.headers.get("Set-Cookie"), null);
+    assert.equal(r.headers.get("Location"), null);
+  }
+  for (const challenge of ["Bearer", 'Bearer error="invalid_token"']) {
+    const r = await send(() => pairRefusal(401, { "WWW-Authenticate": challenge }));
+    assert.equal(r.status, 401);
+    assert.equal(r.headers.get("WWW-Authenticate"), challenge);
+  }
+  const allow = await send(() => pairRefusal(405, { Allow: "POST" }));
+  assert.equal(allow.status, 405);
+  assert.equal(allow.headers.get("Allow"), "POST");
+  for (const [what, respond] of [
+    ["redirect", () => new Response(null, { status: 302, headers: { Location: "https://elsewhere.invalid/" } })],
+    ["foreign challenge", () => pairRefusal(401, { "WWW-Authenticate": 'Bearer resource_metadata="https://elsewhere.invalid"' })],
+    ["challenge without one", () => pairRefusal(401)],
+    ["foreign Allow", () => pairRefusal(405, { Allow: "GET" })],
+    ["unknown status", () => pairRefusal(500)],
+    ["foreign media", () => new Response("<html>", { status: 200, headers: { "Content-Type": "text/html" } })],
+    ["body without media", () => ({ status: 200, headers: new Headers(), body: new Response("x").body })],
+    ["oversized reply", () => pairReply(200, {}, "y".repeat(LIMITS.reply + 1))],
+  ]) {
+    assert.equal((await send(respond)).status, 502, what);
+  }
+  assert.equal(rt.timers.size, 0);
+});
+
+test("B1: the pairing upstream deadline is 35 s: a hung call aborts and its late response is cancelled", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  let aborted = false;
+  const hang = fakeBinding((_, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); })));
+  let pending = worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: PAIR_BODY }), pairEnv(hang));
+  await until("upstream call", () => hang.calls.length === 1);
+  assert.deepEqual([...rt.timers.values()].map((t) => t.ms), [LIMITS.upstreamMs]);
+  rt.fireAll();
+  assert.equal((await pending).status, 504);
+  assert.ok(aborted);
+
+  const late = deferred();
+  const ignoring = fakeBinding(() => late.promise);
+  pending = worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: PAIR_BODY }), pairEnv(ignoring));
+  await until("upstream call", () => ignoring.calls.length === 1);
+  rt.fireAll();
+  assert.equal((await pending).status, 504);
+  const lateBody = trackedBody(['{"late":true}']);
+  late.resolve({ status: 200, headers: new Headers({ "Content-Type": "application/json" }), body: lateBody.stream });
+  await until("late body cancelled", () => lateBody.state.cancelled);
+  assert.equal(lateBody.state.pulls, 0);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("B3: opting into pairing leaves registration and MCP credential handling unchanged", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => json());
+  for (const header of ["Cookie", "Authorization", "Proxy-Authorization", ASSERTION_HEADER]) {
+    const r = await worker.fetch(request(REGISTER_PATH, { method: "GET", headers: { ...regHeaders, [header]: "synthetic" } }), pairEnv(binding));
+    assert.equal(r.status, 403, header);
+  }
+  // Default (Access) mode MCP still demands the assertion; a pairing bearer is not one.
+  assert.equal((await worker.fetch(request(MCP_PATH, { headers: { ...pairHeaders, Accept: "application/json, text/event-stream" }, body: INIT }), pairEnv(binding))).status, 403);
+  assert.equal(binding.calls.length, 0);
+  // The registration upgrade is not accepted at the pair path either.
+  assert.equal((await worker.fetch(request(PAIR_PATH, { method: "GET", headers: regHeaders }), pairEnv(binding))).status, 405);
+  assert.equal(binding.calls.length, 0);
+});
+
+test("B1: every pairing answer carries the gateway's media type, and Allow or a challenge only on their own status", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const send = async (respond) => worker.fetch(request(PAIR_PATH, { headers: pairHeaders, body: PAIR_BODY }), pairEnv(fakeBinding(respond)));
+  // The gateway always names its media type; an empty, untyped answer is not
+  // a pairing result the host could trust.
+  for (const status of [200, 409]) {
+    assert.equal((await send(() => ({ status, headers: new Headers(), body: null }))).status, 502, String(status));
+  }
+  const ok = await send(() => pairReply(200, { "WWW-Authenticate": "Bearer", Allow: "POST" }));
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("WWW-Authenticate"), null);
+  assert.equal(ok.headers.get("Allow"), null);
+  const conflict = await send(() => pairRefusal(409, { Allow: "POST", "WWW-Authenticate": 'Bearer error="invalid_token"' }));
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.headers.get("Allow"), null);
+  assert.equal(conflict.headers.get("WWW-Authenticate"), null);
+  const unauthorized = await send(() => pairRefusal(401, { "WWW-Authenticate": "Bearer", Allow: "POST" }));
+  assert.equal(unauthorized.headers.get("Allow"), null);
+  const method = await send(() => pairRefusal(405, { Allow: "POST", "WWW-Authenticate": "Bearer" }));
+  assert.equal(method.headers.get("WWW-Authenticate"), null);
   assert.equal(rt.timers.size, 0);
 });
