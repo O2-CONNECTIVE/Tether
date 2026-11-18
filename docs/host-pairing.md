@@ -1,18 +1,33 @@
 # ホストのペア登録
 
-[gateway](agent-gateway.md) / [常駐設定](agent-cli-resident.md) / [Linux container配置](../deploy/cloudflare/linux-container.md)
+[[agent-gateway]] / [[agent-cli-resident]] / [[linux-container]]
 
-この文書は、gateway側でホスト鍵を登録する契約を記載します。Worker（PR B）とホストの`pair`コマンド（PR C）はまだありません。後続PRで追加します。実IdP・実配置・Worker経由の通しは未確認です。
+この文書は、gateway側でホスト鍵を登録する契約と、ホストの`pair`コマンドの使い方を記載します。Worker（PR B）とホストのpairコマンド（PR C）は実装済みです。実IdP・実配置・Worker経由の通しは未確認です。
 
 ## 登録の流れ
 
-1. ホストで`pair`を実行します（コマンドはPR Cで追加予定です）。
+1. ホストで `tether-host-pair` を実行します。
 2. ホストはIdPのログインを経て、pairing用tokenを取得します。
 3. ホストは新しいEd25519鍵でproofを作り、`POST /tether-agent/v1/pair`へ送ります。
 4. gatewayは設定済みの登録簿へ新しい鍵を保存し、登録情報を返します。
 5. 以後の接続は現在のホスト鍵を使うhandshakeで認証します。
 
 この手順の実IdP連携とWorker経由の通信は確認していません。
+
+
+## ホストでの実行
+
+次の3つを指定します。`--gateway` は `https://host[:port]` 形式です。path、query、fragmentは指定できません。`--issuer` はIdPのHTTPS issuer URLです。`--client-id` はpublic clientのIDです。
+
+```sh
+tether-host-pair --gateway https://gateway.example --issuer https://idp.example/tenant --client-id host-client
+```
+
+ブラウザでIdPにログインすると、新しいEd25519鍵と常駐用policyが固定の配置先に保存されます。同じ利用者のpairを同時に実行すると、directory内のlockで後続を拒否します。成功後は常駐プロセスを止めて起動し直してください。
+
+ログイン前にlockと既存policyの保存先保護を確認し、確認できない場合は「保存先の保護を確かめられませんでした。何も変えていません」と表示してbrowserやnetworkを使わず終了します。
+
+4xx拒否では前のpairは変わりません。5xx、timeout、通信切断、不正な成功応答ではgateway登録の成否を判定できません。登録済みなら前の鍵は使えなくなっているため、もう一度pairを実行してください。pairが管理する旧鍵だけを削除します。`~/.ssh`など手で置いた鍵は削除しません。
 
 ## 登録口
 

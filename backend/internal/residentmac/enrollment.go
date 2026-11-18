@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// EnrolledLocation returns the fixed per-account enrollment location.
+func EnrolledLocation(ctx context.Context) (home, policyPath string, err error) {
+	policyPath, err = currentEnrolledPolicy(ctx)
+	if err != nil || !strings.HasSuffix(policyPath, "/"+enrolledPolicyRelative) {
+		return "", "", ErrStandbyUnavailable
+	}
+	return strings.TrimSuffix(policyPath, "/"+enrolledPolicyRelative), policyPath, nil
+}
+
 // One current-account location, not discovery, enrollment or a trust witness.
 // Only the native provider constructs these facts outside package tests.
 type enrollmentAccount struct {

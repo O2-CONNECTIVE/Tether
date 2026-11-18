@@ -343,3 +343,9 @@ DarwinのGo試験だけが新規の匿名一時folderで `openat` / `fstatat` / 
 Linux/Windowsは非対応の拒否・root handle消費と共通permission契約を検証し、Darwin実行の代用にしません。
 許可やOS入力の偽装は試験内の値で行い、owner変更・mount・実credential・実folder選択を行いません。
 [残余リスク](selected-folder-read.md)はsource/CI成功でも解除しません。
+
+## tether-host-pair
+
+ホストのpair CLIは `cmd/tether-host-pair` の共通3 fileと、lock / browser起動のOS別2 fileを製品fileとして照合します。linux / darwinは `platform_unix.go`、windowsは拒否stubを選びます。browser起動はdarwinだけ `/usr/bin/open` を使います。
+
+現inventoryは53 packageです。cgo有効時のfile数はLinux391 / Darwin396 / Windows422、Darwinのcgo無効時は393です。

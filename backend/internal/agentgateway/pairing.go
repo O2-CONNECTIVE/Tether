@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentwork"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -171,8 +172,7 @@ func validPairEndpoint(raw string) bool {
 }
 
 func validRegistrationURL(raw string) bool {
-	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == "wss" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.Path != "" && u.String() == raw
+	return residentwork.ValidEndpoint(raw)
 }
 
 func clonePairRecords(in []PairRecord) []PairRecord {

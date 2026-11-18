@@ -50,9 +50,12 @@ func ValidRequestID(s string) bool {
 	}
 	return true
 }
+func ValidEndpoint(s string) bool {
+	u, e := url.Parse(s)
+	return e == nil && len(s) <= 256 && u.Scheme == "wss" && u.Host != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && u.RawPath == "" && u.Opaque == "" && u.Path != "" && u.Path != "/" && strings.ToLower(u.Host) == u.Host && u.String() == s
+}
 func validBinding(b Binding) bool {
-	u, e := url.Parse(b.Endpoint)
-	return e == nil && len(b.Endpoint) <= 256 && u.Scheme == "wss" && u.Host != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && u.RawPath == "" && u.Opaque == "" && u.Path != "" && u.Path != "/" && strings.ToLower(u.Host) == u.Host && u.String() == b.Endpoint && ValidOperationID(b.HostLabel) && ValidOperationID(b.PrincipalLabel) && !strings.Contains(b.HostLabel, "_") && !strings.Contains(b.PrincipalLabel, "_")
+	return ValidEndpoint(b.Endpoint) && ValidOperationID(b.HostLabel) && ValidOperationID(b.PrincipalLabel) && !strings.Contains(b.HostLabel, "_") && !strings.Contains(b.PrincipalLabel, "_")
 }
 func prefix(domain string, b Binding, s, n, p [32]byte) (*bytes.Buffer, error) {
 	if !validBinding(b) || s == ([32]byte{}) || n == ([32]byte{}) || p == ([32]byte{}) || s == n {

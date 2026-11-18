@@ -28,6 +28,14 @@ func TestIntentTranscriptIndependentGoldenAndDomainSeparation(t *testing.T) {
 		t.Fatal("host proof transcript changed", e)
 	}
 }
+
+func TestValidEndpointMatchesResidentBindingRequirements(t *testing.T) {
+	for _, endpoint := range []string{"wss://example.test/register", "wss://example.test/", "wss://EXAMPLE.test/register", "wss://" + strings.Repeat("a", 250) + ".test/register"} {
+		if ValidEndpoint(endpoint) != (endpoint == "wss://example.test/register") {
+			t.Errorf("ValidEndpoint(%q)=%v", endpoint, ValidEndpoint(endpoint))
+		}
+	}
+}
 func TestIntentFieldsAreBoundedAndSigned(t *testing.T) {
 	for _, kind := range []string{"version", "request", "operation", "expiry", "zero-nonce", "same-nonce", "binding"} {
 		t.Run(kind, func(t *testing.T) {

@@ -22,6 +22,15 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// ValidateFixedResidentPolicy is the public enrollment boundary for fixed-scope policies.
+func ValidateFixedResidentPolicy(raw []byte, policyPath string) error {
+	p, err := parseResidentPolicy(raw)
+	if err != nil || p.key.Path == policyPath || !fixedResidentPolicy(p) {
+		return ErrResident
+	}
+	return nil
+}
+
 var ErrResident = errors.New("maclaunch: resident scope refused or unavailable")
 var ErrResidentUnknown = errors.New("maclaunch: resident original cleanup unconfirmed")
 
