@@ -21,7 +21,10 @@ Access公開鍵refresh候補の `internal/agentgateway/access_rotation.go` に�
 52 package、Linux380 / Darwin-cgo385 / Darwin-nocgo382 / Windows411 production fileです。
 [更新の固定方針と配置前の条件](access-key-rotation-candidate.md)を参照してください。
 O2 CONNECTIVE IdP のOAuth tokenを検証するJWKS取得の `internal/agentgateway/jwks_refresh.go` を1fileだけ追加登録し、
-52 package、Linux383 / Darwin-cgo388 / Darwin-nocgo385 / Windows414 production fileです。
+52 package、Linux383 / Darwin-cgo388 / Darwin-nocgo385 / Windows414 production fileでした。
+ホストのペア登録の `internal/agentgateway/pairing.go`、`cmd/rescue-gateway` の登録簿の検証 `pairing_registry.go`、
+保護した登録簿の store（unix は `pairing_store_unix.go`、Windows は常に拒否する `pairing_store_other.go`）を限定登録し、
+52 package、Linux386 / Darwin-cgo391 / Darwin-nocgo388 / Windows417 production fileです。
 任意 argv は exit 1、対応 build のゼロ引数だけが固定 enrollment を選びます。
 この entry の追加は署名・配置・native verified launch・配布を証明せず、通常 CLI / Tauri は未接続です。
 command unit は純粋な argv 判定と拒否だけを実行し、Darwin の実 account / policy / key を読みません。

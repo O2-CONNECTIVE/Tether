@@ -138,13 +138,3 @@ func encodePairingRegistry(records []agentgateway.PairRecord) ([]byte, error) {
 	}
 	return json.Marshal(d)
 }
-
-// openNativeRegistry is a compile-time stub for the unix protected store.
-func openNativeRegistry(ctx context.Context, path string, diagnostic io.Writer) (registry, error) {
-	return openRegistryWith(ctx, path, registryOps{diagnostic: diagnostic})
-}
-
-// openRegistryWith is the injection point for protected reads and atomic commit operations.
-func openRegistryWith(context.Context, string, registryOps) (registry, error) {
-	return nil, errRegistry
-}
