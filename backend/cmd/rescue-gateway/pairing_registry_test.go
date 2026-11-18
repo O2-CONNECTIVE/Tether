@@ -1,9 +1,42 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestNativePairingRegistryRenameAndDirectorySyncA11(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pairs.json")
+	store, err := openNativeRegistry(context.Background(), path)
+	if err != nil {
+		t.Fatalf("open native registry for atomic-save checks: %v", err)
+	}
+	defer store.Close()
+	old := []byte(`{"hosts":[]}`)
+	if err := store.Save(context.Background(), old); err != nil {
+		t.Fatalf("initial save: %v", err)
+	}
+	if _, err := os.ReadFile(path); err != nil {
+		t.Fatalf("registry file was not committed: %v", err)
+	}
+}
+
+func TestNativePairingRegistryExclusiveLockA14(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pairs.json")
+	first, err := openNativeRegistry(context.Background(), path)
+	if err != nil {
+		t.Fatalf("first registry open: %v", err)
+	}
+	defer first.Close()
+	second, err := openNativeRegistry(context.Background(), path)
+	if err == nil {
+		_ = second.Close()
+		t.Fatal("second registry acquired an already-held lock")
+	}
+}
 
 func TestPairingRegistryRejectsInvalidRecordsA14(t *testing.T) {
 	doc := localDoc(t)
