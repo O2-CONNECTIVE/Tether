@@ -49,8 +49,8 @@ type grantEnv struct {
 	deadline  time.Time
 	// notBefore is the HardDeadline handed to the issuer, with its monotonic
 	// reading kept. deadline is the same instant without one (the Authority
-	// rounds it), while every deadline owner also ends the grant on a monotonic
-	// budget, so "not early" is measured against this value on that clock.
+	// rounds it). The deadline owners end the grant on the wall clock or on a
+	// monotonic budget, so "not early" is checked against both values.
 	notBefore time.Time
 }
 

@@ -90,10 +90,16 @@ func TestHardDeadlineIsNotExtendedByPeerHeartbeats(t *testing.T) {
 	p := connect(t, env, context.Background(), quickBudgets(), peer)
 	early := env.closedBeforeRevoke(p.sConn)
 	waitDone(t, p.server.Done(), 3*time.Second, "teardown at the hard deadline")
-	// Not early on the monotonic clock the deadline owners count. The wall
-	// clock can run slower than it, so the wall deadline is not that bound.
-	if time.Now().Before(env.notBefore) || p.server.Reason() != ReasonHardDeadline || !env.revoked() {
-		t.Fatalf("reason %v at %v before %v", p.server.Reason(), time.Now(), env.notBefore)
+	// The deadline owners end the grant when the wall clock reaches the deadline
+	// (Authority Lookup, the channel's hard timer) or the monotonic budget runs
+	// out, whichever comes first. The two clocks can drift either way, so the
+	// teardown is early only if it came before the deadline on both clocks.
+	now := time.Now()
+	if now.Before(env.notBefore) && now.Round(0).Before(env.deadline) {
+		t.Fatalf("teardown at %v before the deadline %v on both clocks", now, env.deadline)
+	}
+	if p.server.Reason() != ReasonHardDeadline || !env.revoked() {
+		t.Fatalf("reason %v revoked %v", p.server.Reason(), env.revoked())
 	}
 	if p.client.answeredBeats() == 0 {
 		t.Fatal("peer heartbeats never ran")

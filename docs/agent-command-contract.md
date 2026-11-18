@@ -120,7 +120,7 @@ Macの現在利用者profileは、guest分離を偽って表明しないよう�
 - `Session.Grant()`：正規Authorityの不変grantの写しで、時刻を観測しません。
 - `Session.Done()`：正規Authorityの失効signalです。
 - `Session.ClaimTransport()`：認証channel 1本だけの単回専有で、wireの`Claim()`とは別です。どちらも解放しません。
-- `Session.StopReason()`：Sessionが失効時に最初に記録した停止理由で、`Done`のcloseより前に記録されます。時刻を観測せず、失効もさせません。
+- `Session.StopReason()`：Sessionが失効時に最初に記録した停止理由です。Session自身が失効させるときは`Done`のcloseより前に記録されます。外部の`Revoke`や、壁時計の期限での`Lookup`による失効では`Done`が先に閉じ、理由は後で記録されるため、その間は`StopNone`を返します。時刻を観測せず、失効もさせません。
 
 ## 期限、失効、取消
 
