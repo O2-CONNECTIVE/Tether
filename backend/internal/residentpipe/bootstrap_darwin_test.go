@@ -198,15 +198,11 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 // may end that way. A signal, an unknown close, a lost terminal or any other
 // serve failure stays non-zero and so remains unconfirmed in the GUI.
 func TestOwnedResultExitsCleanlyOnlyAfterConfirmedExpiry(t *testing.T) {
-	expired, stop := context.WithTimeout(context.Background(), 0)
-	defer stop()
-	<-expired.Done()
-	signalled, cancel := context.WithCancel(context.Background())
-	cancel()
-	live := context.Background()
+	expired, signalled := context.DeadlineExceeded, context.Canceled
+	var live error
 	for _, tc := range []struct {
 		name                          string
-		lifetime                      context.Context
+		ended                         error
 		served, closeErr, terminalErr error
 		want                          int
 	}{
@@ -219,7 +215,7 @@ func TestOwnedResultExitsCleanlyOnlyAfterConfirmedExpiry(t *testing.T) {
 		{"signal", signalled, context.Canceled, nil, nil, 1},
 		{"input EOF", live, os.ErrClosed, nil, nil, 0},
 	} {
-		if got := ExitCode(ownedResult(tc.lifetime, tc.served, tc.closeErr, tc.terminalErr)); got != tc.want {
+		if got := ExitCode(ownedResult(tc.ended, tc.served, tc.closeErr, tc.terminalErr)); got != tc.want {
 			t.Errorf("%s: exit %d, want %d", tc.name, got, tc.want)
 		}
 	}
