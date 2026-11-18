@@ -5,14 +5,156 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
+	"golang.org/x/crypto/ssh"
 )
+
+func TestExecutePairsWithRealGatewayServePair(t *testing.T) {
+	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x71}, ed25519.SeedSize))
+	const kid = "pair-test"
+	issuerURL, publicURL := "", ""
+	accessToken := ""
+	issuerServer := newLoopbackTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"issuer": issuerURL, "authorization_endpoint": issuerURL + "/authorize", "token_endpoint": issuerURL + "/token", "code_challenge_methods_supported": []string{"S256"}})
+		case "/token":
+			claims, _ := json.Marshal(map[string]any{"iss": issuerURL, "aud": publicURL, "sub": "subject-1", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix()})
+			header, _ := json.Marshal(map[string]any{"alg": "EdDSA", "kid": kid, "typ": "at+jwt"})
+			input := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
+			accessToken = input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerKey, []byte(input)))
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": accessToken, "token_type": "Bearer"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuerServer.Close()
+	issuerURL = issuerServer.URL
+	makeVerifier := func(audience string) *agentgateway.Verifier {
+		pub := issuerKey.Public().(ed25519.PublicKey)
+		jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": kid, "alg": "EdDSA", "use": "sig", "x": base64.RawURLEncoding.EncodeToString(pub)}}})
+		v, err := agentgateway.NewVerifier(agentgateway.VerifierConfig{Issuer: issuerURL, Audience: audience, Types: []string{"at+jwt"}, JWKS: jwks})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	mainVerifier := makeVerifier("https://gateway.example.test/mcp")
+	_, principalKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principalSigner, err := ssh.NewSignerFromKey(principalKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := agentgateway.New(agentgateway.Config{Verifier: mainVerifier, Resource: "https://gateway.example.test/mcp", Principals: []agentgateway.Principal{{Label: "member", Subject: "subject-1", Signer: principalSigner}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = gw.Close(context.Background()) })
+	if err := gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "host-test", Principals: []string{"member"}, Paired: true}}); err != nil {
+		t.Fatal(err)
+	}
+	var gatewayServer *httptest.Server
+	gatewayServer = newLoopbackTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gw.ServePair(w, r) }))
+	t.Cleanup(gatewayServer.Close)
+	publicURL = gatewayServer.URL + agentgateway.PairPath
+	registration := "wss://gateway.example.test/register"
+	if err := gw.ConfigurePairing(agentgateway.PairingConfig{Verifier: makeVerifier(publicURL), Endpoint: publicURL, RegistrationEndpoint: registration}); err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(issuerServer.Certificate())
+	pool.AddCert(gatewayServer.Certificate())
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+	defer client.CloseIdleConnections()
+	home := t.TempDir()
+	policyPath := filepath.Join(home, "Library", "Application Support", "pair-test", "resident-policy.json")
+	args := []string{"--gateway", gatewayServer.URL, "--issuer", issuerServer.URL, "--client-id", "pair-client"}
+	d := deps{client: client, location: func(context.Context) (string, string, error) { return home, policyPath, nil }, readProtected: func(_ context.Context, path string) ([]byte, error) { return os.ReadFile(path) }, callbackWait: time.Second, pairTimeout: time.Second}
+	d.openBrowser = func(raw string) error {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return err
+		}
+		callback, err := url.Parse(u.Query().Get("redirect_uri"))
+		if err != nil {
+			return err
+		}
+		q := callback.Query()
+		q.Set("state", u.Query().Get("state"))
+		q.Set("code", "auth-code")
+		callback.RawQuery = q.Encode()
+		resp, err := http.Get(callback.String())
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+	var stdout, stderr strings.Builder
+	if code := execute(context.Background(), args, &stdout, &stderr, d); code != 0 {
+		t.Fatalf("execute status=%d stderr=%q", code, stderr.String())
+	}
+	raw, err := os.ReadFile(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := maclaunch.ValidateFixedResidentPolicy(raw, policyPath); err != nil {
+		t.Fatalf("policy validation: %v", err)
+	}
+	var policy struct {
+		RegistrationEndpoint string `json:"registration_endpoint"`
+		HostLabel            string `json:"host_label"`
+		PrincipalPublicKey   string `json:"principal_public_key"`
+		HostKeyPath          string `json:"host_key_path"`
+	}
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := os.ReadFile(policy.HostKeyPath)
+	if err != nil {
+		t.Fatalf("read host key %q: %v", policy.HostKeyPath, err)
+	}
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		t.Fatal("host key PEM missing")
+	}
+	signer, err := ssh.ParsePrivateKey(keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.HostKey(policy.HostLabel); !bytes.Equal(got, signer.PublicKey().Marshal()) {
+		t.Fatalf("gateway HostKey mismatch")
+	}
+	principalWire := ssh.MarshalAuthorizedKey(principalSigner.PublicKey())
+	if policy.RegistrationEndpoint != registration || policy.HostLabel != "host-test" || policy.PrincipalPublicKey != strings.TrimSpace(strings.TrimPrefix(string(principalWire), "ssh-ed25519 ")) {
+		t.Fatalf("policy/gateway mismatch: %+v", policy)
+	}
+	if !bytes.Equal(signer.PublicKey().Marshal(), gw.HostKey("host-test")) || accessToken == "" {
+		t.Fatal("gateway did not accept CLI host key or token")
+	}
+}
 
 func TestExecutePairLockPreventsBrowserAndNetwork(t *testing.T) {
 	home := t.TempDir()
