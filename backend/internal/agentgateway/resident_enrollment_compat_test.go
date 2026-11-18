@@ -30,7 +30,11 @@ func legacyEnrollmentFixture(t *testing.T) (*Gateway, []ResidentEnrollment) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Key: host.PublicKey().Marshal(), Principals: []string{"member1"}}, {Label: "host2", Key: host.PublicKey().Marshal(), Principals: []string{"member2"}}}); err != nil {
+	secondHost, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x32}, ed25519.SeedSize)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Key: host.PublicKey().Marshal(), Principals: []string{"member1"}}, {Label: "host2", Key: secondHost.PublicKey().Marshal(), Principals: []string{"member2"}}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -81,7 +85,7 @@ func TestResidentEnrollmentRejectsInvalidHostKeys(t *testing.T) {
 	}(), "malformed": []byte("not-a-key")} {
 		t.Run(name, func(t *testing.T) {
 			g, entries := legacyEnrollmentFixture(t)
-			g.hosts["host2"] = key
+			g.hosts["host2"].key = key
 			if err := g.ConfigureResident(legacyEndpoint, legacyControl(), entries); !errors.Is(err, ErrConfig) {
 				t.Fatalf("ConfigureResident error = %v", err)
 			}

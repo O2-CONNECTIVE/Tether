@@ -80,7 +80,7 @@ type fixtureResidentAddr struct{}
 
 func (fixtureResidentAddr) Network() string { return "memory" }
 func (fixtureResidentAddr) String() string  { return "memory" }
-func residentEvidenceRig(t *testing.T) (*Gateway, *residentSession, ssh.Signer, *residentControlFixture) {
+func residentEvidenceRig(t *testing.T, pairing ...bool) (*Gateway, *residentSession, ssh.Signer, *residentControlFixture) {
 	t.Helper()
 	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, 32))
 	jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": "test", "alg": "EdDSA", "x": base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey))}}})
@@ -96,7 +96,20 @@ func residentEvidenceRig(t *testing.T) (*Gateway, *residentSession, ssh.Signer, 
 		t.Fatal(e)
 	}
 	control := &residentControlFixture{begin: make(chan struct{}), runs: make(chan residentRunCall, 8), rotated: make(chan string, 8)}
-	if e = g.ConfigureHosts([]HostEntry{{Label: "host1", Key: host.PublicKey().Marshal(), Principals: []string{"member1"}}}); e != nil {
+	if len(pairing) != 0 && pairing[0] {
+		pairingEndpoint := "https://example.test" + PairPath
+		pairingVerifier, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: pairingEndpoint, Types: []string{"at+jwt"}, JWKS: jwks})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e = g.ConfigureHosts([]HostEntry{{Label: "host1", Principals: []string{"member1"}, Paired: true}})
+		if e == nil {
+			e = g.ConfigurePairing(PairingConfig{Verifier: pairingVerifier, Endpoint: pairingEndpoint, RegistrationEndpoint: "wss://example.test/register", Records: []PairRecord{{HostLabel: "host1", HostKey: host.PublicKey().Marshal(), Issuer: "https://issuer.example.invalid/", Subject: "subject"}}})
+		}
+	} else {
+		e = g.ConfigureHosts([]HostEntry{{Label: "host1", Key: host.PublicKey().Marshal(), Principals: []string{"member1"}}})
+	}
+	if e != nil {
 		t.Fatal(e)
 	}
 	e = g.ConfigureResident("wss://example.test/register", control, []ResidentEnrollment{{HostLabel: "host1", PrincipalLabel: "member1"}})

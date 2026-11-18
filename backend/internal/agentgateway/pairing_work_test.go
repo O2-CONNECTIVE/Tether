@@ -17,23 +17,11 @@ import (
 )
 
 func TestServePairRejectsUncollectedWorkA7(t *testing.T) {
-	g, s, host, _ := residentEvidenceRig(t)
+	g, s, host, _ := residentEvidenceRig(t, true)
 	defer g.Close(context.Background())
 	s.FixedStart(context.Background(), strings.Repeat("1", 32))
-	pairAud := "https://example.test/pair"
+	pairAud := "https://example.test" + PairPath
 	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
-	pub := issuerKey.Public().(ed25519.PublicKey)
-	jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": "test", "alg": "EdDSA", "x": base64.RawURLEncoding.EncodeToString(pub)}}})
-	v, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: pairAud, Types: []string{"at+jwt"}, JWKS: jwks})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Principals: []string{"member1"}, Paired: true}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := g.ConfigurePairing(PairingConfig{Verifier: v, Endpoint: pairAud, RegistrationEndpoint: "wss://example.test/register"}); err != nil {
-		t.Fatal(err)
-	}
 	now := time.Now().Unix()
 	h, _ := json.Marshal(map[string]any{"alg": "EdDSA", "kid": "test", "typ": "at+jwt"})
 	c, _ := json.Marshal(map[string]any{"iss": "https://issuer.example.invalid/", "aud": pairAud, "sub": "subject", "iat": now, "exp": now + 60})
@@ -67,7 +55,7 @@ func pairTranscriptBytesForTest(endpoint string, key []byte, hash [32]byte) []by
 }
 
 func TestServePairAllowsPairingAfterCollectedWorkA7(t *testing.T) {
-	g, s, host, control := residentEvidenceRig(t)
+	g, s, host, control := residentEvidenceRig(t, true)
 	defer g.Close(context.Background())
 	id := strings.Repeat("2", 32)
 	s.FixedStart(context.Background(), id)
@@ -89,20 +77,8 @@ func TestServePairAllowsPairingAfterCollectedWorkA7(t *testing.T) {
 
 func residentPairAttempt(t *testing.T, g *Gateway, host ssh.Signer) *httptest.ResponseRecorder {
 	t.Helper()
-	pairAud := "https://example.test/pair"
+	pairAud := "https://example.test" + PairPath
 	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
-	pub := issuerKey.Public().(ed25519.PublicKey)
-	jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": "test", "alg": "EdDSA", "x": base64.RawURLEncoding.EncodeToString(pub)}}})
-	v, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: pairAud, Types: []string{"at+jwt"}, JWKS: jwks})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Principals: []string{"member1"}, Paired: true}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := g.ConfigurePairing(PairingConfig{Verifier: v, Endpoint: pairAud, RegistrationEndpoint: "wss://example.test/register"}); err != nil {
-		t.Fatal(err)
-	}
 	now := time.Now().Unix()
 	h, _ := json.Marshal(map[string]any{"alg": "EdDSA", "kid": "test", "typ": "at+jwt"})
 	c, _ := json.Marshal(map[string]any{"iss": "https://issuer.example.invalid/", "aud": pairAud, "sub": "subject", "iat": now, "exp": now + 60})

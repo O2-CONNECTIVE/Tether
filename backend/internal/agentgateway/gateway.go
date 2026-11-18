@@ -10,6 +10,7 @@
 package agentgateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -99,6 +100,14 @@ type route struct {
 	cleanupErr  error
 }
 
+type hostSlot struct {
+	key        []byte
+	principals map[string]bool
+	paired     *principal
+	replacing  bool
+	record     *PairRecord
+}
+
 type session struct {
 	owner    *principal
 	route    *route // immutable; nil means permanently discovery-only
@@ -109,8 +118,9 @@ type session struct {
 
 // Gateway holds every mapping in memory only.
 type Gateway struct {
-	hosts         map[string][]byte
+	hosts         map[string]*hostSlot
 	pairing       *PairingConfig
+	pairMu        sync.Mutex
 	residentOnly  bool // immutable, trusted composition only
 	discoveryOnly bool // immutable capability restriction, never request-selected
 	ctx           context.Context
@@ -256,6 +266,8 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn) (*route, erro
 		refusal = ErrRefused
 	case p == nil || p.signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "":
 		refusal = ErrConfig
+	case !g.dispatchHostAllowedLocked(p, d.HostKey):
+		refusal = ErrRefused
 	case reused || p.route != nil || p.connecting || len(g.launches) >= MaxAttachments:
 		refusal = ErrRefused
 	default:
@@ -281,11 +293,28 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn) (*route, erro
 		g.retire(r)
 		return r, ErrClosed
 	}
+	if !g.dispatchHostAllowedLocked(p, d.HostKey) {
+		g.mu.Unlock()
+		g.retire(r)
+		return nil, ErrRefused
+	}
 	p.route = r
 	g.watchers.Add(1)
 	g.mu.Unlock()
 	go g.watch(r)
 	return r, nil
+}
+
+func (g *Gateway) dispatchHostAllowedLocked(p *principal, key []byte) bool {
+	if g.hosts == nil {
+		return true
+	}
+	for _, slot := range g.hosts {
+		if slot.principals[p.label] && !slot.replacing && len(slot.key) != 0 && bytes.Equal(slot.key, key) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) {

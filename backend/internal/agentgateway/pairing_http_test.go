@@ -2,6 +2,7 @@ package agentgateway_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -23,21 +24,31 @@ import (
 )
 
 func pairSetup(t *testing.T, subject string, hosts []agentgateway.HostEntry, save func([]agentgateway.PairRecord) error) (*agentgateway.Gateway, ssh.Signer) {
+	return pairSetupWithRecords(t, subject, hosts, nil, save)
+}
+
+func pairSetupWithRecords(t *testing.T, subject string, hosts []agentgateway.HostEntry, records []agentgateway.PairRecord, save func([]agentgateway.PairRecord) error) (*agentgateway.Gateway, ssh.Signer) {
 	t.Helper()
 	v, err := agentgateway.NewVerifier(agentgateway.VerifierConfig{Issuer: testIssuer, Audience: pairingAudience, Types: []string{"at+jwt"}, JWKS: jwks(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := agentgateway.New(agentgateway.Config{Verifier: v, Resource: testResource, Principals: []agentgateway.Principal{{Label: label(0), Subject: subject, Signer: fixtureSigner(t, 0x21)}}})
+	principals := make([]agentgateway.Principal, len(subjects))
+	for i := range subjects {
+		principals[i] = agentgateway.Principal{Label: label(i), Subject: subjects[i], Signer: fixtureSigner(t, byte(0x21+i))}
+	}
+	principals[0].Subject = subject
+	g, err := agentgateway.New(agentgateway.Config{Verifier: v, Resource: testResource, Principals: principals})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := g.ConfigureHosts(hosts); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.ConfigurePairing(agentgateway.PairingConfig{Verifier: v, Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: "wss://gateway.example.invalid/register", Save: save}); err != nil {
+	if err := g.ConfigurePairing(agentgateway.PairingConfig{Verifier: v, Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: "wss://gateway.example.invalid/register", Records: records, Save: save}); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = g.Close(context.Background()) })
 	return g, fixtureSigner(t, 0x31)
 }
 
@@ -141,7 +152,7 @@ func TestServePairRejectsWrongProofA4(t *testing.T) {
 
 func TestServePairRejectsDuplicateKeysA5(t *testing.T) {
 	key := fixtureSigner(t, 0x31).PublicKey().Marshal()
-	g, signer := pairSetup(t, subjects[0], []agentgateway.HostEntry{{Label: "host-1", Key: key, Principals: []string{label(1)}}}, nil)
+	g, signer := pairSetup(t, subjects[0], []agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}, {Label: "host-2", Key: key, Principals: []string{label(1)}}}, nil)
 	rr := pairRequest(t, g, signer, subjects[0])
 	// A host key already assigned to another host must not be claimed twice.
 	if rr.Code != 409 {
@@ -151,9 +162,10 @@ func TestServePairRejectsDuplicateKeysA5(t *testing.T) {
 }
 
 func TestServePairRejectsPrincipalKeyReuseA5(t *testing.T) {
-	principalKey := fixtureSigner(t, 0x21).PublicKey().Marshal()
-	g, signer := pairSetup(t, subjects[0], []agentgateway.HostEntry{{Label: "host-1", Key: principalKey, Principals: []string{label(1)}}}, nil)
-	rr := pairRequest(t, g, signer, subjects[0])
+	otherKey := fixtureSigner(t, 0x32).PublicKey().Marshal()
+	g, _ := pairSetup(t, subjects[0], []agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}, {Label: "host-2", Key: otherKey, Principals: []string{label(1)}}}, nil)
+	principalSigner := fixtureSigner(t, 0x21)
+	rr := pairRequestWithProof(t, g, principalSigner, principalSigner, subjects[0], "https://gateway.example.invalid"+agentgateway.PairPath, false)
 	// A host key cannot reuse a principal's enrollment key.
 	if rr.Code != 409 {
 		t.Fatalf("principal key reuse status = %d, want 409", rr.Code)
@@ -162,8 +174,7 @@ func TestServePairRejectsPrincipalKeyReuseA5(t *testing.T) {
 
 func TestServePairSaveFailurePreservesOldHostKeyA11p(t *testing.T) {
 	old := fixtureSigner(t, 0x32).PublicKey().Marshal()
-	g, signer := pairSetup(t, subjects[0], []agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}}, func([]agentgateway.PairRecord) error { return errSave })
-	_ = g.ConfigurePairing(agentgateway.PairingConfig{Verifier: nil, Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, Records: []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: old}}, Save: func([]agentgateway.PairRecord) error { return errSave }})
+	g, signer := pairSetupWithRecords(t, subjects[0], []agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}}, []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: old, Issuer: testIssuer, Subject: subjects[0]}}, func([]agentgateway.PairRecord) error { return errSave })
 	rr := pairRequest(t, g, signer, subjects[0])
 	// A failed durable write must leave the previously enrolled key active.
 	if rr.Code != 503 {
@@ -176,8 +187,7 @@ func TestServePairSaveFailurePreservesOldHostKeyA11p(t *testing.T) {
 
 func TestServePairSaveSuccessReplacesHostKeyA11p(t *testing.T) {
 	old := fixtureSigner(t, 0x32).PublicKey().Marshal()
-	g, signer := pairSetup(t, subjects[0], []agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}}, func([]agentgateway.PairRecord) error { return nil })
-	_ = g.ConfigurePairing(agentgateway.PairingConfig{Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, Records: []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: old}}})
+	g, signer := pairSetupWithRecords(t, subjects[0], []agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}}, []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: old, Issuer: testIssuer, Subject: subjects[0]}}, nil)
 	rr := pairRequest(t, g, signer, subjects[0])
 	// A successful durable write must activate the new host identity.
 	if rr.Code != 200 {
@@ -192,10 +202,10 @@ func TestConnectRejectsOldHostKeyAfterPairingReplacementA9(t *testing.T) {
 	r := newModeRig(t, agentgateway.Config{Verifier: verifier(t)})
 	oldKey := fixtureSigner(t, 0x41).PublicKey().Marshal()
 	newKey := fixtureSigner(t, 0x42).PublicKey().Marshal()
-	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "host-1", Key: oldKey, Principals: []string{label(0)}}}); err != nil {
+	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.gw.ConfigurePairing(agentgateway.PairingConfig{Records: []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: newKey}}}); err != nil {
+	if err := r.gw.ConfigurePairing(agentgateway.PairingConfig{Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: "wss://gateway.example.invalid/register", Records: []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: newKey, Issuer: testIssuer, Subject: subjects[0]}}}); err != nil {
 		t.Fatal(err)
 	}
 	d := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Identity: supervisor.Identity{LaunchID: "fresh-launch"}}, Profile: agentexec.ProfileMacCurrentUser}, Deadline: time.Now().Add(time.Minute), HostKey: oldKey}

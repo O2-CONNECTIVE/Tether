@@ -65,7 +65,13 @@ func (c FileConfig) PairingVerifier(audience string, types []string) (*Verifier,
 		return nil, ErrConfig
 	}
 	base := c.Verifier
-	return NewVerifier(VerifierConfig{Issuer: base.Issuer, Audience: audience, Types: types, JWKS: base.JWKS, JWKSURL: base.JWKSURL, Leeway: base.Leeway, Clock: base.Clock})
+	v, err := NewVerifier(VerifierConfig{Issuer: base.Issuer, Audience: audience, Scope: "", Types: types, JWKS: base.JWKS, JWKSURL: base.JWKSURL, Leeway: base.Leeway, Clock: base.Clock})
+	if err != nil {
+		return nil, err
+	}
+	v.maxLifetime = PairTokenMaxLifetime
+	v.singleAudience = true
+	return v, nil
 }
 
 // Members of each mode. The sets share only the mode-neutral members, so a

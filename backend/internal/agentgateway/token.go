@@ -78,6 +78,8 @@ type Verifier struct {
 	refresh                 *jwksRefresh
 	leeway                  time.Duration
 	clock                   func() time.Time
+	maxLifetime             time.Duration
+	singleAudience          bool
 }
 
 type verificationKey struct {
@@ -220,11 +222,17 @@ func (v *Verifier) claims(payload []byte) (Identity, error) {
 	sub, ok2 := str(c["sub"])
 	exp, ok3 := numericDate(c["exp"])
 	iat, ok4 := numericDate(c["iat"])
-	if !ok1 || !ok2 || !ok3 || !ok4 || iss != v.issuer || !printable(sub) || !audienceListed(c["aud"], v.audience, true) {
+	if !ok1 || !ok2 || !ok3 || !ok4 || iss != v.issuer || !printable(sub) || !audienceListed(c["aud"], v.audience, true) ||
+		(v.refusedAudience != "" && audienceListed(c["aud"], v.refusedAudience, true)) ||
+		(v.singleAudience && !singleAudience(c["aud"], v.audience)) {
 		return Identity{}, ErrToken
 	}
 	now := v.clock()
-	if !exp.After(iat) || exp.Sub(iat) > MaxTokenLifetime || !now.Before(exp.Add(v.leeway)) || iat.After(now.Add(v.leeway)) {
+	maxLifetime := v.maxLifetime
+	if maxLifetime == 0 {
+		maxLifetime = MaxTokenLifetime
+	}
+	if !exp.After(iat) || exp.Sub(iat) > maxLifetime || !now.Before(exp.Add(v.leeway)) || iat.After(now.Add(v.leeway)) {
 		return Identity{}, ErrToken
 	}
 	if raw, ok := c["nbf"]; ok {
@@ -243,6 +251,18 @@ func (v *Verifier) claims(payload []byte) (Identity, error) {
 		}
 	}
 	return Identity{Issuer: iss, Subject: sub, Expiry: exp}, nil
+}
+
+func singleAudience(raw json.RawMessage, want string) bool {
+	if s, ok := str(raw); ok {
+		return s == want
+	}
+	var list []json.RawMessage
+	if firstByte(raw) != '[' || json.Unmarshal(raw, &list) != nil || len(list) != 1 {
+		return false
+	}
+	s, ok := str(list[0])
+	return ok && s == want
 }
 
 // audienceListed requires want in "aud": an array of 1..maxAudiences strings,
