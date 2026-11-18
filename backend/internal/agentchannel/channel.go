@@ -329,9 +329,11 @@ func (c *Channel) live() bool {
 
 // deadReason names why a channel that is no longer live ended: the hard
 // deadline, our own revoke after the transport ended, or an outside revoke.
+// The Session also ends the grant on its monotonic budget, which can run out
+// before the wall clock reaches the deadline, so its recorded reason counts.
 func (c *Channel) deadReason() Reason {
 	switch {
-	case !time.Now().Before(c.deadline):
+	case !time.Now().Before(c.deadline) || c.session.StopReason() == agentexec.StopHardDeadline:
 		return ReasonHardDeadline
 	case c.ownRevoke.Load() && c.raw.isAdmitted():
 		return ReasonTransport

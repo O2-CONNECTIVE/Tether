@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 )
 
 func TestQuietChannelStaysOpenWhileHeartbeatsAnswer(t *testing.T) {
@@ -88,11 +90,34 @@ func TestHardDeadlineIsNotExtendedByPeerHeartbeats(t *testing.T) {
 	p := connect(t, env, context.Background(), quickBudgets(), peer)
 	early := env.closedBeforeRevoke(p.sConn)
 	waitDone(t, p.server.Done(), 3*time.Second, "teardown at the hard deadline")
-	if time.Now().Before(env.deadline) || p.server.Reason() != ReasonHardDeadline || !env.revoked() {
-		t.Fatalf("reason %v at %v before %v", p.server.Reason(), time.Now(), env.deadline)
+	// Not early on the monotonic clock the deadline owners count. The wall
+	// clock can run slower than it, so the wall deadline is not that bound.
+	if time.Now().Before(env.notBefore) || p.server.Reason() != ReasonHardDeadline || !env.revoked() {
+		t.Fatalf("reason %v at %v before %v", p.server.Reason(), time.Now(), env.notBefore)
 	}
 	if p.client.answeredBeats() == 0 {
 		t.Fatal("peer heartbeats never ran")
+	}
+	if err := p.server.Close(); err != nil || early.Load() {
+		t.Fatalf("close %v early %v", err, early.Load())
+	}
+}
+
+// The Session also ends the grant on its elapsed (monotonic) budget, which can
+// run out while the wall clock is still before the hard deadline: maclaunch's
+// ElapsedDeadline, or a wall clock that runs slow. That is the hard deadline,
+// not an outside revoke, and the channel must report it the way the Session
+// recorded it.
+func TestSessionElapsedDeadlineIsReportedAsHardDeadline(t *testing.T) {
+	env := newEnvElapsed(t, 30*time.Second, 300*time.Millisecond)
+	p := connect(t, env, context.Background(), quickBudgets(), quickBudgets())
+	early := env.closedBeforeRevoke(p.sConn)
+	waitDone(t, p.server.Done(), 3*time.Second, "teardown at the Session's elapsed deadline")
+	if !time.Now().Before(env.deadline) {
+		t.Fatal("the wall deadline passed; this test needs the elapsed deadline to come first")
+	}
+	if p.server.Reason() != ReasonHardDeadline || env.session.StopReason() != agentexec.StopHardDeadline || !env.revoked() {
+		t.Fatalf("reason %v session %v revoked %v", p.server.Reason(), env.session.StopReason(), env.revoked())
 	}
 	if err := p.server.Close(); err != nil || early.Load() {
 		t.Fatalf("close %v early %v", err, early.Load())

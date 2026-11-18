@@ -8,7 +8,7 @@
 - runtimeが宣言するprofile（`ProfiledRuntime`。宣言がなければWindows guest）、grantの`GuestBoundary`、issuerの種別がpolicyのprofileと一致しない場合は、専有の前に`ErrProfile`になります。Macの現在利用者は`ephemeral.NewCurrentUser`と`supervisor.CurrentUserNoIsolation`の明示入口だけを受け付けます。Macの詳細は[Mac runtime](../../../docs/mac-agent-runtime.md)を参照してください。
 - `Session.Claim()`はadapter（wire Server）1つだけの単回専有です。`Mode()`、`Profile()`、`KeySetDigest()`は読取り専用の写しで、認可の入力ではありません。
 - hard deadlineは単一owner（`checkDeadline`、timer 1本）が、最大`DeadlineRecheck`（1秒）ごとに正規issuerの時計で再観測します。sleepや壁時計の前進の後でも、要求なしに終わります。New時の残りを経過予算として固定し、延長はしません。期限前のcallbackでは失効させません。頭打ちになったcommand timerは、このownerへ判定を渡します。
-- transport向けに、読取り専用の`Grant()`・`Done()`、単回の`ClaimTransport()`、即時の再観測`ObserveDeadline()`があります。
+- transport向けに、読取り専用の`Grant()`・`Done()`・`StopReason()`、単回の`ClaimTransport()`、即時の再観測`ObserveDeadline()`があります。
 - 1つのAuthorityには`ClaimConsumer`で1 Sessionだけを結び、Closeしても専有を戻しません。
 - `Authority.Done`を監視し、issuerやOwnerの失効をrequestなしでworkerへ伝えます。失効は認可を先に確定してからworkerを取り消します。
 - command bytesは`GuestRuntime.StartShell`のstdinだけに渡します。argv・path・token・SIDの入力はありません。
