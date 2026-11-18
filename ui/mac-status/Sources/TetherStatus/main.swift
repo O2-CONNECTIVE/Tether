@@ -78,7 +78,7 @@ enum RenderFailure: Error { case image }
         state.ingest(try JSONSerialization.data(withJSONObject:object),at:100)
         if closed || notStarted || kind == "connecting-eof" { state.fail(.eof) }
         let view=StatusView(snapshot:state.snapshot,now:kind == "stale" || kind == "connecting-stale" ? 104 : 100,fixture:true,renderStatic:true,textScale:name == "large-text" ? 1.5 : 1)
-            .environment(\.sizeCategory,size).frame(width:width,height:height,alignment:.topLeading).background(Color(nsColor:.windowBackgroundColor)).environment(\.colorScheme,scheme)
+            .environment(\.sizeCategory,size).frame(width:width,height:height,alignment:.topLeading).background(TetherPalette(scheme).canvas).environment(\.colorScheme,scheme)
         let renderer=ImageRenderer(content:view); renderer.scale=2
         if let image=renderer.nsImage,let data=image.tiffRepresentation,
            let bitmap=NSBitmapImageRep(data:data),let png=bitmap.representation(using:.png,properties:[:]) {

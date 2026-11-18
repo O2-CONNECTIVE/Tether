@@ -1,7 +1,7 @@
 .shell { width: min(100% - 2rem, 52rem); margin-inline: auto; padding-block: var(--sys-space-xl); }
 .shell > * + * { margin-top: var(--sys-space-xl); }
 .shell header { display: grid; gap: var(--sys-space-sm); }
-.shell-panel { padding: var(--sys-space-xl); border: 1px solid var(--sys-border-default); border-radius: var(--sys-radius-panel); background: var(--sys-surface-default); }
+.shell-panel { padding: var(--sys-space-xl); border: 1px solid var(--cmp-panel-border); border-radius: var(--cmp-panel-radius); background: var(--sys-surface-default); box-shadow: var(--cmp-panel-shadow); }
 .shell-panel > * + * { margin-top: var(--sys-space-lg); }
 .shell-permissions { display: grid; grid-template-columns: auto 1fr; gap: var(--sys-space-sm) var(--sys-space-xl); margin: 0; }
 .shell-permissions dt { color: var(--sys-text-secondary); }

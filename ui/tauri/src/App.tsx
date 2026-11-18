@@ -7,6 +7,7 @@ import { StatusContent } from './host-status/StatusContent.tsx';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './components/ui/collapsible.tsx';
+import { Brand } from './Brand.tsx';
 
 export function App({ invoke, residentInvoke }: { invoke: AppInvoke | undefined; residentInvoke?: ResidentInvoke }) {
   const [state, setState] = useState<AppState>(initialAppState);
@@ -31,7 +32,7 @@ export function App({ invoke, residentInvoke }: { invoke: AppInvoke | undefined;
   }, [invoke]);
   const refresh = useCallback(() => { void controller.current?.refresh(); }, []);
   return <main className="shell">
-    <header><h1>サポートの状態</h1>
+    <header><Brand product="Tether" /><h1>サポートの状態</h1>
       <p id="operation-help">この shell はバックエンド未配線です。開始や停止はできません。</p></header>
     <section className={`status${state.kind === 'unavailable' ? ' status--unconfirmed' : ''}`} role="status" aria-live="polite" aria-atomic="true">
       <StatusContent headingId="status-title" descriptionId="status-description"

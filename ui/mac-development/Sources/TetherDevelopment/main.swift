@@ -19,17 +19,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         signal(SIGPIPE, SIG_IGN)
         NSApp.setActivationPolicy(.regular)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.backgroundColor = TetherPalette.canvas
         window.title = "Tether Development · 開発専用"; window.delegate = self
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 620, height: 560)
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.edgeInsets = NSEdgeInsets(top: 28, left: 28, bottom: 28, right: 28)
         let badge = NSTextField(labelWithString: "開発専用・Developer ID 未検証")
-        badge.font = .boldSystemFont(ofSize: 15); badge.textColor = .systemOrange
-        status.font = .boldSystemFont(ofSize: 25)
+        badge.font = TetherPalette.font(15, bold: true); badge.textColor = TetherPalette.warning
+        status.font = TetherPalette.font(25, bold: true); status.textColor = TetherPalette.ink
         let warning = NSTextField(wrappingLabelWithString: "通常製品とは別のローカル開発アプリです。待機 ON だけでは固定の検証操作だけを受け付けます。コマンド実行は、下のボタンで許可している間だけ通ります。署名・公開・認証の保証を追加しません。")
+        detail.font = TetherPalette.font(13); detail.textColor = TetherPalette.ink
+        warning.font = TetherPalette.font(13); warning.textColor = TetherPalette.ink
         let limit = NSTextField(wrappingLabelWithString: "起動から15分で終了を要求します。再接続でも延長しません。永続運転・ログイン起動ではありません。サーバー側の期限設定が別途必要です。")
-        limit.textColor = .secondaryLabelColor
+        limit.font = TetherPalette.font(13); limit.textColor = TetherPalette.muted
         start = button("開発ホストを準備", #selector(prepare))
         on = button("待機を ON", #selector(enable)); off = button("待機を OFF", #selector(disable))
         allow = button("コマンド実行を15分許可", #selector(allowRun)); deny = button("許可を取り消す", #selector(denyRun))
@@ -39,10 +42,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let runRow = NSStackView(views: [allow!, deny!]); runRow.spacing = 10
         let endRow = NSStackView(views: [stop!, quit!]); endRow.spacing = 10
         diagnostic.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        diagnostic.textColor = .secondaryLabelColor; diagnostic.isSelectable = true
-        runState.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        diagnostic.textColor = TetherPalette.muted; diagnostic.isSelectable = true
+        runState.font = .monospacedSystemFont(ofSize: 12, weight: .regular); runState.textColor = TetherPalette.ink
         history.isEditable = false; history.isSelectable = true
-        history.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        history.font = .monospacedSystemFont(ofSize: 11, weight: .regular); history.textColor = TetherPalette.ink
         history.textContainerInset = NSSize(width: 5, height: 5)
         let scroll = NSScrollView(); scroll.documentView = history; scroll.hasVerticalScroller = true
         scroll.heightAnchor.constraint(equalToConstant: 220).isActive = true
@@ -60,7 +63,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         update()
     }
     private func button(_ title: String, _ action: Selector) -> NSButton {
-        NSButton(title: title, target: self, action: action)
+        let button = NSButton(title: title, target: self, action: action)
+        button.font = TetherPalette.font(13)
+        return button
     }
     @objc private func prepare() { resident.prepare(); update() }
     @objc private func enable() { resident.intent("on"); update() }

@@ -2,7 +2,7 @@
 
 [設計・具体値・状態対応](../../../docs/tauri-design-tokens.md)
 
-ライトテーマの暫定提案です。
+ライトテーマの提案です。色・書体・部品の形は O2 の Derivation-Products を踏襲します（[#392](https://github.com/O2-CONNECTIVE/Tether/issues/392)）。
 Tauri runtime、npm 依存、接続機能、JavaScript はありません。
 実アプリへ配線する前にトークンと状態の意味を確認するための HTML/CSS です。
 開始・停止を含め、実通信の操作はありません。

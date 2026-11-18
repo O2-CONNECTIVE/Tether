@@ -2,6 +2,9 @@
 
 [設計仕様](tauri-design-tokens.md) / [Issue #16](https://github.com/O2-CONNECTIVE/Tether/issues/16)
 
+> [!WARNING]
+> この文書の数値と画像は、2026-10-27 の暫定色（#16）の確認記録です。O2 の Derivation-Products の値に差し替えた（#392）後の現行の組と比は、[トークン仕様](tauri-design-tokens.md#コントラスト比の一覧)の一覧にあります。
+
 対象は同じ PR のライトテーマ tokens と静的 HTML/CSS 状態見本です。
 2026-10-27、macOS の Chrome 156.0.8078.48 で実際に描画し、広幅・狭幅・forced colors の画像を目視確認しました。
 Tauri runtime と Go バックエンドは含まれず、実接続や終了の検証ではありません。

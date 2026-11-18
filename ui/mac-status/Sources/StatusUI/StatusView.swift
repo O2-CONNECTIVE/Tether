@@ -4,6 +4,7 @@ import StatusCore
 
 public struct StatusView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     let snapshot: Snapshot
     let now: TimeInterval
     let fixture: Bool
@@ -46,7 +47,8 @@ public struct StatusView: View {
         if !fresh { return "接続や停止を確認できません。表示から状態を推定しないでください。" }
         return "この画面は状態の確認専用です。新しい操作を許可しません。"
     }
-    private var tone: Color { unknown || (frame?.phase == "failed" && feedback != nil) ? .primary : (fresh ? .accentColor : .secondary) }
+    private var palette: TetherPalette { TetherPalette(colorScheme) }
+    private var tone: Color { unknown || (frame?.phase == "failed" && feedback != nil) ? palette.ink : (fresh ? palette.info : (palette.dark ? .secondary : palette.muted)) }
     private var metricsCurrent: Bool { fresh && !unknown && frame?.terminal != true }
     private var remaining: String {
         guard metricsCurrent, let s = snapshot.remaining(at:now) else { return "—" }
@@ -55,11 +57,11 @@ public struct StatusView: View {
     private var content: some View {
             VStack(alignment:.leading,spacing:24) {
                 HStack(alignment:.firstTextBaseline) {
-                    Text("Tether").font(.system(size:20*textScale,weight:.semibold))
+                    Text("Tether").font(.tether(20*textScale,weight:.semibold))
                     Spacer()
-                    Text("状態確認専用").font(.system(size:12*textScale)).foregroundStyle(Color.primary.opacity(0.72))
+                    Text("状態確認専用").font(.tether(12*textScale)).foregroundStyle(palette.muted)
                 }
-                if fixture { Label("表示テスト・実接続なし",systemImage:"testtube.2").font(.system(size:14*textScale,weight:.semibold)).foregroundStyle(Color.primary.opacity(0.8)) }
+                if fixture { Label("表示テスト・実接続なし",systemImage:"testtube.2").font(.tether(14*textScale,weight:.semibold)).foregroundStyle(palette.dark ? Color.primary.opacity(0.8) : palette.ink) }
                 VStack(alignment:.leading,spacing:10) {
                     HStack(alignment:.top,spacing:10) {
                         if feedback?.isProcessing == true {
@@ -73,33 +75,33 @@ public struct StatusView: View {
                                 .accessibilityHidden(true)
                         }
                         Text(title).fixedSize(horizontal:false,vertical:true)
-                    }.font(.system(size:20*textScale,weight:.semibold)).foregroundStyle(tone)
-                    Text(subtitle).foregroundStyle(Color.primary.opacity(0.72)).fixedSize(horizontal:false,vertical:true)
+                    }.font(.tether(20*textScale,weight:.semibold)).foregroundStyle(tone)
+                    Text(subtitle).foregroundStyle(palette.muted).fixedSize(horizontal:false,vertical:true)
                 }.accessibilityElement(children:.combine)
                 ViewThatFits(in:.horizontal) {
                     HStack(spacing:12) { metric("承認の残り時間",remaining); metric("実行中の操作",metricsCurrent ? String(frame?.running ?? 0) : "—") }
                     VStack(spacing:12) { metric("承認の残り時間",remaining); metric("実行中の操作",metricsCurrent ? String(frame?.running ?? 0) : "—") }
                 }
-                Text("件数は管理中の操作数です。OS 全体のプロセス数ではありません。").font(.system(size:12*textScale)).foregroundStyle(Color.primary.opacity(0.72))
+                Text("件数は管理中の操作数です。OS 全体のプロセス数ではありません。").font(.tether(12*textScale)).foregroundStyle(palette.muted)
                 VStack(alignment:.leading,spacing:8) {
-                    Text("停止と回収").font(.system(size:14*textScale,weight:.semibold))
+                    Text("停止と回収").font(.tether(14*textScale,weight:.semibold))
                     Text(cleanupText).fixedSize(horizontal:false,vertical:true)
-                    if snapshot.terminalObserved { Text(endReason).font(.system(size:12*textScale)).fixedSize(horizontal:false,vertical:true) }
+                    if snapshot.terminalObserved { Text(endReason).font(.tether(12*textScale)).fixedSize(horizontal:false,vertical:true) }
                     Text("残り時間は受信情報からの目安です。0 秒でも停止完了の証明にはなりません。")
-                        .font(.system(size:12*textScale)).foregroundStyle(Color.primary.opacity(0.72)).fixedSize(horizontal:false,vertical:true)
+                        .font(.tether(12*textScale)).foregroundStyle(palette.muted).fixedSize(horizontal:false,vertical:true)
                 }
                 Divider()
                 VStack(alignment:.leading,spacing:8) {
-                    Label("実行時の権限: 現在のユーザー",systemImage:"person.crop.circle.badge.exclamationmark").font(.system(size:14*textScale,weight:.semibold))
+                    Label("実行時の権限: 現在のユーザー",systemImage:"person.crop.circle.badge.exclamationmark").font(.tether(14*textScale,weight:.semibold))
                     Text("サンドボックスではありません。このユーザーがアクセスできるファイルやネットワークに届きます。")
                     Text("画面を閉じてもエージェントは停止しません。実行済みの変更は元に戻りません。プロセス群から離れた子孫の停止は保証しません。")
-                }.font(.system(size:12*textScale)).foregroundStyle(Color.primary.opacity(0.72)).fixedSize(horizontal:false,vertical:true)
-            }.font(.system(size:14*textScale)).padding(28).frame(maxWidth:720,alignment:.leading).frame(maxWidth:.infinity)
+                }.font(.tether(12*textScale)).foregroundStyle(palette.muted).fixedSize(horizontal:false,vertical:true)
+            }.font(.tether(14*textScale)).foregroundStyle(palette.ink).padding(28).frame(maxWidth:720,alignment:.leading).frame(maxWidth:.infinity)
     }
     public var body: some View {
         Group {
             if renderStatic { content } else { ScrollView { content } }
-        }.background(Color(nsColor:.windowBackgroundColor)).frame(minWidth:320,minHeight:420)
+        }.background(palette.canvas).frame(minWidth:320,minHeight:420)
         .accessibilityLabel("Tether この Mac の状態")
     }
     private var endReason: String {
@@ -121,10 +123,19 @@ public struct StatusView: View {
     }
     private func metric(_ label:String,_ value:String) -> some View {
         VStack(alignment:.leading,spacing:8) {
-            Text(label).font(.system(size:12*textScale)).foregroundStyle(Color.primary.opacity(0.72))
+            Text(label).font(.tether(12*textScale)).foregroundStyle(palette.muted)
+            // Keep rounded monospaced digits so countdown columns do not shift.
             Text(value).font(.system(size:30*textScale,weight:.medium,design:.rounded)).monospacedDigit()
         }.frame(minWidth:140*textScale,maxWidth:.infinity,alignment:.leading).padding(16)
-            .background(RoundedRectangle(cornerRadius:12).fill(Color.primary.opacity(0.045)))
+            .background {
+                if palette.dark {
+                    RoundedRectangle(cornerRadius:12).fill(palette.panel)
+                } else {
+                    RoundedRectangle(cornerRadius:16).fill(palette.panel)
+                        .overlay(RoundedRectangle(cornerRadius:16).stroke(palette.line,lineWidth:1))
+                        .shadow(color:Color(.sRGB,red:38/255,green:75/255,blue:66/255).opacity(0.055),radius:14,x:0,y:9)
+                }
+            }
             .accessibilityElement(children:.combine)
     }
 }

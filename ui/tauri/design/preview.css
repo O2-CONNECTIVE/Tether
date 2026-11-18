@@ -5,7 +5,7 @@
 .preview-notice { border-inline-start: 4px solid var(--sys-border-strong); padding: var(--sys-space-lg); background: var(--sys-surface-default); }
 .preview-section { display: grid; gap: var(--sys-space-xl); }
 .preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sys-space-xl); }
-.preview-panel { padding: var(--sys-space-xl); border: 1px solid var(--sys-border-default); border-radius: var(--sys-radius-panel); background: var(--sys-surface-default); box-shadow: var(--sys-shadow-panel); }
+.preview-panel { padding: var(--sys-space-xl); border: 1px solid var(--cmp-panel-border); border-radius: var(--cmp-panel-radius); background: var(--sys-surface-default); box-shadow: var(--cmp-panel-shadow); }
 .preview-panel > * + * { margin-top: var(--sys-space-lg); }
 .preview-actions { display: flex; flex-wrap: wrap; gap: var(--sys-space-md); }
 .preview-actions .button { flex: 1 1 12rem; }
