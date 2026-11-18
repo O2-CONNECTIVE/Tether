@@ -20,7 +20,8 @@ extension RecoveryController {
             status = "起動できませんでした"
             detail = "接続は開始していません。同梱ファイルと開発用ビルドを確認してから、「もう一度準備」を押してください。"
         } else if mayQuit && launched {
-            // The helper's fixed 15-minute lifetime starts after launchedAt, so an
+            // The helper's fixed 15-minute lifetime (developmentLifetime in
+            // backend/internal/residentpipe) starts after launchedAt, so an
             // unrequested close received at least that long after it is the expiry.
             let expired = f.unrequestedCloseAt.flatMap { at in launchedAt.map { at >= $0 && at - $0 >= 900_000 } } == true
             status = expired ? "15分の期限で停止しました" : "停止・回収を確認しました"

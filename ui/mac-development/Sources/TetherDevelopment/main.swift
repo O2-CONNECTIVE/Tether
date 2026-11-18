@@ -74,12 +74,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if resident.shouldTerminate { timer?.invalidate(); return .terminateNow }
         // The timer renders the pending request. Do not recursively terminate
         // from inside this delegate callback when proof arrives during a poll.
-        // A refusal is shown, even when Cmd-Q arrives with the window hidden.
-        window.makeKeyAndOrderFront(nil)
+        // Show the refusal even when a quit arrives with the window hidden or the
+        // app inactive (Dock menu, logout); this does not take keyboard focus.
+        NSApp.unhideWithoutActivation(); window.makeKeyAndOrderFront(nil); window.orderFrontRegardless()
         return .terminateCancel
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if resident.closeHidesWindow { return true } // app, owner and unknown stay; Dock reopens
+        if resident.closeWindow() { return true } // hidden: app, owner and unknown stay; Dock reopens
         NSApp.terminate(nil); return false
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

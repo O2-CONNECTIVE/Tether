@@ -45,29 +45,36 @@ func checkPresentation() {
     check(blocked.detail.contains("診断情報") && blocked.diagnostic.contains("unknown owner"), "UI unknown gives diagnosis instead of false recovery")
     unknown.requestQuit(); unknown.requestQuit()
     check(!unknown.shouldTerminate && !unknown.presentation(at: 5000).canPrepare, "UI quit cannot bypass unknown")
-    // Quit, Cmd-Q and the close button share this refusal. An unchanged screen
+    // Quit and Cmd-Q share this refusal. An unchanged screen
     // was reported as no response, so the refusal itself must become visible.
     let refused = unknown.presentation(at: 5000)
     check(!blocked.detail.contains("終了できません"), "UI unknown claims no refusal before quit is asked")
     check(refused.status == blocked.status && refused.detail.hasPrefix("回収を確認できないため終了できません。"), "UI refused quit on unknown states why the app stays open")
 
     // Only this process remembers an unresolved owner, so the close button hides
-    // the window instead of quitting: the app, owner and unknown stay, and a Dock
-    // reopen renders the same state. Quit and Cmd-Q still refuse with the reason.
-    let hidden = completed("hidden unknown"); hidden.feed.invalidateCleanup("owner-result-unknown")
+    // the window instead of quitting: no quit request and no state change, so the
+    // app, owner and unknown stay and a Dock reopen renders the same state. Quit
+    // and Cmd-Q still refuse with the reason. (The AppKit hide/reopen calls
+    // themselves are wiring in main.swift and are not exercised here.)
+    // Not yet closing, so a close sent by hiding would be visible here.
+    let hidden = Owner("hidden unknown"); hidden.launched = true
+    hidden.feed.ingest(recoveryStatus(), at: 5000); hidden.feed.invalidateCleanup("owner-result-unknown")
     var hiddenReplacements = 0
     let hiding = RecoveryController(owner: hidden) { hiddenReplacements += 1; return Owner("forbidden") }
     let beforeHide = hiding.presentation(at: 5000)
-    check(hiding.closeHidesWindow && !hiding.quitRequested && !hiding.shouldTerminate, "UI close button on unknown hides the window without quitting")
+    check(hiding.closeWindow() && hiding.closeWindow() && !hiding.quitRequested && !hiding.shouldTerminate, "UI close button on unknown hides the window without a quit request")
+    check(hidden.closes == 0 && !hidden.feed.closing, "UI hiding sends no close to the original owner")
     let reopened = hiding.presentation(at: 5000)
-    check(reopened.status == beforeHide.status && reopened.detail == beforeHide.detail && reopened.diagnostic == beforeHide.diagnostic, "UI reopened unknown window shows the same unresolved state")
+    check(reopened.status == beforeHide.status && reopened.detail == beforeHide.detail && reopened.diagnostic == beforeHide.diagnostic, "UI hiding leaves the unresolved state a Dock reopen renders unchanged")
     check(!reopened.canPrepare && !hiding.prepare() && hiddenReplacements == 0 && hidden.feed.cleanupInvalid && !hiding.mayQuit, "UI hidden unknown stays unconfirmed and blocks a new owner")
     hiding.requestQuit()
     check(!hiding.shouldTerminate && hiding.presentation(at: 5000).detail.hasPrefix("回収を確認できないため終了できません。"), "UI quit after hiding still refuses with the reason")
     let awaiting = Owner("awaiting proof"); awaiting.launched = true; awaiting.feed.fail()
-    for (name, owner) in [("awaiting proof", awaiting), ("collected", completed()), ("unstarted", Owner("unstarted"))] {
-        check(!RecoveryController(owner: owner) { Owner("forbidden") }.closeHidesWindow, "UI close button on \(name) still asks to quit")
+    for (name, owner, ends) in [("awaiting proof", awaiting, false), ("collected", completed(), true), ("unstarted", Owner("unstarted"), true)] {
+        let closing = RecoveryController(owner: owner) { Owner("forbidden") }
+        check(!closing.closeWindow() && closing.quitRequested && closing.shouldTerminate == ends, "UI close button on \(name) still asks to quit")
     }
+    check(awaiting.closes == 1, "UI close button while awaiting proof asks the original owner to close once")
 
     // The helper's own 15-minute expiry closes the original owner without a GUI
     // request or fault. With all four proofs, quit and fresh preparation use the

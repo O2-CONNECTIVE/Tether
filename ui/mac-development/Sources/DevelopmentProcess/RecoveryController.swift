@@ -38,9 +38,15 @@ public final class RecoveryController {
     public var launched: Bool { owner.launched }
     public var launchFailed: Bool { owner.launchFailed }
     public var launchedAt: UInt64? { owner.launchedAt }
-    // Only this process remembers an unresolved owner. The close button then
-    // hides the window and keeps the app, owner and unknown; Quit still refuses.
-    public var closeHidesWindow: Bool { owner.feed.cleanupInvalid }
+    // Close button; returns whether the window may close. Only this process
+    // remembers an unresolved owner, so while collection is unconfirmed the
+    // window hides with no quit request and no state change: the app, owner and
+    // unknown stay, and Quit still refuses. Otherwise it asks to quit as before.
+    public func closeWindow() -> Bool {
+        if owner.feed.cleanupInvalid { return true }
+        requestQuit()
+        return false
+    }
     public var mayQuit: Bool { owner.mayQuit }
     public var diagnostic: String { owner.diagnostic }
     public var preparation: Preparation {
