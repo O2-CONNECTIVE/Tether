@@ -54,6 +54,13 @@ type deps struct {
 	pilotLifetime     time.Duration
 	refreshAccessKeys func(context.Context, *agentgateway.AccessVerifier) error
 	waitAccessRefresh func(context.Context, time.Duration) bool
+	openRegistry      func(context.Context, string, io.Writer) (registry, error)
+}
+
+type registry interface {
+	Load() []byte
+	Save(context.Context, []byte) error
+	Close() error
 }
 
 func nativeDeps() deps {
@@ -64,6 +71,7 @@ func nativeDeps() deps {
 		pilotLifetime:     pilotMaxLifetime,
 		refreshAccessKeys: func(ctx context.Context, v *agentgateway.AccessVerifier) error { return v.RefreshKeys(ctx) },
 		waitAccessRefresh: waitAccessRefresh,
+		openRegistry:      openNativeRegistry,
 	}
 }
 
@@ -130,7 +138,11 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 	// FileConfig intentionally leaves CallTimeout zero: the default is 30s,
 	// bounded below the native Worker upstream budget of 35s. No document
 	// member can extend it; keep that contract when adding future settings.
-	gwConfig, err := cfg.gateway.GatewayConfig()
+	fileConfig := cfg.gateway
+	if cfg.pairing != nil {
+		fileConfig.Verifier.RefusedAudience = cfg.pairing.Audience
+	}
+	gwConfig, err := fileConfig.GatewayConfig()
 	if err != nil {
 		report(diagnostic, "設定が不正または不完全です")
 		return 2
@@ -142,6 +154,76 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 		report(diagnostic, "設定が不正または不完全です")
 		return 2
 	}
+	var store registry
+	var records []agentgateway.PairRecord
+	if cfg.pairing != nil {
+		if d.openRegistry == nil {
+			report(diagnostic, "登録簿を読めませんでした。待受しません")
+			return closeUnserved(nil, gw.Close, diagnostic, 2)
+		}
+		open, cancel := context.WithTimeout(ctx, readBudget)
+		store, err = d.openRegistry(open, cfg.pairing.RegistryPath, diagnostic)
+		cancel()
+		if store != nil {
+			defer func() {
+				if err := store.Close(); err != nil {
+					report(diagnostic, "登録簿を閉じられませんでした")
+					code = 1
+				}
+			}()
+		}
+		if err != nil || store == nil {
+			report(diagnostic, "登録簿を読めませんでした。待受しません")
+			return closeUnserved(nil, gw.Close, diagnostic, 2)
+		}
+		records, err = validatePairingRegistry(store.Load(), cfg)
+		if err != nil {
+			report(diagnostic, "登録簿が不正です。待受しません")
+			return closeUnserved(nil, gw.Close, diagnostic, 2)
+		}
+	}
+	hosts := make([]agentgateway.HostEntry, 0, len(cfg.hosts))
+	for _, host := range cfg.hosts {
+		entry := agentgateway.HostEntry{Label: host.Label, Principals: append([]string(nil), host.Principals...), Paired: host.Paired}
+		if host.PublicKey != nil {
+			entry.Key = host.PublicKey.Marshal()
+		}
+		hosts = append(hosts, entry)
+	}
+	if err := gw.ConfigureHosts(hosts); err != nil {
+		report(diagnostic, "ホスト構成を開始できませんでした。待受しません")
+		return closeUnserved(nil, gw.Close, diagnostic, 2)
+	}
+	var registration *agenttransport.Handler
+	if cfg.pairing != nil {
+		verifier, err := cfg.gateway.PairingVerifier(cfg.pairing.Audience, cfg.pairing.TokenTypes)
+		if err != nil {
+			report(diagnostic, "設定が不正または不完全です")
+			return closeUnserved(nil, gw.Close, diagnostic, 2)
+		}
+		resource, _ := url.Parse(cfg.gateway.Resource)
+		if err := gw.ConfigurePairing(agentgateway.PairingConfig{
+			Verifier: verifier, Endpoint: resource.Scheme + "://" + resource.Host + agentgateway.PairPath,
+			RegistrationEndpoint: cfg.endpoint, Records: records,
+			Save: func(next []agentgateway.PairRecord) error {
+				raw, err := encodePairingRegistry(next)
+				if err != nil {
+					return err
+				}
+				saveCtx, cancel := context.WithTimeout(ctx, readBudget)
+				defer cancel()
+				return store.Save(saveCtx, raw)
+			},
+			Disconnect: func(label string) {
+				if registration != nil {
+					registration.DisconnectHost(label)
+				}
+			},
+		}); err != nil {
+			report(diagnostic, "登録口を開始できませんでした。待受しません")
+			return closeUnserved(nil, gw.Close, diagnostic, 2)
+		}
+	}
 	// Resident signers come only from explicitly selected protected entries.
 	// Legacy host/key enrollment alone never enables the resident protocol.
 	var residentPrincipals []agenttransport.ResidentPrincipal
@@ -152,7 +234,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 			}
 		}
 	}
-	registration, err := agenttransport.NewHandler(agenttransport.HandlerConfig{
+	registration, err = agenttransport.NewHandler(agenttransport.HandlerConfig{
 		Endpoint: cfg.endpoint, Hosts: cfg.hosts, Registrar: gw, Budgets: agenttransport.DefaultBudgets(),
 		ResidentPrincipals: residentPrincipals,
 	})
@@ -199,7 +281,11 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 	}
 	mcpPath, registrationPath := pathOf(cfg.gateway.Resource), pathOf(cfg.endpoint)
 	metadata := cfg.gateway.Mode == agentgateway.ModeOAuthBearer
-	code = serve(ctx, ln, routes(mcpPath, registrationPath, metadata, gw, registration), registration.Close, gw.Close, diagnostic)
+	var pair http.Handler
+	if cfg.pairing != nil {
+		pair = http.HandlerFunc(gw.ServePair)
+	}
+	code = serve(ctx, ln, routes(mcpPath, registrationPath, metadata, pair, gw, registration), registration.Close, gw.Close, diagnostic)
 	if pilot && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		report(diagnostic, "試行期限に達したため停止しました")
 	}
@@ -242,13 +328,15 @@ func closeUnserved(closeRegistration, closeGateway func(context.Context) error, 
 // protected resource metadata to the gateway. In Access mode discovery is the
 // Access edge's, so the metadata paths are 404 here. No prefix match, path
 // cleaning or redirect applies.
-func routes(mcpPath, registrationPath string, metadata bool, gw, registration http.Handler) http.Handler {
+func routes(mcpPath, registrationPath string, metadata bool, pair, gw, registration http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL == nil || r.URL.RawPath != "" {
 			http.NotFound(w, r)
 			return
 		}
 		switch p := r.URL.Path; {
+		case pair != nil && p == agentgateway.PairPath:
+			pair.ServeHTTP(w, r)
 		case p == registrationPath:
 			registration.ServeHTTP(w, r)
 		case p == mcpPath, metadata && (p == agentgateway.MetadataPrefix || p == agentgateway.MetadataPrefix+mcpPath):

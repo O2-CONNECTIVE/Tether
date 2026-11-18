@@ -11,6 +11,8 @@ source/memory試験と限定native実演・HTTP discoveryは別の検証境界�
 
 ## 呼出し経路
 
+設定に`pairing`がある場合だけ、ホスト登録口`POST /tether-agent/v1/pair`も有効です。MCP入口はpairing audienceを含むtokenを拒否します。登録の契約は[ホストのペア登録](host-pairing.md)を参照してください。
+
 ```text
 dots（遠隔MCP client）
   → [Access方式のみ] Cloudflare Access edge（Managed OAuth。discovery・401 challenge・opaque tokenの検証はedge側）

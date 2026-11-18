@@ -29,6 +29,8 @@
 - 公開鍵はそのhost登録から取得し、signerは既存の保護loaderで読んだ同じprincipal鍵だけです。ここへ別の鍵・signer・tokenは指定できません。
 - operationは`tether-fixed-command-v1`だけです。任意command・timeout・grant・承認flag・共有policyは追加できません。固定commandと15秒の上限は既存実装が所有します。
 
+`hosts`のpaired項目は[ホストのペア登録](host-pairing.md)を参照してください。枠はprincipal 1人に対応し、そのprincipalのresident hostです。ホストで`pair`を実行した後は、常駐プロセスを停止して起動し直し、新しい鍵を読み込ませます。待機のON/OFFでは新しい鍵を読みません。
+
 全検査を鍵の読取り前に完了します。部分的に正常な配列でも一部だけ起動せず、設定不正は終了値2です。
 文書・鍵の保護検査、fingerprint、HTTP認証、登録時の相互署名、exact path、既定loopback/private profileは変更しません。
 

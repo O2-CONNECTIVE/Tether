@@ -72,7 +72,6 @@ type ResidentControl interface {
 }
 type ResidentEnrollment struct {
 	HostLabel, PrincipalLabel string
-	HostKey                   []byte
 }
 type ResidentWorkBinding struct {
 	Host, Principal, Generation, RequestID string
@@ -123,6 +122,11 @@ type residentSession struct {
 	generation string
 }
 
+func (g *Gateway) hostReplacingLocked(label string) bool {
+	slot := g.hosts[label]
+	return slot != nil && slot.replacing
+}
+
 // ConfigureResident is one-shot, before any MCP session or work. A principal
 // has exactly one explicitly enrolled host here; ambiguous mappings refuse.
 func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, entries []ResidentEnrollment) error {
@@ -136,16 +140,23 @@ func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, en
 	setup := &residentSetup{endpoint: endpoint, control: control, entries: map[*principal]*residentEntry{}}
 	for _, e := range entries {
 		p := g.byLabel[e.PrincipalLabel]
-		key, err := ssh.ParsePublicKey(e.HostKey)
-		if p == nil || p.signer == nil || !validLabel(e.HostLabel) || err != nil || key.Type() != ssh.KeyAlgoED25519 || setup.entries[p] != nil {
+		hostKey := g.HostKey(e.HostLabel)
+		key, err := ssh.ParsePublicKey(hostKey)
+		pairedSlot := false
+		g.mu.Lock()
+		if slot := g.hosts[e.HostLabel]; slot != nil {
+			pairedSlot = slot.paired == p && g.pairing != nil
+		}
+		g.mu.Unlock()
+		validStaticKey := err == nil && key.Type() == ssh.KeyAlgoED25519
+		if p == nil || p.signer == nil || !validLabel(e.HostLabel) || (!validStaticKey && !pairedSlot) || setup.entries[p] != nil {
 			return ErrConfig
 		}
-		e.HostKey = append([]byte(nil), e.HostKey...)
 		setup.entries[p] = &residentEntry{enrollment: e, works: map[string]*residentWork{}}
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.closed || g.resident != nil || len(g.sessions) != 0 {
+	if g.closed || g.hosts == nil || g.resident != nil || len(g.sessions) != 0 {
 		return ErrRefused
 	}
 	g.resident = setup
@@ -174,7 +185,7 @@ func (s *residentSession) FixedStart(ctx context.Context, id string) map[string]
 		g.mu.Unlock()
 		return map[string]any{"error": "replay_ledger_full"}
 	}
-	if g.closed || !agentwire.ValidCommandID(id) || g.residentResultCountLocked() >= MaxResidentResults || s.entry.current != nil || s.principal.route != nil || s.principal.connecting {
+	if g.closed || g.hostReplacingLocked(s.entry.enrollment.HostLabel) || !agentwire.ValidCommandID(id) || g.residentResultCountLocked() >= MaxResidentResults || s.entry.current != nil || s.principal.route != nil || s.principal.connecting {
 		g.mu.Unlock()
 		return map[string]any{"error": "busy_or_refused", "owner_cleanup": "unknown"}
 	}
@@ -230,7 +241,7 @@ func (s *residentSession) RunCommand(ctx context.Context, id, command, cwd strin
 		g.mu.Unlock()
 		return map[string]any{"error": "replay_ledger_full"}
 	}
-	if g.closed || g.residentResultCountLocked() >= MaxResidentResults || s.entry.current != nil || s.principal.route != nil || s.principal.connecting {
+	if g.closed || g.hostReplacingLocked(s.entry.enrollment.HostLabel) || g.residentResultCountLocked() >= MaxResidentResults || s.entry.current != nil || s.principal.route != nil || s.principal.connecting {
 		g.mu.Unlock()
 		return map[string]any{"error": "busy_or_refused", "owner_cleanup": "unknown"}
 	}
@@ -313,7 +324,14 @@ func (g *Gateway) ConnectResident(label string, d Dispatch, b ResidentWorkBindin
 	if entry != nil {
 		w = entry.works[b.RequestID]
 	}
-	valid := !g.discoveryOnly && !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Run == w.binding.Run && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, entry.enrollment.HostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
+	var hostKey []byte
+	var replacing bool
+	if entry != nil {
+		if slot := g.hosts[entry.enrollment.HostLabel]; slot != nil {
+			hostKey, replacing = slot.key, slot.replacing
+		}
+	}
+	valid := !g.discoveryOnly && !g.closed && !replacing && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Run == w.binding.Run && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, hostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
 	if valid {
 		w.binding.Sequence = b.Sequence
 		w.registering = true
@@ -417,9 +435,13 @@ func (g *Gateway) residentCollectedLocked(proof ResidentCollectionProof) (*resid
 		return nil, false, ErrRefused
 	}
 	w := e.works[proof.Binding.RequestID]
-	key, err := ssh.ParsePublicKey(e.enrollment.HostKey)
+	var hostKey []byte
+	if slot := g.hosts[e.enrollment.HostLabel]; slot != nil {
+		hostKey = slot.key
+	}
+	key, err := ssh.ParsePublicKey(hostKey)
 	b := proof.Binding
-	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Run != w.binding.Run || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, e.enrollment.HostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
+	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Run != w.binding.Run || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, hostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
 		return nil, false, ErrRefused
 	}
 	w.binding.Sequence = b.Sequence

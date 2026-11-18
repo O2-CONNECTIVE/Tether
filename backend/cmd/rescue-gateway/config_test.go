@@ -240,6 +240,66 @@ func TestLocalConfigRefuses(t *testing.T) {
 	}
 }
 
+func TestPairingConfigRejectsConflictingSettingsA13(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		pairing map[string]any
+		edit    func(map[string]any)
+	}{
+		{"audience equals MCP resource", map[string]any{"registry_path": "/tmp/pair.json", "audience": "https://gateway.example.invalid/mcp", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
+		{"audience equals client with JWT", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-client", "client_id": "pair-client", "token_types": []any{"JWT"}}, nil},
+		{"audience equals client with application/JWT", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-client", "client_id": "pair-client", "token_types": []any{"application/JWT"}}, nil},
+		{"registry path equals config", map[string]any{"registry_path": configPath, "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
+		{"pair route conflicts with registration endpoint", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, func(d map[string]any) {
+			d["registration_endpoint"] = "wss://gateway.example.invalid/tether-agent/v1/pair"
+		}},
+		{"pair route conflicts with resource", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, func(d map[string]any) {
+			d["gateway"].(map[string]any)["resource"] = "https://gateway.example.invalid/tether-agent/v1/pair"
+		}},
+		{"registry path equals principal key path", map[string]any{"registry_path": `C:\Users\synthetic\rescue\keys\member-1`, "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
+		{"missing registry_path", map[string]any{"audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
+		{"missing audience", map[string]any{"registry_path": "/tmp/pair.json", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
+		{"missing client_id", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "token_types": []any{"at+jwt"}}, nil},
+		{"missing token_types", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client"}, nil},
+		{"unknown member", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}, "extra": "unexpected"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := localDoc(t)
+			doc["pairing"] = tc.pairing
+			if tc.edit != nil {
+				tc.edit(doc)
+			}
+			if _, err := parseLocalConfig(encode(t, doc), configPath); err == nil {
+				t.Fatalf("A13 expected conflicting pairing config to be rejected")
+			}
+		})
+	}
+	accessDoc := accessLocalDoc(t)
+	accessDoc["pairing"] = map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}
+	if _, err := parseLocalConfig(encode(t, accessDoc), configPath); err == nil {
+		t.Fatal("A13 expected pairing with Access mode to be rejected")
+	}
+}
+
+func TestPairedHostRequiresPairingConfigA13(t *testing.T) {
+	// Pairing slots require the pairing service at startup so they cannot be mistaken for enrolled keys.
+	doc := localDoc(t)
+	doc["hosts"] = []any{map[string]any{"label": "mac-1", "paired": true, "principals": []any{"member-1"}}}
+	if _, err := parseLocalConfig(encode(t, doc), configPath); err == nil {
+		t.Fatal("A13 expected a paired host without pairing config to be rejected")
+	}
+}
+
+func TestPairedHostRequiresExactlyOnePrincipalA13(t *testing.T) {
+	// A paired host key belongs to exactly one resident principal.
+	doc := localDoc(t)
+	doc["pairing"] = map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}
+	doc["hosts"] = []any{map[string]any{"label": "mac-1", "paired": true, "principals": []any{"member-1", "member-2"}}}
+	if _, err := parseLocalConfig(encode(t, doc), configPath); err == nil {
+		t.Fatal("A13 expected paired host with multiple principals to be rejected")
+	}
+}
+
 func TestLocalConfigRefusesRawShapes(t *testing.T) {
 	valid := encode(t, localDoc(t))
 	duplicate := append(append([]byte(nil), valid[:len(valid)-1]...), `,"registration_endpoint":"wss://gateway.example.invalid/agent-register"}`...)
@@ -250,6 +310,18 @@ func TestLocalConfigRefusesRawShapes(t *testing.T) {
 	} {
 		if _, err := parseLocalConfig(raw, configPath); err == nil {
 			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+func TestHostPairedMemberAcceptsOnlyTrueA13(t *testing.T) {
+	// "paired" chooses between a pinned key and a pairing slot; any other value
+	// is a typo that must not silently fall back to the static-key meaning.
+	for _, v := range []any{false, 1, "true"} {
+		doc := localDoc(t)
+		item(doc, "hosts", 0)["paired"] = v
+		if _, err := parseLocalConfig(encode(t, doc), configPath); err == nil {
+			t.Fatalf("hosts[].paired=%v was accepted", v)
 		}
 	}
 }

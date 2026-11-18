@@ -29,6 +29,7 @@ type EnrolledHost struct {
 	Label      string
 	PublicKey  ssh.PublicKey
 	Principals []string
+	Paired     bool
 }
 
 // HandlerConfig is chosen by the trusted gateway composition, never a request.
@@ -46,6 +47,7 @@ type HandlerConfig struct {
 type enrolled struct {
 	key        ssh.PublicKey
 	wire       []byte
+	Paired     bool
 	principals map[string]bool
 }
 
@@ -99,15 +101,19 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 	}
 	keys := map[string]bool{}
 	for _, e := range cfg.Hosts {
-		if !validLabel(e.Label) || h.hosts[e.Label] != nil || e.PublicKey == nil || len(e.Principals) == 0 || len(e.Principals) > agentgateway.MaxPrincipals {
+		if !validLabel(e.Label) || h.hosts[e.Label] != nil || len(e.Principals) == 0 || len(e.Principals) > agentgateway.MaxPrincipals ||
+			(e.Paired && (e.PublicKey != nil || len(e.Principals) != 1)) || (!e.Paired && e.PublicKey == nil) {
 			return nil, ErrConfig
 		}
-		key, err := rawEd25519(e.PublicKey.Marshal())
-		if err != nil || keys[string(key.Marshal())] {
-			return nil, ErrConfig
+		entry := &enrolled{Paired: e.Paired, principals: map[string]bool{}}
+		if e.PublicKey != nil {
+			key, err := rawEd25519(e.PublicKey.Marshal())
+			if err != nil || keys[string(key.Marshal())] {
+				return nil, ErrConfig
+			}
+			keys[string(key.Marshal())] = true
+			entry.key, entry.wire = key, key.Marshal()
 		}
-		keys[string(key.Marshal())] = true
-		entry := &enrolled{key: key, wire: key.Marshal(), principals: map[string]bool{}}
 		for _, p := range e.Principals {
 			if !validLabel(p) || entry.principals[p] {
 				return nil, ErrConfig
@@ -121,6 +127,22 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	return h, nil
+}
+
+func (h *Handler) hostKey(label string) (ssh.PublicKey, []byte) {
+	if source, ok := h.registrar.(interface{ HostKey(string) []byte }); ok {
+		wire := source.HostKey(label)
+		key, err := rawEd25519(wire)
+		if err != nil {
+			return nil, nil
+		}
+		return key, append([]byte(nil), key.Marshal()...)
+	}
+	entry := h.hosts[label]
+	if entry == nil || entry.key == nil || entry.Paired {
+		return nil, nil
+	}
+	return entry.key, append([]byte(nil), entry.wire...)
 }
 
 // ServeHTTP refuses before upgrading anything that is not an exact, credential
@@ -325,6 +347,7 @@ func (h *Handler) register(ctx context.Context, ws *websocket.Conn) (string, age
 		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
 	host := h.hosts[reg.host]
+	hostKey, hostWire := h.hostKey(reg.host)
 	data := transcript(h.endpoint, reg.host, reg.principal, reg.dispatch, nonce)
 	if reg.resident != nil {
 		current, ok := h.currentWork(*reg.resident)
@@ -334,9 +357,9 @@ func (h *Handler) register(ctx context.Context, ws *websocket.Conn) (string, age
 		*reg.resident = current
 		data = workTranscript(h.endpoint, reg.host, reg.principal, reg.dispatch, nonce, *reg.resident)
 	}
-	if host == nil || !host.principals[reg.principal] || !bytes.Equal(reg.dispatch.HostKey, host.wire) ||
+	if host == nil || hostKey == nil || !host.principals[reg.principal] || !bytes.Equal(reg.dispatch.HostKey, hostWire) ||
 		checkDispatch(reg.dispatch, h.clock()) != nil ||
-		verify(host.key, data, reg.signature) != nil {
+		verify(hostKey, data, reg.signature) != nil {
 		return "", agentgateway.Dispatch{}, nil, ErrRefused
 	}
 	if err := ws.Write(ctx, websocket.MessageText, encodeAccepted()); err != nil {

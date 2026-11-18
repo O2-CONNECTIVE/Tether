@@ -36,6 +36,15 @@ type localConfig struct {
 	hosts        []agenttransport.EnrolledHost
 	resident     []agentgateway.ResidentEnrollment // explicit fixed-scope opt-in only
 	residentOnly bool                              // rejects legacy registration and generic MCP binding
+	pairing      *pairingConfig
+}
+
+// pairingConfig is the optional host-pairing composition input.
+type pairingConfig struct {
+	RegistryPath string
+	Audience     string
+	ClientID     string
+	TokenTypes   []string
 }
 
 // parseLocalConfig validates the whole document before any key is opened.
@@ -46,7 +55,7 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	if len(raw) == 0 || len(raw) > agentkeys.MaxTrustConfigBytes || agentwire.CheckJSON(raw, false) != nil {
 		return localConfig{}, errConfig
 	}
-	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident", "resident_only")
+	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident", "resident_only", "pairing")
 	defer wipeMembers(m)
 	if fieldErr != nil || m["gateway"] == nil || m["registration_endpoint"] == nil || m["principal_keys"] == nil || m["hosts"] == nil {
 		return localConfig{}, errConfig
@@ -81,7 +90,90 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 		}
 		c.residentOnly = true
 	}
+	if raw, present := m["pairing"]; present {
+		f, fieldErr := agentwire.Fields(raw, "registry_path", "audience", "client_id", "token_types")
+		if fieldErr != nil || len(f) != 4 {
+			return localConfig{}, errConfig
+		}
+		var p pairingConfig
+		var valid bool
+		p.RegistryPath, valid = text(f["registry_path"], maxPathBytes)
+		if !valid || !absolutePath(p.RegistryPath) {
+			return localConfig{}, errConfig
+		}
+		p.Audience, valid = text(f["audience"], 256)
+		if !valid || !printable(p.Audience) {
+			return localConfig{}, errConfig
+		}
+		p.ClientID, valid = text(f["client_id"], 256)
+		if !valid || !printable(p.ClientID) {
+			return localConfig{}, errConfig
+		}
+		vals, valid := array(f["token_types"], 16)
+		if !valid || len(vals) == 0 {
+			return localConfig{}, errConfig
+		}
+		for _, v := range vals {
+			s, yes := text(v, 256)
+			if !yes || !printable(s) {
+				return localConfig{}, errConfig
+			}
+			p.TokenTypes = append(p.TokenTypes, s)
+		}
+		if c.gateway.Mode != agentgateway.ModeOAuthBearer || p.Audience == c.gateway.Verifier.Audience ||
+			(p.Audience == p.ClientID && containsNormalType(p.TokenTypes, "jwt")) ||
+			pairingPathConflict(c.gateway.Resource, c.endpoint) || samePath(p.RegistryPath, configPath) {
+			return localConfig{}, errConfig
+		}
+		for _, k := range c.keys {
+			if samePath(p.RegistryPath, k.Path) {
+				return localConfig{}, errConfig
+			}
+		}
+		c.pairing = &p
+	}
+	paired := false
+	for i := range c.hosts {
+		if c.hosts[i].Paired {
+			paired = true
+			if len(c.hosts[i].Principals) != 1 {
+				return localConfig{}, errConfig
+			}
+			found := false
+			for _, r := range c.resident {
+				if r.HostLabel == c.hosts[i].Label && r.PrincipalLabel == c.hosts[i].Principals[0] {
+					found = true
+				}
+			}
+			if !found {
+				return localConfig{}, errConfig
+			}
+		}
+	}
+	if paired && c.pairing == nil {
+		return localConfig{}, errConfig
+	}
 	return c, nil
+}
+
+// containsNormalType normalizes like the token verifier does (lower case,
+// "application/" removed), so the check matches what the verifier accepts.
+func containsNormalType(types []string, target string) bool {
+	for _, t := range types {
+		if strings.TrimPrefix(strings.ToLower(t), "application/") == target {
+			return true
+		}
+	}
+	return false
+}
+
+// pairingPathConflict reports whether the fixed pair route would shadow the MCP
+// resource or the host registration route. Metadata paths start with
+// MetadataPrefix and cannot equal the fixed PairPath.
+func pairingPathConflict(resource, endpoint string) bool {
+	r, err := url.Parse(resource)
+	e, ok := wssEndpoint(endpoint)
+	return err != nil || !ok || r.Path == agentgateway.PairPath || e.Path == agentgateway.PairPath
 }
 
 // residentEnrollments selects an existing, unambiguous principal/host pair.
@@ -122,7 +214,7 @@ func residentEnrollments(raw json.RawMessage, hosts []agenttransport.EnrolledHos
 			return nil, false
 		}
 		seen[principal] = true
-		entries = append(entries, agentgateway.ResidentEnrollment{HostLabel: host, PrincipalLabel: principal, HostKey: selected.PublicKey.Marshal()})
+		entries = append(entries, agentgateway.ResidentEnrollment{HostLabel: host, PrincipalLabel: principal})
 	}
 	return entries, true
 }
@@ -174,21 +266,29 @@ func enrolledHosts(raw json.RawMessage, labels map[string]int, keys []agentkeys.
 	hosts := make([]agenttransport.EnrolledHost, 0, len(items))
 	hostLabels, hostKeys := map[string]bool{}, map[string]bool{}
 	for _, item := range items {
-		f, ok := members(item, "label", "public_key", "principals")
-		if !ok {
+		f, fieldErr := agentwire.Fields(item, "label", "public_key", "principals", "paired")
+		if fieldErr != nil || len(f) < 3 {
 			return nil, false
 		}
 		label, ok1 := text(f["label"], maxLabelBytes)
-		encoded, ok2 := text(f["public_key"], 128)
+		encoded, hasPublicKey := text(f["public_key"], 128)
 		served, ok3 := array(f["principals"], agentgateway.MaxPrincipals)
-		key, ok4 := parsePublicKey(encoded)
-		_, isPrincipal := labels[label]
-		if !ok1 || !ok2 || !ok3 || !ok4 || len(served) == 0 || !validLabel(label) || isPrincipal || hostLabels[label] ||
-			hostKeys[encoded] || principalPrints[ssh.FingerprintSHA256(key)] {
+		paired := bytes.Equal(f["paired"], []byte("true"))
+		if f["paired"] != nil && !paired {
 			wipeMembers(f)
 			return nil, false
 		}
-		h := agenttransport.EnrolledHost{Label: label, PublicKey: key}
+		key, ok4 := parsePublicKey(encoded)
+		if paired && f["public_key"] == nil {
+			ok4 = true
+		}
+		_, isPrincipal := labels[label]
+		if !ok1 || (!paired && !hasPublicKey) || (paired && hasPublicKey) || !ok3 || !ok4 || len(served) == 0 || (paired && len(served) != 1) || !validLabel(label) || isPrincipal || hostLabels[label] ||
+			(encoded != "" && hostKeys[encoded]) || (key != nil && principalPrints[ssh.FingerprintSHA256(key)]) {
+			wipeMembers(f)
+			return nil, false
+		}
+		h := agenttransport.EnrolledHost{Label: label, PublicKey: key, Paired: paired}
 		mapped := map[string]bool{}
 		for _, s := range served {
 			p, ok := text(s, maxLabelBytes)
@@ -200,7 +300,10 @@ func enrolledHosts(raw json.RawMessage, labels map[string]int, keys []agentkeys.
 			h.Principals = append(h.Principals, p)
 		}
 		wipeMembers(f)
-		hostLabels[label], hostKeys[encoded] = true, true
+		hostLabels[label] = true
+		if encoded != "" {
+			hostKeys[encoded] = true
+		}
 		hosts = append(hosts, h)
 	}
 	return hosts, true

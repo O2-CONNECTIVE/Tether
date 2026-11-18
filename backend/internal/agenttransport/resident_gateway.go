@@ -15,6 +15,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// testHookAfterResidentReserved runs after the resident slot is reserved and
+// before the accepted response. It makes the key-rotation race deterministic.
+var testHookAfterResidentReserved func()
+
 // ResidentPrincipal is supplied by the protected normal gateway composition.
 // A signer enables identity-only resident authentication, never an execution grant.
 type ResidentPrincipal struct {
@@ -116,6 +120,15 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 		peer = nil
 		return
 	}
+	if testHookAfterResidentReserved != nil {
+		testHookAfterResidentReserved()
+	}
+	currentHostKey, currentHostWire := h.hostKey(b.host)
+	if currentHostKey == nil || !bytes.Equal(currentHostWire, b.hostKey) {
+		// peer stays set: the deferred cleanup releases the reserved slot.
+		_ = ws.Close(websocket.StatusPolicyViolation, "resident identity refused")
+		return
+	}
 	sig, e := sign(signer, signer.PublicKey(), residentTranscript(b, "gateway-accepted"))
 	if e != nil {
 		return
@@ -159,8 +172,9 @@ func (h *Handler) authenticateResident(ctx context.Context, ws *websocket.Conn) 
 	}
 	host := h.hosts[m["host"]]
 	signer := h.residentSigners[m["principal"]]
+	hostKey, hostWire := h.hostKey(m["host"])
 	nonce, ok := decodeB64(m["client_nonce"])
-	if host == nil || signer == nil || !host.principals[m["principal"]] || !ok || len(nonce) != NonceSize {
+	if host == nil || hostKey == nil || signer == nil || !host.principals[m["principal"]] || !ok || len(nonce) != NonceSize {
 		return b, nil, nil, ErrRefused
 	}
 	server, e := newNonce()
@@ -171,7 +185,7 @@ func (h *Handler) authenticateResident(ctx context.Context, ws *websocket.Conn) 
 	if e != nil {
 		return b, nil, nil, e
 	}
-	b = residentBinding{endpoint: h.endpoint, host: m["host"], principal: m["principal"], generation: hex.EncodeToString(generation), clientNonce: nonce, serverNonce: server, hostKey: host.wire, principalKey: signer.PublicKey().Marshal()}
+	b = residentBinding{endpoint: h.endpoint, host: m["host"], principal: m["principal"], generation: hex.EncodeToString(generation), clientNonce: nonce, serverNonce: server, hostKey: hostWire, principalKey: signer.PublicKey().Marshal()}
 	sig, e := sign(signer, signer.PublicKey(), residentTranscript(b, "gateway-challenge"))
 	if e != nil {
 		return b, nil, nil, e
@@ -188,10 +202,10 @@ func (h *Handler) authenticateResident(ctx context.Context, ws *websocket.Conn) 
 		return b, nil, nil, ErrRefused
 	}
 	sig, ok = residentSignature(m)
-	if !ok || verify(host.key, residentTranscript(b, "host-proof"), sig) != nil {
+	if !ok || verify(hostKey, residentTranscript(b, "host-proof"), sig) != nil {
 		return b, nil, nil, ErrRefused
 	}
-	return b, host.key, signer, nil
+	return b, hostKey, signer, nil
 }
 
 func (p *residentPeer) readReceipts() error {
@@ -267,6 +281,20 @@ func (h *Handler) ResidentConnected(host, principal string) bool {
 	defer h.mu.Unlock()
 	p := h.residents[residentMapKey(host, principal)]
 	return !h.closed && p != nil && p.ready && p.ctx.Err() == nil
+}
+
+// DisconnectHost ends resident controls authenticated under the replaced host identity.
+func (h *Handler) DisconnectHost(label string) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	for _, peer := range h.residents {
+		if peer.binding.host == label {
+			peer.cancel()
+		}
+	}
+	h.mu.Unlock()
 }
 
 // ProposeResidentFixed is a trusted composition port, NOT an HTTP authorization

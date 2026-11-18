@@ -58,6 +58,22 @@ type FileConfig struct {
 	AllowedOrigins  []string
 }
 
+// PairingVerifier supplies the pairing-specific verifier configuration.
+// Pair-token lifetime and audience cardinality are enforced by the pairing verifier.
+func (c FileConfig) PairingVerifier(audience string, types []string) (*Verifier, error) {
+	if c.Mode != ModeOAuthBearer {
+		return nil, ErrConfig
+	}
+	base := c.Verifier
+	v, err := NewVerifier(VerifierConfig{Issuer: base.Issuer, Audience: audience, Scope: "", Types: types, JWKS: base.JWKS, JWKSURL: base.JWKSURL, Leeway: base.Leeway, Clock: base.Clock})
+	if err != nil {
+		return nil, err
+	}
+	v.maxLifetime = PairTokenMaxLifetime
+	v.singleAudience = true
+	return v, nil
+}
+
 // Members of each mode. The sets share only the mode-neutral members, so a
 // document can never mix the two modes' trust inputs.
 var (

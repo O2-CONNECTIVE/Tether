@@ -45,20 +45,36 @@ func (l *fakeListener) Addr() net.Addr { return &net.TCPAddr{IP: net.IPv4(127, 0
 
 // recorder logs every native step in order and serves synthetic values.
 type recorder struct {
-	t        *testing.T
-	mu       sync.Mutex
-	calls    []string
-	doc      []byte
-	readErr  error
-	signers  map[string]ssh.Signer // by fingerprint
-	failKey  string                // fingerprint whose load fails
-	listener *fakeListener
-	listened chan struct{}
-	network  string        // the network passed to listen; read after listened closes
-	lifetime time.Duration // deps.pilotLifetime
-	hold     string        // the read or load step that waits for its ctx to end
-	bounds   []time.Time   // every read and load ctx deadline, in call order
+	t             *testing.T
+	mu            sync.Mutex
+	calls         []string
+	doc           []byte
+	readErr       error
+	signers       map[string]ssh.Signer // by fingerprint
+	failKey       string                // fingerprint whose load fails
+	listener      *fakeListener
+	listened      chan struct{}
+	network       string        // the network passed to listen; read after listened closes
+	lifetime      time.Duration // deps.pilotLifetime
+	hold          string        // the read or load step that waits for its ctx to end
+	bounds        []time.Time   // every read and load ctx deadline, in call order
+	registryBytes []byte
 }
+
+type memoryRegistry struct {
+	raw  []byte
+	save func([]byte)
+}
+
+func (r *memoryRegistry) Load() []byte { return append([]byte(nil), r.raw...) }
+func (r *memoryRegistry) Save(_ context.Context, raw []byte) error {
+	r.raw = append(r.raw[:0], raw...)
+	if r.save != nil {
+		r.save(append([]byte(nil), raw...))
+	}
+	return nil
+}
+func (*memoryRegistry) Close() error { return nil }
 
 func newRecorder(t *testing.T, doc []byte) *recorder {
 	return &recorder{t: t, doc: doc, listened: make(chan struct{}), lifetime: pilotMaxLifetime, signers: map[string]ssh.Signer{
@@ -102,6 +118,13 @@ func (r *recorder) deadlines() []time.Time {
 func (r *recorder) deps() deps {
 	return deps{
 		pilotLifetime: r.lifetime,
+		openRegistry: func(context.Context, string, io.Writer) (registry, error) {
+			return &memoryRegistry{raw: append([]byte(nil), r.registryBytes...), save: func(raw []byte) {
+				r.mu.Lock()
+				r.registryBytes = append(r.registryBytes[:0], raw...)
+				r.mu.Unlock()
+			}}, nil
+		},
 		readTrust: func(ctx context.Context, path string) ([]byte, error) {
 			if path != configPath {
 				r.t.Error("unexpected document read")

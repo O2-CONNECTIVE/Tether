@@ -69,7 +69,7 @@ func TestResidentConfigPinsOnlyExplicitExistingPair(t *testing.T) {
 		t.Fatal("resident mapping missing", err)
 	}
 	e := c.resident[0]
-	if e.HostLabel != "mac-1" || e.PrincipalLabel != "member-1" || !bytes.Equal(e.HostKey, publicOf(t, 0x21).Marshal()) {
+	if e.HostLabel != "mac-1" || e.PrincipalLabel != "member-1" || !bytes.Equal(c.hosts[0].PublicKey.Marshal(), publicOf(t, 0x21).Marshal()) {
 		t.Fatal("resident mapping widened or substituted")
 	}
 	legacy, err := parseLocalConfig(encode(t, localDoc(t)), configPath)
