@@ -14,6 +14,7 @@ final class Owner: RecoveryOwner {
     var feed = Feed()
     var launched = false
     var launchFailed = false
+    var launchedAt: UInt64?
     var reaped = false, eof = false, exitOK = false
     var starts = 0, closes = 0, polls = 0
     let diagnostic: String
@@ -26,8 +27,8 @@ final class Owner: RecoveryOwner {
     func close() { if feed.requestClose() != nil { closes += 1 } }
     func poll() { polls += 1 }
 }
-func terminal(_ outcome: String) -> Data {
-    Data("{\"protocolVersion\":1,\"type\":\"closed\",\"sourceContinuousMs\":5000,\"outcome\":\"\(outcome)\"}".utf8)
+func terminal(_ outcome: String, at source: UInt64 = 5000) -> Data {
+    Data("{\"protocolVersion\":1,\"type\":\"closed\",\"sourceContinuousMs\":\(source),\"outcome\":\"\(outcome)\"}".utf8)
 }
 func completed(_ name: String = "collected original") -> Owner {
     let owner = Owner(name); owner.launched = true

@@ -5,6 +5,7 @@ protocol RecoveryOwner: AnyObject {
     var feed: Feed { get }
     var launched: Bool { get }
     var launchFailed: Bool { get }
+    var launchedAt: UInt64? { get }
     var mayQuit: Bool { get }
     var diagnostic: String { get }
     func start()
@@ -36,6 +37,16 @@ public final class RecoveryController {
     public var feed: Feed { owner.feed }
     public var launched: Bool { owner.launched }
     public var launchFailed: Bool { owner.launchFailed }
+    public var launchedAt: UInt64? { owner.launchedAt }
+    // Close button; returns whether the window may close. Only this process
+    // remembers an unresolved owner, so while collection is unconfirmed the
+    // window hides with no quit request and no state change: the app, owner and
+    // unknown stay, and Quit still refuses. Otherwise it asks to quit as before.
+    public func closeWindow() -> Bool {
+        if owner.feed.cleanupInvalid { return true }
+        requestQuit()
+        return false
+    }
     public var mayQuit: Bool { owner.mayQuit }
     public var diagnostic: String { owner.diagnostic }
     public var preparation: Preparation {

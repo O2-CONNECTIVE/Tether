@@ -24,10 +24,22 @@ Developer ID の結果をモックに置換しません。別 bundle ID、常時
 - Quit とウィンドウ閉鎖は同じ元 owner に close を一度要求します。
   confirmed 終了frame、EOF、元 child の正常終了/回収が揃うまで終了を許可しません。
   unknown を kill・再起動・時間切れで成功へ変更しません。Quit 要求後は再準備を拒否し、
-  回収確認後に終了します。「ホストを停止」とアプリの終了は別の操作です。
+  回収確認後に終了します。回収未確認（cleanupInvalid）の間は、Quit と Cmd-Q を拒否し、
+  拒否の理由を画面に表示します。閉じるボタンはウィンドウだけを閉じ、アプリ・元 owner・
+  未確認の状態は残ります。Dock から開き直すと同じ画面を表示します。未確認の状態を
+  覚えているのはこのプロセスだけなので、アプリは終了しません。強制終了すると記録は
+  残りません。「ホストを停止」とアプリの終了は別の操作です。
 - **起動から15分で終了を要求する限定CLIです。永続運転ではありません。**
-  LaunchAgent、ログイン起動、自動再起動はありません。期限終了時の非0 exit は
-  保守的に回収未確認として残します。server-side bounded pilot は別途必要です。
+  LaunchAgent、ログイン起動、自動再起動はありません。期限で元 owner の close が
+  confirmed になり、終了frameも書けた場合だけ、helper は明示 close と同じ exit 0 で
+  終わります。GUI はそのうえで従来の4点の証拠が揃った場合だけ回収を確認します。
+  close が unknown なら helper は終了せず元 owner を保持します。終了frameの書込み失敗、
+  期限以外の serve 失敗、signal による終了は非0のままです。いずれも回収未確認として残します。
+  GUI は、自分が頼んでいない confirmed の終了通知が helper の起動から15分以上後に届き、
+  4点の証拠が揃った場合に「15分の期限で停止しました」と「もう一度準備」の案内を出します。
+  理由は GUI が helper を起動した時刻と終了通知を受けた時刻から判断し、
+  終了通知の形式は変えていません。
+  server-side bounded pilot は別途必要です。
 - 起動失敗の診断や caller、credential、endpoint、生JSONを表示・保存しません。
   実ユーザーでの実行は現在ユーザー権限です。専用OSユーザーは自動作成しません。
 
@@ -147,8 +159,9 @@ AppKit は同じ RecoveryController の表示状態と操作を使います。�
 
 pending ON/OFF、standby stopping、cleanup pending は OFF 完了表示と分けます。
 unknown は「回収未確認・再準備できません」と固定診断を表示します。
+閉じるボタンはウィンドウを隠すだけで、アプリは終了しません。
 [未解決記録と画面だけの退出案](../../docs/mac-development-recovery.md)は設計段階であり、
-unknown の GUI を安全に閉じる新機能や横断的な再起動遮断はまだ実装していません。
+unknown のままアプリを終了する経路や横断的な再起動遮断はまだ実装していません。
 
 `swift run RecoveryChecks` は controller と UI 表示値を同じ fixture で検査します。
 実 AppKit の描画、折返し、フォーカス、VoiceOver、実 helper の起動・回収は未確認です。

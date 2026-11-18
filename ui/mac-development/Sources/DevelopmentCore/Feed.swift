@@ -15,6 +15,7 @@ public struct Feed {
     public private(set) var closed = false
     public private(set) var closeConfirmed = false
     public private(set) var closing = false
+    public private(set) var unrequestedCloseAt: UInt64?
     public private(set) var pending: (id: UInt64, intent: String)?
     private var lastTime: UInt64 = 0
     private var lastSource: UInt64 = 0
@@ -90,6 +91,7 @@ public struct Feed {
                 if kind == "status" { try receiveStatus(root.fields["snapshot"]!, source: source) }
                 else if kind == "closed" {
                     let outcome = try root.text("outcome", ["confirmed", "unknown"])
+                    if !closing { unrequestedCloseAt = now } // the owner closed before any GUI request
                     closed = true; closing = true; closeConfirmed = outcome == "confirmed"
                     if !closeConfirmed { invalidateCleanup("owner-cleanup-unknown") }
                 } else { throw Invalid.input }

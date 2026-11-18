@@ -98,6 +98,7 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 // Both bootstraps transfer the same loaded owner here exactly once.
 func runOwnedInput(lifetime context.Context, owner *residentmac.Standby, pipes *ownedPipes, dialect inputDialect) error {
 	e := safeServeInput(lifetime, owner, pipes, dialect)
+	ended := lifetime.Err() // why serve ended, read before the close budget runs
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), CloseBudget)
 	closeErr := closeOnce(owner, closeCtx)
 	closeCancel() // exactly once
@@ -112,10 +113,18 @@ func runOwnedInput(lifetime context.Context, owner *residentmac.Standby, pipes *
 		}
 	}
 	runtime.KeepAlive(owner)
-	if errors.Is(e, os.ErrClosed) {
-		e = nil
+	return ownedResult(ended, e, closeErr, terminalErr)
+}
+
+// ownedResult is the process result of one finished original owner. Input EOF
+// and the lifetime's own expiry end like a requested close; the joined close and
+// terminal results still decide. A signal (Canceled) keeps its failure result.
+// Product lifetimes carry no deadline, so only the development timer expires.
+func ownedResult(ended, served, closeErr, terminalErr error) error {
+	if errors.Is(served, os.ErrClosed) || (served == context.DeadlineExceeded && ended == context.DeadlineExceeded) {
+		served = nil
 	}
-	return errors.Join(e, closeErr, terminalErr)
+	return errors.Join(served, closeErr, terminalErr)
 }
 func serve(owner *residentmac.Standby, p *ownedPipes) error {
 	return serveInput(context.Background(), owner, p, jsonInput)

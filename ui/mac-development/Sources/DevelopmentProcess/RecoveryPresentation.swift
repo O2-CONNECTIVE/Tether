@@ -10,7 +10,9 @@ extension RecoveryController {
         let status: String, detail: String
         if f.cleanupInvalid {
             status = "回収未確認・再準備できません"
-            detail = "新しい操作は受け付けません。元のホストの回収を確認できないため、画面を保持します。下の診断情報を確認してください。終了の連打や再準備では解消できません。"
+            // Quit and Cmd-Q are refused here; say so instead of an unchanged screen.
+            detail = (quitRequested ? "回収を確認できないため終了できません。閉じるボタンではウィンドウだけを閉じ、アプリは残ります（Dock から開き直せます）。" : "")
+                + "新しい操作は受け付けません。元のホストの回収を確認できないため、状態を保持します。下の診断情報を確認してください。終了の連打や再準備では解消できません。"
         } else if shouldTerminate {
             status = "終了します"
             detail = launched ? "元のホストの停止・回収を確認しました。" : "ホストは起動していません。"
@@ -18,8 +20,14 @@ extension RecoveryController {
             status = "起動できませんでした"
             detail = "接続は開始していません。同梱ファイルと開発用ビルドを確認してから、「もう一度準備」を押してください。"
         } else if mayQuit && launched {
-            status = "停止・回収を確認しました"
-            detail = "「もう一度準備」で新しい開発ホストを準備できます。待機を ON にするには、あらためて操作してください。"
+            // The helper's fixed 15-minute lifetime (developmentLifetime in
+            // backend/internal/residentpipe) starts after launchedAt, so an
+            // unrequested close received at least that long after it is the expiry.
+            let expired = f.unrequestedCloseAt.flatMap { at in launchedAt.map { at >= $0 && at - $0 >= 900_000 } } == true
+            status = expired ? "15分の期限で停止しました" : "停止・回収を確認しました"
+            detail = (expired
+                ? "開発ホストは起動から15分で終了する限定運転のため停止しました。停止・回収を確認しました。続けるには「もう一度準備」を押してください。"
+                : "「もう一度準備」で新しい開発ホストを準備できます。") + "待機を ON にするには、あらためて操作してください。"
         } else if f.fault || f.closing {
             status = f.fault ? "操作受付を停止し、回収を確認中" : "停止と回収を確認中"
             detail = quitRequested ? "回収を確認したらアプリを終了します。新しい準備は行いません。" : "元のホストの終了を待っています。回収を確認したら「もう一度準備」を選べます。"

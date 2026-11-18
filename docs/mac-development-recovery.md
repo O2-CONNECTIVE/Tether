@@ -47,6 +47,12 @@ Quit とウィンドウ閉鎖は controller に一方向の終了 intent を残�
 だけでなく prepare/intent の入口でも拒否します。回収の到着と遅れた再準備クリックが
 同じ turn にあっても、新 owner を開始してから自動終了する経路を作りません。
 
+cleanupInvalid の間だけ、閉じるボタンは終了 intent を残さずウィンドウを隠します。
+アプリ、元 owner、unknown、新しい owner の遮断はそのまま残り、Dock から開き直すと
+同じ画面を表示します。Quit と Cmd-Q は拒否し、拒否の理由を画面に出します。
+これは下の「画面だけの退出」（記録を残したアプリの終了）ではありません。
+未確認の状態はこのプロセスのメモリにしかないため、強制終了すると記録は残りません。
+
 RecoveryPresentation は同じ controller から作り、AppKit はその文字と操作可否を描画します。
 UI fixture では one-shot 表示と Quit 競合を残した baseline が 65 条件中 15 条件で失敗し、
 修正後に同じ 65 条件が成功しました。さらに pending OFF と accepted connecting の

@@ -45,6 +45,68 @@ func checkPresentation() {
     check(blocked.detail.contains("診断情報") && blocked.diagnostic.contains("unknown owner"), "UI unknown gives diagnosis instead of false recovery")
     unknown.requestQuit(); unknown.requestQuit()
     check(!unknown.shouldTerminate && !unknown.presentation(at: 5000).canPrepare, "UI quit cannot bypass unknown")
+    // Quit and Cmd-Q share this refusal. An unchanged screen
+    // was reported as no response, so the refusal itself must become visible.
+    let refused = unknown.presentation(at: 5000)
+    check(!blocked.detail.contains("終了できません"), "UI unknown claims no refusal before quit is asked")
+    check(refused.status == blocked.status && refused.detail.hasPrefix("回収を確認できないため終了できません。"), "UI refused quit on unknown states why the app stays open")
+
+    // Only this process remembers an unresolved owner, so the close button hides
+    // the window instead of quitting: no quit request and no state change, so the
+    // app, owner and unknown stay and a Dock reopen renders the same state. Quit
+    // and Cmd-Q still refuse with the reason. (The AppKit hide/reopen calls
+    // themselves are wiring in main.swift and are not exercised here.)
+    // Not yet closing, so a close sent by hiding would be visible here.
+    let hidden = Owner("hidden unknown"); hidden.launched = true
+    hidden.feed.ingest(recoveryStatus(), at: 5000); hidden.feed.invalidateCleanup("owner-result-unknown")
+    var hiddenReplacements = 0
+    let hiding = RecoveryController(owner: hidden) { hiddenReplacements += 1; return Owner("forbidden") }
+    let beforeHide = hiding.presentation(at: 5000)
+    check(hiding.closeWindow() && hiding.closeWindow() && !hiding.quitRequested && !hiding.shouldTerminate, "UI close button on unknown hides the window without a quit request")
+    check(hidden.closes == 0 && !hidden.feed.closing, "UI hiding sends no close to the original owner")
+    let reopened = hiding.presentation(at: 5000)
+    check(reopened.status == beforeHide.status && reopened.detail == beforeHide.detail && reopened.diagnostic == beforeHide.diagnostic, "UI hiding leaves the unresolved state a Dock reopen renders unchanged")
+    check(!reopened.canPrepare && !hiding.prepare() && hiddenReplacements == 0 && hidden.feed.cleanupInvalid && !hiding.mayQuit, "UI hidden unknown stays unconfirmed and blocks a new owner")
+    hiding.requestQuit()
+    check(!hiding.shouldTerminate && hiding.presentation(at: 5000).detail.hasPrefix("回収を確認できないため終了できません。"), "UI quit after hiding still refuses with the reason")
+    let awaiting = Owner("awaiting proof"); awaiting.launched = true; awaiting.feed.fail()
+    for (name, owner, ends) in [("awaiting proof", awaiting, false), ("collected", completed(), true), ("unstarted", Owner("unstarted"), true)] {
+        let closing = RecoveryController(owner: owner) { Owner("forbidden") }
+        check(!closing.closeWindow() && closing.quitRequested && closing.shouldTerminate == ends, "UI close button on \(name) still asks to quit")
+    }
+    check(awaiting.closes == 1, "UI close button while awaiting proof asks the original owner to close once")
+
+    // The helper's own 15-minute expiry closes the original owner without a GUI
+    // request or fault. With all four proofs, quit and fresh preparation use the
+    // existing paths; nothing here relaxes the proof itself. The screen says why
+    // the host stopped and what to do next, without a protocol change.
+    func expiredOwner(launchedAt: UInt64 = 4_000, closeAt: UInt64 = 905_000, requested: Bool = false) -> Owner {
+        let owner = Owner("expired original"); owner.launched = true; owner.launchedAt = launchedAt
+        owner.feed.ingest(recoveryStatus(), at: 5000)
+        if requested { owner.close() }
+        owner.feed.ingest(terminal("confirmed", at: closeAt), at: closeAt)
+        owner.reaped = true; owner.eof = true; owner.exitOK = true
+        return owner
+    }
+    let expired = expiredOwner()
+    var expiryOwners = 0
+    let expiry = RecoveryController(owner: expired) { expiryOwners += 1; return Owner("after expiry") }
+    let afterExpiry = expiry.presentation(at: 905_000)
+    check(!expired.feed.fault && afterExpiry.canPrepare && afterExpiry.quitTitle == "終了", "UI confirmed expiry offers preparation and plain quit")
+    check(afterExpiry.status == "15分の期限で停止しました" && afterExpiry.detail.contains("起動から15分") && afterExpiry.detail.contains("停止・回収を確認しました") && afterExpiry.detail.contains("「もう一度準備」"), "UI confirmed expiry names the 15-minute limit, the proof and the next action")
+    // Only an unrequested close received at least 15 minutes after this GUI
+    // started the helper is called expiry; viewing it later never changes that.
+    let early = RecoveryController(owner: expiredOwner(closeAt: 5_000)) { Owner("forbidden") }
+    check(early.presentation(at: 905_000).status == "停止・回収を確認しました", "UI early unrequested close is not called expiry, even when viewed later")
+    let stopped = RecoveryController(owner: expiredOwner(requested: true)) { Owner("forbidden") }
+    check(stopped.presentation(at: 905_000).status == "停止・回収を確認しました", "UI a requested stop after 15 minutes is not called expiry")
+    let unknownStart = expiredOwner(); unknownStart.launchedAt = nil
+    check(RecoveryController(owner: unknownStart) { Owner("forbidden") }.presentation(at: 905_000).status == "停止・回収を確認しました", "UI without a launch time never infers expiry")
+    check(expiry.prepare() && expiryOwners == 1 && expiry.previousDiagnostic == "expired original", "UI confirmed expiry prepares one fresh owner")
+    let expiredQuit = expiredOwner()
+    let expiryQuit = RecoveryController(owner: expiredQuit) { Owner("forbidden") }
+    expiryQuit.requestQuit()
+    check(expiryQuit.shouldTerminate && expiredQuit.closes == 0, "UI quit after confirmed expiry ends without another close")
 
     let transition = Owner("pending ON"); transition.launched = true
     transition.feed.ingest(recoveryStatus(), at: 5000)
