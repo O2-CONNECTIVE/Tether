@@ -1,6 +1,7 @@
 """Static token validation, not a behavior-TDD or native-runtime test."""
 
 import colorsys
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -14,6 +15,13 @@ MAC_REFS = {"canvas": "canvas", "panel": "white", "ink": "ink", "muted": "ink-mu
             "line": "line", "info": "blue-700", "warning": "amber-800"}
 MAC_PAIRS = (("ink", "canvas"), ("ink", "panel"), ("muted", "canvas"), ("muted", "panel"),
              ("info", "canvas"), ("warning", "canvas"))
+# ロゴ（O2 の gateway-mark.svg）は図形を変えずに使う。正本は Brand.tsx、写しは見本と Mac の 2 app。
+# BRAND_SHA256 は O2 の public/gateway-mark.svg の path と塗り（"塗り|d" を改行でつないだもの）の hash。
+BRAND_SOURCE = UI / "tauri/src/Brand.tsx"
+BRAND_HTML = ROOT / "index.html"
+BRAND_SWIFTS = (UI / "mac-status/Sources/StatusUI/TetherBrand.swift",
+                UI / "mac-development/Sources/TetherDevelopment/TetherBrand.swift")
+BRAND_SHA256 = "37a3f207a10d2c46a2e65ff46d4b158a9d2f00154f134e32fd185fa8b66a84ba"
 STATE_ROLES = ("info", "confirmation", "warning", "danger", "neutral")
 
 
@@ -102,11 +110,36 @@ def check_mac_palette(tokens):
     return status
 
 
+def read_brand_svg(path):
+    return [(fill.lower(), d) for fill, d in
+            re.findall(r'<path fill="(#[0-9A-Fa-f]{6})" d="([^"]+)"', path.read_text(encoding="utf-8"))]
+
+
+def read_brand_swift(path):
+    source = path.read_text(encoding="utf-8")
+    block = source.split("// brand:start", 1)[1].split("// brand:end", 1)[0]
+    return block, [("#" + fill.lower(), d) for d, fill in re.findall(r'\("([^"]+)",\s*0x([0-9A-Fa-f]{6})\)', block)]
+
+
+def check_brand():
+    """ロゴの path と塗りが、正本・見本・2 つの Mac app で同じで、O2 の元のままであること。"""
+    source = read_brand_svg(BRAND_SOURCE)
+    assert source, "No logo paths in Brand.tsx"
+    digest = hashlib.sha256("\n".join(fill + "|" + d for fill, d in source).encode()).hexdigest()
+    assert digest == BRAND_SHA256, "Brand mark differs from the upstream gateway-mark.svg"
+    assert read_brand_svg(BRAND_HTML) == source, "Brand mark differs from Brand.tsx: " + BRAND_HTML.name
+    (status_block, status), (development_block, development) = (read_brand_swift(path) for path in BRAND_SWIFTS)
+    for path, paths in zip(BRAND_SWIFTS, (status, development)):
+        assert paths == source, "Brand mark differs from Brand.tsx: " + path.name
+    assert status_block == development_block, "Brand block differs between mac-status and mac-development"
+
+
 def main():
     markdown_only = "--markdown" in sys.argv[1:]
     tokens = read_tokens()
     check_primary_is_not_a_state_color(tokens)
     mac = check_mac_palette(tokens)
+    check_brand()
     for name in tokens:
         resolve(tokens, name)
     # Known WCAG reference values check the measurement independently.

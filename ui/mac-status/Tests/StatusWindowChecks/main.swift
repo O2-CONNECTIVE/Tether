@@ -23,7 +23,17 @@ struct FixtureView: View {
     var checks=0
     var timer:Timer?
     func verify(_ condition:Bool) { checks += 1; if !condition { failures += 1 } }
+    func verifyBrandMark() {
+        // O2 の gateway mark（viewBox 0 0 100 100）の外接矩形。path の相対座標や曲線を読み違えると形が崩れる。
+        let expected=[CGRect(x:0,y:-0.39,width:66,height:97.28),CGRect(x:48,y:17.87,width:52,height:79.13)]
+        let bounds=TetherBrand.markBounds
+        verify(bounds.count == expected.count)
+        for (actual,want) in zip(bounds,expected) {
+            verify(abs(actual.minX-want.minX)<0.5 && abs(actual.minY-want.minY)<0.5 && abs(actual.maxX-want.maxX)<0.5 && abs(actual.maxY-want.maxY)<0.5)
+        }
+    }
     func begin() {
+        verifyBrandMark()
         var fds:[Int32]=[0,0]; guard pipe(&fds)==0 else { exit(1) }
         saved=dup(STDIN_FILENO); guard dup2(fds[0],STDIN_FILENO)==STDIN_FILENO else { exit(1) }
         close(fds[0]); writer=fds[1]

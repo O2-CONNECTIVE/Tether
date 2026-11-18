@@ -56,8 +56,14 @@ public struct StatusView: View {
     }
     private var content: some View {
             VStack(alignment:.leading,spacing:24) {
-                HStack(alignment:.firstTextBaseline) {
-                    Text("Tether").font(.tether(20*textScale,weight:.semibold))
+                HStack(alignment:.lastTextBaseline) {
+                    HStack(spacing:12) {
+                        BrandMark(size:32*textScale)
+                        VStack(alignment:.leading,spacing:0) {
+                            Text("O2 CONNECTIVE").font(.tether(11*textScale,weight:.semibold)).foregroundStyle(palette.muted)
+                            Text("Tether").font(.tether(20*textScale,weight:.semibold))
+                        }
+                    }
                     Spacer()
                     Text("状態確認専用").font(.tether(12*textScale)).foregroundStyle(palette.muted)
                 }

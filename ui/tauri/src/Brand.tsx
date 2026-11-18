@@ -1,3 +1,5 @@
+// O2 CONNECTIVE のブランドのロゴ（gateway mark）。Derivation-Products（private）の public/gateway-mark.svg から取り込み、
+// path と塗りは変えていない。ui/tauri/design/check_tokens.py が元の hash と照合する（Issue #392）。
 export function Brand({ product }: { product: string }) {
   return <div className="brand">
     <svg className="brand__mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false">

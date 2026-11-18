@@ -25,6 +25,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentMinSize = NSSize(width: 620, height: 560)
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.edgeInsets = NSEdgeInsets(top: 28, left: 28, bottom: 28, right: 28)
+        let brandMark = NSImageView(image: TetherBrandImage.mark(size: 28))
+        brandMark.setAccessibilityElement(false)
+        brandMark.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        brandMark.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        let brandName = NSTextField(labelWithString: "O2 CONNECTIVE")
+        brandName.font = TetherPalette.font(15, bold: true); brandName.textColor = TetherPalette.ink
+        let brand = NSStackView(views: [brandMark, brandName]); brand.orientation = .horizontal; brand.spacing = 10; brand.alignment = .centerY
         let badge = NSTextField(labelWithString: "開発専用・Developer ID 未検証")
         badge.font = TetherPalette.font(15, bold: true); badge.textColor = TetherPalette.warning
         status.font = TetherPalette.font(25, bold: true); status.textColor = TetherPalette.ink
@@ -49,7 +56,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         history.textContainerInset = NSSize(width: 5, height: 5)
         let scroll = NSScrollView(); scroll.documentView = history; scroll.hasVerticalScroller = true
         scroll.heightAnchor.constraint(equalToConstant: 220).isActive = true
-        for view in [badge, status, detail, warning, limit, row, runRow, runState, scroll, endRow, diagnostic] { stack.addArrangedSubview(view) }
+        for view in [brand, badge, status, detail, warning, limit, row, runRow, runState, scroll, endRow, diagnostic] { stack.addArrangedSubview(view) }
         for label in [status, detail, warning, limit, runState, diagnostic] {
             label.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -56).isActive = true
         }

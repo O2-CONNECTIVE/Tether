@@ -97,6 +97,9 @@ Mac のネイティブ GUI でも、「接続中」の文字色は OS の accent
 `src/Brand.jsx` の構成（gateway-mark と「O2 CONNECTIVE」、副題に製品名の「Tether」）を、`ui/tauri/src/Brand.tsx` と状態見本の見出しに置きます。
 この Tauri アプリの CSP は `img-src` を許可していないので、画像ファイルではなくインライン SVG にします。
 ロゴは装飾（`aria-hidden`）で、社名と製品名は文字で読めます。ロゴの色（`#065292`・`#45B035`）は商標の表示でありコントラストの対象外です。
+ロゴの図形は O2 CONNECTIVE のブランドのロゴで、Derivation-Products（private）の `public/gateway-mark.svg` から取り込み、path と塗りは変えていません。
+元と同じであることは `check_tokens.py` が hash で検査します（`ui/tauri/src/Brand.tsx` を正本に、状態見本の `index.html` と Mac の 2 つの `TetherBrand.swift` が同じ値）。
+Mac のネイティブ GUI の見出し（`ui/mac-status`、`ui/mac-development`）にも、同じロゴと「O2 CONNECTIVE」の文字を置きます。Swift には SVG の path を `CGPath` にする小さな読み取りを置き、図形のデータはそのまま持ちます。
 Tauri の操作側画面と host-status の見本画面には、まだ置いていません。
 副題の「Tether」は primary の緑で、`#167A65` を面（canvas・白・sidebar）に対して 4.5:1 以上で測っています。
 

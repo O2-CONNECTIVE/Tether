@@ -28,6 +28,15 @@ class TokenCommandTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             shutil.copy2(scripts.parent / relative, target)
             self.palettes.append(target)
+        # ロゴ（#392）: 正本の Brand.tsx、見本の index.html、2 つの Mac app の TetherBrand.swift。
+        self.brands = {}
+        for key, relative in (('tsx', 'ui/tauri/src/Brand.tsx'), ('html', 'ui/tauri/design/index.html'),
+                              ('status', 'ui/mac-status/Sources/StatusUI/TetherBrand.swift'),
+                              ('development', 'ui/mac-development/Sources/TetherDevelopment/TetherBrand.swift')):
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(scripts.parent / relative, target)
+            self.brands[key] = target
 
     def run_tokens(self, **environment):
         return subprocess.run(
@@ -101,6 +110,28 @@ class TokenCommandTests(unittest.TestCase):
         result = self.run_tokens()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('Mac palette names differ from MAC_REFS', result.stderr)
+
+    def test_logo_path_copy_that_drifts_from_brand_tsx_is_rejected(self):
+        # ロゴの図形は O2 のものを変えずに使う。Mac の 1 か所だけ数字が違えば、画面ごとに形が変わる。
+        self.mutate(self.brands['status'], '("M0 32c0-7', '("M0 33c0-7')
+        result = self.run_tokens()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('Brand mark differs from Brand.tsx', result.stderr)
+
+    def test_logo_edited_in_every_copy_is_rejected_against_the_upstream_hash(self):
+        # 全部の写しを同じに書き換えても、O2 の gateway-mark.svg から変わったことは検査で分かる。
+        for key in self.brands:
+            self.mutate(self.brands[key], 'M0 32c0-7', 'M0 33c0-7')
+        result = self.run_tokens()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('Brand mark differs from the upstream gateway-mark.svg', result.stderr)
+
+    def test_two_mac_apps_must_share_one_brand_block(self):
+        # 図形の値が同じでも、path を読む処理が片方だけ違えば、2 つの app でロゴの形が変わる。
+        self.mutate(self.brands['development'], 'let relative = command >= 97', 'let relative = command > 97')
+        result = self.run_tokens()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('Brand block differs between mac-status and mac-development', result.stderr)
 
     def test_two_mac_apps_must_share_one_palette(self):
         self.mutate(self.palettes[1], 'static let line = 0xDFE9E5', 'static let line = 0xDFE9E6')
