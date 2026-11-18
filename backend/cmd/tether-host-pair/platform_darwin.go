@@ -2,6 +2,14 @@
 
 package main
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+	"time"
+)
 
-func openBrowser(url string) error { return exec.Command("/usr/bin/open", url).Start() }
+func openBrowser(url string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "/usr/bin/open", url).Run()
+}

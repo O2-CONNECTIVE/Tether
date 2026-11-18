@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,26 @@ import (
 
 func pairSetup(t *testing.T, subject string, hosts []agentgateway.HostEntry, save func([]agentgateway.PairRecord) error) (*agentgateway.Gateway, ssh.Signer) {
 	return pairSetupWithRecords(t, subject, hosts, nil, save)
+}
+
+func TestConfigurePairingRejectsInvalidRegistrationEndpoint(t *testing.T) {
+	for _, endpoint := range []string{"wss://gw.example/", "wss://GW.example/register", "wss://" + strings.Repeat("a", 250) + ".test/register"} {
+		t.Run(endpoint, func(t *testing.T) {
+			host := fixtureSigner(t, 0x51)
+			g, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), Resource: testResource, Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Signer: fixtureSigner(t, 0x52)}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer g.Close(context.Background())
+			if err := g.ConfigureHosts([]agentgateway.HostEntry{{Label: "host-1", Key: host.PublicKey().Marshal(), Principals: []string{label(0)}}}); err != nil {
+				t.Fatal(err)
+			}
+			err = g.ConfigurePairing(agentgateway.PairingConfig{Verifier: pairingVerifier(t), Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: endpoint})
+			if !errors.Is(err, agentgateway.ErrConfig) {
+				t.Fatalf("endpoint accepted: %q err=%v", endpoint, err)
+			}
+		})
+	}
 }
 
 func pairSetupWithRecords(t *testing.T, subject string, hosts []agentgateway.HostEntry, records []agentgateway.PairRecord, save func([]agentgateway.PairRecord) error) (*agentgateway.Gateway, ssh.Signer) {

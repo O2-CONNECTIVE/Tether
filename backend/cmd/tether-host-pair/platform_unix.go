@@ -10,7 +10,9 @@ import (
 )
 
 var errPairBusy = errors.New("pair busy")
+var errPairUnsupported = errors.New("pair unsupported")
 var pairLock *os.File
+var flockPair = syscall.Flock
 
 func lockPair(dir string) error {
 	f, e := os.OpenFile(filepath.Join(dir, "pair.lock"), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0600)
@@ -21,11 +23,23 @@ func lockPair(dir string) error {
 		f.Close()
 		return e
 	}
-	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+	if e = flockPair(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
 		f.Close()
-		if e == syscall.EWOULDBLOCK || e == syscall.EAGAIN {
+		if e == syscall.EWOULDBLOCK {
 			return errPairBusy
 		}
+		return e
+	}
+	info, e := f.Stat()
+	if e == nil && info.Size() == 0 {
+		_, e = f.WriteString("tether-host-pair lock\n")
+		if e == nil {
+			e = f.Sync()
+		}
+	}
+	if e != nil {
+		_ = flockPair(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
 		return e
 	}
 	pairLock = f
@@ -33,7 +47,7 @@ func lockPair(dir string) error {
 }
 func unlockPair() {
 	if pairLock != nil {
-		_ = syscall.Flock(int(pairLock.Fd()), syscall.LOCK_UN)
+		_ = flockPair(int(pairLock.Fd()), syscall.LOCK_UN)
 		_ = pairLock.Close()
 		pairLock = nil
 	}

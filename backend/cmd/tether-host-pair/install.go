@@ -8,11 +8,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"golang.org/x/crypto/ssh"
 )
@@ -26,8 +28,9 @@ type pairResult struct {
 
 func parsePairResult(ct string, b []byte) (pairResult, error) {
 	var x pairResult
-	var members map[string]json.RawMessage
-	if !strings.HasPrefix(strings.ToLower(ct), "application/json") || json.Unmarshal(b, &members) != nil || len(members) != 4 || json.Unmarshal(b, &x) != nil || x.RegistrationEndpoint == "" || x.HostLabel == "" || x.PrincipalLabel == "" {
+	mediaType, _, mediaErr := mime.ParseMediaType(ct)
+	members, fieldsErr := agentwire.Fields(b, "registration_endpoint", "host_label", "principal_label", "principal_public_key")
+	if mediaErr != nil || mediaType != "application/json" || agentwire.CheckJSON(b, false) != nil || fieldsErr != nil || len(members) != 4 || json.Unmarshal(b, &x) != nil || x.RegistrationEndpoint == "" || x.HostLabel == "" || x.PrincipalLabel == "" {
 		return x, errors.New("invalid")
 	}
 	parts := strings.Split(x.PrincipalPublicKey, " ")
@@ -44,16 +47,27 @@ func parsePairResult(ct string, b []byte) (pairResult, error) {
 	}
 	return x, nil
 }
-func install(dir, policyPath, home string, priv ed25519.PrivateKey, signer ssh.Signer, result pairResult) error {
+
+var renameFile = os.Rename
+var syncDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+func install(dir, policyPath, home string, priv ed25519.PrivateKey, signer ssh.Signer, result pairResult, oldPolicy []byte) (bool, error) {
 	hash := sha256.Sum256(signer.PublicKey().Marshal())
 	keyPath := filepath.Join(dir, "host-key-"+base64.RawURLEncoding.EncodeToString(hash[:]))
 	pemBytes, e := ssh.MarshalPrivateKey(priv, "tether host key")
 	if e != nil {
-		return e
+		return false, e
 	}
 	keyTemp, e := writeTemp(dir, ".pair-", pem.EncodeToMemory(pemBytes))
 	if e != nil {
-		return e
+		return false, e
 	}
 	installDone := false
 	defer func() {
@@ -62,45 +76,29 @@ func install(dir, policyPath, home string, priv ed25519.PrivateKey, signer ssh.S
 			os.Remove(keyPath)
 		}
 	}()
-	if e = os.Rename(keyTemp, keyPath); e != nil {
-		return e
+	if e = renameFile(keyTemp, keyPath); e != nil {
+		return false, e
 	}
 	policy := map[string]any{"protocol": "rescue-mac-resident-policy/1", "policy_digest": agentexec.MacCurrentUserPolicyDigest(), "registration_endpoint": result.RegistrationEndpoint, "host_label": result.HostLabel, "principal_label": result.PrincipalLabel, "principal_public_key": strings.SplitN(result.PrincipalPublicKey, " ", 2)[1], "host_key_path": keyPath, "host_key_fingerprint": ssh.FingerprintSHA256(signer.PublicKey()), "work_dir": home, "home": home, "cleanup_seconds": 10, "operations": []any{map[string]any{"id": maclaunch.ResidentFixedRequestID, "command": maclaunch.ResidentFixedCommand, "timeout_ms": 15000}}}
 	raw, e := json.Marshal(policy)
 	if e != nil {
-		return e
+		return false, e
 	}
 	if e = maclaunch.ValidateFixedResidentPolicy(raw, policyPath); e != nil {
-		return e
-	}
-	oldPolicy, oldErr := os.ReadFile(policyPath)
-	oldExists := oldErr == nil
-	if oldErr != nil && !os.IsNotExist(oldErr) {
-		return oldErr
-	}
-	oldInfo, infoErr := os.Stat(policyPath)
-	if infoErr == nil {
-		if !oldInfo.Mode().IsRegular() {
-			return errors.New("policy not regular")
-		}
-	} else if !os.IsNotExist(infoErr) {
-		return infoErr
+		return false, e
 	}
 	pt, e := writeTemp(dir, ".pair-", raw)
 	if e != nil {
-		return e
+		return false, e
 	}
 	defer os.Remove(pt)
-	if e = os.Rename(pt, policyPath); e != nil {
-		return e
+	if e = renameFile(pt, policyPath); e != nil {
+		return false, e
 	}
 	// The rename is the commit: the gateway already holds the new key, so a
 	// failed directory sync must not undo it (the old key no longer pairs).
-	if d, e := os.Open(dir); e == nil {
-		_ = d.Sync()
-		d.Close()
-	}
-	if oldExists {
+	syncWarning := syncDir(dir) != nil
+	if len(oldPolicy) > 0 {
 		var previous struct {
 			KeyPath string `json:"host_key_path"`
 		}
@@ -109,7 +107,7 @@ func install(dir, policyPath, home string, priv ed25519.PrivateKey, signer ssh.S
 		}
 	}
 	installDone = true
-	return nil
+	return syncWarning, nil
 }
 func writeTemp(dir, prefix string, b []byte) (string, error) {
 	f, e := os.CreateTemp(dir, prefix)

@@ -25,6 +25,8 @@ tether-host-pair --gateway https://gateway.example --issuer https://idp.example/
 
 ブラウザでIdPにログインすると、新しいEd25519鍵と常駐用policyが固定の配置先に保存されます。同じ利用者のpairを同時に実行すると、directory内のlockで後続を拒否します。成功後は常駐プロセスを止めて起動し直してください。
 
+ログイン前にlockと既存policyの保存先保護を確認し、確認できない場合は「保存先の保護を確かめられませんでした。何も変えていません」と表示してbrowserやnetworkを使わず終了します。
+
 4xx拒否では前のpairは変わりません。5xx、timeout、通信切断、不正な成功応答ではgateway登録の成否を判定できません。登録済みなら前の鍵は使えなくなっているため、もう一度pairを実行してください。pairが管理する旧鍵だけを削除します。`~/.ssh`など手で置いた鍵は削除しません。
 
 ## 登録口

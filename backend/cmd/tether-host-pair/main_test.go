@@ -77,10 +77,39 @@ func TestNewCallbackAcceptsOnlyOneMatchingLoopbackLogin(t *testing.T) {
 	}
 }
 
+func TestCallbackRejectsPresentEmptyError(t *testing.T) {
+	h, result := newCallback("state")
+	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/callback?state=state&code=code&error=", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty error status=%d", w.Code)
+	}
+	if got := <-result; got.err == nil {
+		t.Fatalf("empty error accepted: %+v", got)
+	}
+}
+
+func TestParsePairResultRequiresExactJSONMediaTypeAndMembers(t *testing.T) {
+	valid := []byte(`{"registration_endpoint":"wss://gw.test/register","host_label":"host","principal_label":"principal","principal_public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAvzQ9BrCC5xE1lQfM4NXu7CwJwE74lfM2nCHx9+spk8"}`)
+	duplicate := strings.Replace(string(valid), `,"host_label"`, `,"registration_endpoint":"wss://gw.test/register","host_label"`, 1)
+	unknown := strings.TrimSuffix(string(valid), "}") + `,"extra":true}`
+	for _, tc := range []struct{ ct, body string }{
+		{"application/jsonp", string(valid)},
+		{"application/json", duplicate},
+		{"application/json", unknown},
+	} {
+		if _, err := parsePairResult(tc.ct, []byte(tc.body)); err == nil {
+			t.Errorf("accepted content-type=%q body=%s", tc.ct, tc.body)
+		}
+	}
+}
+
 func TestExecuteRejectsInvalidArgumentsWithoutNetworkOrBrowser(t *testing.T) {
 	calls := 0
 	d := deps{client: http.DefaultClient, location: func(context.Context) (string, string, error) { calls++; return "", "", nil }, openBrowser: func(string) error { calls++; return nil }, callbackWait: time.Millisecond, pairTimeout: time.Millisecond}
-	cases := [][]string{{}, {"--gateway", "https://gw.test", "--issuer", "https://id.test"}, {"--gateway", "https://gw.test", "--gateway", "https://gw.test", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "http://gw.test", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "https://gw.test/path", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "https://gw.test?x=1", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "https://gw.test", "--issuer", "https://id.test", "--client-id", "x", "extra"}}
+	cases := [][]string{{}, {"--gateway", "https://gw.test", "--issuer", "https://id.test"}, {"--gateway", "https://gw.test", "--gateway", "https://gw.test", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "http://gw.test", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "https://gw.test/path", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "https://gw.test?x=1", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "HTTPS://gw.test", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "https://GW.test", "--issuer", "https://id.test", "--client-id", "x"}, {"--gateway", "https://gw.test", "--issuer", "https://id.test", "--client-id", "x", "extra"}}
 	for _, args := range cases {
 		var out, errOut strings.Builder
 		if got := execute(context.Background(), args, &out, &errOut, d); got != 2 {
@@ -92,15 +121,33 @@ func TestExecuteRejectsInvalidArgumentsWithoutNetworkOrBrowser(t *testing.T) {
 	}
 }
 
+func TestExecuteDirectoryCreationFailureUsesUnsafeLocationDiagnostic(t *testing.T) {
+	home := t.TempDir()
+	blocker := filepath.Join(home, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d := deps{client: http.DefaultClient, location: func(context.Context) (string, string, error) {
+		return home, filepath.Join(blocker, "resident-policy.json"), nil
+	}}
+	var out, stderr strings.Builder
+	args := []string{"--gateway", "https://gw.test", "--issuer", "https://id.test", "--client-id", "x"}
+	if code := execute(context.Background(), args, &out, &stderr, d); code != 1 || !strings.Contains(stderr.String(), diagLocationUnsafe) {
+		t.Fatalf("status=%d stderr=%q", code, stderr.String())
+	}
+}
+
 type flowFixture struct {
-	home            string
-	issuer, gateway *httptest.Server
-	client          *http.Client
-	gatewayCalls    int
-	malformed       bool
-	gatewayDelay    time.Duration
-	tokenForm       url.Values
-	seenHostKey     string
+	home                  string
+	issuer, gateway       *httptest.Server
+	client                *http.Client
+	gatewayCalls          int
+	malformed             bool
+	gatewayDelay          time.Duration
+	tokenForm             url.Values
+	seenHostKey           string
+	readProtected         func(context.Context, string) ([]byte, error)
+	authorizationEndpoint string
 }
 
 func newLoopbackTLSServer(h http.Handler) *httptest.Server {
@@ -187,12 +234,16 @@ func newFlowFixture(t *testing.T, discoveryIssuer string, gatewayStatus int) *fl
 	f.issuer = newLoopbackTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "openid-configuration") {
 			w.Header().Set("Content-Type", "application/json")
+			authEndpoint := f.authorizationEndpoint
+			if authEndpoint == "" {
+				authEndpoint = f.issuer.URL + "/authorize"
+			}
 			json.NewEncoder(w).Encode(map[string]any{"issuer": func() string {
 				if discoveryIssuer == "MATCH" {
 					return f.issuer.URL
 				}
 				return discoveryIssuer
-			}(), "authorization_endpoint": f.issuer.URL + "/authorize", "token_endpoint": f.issuer.URL + "/token", "code_challenge_methods_supported": []string{"S256"}})
+			}(), "authorization_endpoint": authEndpoint, "token_endpoint": f.issuer.URL + "/token", "code_challenge_methods_supported": []string{"S256"}})
 			return
 		}
 		if r.URL.Path == "/token" {
@@ -222,7 +273,7 @@ func invokeFlowAt(t *testing.T, f *flowFixture, callbackMode, home string) (int,
 	dir := home + "/Library/Application Support/com.o2connective.rescue-host.shell"
 	policy := dir + "/resident-policy.json"
 	var authURL string
-	d := deps{client: f.client, location: func(context.Context) (string, string, error) { return home, policy, nil }, callbackWait: 40 * time.Millisecond, pairTimeout: 40 * time.Millisecond, openBrowser: func(raw string) error {
+	d := deps{client: f.client, location: func(context.Context) (string, string, error) { return home, policy, nil }, callbackWait: 40 * time.Millisecond, pairTimeout: 40 * time.Millisecond, readProtected: f.readProtected, openBrowser: func(raw string) error {
 		authURL = raw
 		go func() {
 			u, _ := url.Parse(raw)
@@ -244,6 +295,9 @@ func invokeFlowAt(t *testing.T, f *flowFixture, callbackMode, home string) (int,
 		}()
 		return nil
 	}}
+	if d.readProtected == nil {
+		d.readProtected = func(_ context.Context, path string) ([]byte, error) { return os.ReadFile(path) }
+	}
 	var stdout, stderr strings.Builder
 	code := execute(context.Background(), []string{"--gateway", f.gateway.URL, "--issuer", f.issuer.URL, "--client-id", "client"}, &stdout, &stderr, d)
 	return code, stdout.String(), stderr.String(), authURL
@@ -374,6 +428,25 @@ func TestExecuteDiscoveryIssuerMismatchDoesNotOpenBrowser(t *testing.T) {
 		t.Fatalf("status=%d gateway=%d browser=%q", code, f.gatewayCalls, auth)
 	}
 }
+
+func TestExecuteProtectedReadFailureStopsBeforeBrowserOrNetwork(t *testing.T) {
+	f := newFlowFixture(t, "MATCH", 200)
+	f.readProtected = func(context.Context, string) ([]byte, error) { return nil, os.ErrPermission }
+	code, _, stderr, auth := invokeFlow(t, f, "")
+	if code != 1 || stderr == "" || !strings.Contains(stderr, diagLocationUnsafe) || auth != "" || f.gatewayCalls != 0 {
+		t.Fatalf("status=%d auth=%q gateway=%d stderr=%q", code, auth, f.gatewayCalls, stderr)
+	}
+}
+
+func TestAuthorizationEndpointQueryIsPreservedExceptScope(t *testing.T) {
+	f := newFlowFixture(t, "MATCH", 200)
+	f.authorizationEndpoint = f.issuer.URL + "/authorize?audience=existing&scope=discard"
+	_, _, _, raw := invokeFlow(t, f, "")
+	u, err := url.Parse(raw)
+	if err != nil || u.Query().Get("audience") != "existing" || u.Query().Has("scope") {
+		t.Fatalf("authorization URL=%q err=%v", raw, err)
+	}
+}
 func TestExecuteGatewayOutcomesPreserveExistingDirectory(t *testing.T) {
 	for _, status := range []int{403, 409, 500} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
@@ -459,6 +532,49 @@ func TestExecuteSuccessRemovesOnlyPairOwnedOldKey(t *testing.T) {
 				t.Fatalf("status=%d old-key error=%v", code, err)
 			}
 		})
+	}
+}
+
+func TestExecuteUsesProtectedPolicyBytesForOldKeySelection(t *testing.T) {
+	f := newFlowFixture(t, "MATCH", 200)
+	home := t.TempDir()
+	dir := filepath.Join(home, "Library", "Application Support", "com.o2connective.rescue-host.shell")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(dir, "host-key-from-protected-read")
+	if err := os.WriteFile(key, []byte("old-key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(dir, "resident-policy.json")
+	if err := os.WriteFile(policyPath, []byte(`{"host_key_path":"external"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.readProtected = func(ctx context.Context, path string) ([]byte, error) {
+		if path == policyPath {
+			return []byte(`{"host_key_path":"` + key + `"}`), nil
+		}
+		return os.ReadFile(path)
+	}
+	code, _, stderr, _ := invokeFlowAt(t, f, "", home)
+	_, err := os.Stat(key)
+	if code != 0 || !os.IsNotExist(err) {
+		t.Fatalf("status=%d key error=%v stderr=%q", code, err, stderr)
+	}
+}
+
+func TestExecuteDirectorySyncFailureWarnsAfterSuccessfulInstall(t *testing.T) {
+	original := syncDir
+	syncDir = func(string) error { return os.ErrPermission }
+	t.Cleanup(func() { syncDir = original })
+	f := newFlowFixture(t, "MATCH", 200)
+	code, stdout, stderr, _ := invokeFlow(t, f, "")
+	if code != 0 || !strings.Contains(stdout, diagPairComplete) || !strings.Contains(stderr, diagSyncWarning) {
+		t.Fatalf("status=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	policyPath := filepath.Join(f.home, "Library", "Application Support", "com.o2connective.rescue-host.shell", "resident-policy.json")
+	if _, err := os.Stat(policyPath); err != nil {
+		t.Fatalf("policy missing: %v", err)
 	}
 }
 

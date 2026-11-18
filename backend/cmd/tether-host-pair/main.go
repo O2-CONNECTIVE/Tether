@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 	"golang.org/x/crypto/ssh"
 )
@@ -27,6 +28,7 @@ import (
 type deps struct {
 	client                    *http.Client
 	location                  func(context.Context) (home, policyPath string, err error)
+	readProtected             func(context.Context, string) ([]byte, error)
 	openBrowser               func(string) error
 	callbackWait, pairTimeout time.Duration
 }
@@ -43,6 +45,8 @@ const (
 	diagPairUnknown    = "gateway 側で登録が済んだか分かりません。済んでいれば前のペアの鍵は使えなくなっています。もう一度 pair を実行してください"
 	diagWriteFailed    = "gateway には登録しましたが、鍵か policy を書けませんでした。もう一度 pair を実行してください"
 	diagPairComplete   = "ペア登録が完了しました。常駐プロセスを止めて起動し直してください"
+	diagLocationUnsafe = "保存先の保護を確かめられませんでした。何も変えていません"
+	diagSyncWarning    = "保存先の同期を確かめられませんでした。登録と書き出しは済んでいます"
 )
 
 func parseArgs(args []string) (string, string, string, bool) {
@@ -59,7 +63,7 @@ func parseArgs(args []string) (string, string, string, bool) {
 		i++
 	}
 	g, i, c := values["--gateway"], values["--issuer"], values["--client-id"]
-	if len(values) != 3 || !validURL(g, true) || !validURL(i, false) || len(c) < 1 || len(c) > 256 {
+	if len(values) != 3 || !validURL(g, true) || !validGatewayForm(g) || !validURL(i, false) || len(c) < 1 || len(c) > 256 {
 		return "", "", "", false
 	}
 	for _, r := range c {
@@ -68,6 +72,10 @@ func parseArgs(args []string) (string, string, string, bool) {
 		}
 	}
 	return g, i, c, true
+}
+func validGatewayForm(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Host == strings.ToLower(u.Host) && (u.Path == "" || u.Path == "/") && raw == "https://"+u.Host+u.Path
 }
 func validURL(raw string, gateway bool) bool {
 	u, e := url.Parse(raw)
@@ -95,18 +103,44 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 	}
 	dir := filepath.Dir(policyPath)
 	if err = os.MkdirAll(dir, 0700); err != nil {
-		fmt.Fprintln(stderr, diagWriteFailed)
+		fmt.Fprintln(stderr, diagLocationUnsafe)
 		return 1
 	}
 	if err = lockPair(dir); err != nil {
 		if errors.Is(err, errPairBusy) {
 			fmt.Fprintln(stderr, diagPairRunning)
-		} else {
+		} else if errors.Is(err, errPairUnsupported) {
 			fmt.Fprintln(stderr, diagUnsupportedOS)
+		} else {
+			fmt.Fprintln(stderr, diagLocationUnsafe)
 		}
 		return 1
 	}
 	defer unlockPair()
+	if d.readProtected == nil {
+		d.readProtected = agentkeys.ReadTrustConfig
+	}
+	lockPath := filepath.Join(dir, "pair.lock")
+	protectCtx, cancelProtect := context.WithTimeout(ctx, 10*time.Second)
+	_, err = d.readProtected(protectCtx, lockPath)
+	cancelProtect()
+	if err != nil {
+		fmt.Fprintln(stderr, diagLocationUnsafe)
+		return 1
+	}
+	var oldPolicy []byte
+	if _, e := os.Lstat(policyPath); e == nil {
+		protectCtx, cancelProtect = context.WithTimeout(ctx, 10*time.Second)
+		oldPolicy, err = d.readProtected(protectCtx, policyPath)
+		cancelProtect()
+		if err != nil {
+			fmt.Fprintln(stderr, diagLocationUnsafe)
+			return 1
+		}
+	} else if !os.IsNotExist(e) {
+		fmt.Fprintln(stderr, diagLocationUnsafe)
+		return 1
+	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		fmt.Fprintln(stderr, diagLoginCancelled)
@@ -147,6 +181,7 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 	defer srv.Close()
 	auth, _ := url.Parse(discovery.AuthorizationEndpoint)
 	q := auth.Query()
+	q.Del("scope")
 	for k, v := range map[string]string{"response_type": "code", "client_id": clientID, "redirect_uri": redirect, "code_challenge": base64.RawURLEncoding.EncodeToString(ch[:]), "code_challenge_method": "S256", "state": state} {
 		q.Set(k, v)
 	}
@@ -180,7 +215,8 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 		fmt.Fprintln(stderr, diagLoginCancelled)
 		return 1
 	}
-	pairURL := strings.TrimSuffix(gateway, "/") + agentgateway.PairPath
+	parsedGateway, _ := url.Parse(gateway)
+	pairURL := "https://" + parsedGateway.Host + agentgateway.PairPath
 	tokenHash := sha256.Sum256([]byte(token))
 	sig, err := signer.Sign(rand.Reader, agentgateway.PairTranscript(pairURL, signer.PublicKey().Marshal(), tokenHash))
 	if err != nil {
@@ -222,9 +258,13 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 		fmt.Fprintln(stderr, diagPairUnknown)
 		return 1
 	}
-	if err = install(dir, policyPath, home, priv, signer, info); err != nil {
+	syncWarning, installErr := install(dir, policyPath, home, priv, signer, info, oldPolicy)
+	if installErr != nil {
 		fmt.Fprintln(stderr, diagWriteFailed)
 		return 1
+	}
+	if syncWarning {
+		fmt.Fprintln(stderr, diagSyncWarning)
 	}
 	fmt.Fprintln(stdout, diagPairComplete)
 	return 0
@@ -251,7 +291,7 @@ func newCallback(state string) (http.Handler, <-chan callbackResult) {
 		}
 		done = true
 		q := r.URL.Query()
-		if q.Get("state") != state || q.Get("error") != "" {
+		if q.Get("state") != state || q.Has("error") {
 			http.Error(w, "", http.StatusBadRequest)
 			ch <- callbackResult{err: errors.New("cancelled")}
 			return

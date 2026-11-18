@@ -36,7 +36,7 @@ func discover(ctx context.Context, c *http.Client, issuer string) (oidcDiscovery
 	}
 	defer resp.Body.Close()
 	b, e := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
-	if e != nil || len(b) > 64*1024 || resp.StatusCode != 200 || json.Unmarshal(b, &d) != nil || d.Issuer != issuer || !validURL(d.AuthorizationEndpoint, false) || !validURL(d.TokenEndpoint, false) {
+	if e != nil || len(b) > 64*1024 || resp.StatusCode != 200 || json.Unmarshal(b, &d) != nil || d.Issuer != issuer || !validAuthorizationURL(d.AuthorizationEndpoint) || !validURL(d.TokenEndpoint, false) {
 		return d, fmt.Errorf("discovery invalid")
 	}
 	if d.CodeChallengeMethods != nil {
@@ -51,6 +51,10 @@ func discover(ctx context.Context, c *http.Client, issuer string) (oidcDiscovery
 		}
 	}
 	return d, nil
+}
+func validAuthorizationURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Fragment == "" && !strings.Contains(raw, "#") && u.Opaque == ""
 }
 func randomURL(n int) (string, error) {
 	b := make([]byte, n)
