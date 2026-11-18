@@ -125,7 +125,9 @@ func newCIGateway(t *testing.T, root string, diag *ciDiagnostic) *ciGateway {
 	checked(err)
 	g.handler, err = agenttransport.NewHandler(agenttransport.HandlerConfig{Endpoint: g.endpoint, Registrar: g.gateway, Budgets: agenttransport.DefaultBudgets(), Hosts: []agenttransport.EnrolledHost{{Label: ciHost, PublicKey: host.PublicKey(), Principals: []string{ciPrincipal}}}, ResidentPrincipals: []agenttransport.ResidentPrincipal{{Label: ciPrincipal, Signer: principal}}})
 	checked(err)
-	checked(g.gateway.ConfigureResident(g.endpoint, g.handler, []agentgateway.ResidentEnrollment{{HostLabel: ciHost, PrincipalLabel: ciPrincipal, HostKey: host.PublicKey().Marshal()}}))
+	// The resident enrollment reads the host key from the gateway's key table.
+	checked(g.gateway.ConfigureHosts([]agentgateway.HostEntry{{Label: ciHost, Key: host.PublicKey().Marshal(), Principals: []string{ciPrincipal}}}))
+	checked(g.gateway.ConfigureResident(g.endpoint, g.handler, []agentgateway.ResidentEnrollment{{HostLabel: ciHost, PrincipalLabel: ciPrincipal}}))
 	block, err := ssh.MarshalPrivateKey(hostKey, "ephemeral synthetic CI fixture")
 	checked(err)
 	keyBytes := pem.EncodeToMemory(block)
