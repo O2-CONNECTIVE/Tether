@@ -72,7 +72,6 @@ type ResidentControl interface {
 }
 type ResidentEnrollment struct {
 	HostLabel, PrincipalLabel string
-	HostKey                   []byte
 }
 type ResidentWorkBinding struct {
 	Host, Principal, Generation, RequestID string
@@ -136,11 +135,11 @@ func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, en
 	setup := &residentSetup{endpoint: endpoint, control: control, entries: map[*principal]*residentEntry{}}
 	for _, e := range entries {
 		p := g.byLabel[e.PrincipalLabel]
-		key, err := ssh.ParsePublicKey(e.HostKey)
+		hostKey := g.HostKey(e.HostLabel)
+		key, err := ssh.ParsePublicKey(hostKey)
 		if p == nil || p.signer == nil || !validLabel(e.HostLabel) || err != nil || key.Type() != ssh.KeyAlgoED25519 || setup.entries[p] != nil {
 			return ErrConfig
 		}
-		e.HostKey = append([]byte(nil), e.HostKey...)
 		setup.entries[p] = &residentEntry{enrollment: e, works: map[string]*residentWork{}}
 	}
 	g.mu.Lock()
@@ -313,7 +312,11 @@ func (g *Gateway) ConnectResident(label string, d Dispatch, b ResidentWorkBindin
 	if entry != nil {
 		w = entry.works[b.RequestID]
 	}
-	valid := !g.discoveryOnly && !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Run == w.binding.Run && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, entry.enrollment.HostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
+	var hostKey []byte
+	if entry != nil {
+		hostKey = g.hosts[entry.enrollment.HostLabel]
+	}
+	valid := !g.discoveryOnly && !g.closed && w != nil && !w.done && !w.registrationSealed && !w.registering && w.route == nil && (w.binding.Sequence == 0 || w.binding.Sequence == b.Sequence) && b.Principal == label && b.Host == entry.enrollment.HostLabel && b.Generation == w.binding.Generation && b.DeadlineMillis == w.binding.DeadlineMillis && b.Run == w.binding.Run && b.Sequence > 0 && b.Sequence <= 32 && bytes.Equal(d.HostKey, hostKey) && !d.Deadline.After(time.UnixMilli(b.DeadlineMillis)) && time.Now().UnixMilli() < b.DeadlineMillis
 	if valid {
 		w.binding.Sequence = b.Sequence
 		w.registering = true
@@ -417,9 +420,10 @@ func (g *Gateway) residentCollectedLocked(proof ResidentCollectionProof) (*resid
 		return nil, false, ErrRefused
 	}
 	w := e.works[proof.Binding.RequestID]
-	key, err := ssh.ParsePublicKey(e.enrollment.HostKey)
+	hostKey := g.hosts[e.enrollment.HostLabel]
+	key, err := ssh.ParsePublicKey(hostKey)
 	b := proof.Binding
-	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Run != w.binding.Run || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, e.enrollment.HostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
+	if w == nil || w.collectionSeen || proof.Endpoint != g.resident.endpoint || b.Host != e.enrollment.HostLabel || b.Generation != w.binding.Generation || b.DeadlineMillis != w.binding.DeadlineMillis || b.Run != w.binding.Run || b.Sequence == 0 || b.Sequence > 32 || (w.binding.Sequence != 0 && b.Sequence != w.binding.Sequence) || len(proof.ClientNonce) != 32 || len(proof.ServerNonce) != 32 || !bytes.Equal(proof.HostKey, hostKey) || !bytes.Equal(proof.PrincipalKey, p.signer.PublicKey().Marshal()) || err != nil || (proof.Cleanup != "confirmed" && proof.Cleanup != "unknown") || !validCollectionSignature(key, proof) {
 		return nil, false, ErrRefused
 	}
 	w.binding.Sequence = b.Sequence

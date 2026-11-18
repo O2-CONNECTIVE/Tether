@@ -1,0 +1,123 @@
+package agentgateway
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+)
+
+func TestServePairRejectsUncollectedWorkA7(t *testing.T) {
+	g, s, host, _ := residentEvidenceRig(t)
+	defer g.Close(context.Background())
+	s.FixedStart(context.Background(), strings.Repeat("1", 32))
+	pairAud := "https://example.test/pair"
+	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
+	pub := issuerKey.Public().(ed25519.PublicKey)
+	jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": "test", "alg": "EdDSA", "x": base64.RawURLEncoding.EncodeToString(pub)}}})
+	v, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: pairAud, Types: []string{"at+jwt"}, JWKS: jwks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Principals: []string{"member1"}, Paired: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.ConfigurePairing(PairingConfig{Verifier: v, Endpoint: pairAud, RegistrationEndpoint: "wss://example.test/register"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	h, _ := json.Marshal(map[string]any{"alg": "EdDSA", "kid": "test", "typ": "at+jwt"})
+	c, _ := json.Marshal(map[string]any{"iss": "https://issuer.example.invalid/", "aud": pairAud, "sub": "subject", "iat": now, "exp": now + 60})
+	input := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(c)
+	token := input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerKey, []byte(input)))
+	digest := sha256.Sum256([]byte(token))
+	transcript := pairTranscriptBytesForTest(pairAud, host.PublicKey().Marshal(), digest)
+	sig, err := host.Sign(nil, transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := ssh.MarshalAuthorizedKey(host.PublicKey())
+	body, _ := json.Marshal(map[string]string{"host_public_key": string(encoded[:len(encoded)-1]), "proof": base64.RawURLEncoding.EncodeToString(ssh.Marshal(sig))})
+	req := httptest.NewRequest("POST", "http://gateway.internal"+PairPath, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	g.ServePair(rr, req)
+	// A host with work awaiting collection must retain its key and registry record.
+	if rr.Code != 409 {
+		t.Fatalf("uncollected work status = %d, want 409", rr.Code)
+	}
+}
+
+func pairTranscriptBytesForTest(endpoint string, key []byte, hash [32]byte) []byte {
+	var out bytes.Buffer
+	for _, part := range [][]byte{[]byte("rescue-host.agentgateway.pair\x00v1\x00"), []byte(endpoint), key, hash[:]} {
+		_ = binary.Write(&out, binary.BigEndian, uint32(len(part)))
+		out.Write(part)
+	}
+	return out.Bytes()
+}
+
+func TestServePairAllowsPairingAfterCollectedWorkA7(t *testing.T) {
+	g, s, host, control := residentEvidenceRig(t)
+	defer g.Close(context.Background())
+	id := strings.Repeat("2", 32)
+	s.FixedStart(context.Background(), id)
+	if err := g.ResidentCollected(signedCollectionFixture(t, g, s, host, id)); err != nil {
+		t.Fatal(err)
+	}
+	close(control.begin)
+	select {
+	case <-s.entry.works[id].completed:
+	case <-time.After(time.Second):
+		t.Fatal("resident work did not settle after collection")
+	}
+	// Once signed collection clears the busy work, the pairing request may proceed.
+	rr := residentPairAttempt(t, g, host)
+	if rr.Code != 200 {
+		t.Fatalf("collected work pairing status = %d, want 200", rr.Code)
+	}
+}
+
+func residentPairAttempt(t *testing.T, g *Gateway, host ssh.Signer) *httptest.ResponseRecorder {
+	t.Helper()
+	pairAud := "https://example.test/pair"
+	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
+	pub := issuerKey.Public().(ed25519.PublicKey)
+	jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": "test", "alg": "EdDSA", "x": base64.RawURLEncoding.EncodeToString(pub)}}})
+	v, err := NewVerifier(VerifierConfig{Issuer: "https://issuer.example.invalid/", Audience: pairAud, Types: []string{"at+jwt"}, JWKS: jwks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Principals: []string{"member1"}, Paired: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.ConfigurePairing(PairingConfig{Verifier: v, Endpoint: pairAud, RegistrationEndpoint: "wss://example.test/register"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	h, _ := json.Marshal(map[string]any{"alg": "EdDSA", "kid": "test", "typ": "at+jwt"})
+	c, _ := json.Marshal(map[string]any{"iss": "https://issuer.example.invalid/", "aud": pairAud, "sub": "subject", "iat": now, "exp": now + 60})
+	input := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(c)
+	token := input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerKey, []byte(input)))
+	digest := sha256.Sum256([]byte(token))
+	sig, err := host.Sign(nil, pairTranscriptBytesForTest(pairAud, host.PublicKey().Marshal(), digest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := ssh.MarshalAuthorizedKey(host.PublicKey())
+	body, _ := json.Marshal(map[string]string{"host_public_key": string(encoded[:len(encoded)-1]), "proof": base64.RawURLEncoding.EncodeToString(ssh.Marshal(sig))})
+	req := httptest.NewRequest("POST", "http://gateway.internal"+PairPath, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	g.ServePair(rr, req)
+	return rr
+}

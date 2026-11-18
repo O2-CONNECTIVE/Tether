@@ -109,6 +109,8 @@ type session struct {
 
 // Gateway holds every mapping in memory only.
 type Gateway struct {
+	hosts         map[string][]byte
+	pairing       *PairingConfig
 	residentOnly  bool // immutable, trusted composition only
 	discoveryOnly bool // immutable capability restriction, never request-selected
 	ctx           context.Context

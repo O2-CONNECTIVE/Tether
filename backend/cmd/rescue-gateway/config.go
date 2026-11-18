@@ -36,6 +36,15 @@ type localConfig struct {
 	hosts        []agenttransport.EnrolledHost
 	resident     []agentgateway.ResidentEnrollment // explicit fixed-scope opt-in only
 	residentOnly bool                              // rejects legacy registration and generic MCP binding
+	pairing      *pairingConfig
+}
+
+// pairingConfig is the optional host-pairing composition input.
+type pairingConfig struct {
+	RegistryPath string
+	Audience     string
+	ClientID     string
+	TokenTypes   []string
 }
 
 // parseLocalConfig validates the whole document before any key is opened.
@@ -46,7 +55,7 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	if len(raw) == 0 || len(raw) > agentkeys.MaxTrustConfigBytes || agentwire.CheckJSON(raw, false) != nil {
 		return localConfig{}, errConfig
 	}
-	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident", "resident_only")
+	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident", "resident_only", "pairing")
 	defer wipeMembers(m)
 	if fieldErr != nil || m["gateway"] == nil || m["registration_endpoint"] == nil || m["principal_keys"] == nil || m["hosts"] == nil {
 		return localConfig{}, errConfig
@@ -80,6 +89,26 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 			return localConfig{}, errConfig
 		}
 		c.residentOnly = true
+	}
+	if raw, present := m["pairing"]; present {
+		// Stub: accept the shape so pairing validation tests reach the missing
+		// policy checks instead of failing as an unknown top-level member.
+		var f map[string]json.RawMessage
+		if json.Unmarshal(raw, &f) != nil {
+			return localConfig{}, errConfig
+		}
+		var p pairingConfig
+		p.RegistryPath, _ = text(f["registry_path"], maxPathBytes)
+		p.Audience, _ = text(f["audience"], 256)
+		p.ClientID, _ = text(f["client_id"], 256)
+		if vals, valid := array(f["token_types"], 16); valid {
+			for _, v := range vals {
+				if s, yes := text(v, 256); yes {
+					p.TokenTypes = append(p.TokenTypes, s)
+				}
+			}
+		}
+		c.pairing = &p
 	}
 	return c, nil
 }
@@ -122,7 +151,7 @@ func residentEnrollments(raw json.RawMessage, hosts []agenttransport.EnrolledHos
 			return nil, false
 		}
 		seen[principal] = true
-		entries = append(entries, agentgateway.ResidentEnrollment{HostLabel: host, PrincipalLabel: principal, HostKey: selected.PublicKey.Marshal()})
+		entries = append(entries, agentgateway.ResidentEnrollment{HostLabel: host, PrincipalLabel: principal})
 	}
 	return entries, true
 }
@@ -174,21 +203,25 @@ func enrolledHosts(raw json.RawMessage, labels map[string]int, keys []agentkeys.
 	hosts := make([]agenttransport.EnrolledHost, 0, len(items))
 	hostLabels, hostKeys := map[string]bool{}, map[string]bool{}
 	for _, item := range items {
-		f, ok := members(item, "label", "public_key", "principals")
-		if !ok {
+		f, fieldErr := agentwire.Fields(item, "label", "public_key", "principals", "paired")
+		if fieldErr != nil || len(f) < 3 {
 			return nil, false
 		}
 		label, ok1 := text(f["label"], maxLabelBytes)
-		encoded, ok2 := text(f["public_key"], 128)
+		encoded, hasPublicKey := text(f["public_key"], 128)
 		served, ok3 := array(f["principals"], agentgateway.MaxPrincipals)
+		paired := bytes.Equal(f["paired"], []byte("true"))
 		key, ok4 := parsePublicKey(encoded)
+		if paired && f["public_key"] == nil {
+			ok4 = true
+		}
 		_, isPrincipal := labels[label]
-		if !ok1 || !ok2 || !ok3 || !ok4 || len(served) == 0 || !validLabel(label) || isPrincipal || hostLabels[label] ||
-			hostKeys[encoded] || principalPrints[ssh.FingerprintSHA256(key)] {
+		if !ok1 || (!paired && !hasPublicKey) || (paired && hasPublicKey) || !ok3 || !ok4 || len(served) == 0 || !validLabel(label) || isPrincipal || hostLabels[label] ||
+			(encoded != "" && hostKeys[encoded]) || (key != nil && principalPrints[ssh.FingerprintSHA256(key)]) {
 			wipeMembers(f)
 			return nil, false
 		}
-		h := agenttransport.EnrolledHost{Label: label, PublicKey: key}
+		h := agenttransport.EnrolledHost{Label: label, PublicKey: key, Paired: paired}
 		mapped := map[string]bool{}
 		for _, s := range served {
 			p, ok := text(s, maxLabelBytes)
@@ -200,7 +233,10 @@ func enrolledHosts(raw json.RawMessage, labels map[string]int, keys []agentkeys.
 			h.Principals = append(h.Principals, p)
 		}
 		wipeMembers(f)
-		hostLabels[label], hostKeys[encoded] = true, true
+		hostLabels[label] = true
+		if encoded != "" {
+			hostKeys[encoded] = true
+		}
 		hosts = append(hosts, h)
 	}
 	return hosts, true

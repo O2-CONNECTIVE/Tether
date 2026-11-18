@@ -29,6 +29,7 @@ type EnrolledHost struct {
 	Label      string
 	PublicKey  ssh.PublicKey
 	Principals []string
+	Paired     bool
 }
 
 // HandlerConfig is chosen by the trusted gateway composition, never a request.

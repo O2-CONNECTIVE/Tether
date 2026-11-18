@@ -50,8 +50,11 @@ func newCapacityRig(t *testing.T) *capacityRig {
 	r := newModeRig(t, agentgateway.Config{Verifier: verifier(t), Clock: clock})
 	control := &generationControl{}
 	entries := []agentgateway.ResidentEnrollment{
-		{HostLabel: "host1", PrincipalLabel: label(0), HostKey: fixtureSigner(t, 0x61).PublicKey().Marshal()},
-		{HostLabel: "host2", PrincipalLabel: label(1), HostKey: fixtureSigner(t, 0x62).PublicKey().Marshal()},
+		{HostLabel: "host1", PrincipalLabel: label(0)},
+		{HostLabel: "host2", PrincipalLabel: label(1)},
+	}
+	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "host1", Key: fixtureSigner(t, 0x61).PublicKey().Marshal(), Principals: []string{label(0)}}, {Label: "host2", Key: fixtureSigner(t, 0x62).PublicKey().Marshal(), Principals: []string{label(1)}}}); err != nil {
+		t.Fatal(err)
 	}
 	if err := r.gw.ConfigureResident("wss://example.test/register", control, entries); err != nil {
 		t.Fatal(err)

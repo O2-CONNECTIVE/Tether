@@ -12,7 +12,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -31,13 +30,16 @@ func legacyEnrollmentFixture(t *testing.T) (*Gateway, []ResidentEnrollment) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Key: host.PublicKey().Marshal(), Principals: []string{"member1"}}, {Label: "host2", Key: host.PublicKey().Marshal(), Principals: []string{"member2"}}}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		if err := g.Close(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
-	return g, []ResidentEnrollment{{HostLabel: "host1", PrincipalLabel: "member1", HostKey: host.PublicKey().Marshal()},
-		{HostLabel: "host2", PrincipalLabel: "member2", HostKey: host.PublicKey().Marshal()}}
+	return g, []ResidentEnrollment{{HostLabel: "host1", PrincipalLabel: "member1"},
+		{HostLabel: "host2", PrincipalLabel: "member2"}}
 }
 
 const legacyEndpoint = "wss://example.test/register"
@@ -47,19 +49,13 @@ func legacyControl() *residentControlFixture {
 }
 
 func TestResidentEnrollmentCompatibilityRejectsWithoutPartialInstall(t *testing.T) {
-	rsaKey, err := ssh.NewPublicKey(&rsa.PublicKey{N: big.NewInt(65537), E: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
 	cases := map[string]func([]ResidentEnrollment) []ResidentEnrollment{
-		"unsupported-key-type":               func(e []ResidentEnrollment) []ResidentEnrollment { e[1].HostKey = rsaKey.Marshal(); return e },
 		"empty":                              func(_ []ResidentEnrollment) []ResidentEnrollment { return nil },
 		"unknown-principal":                  func(e []ResidentEnrollment) []ResidentEnrollment { e[1].PrincipalLabel = "unknown"; return e },
 		"unsigned-principal":                 func(e []ResidentEnrollment) []ResidentEnrollment { e[1].PrincipalLabel = "unsigned"; return e },
 		"duplicate-principal-different-host": func(e []ResidentEnrollment) []ResidentEnrollment { e[1].PrincipalLabel = e[0].PrincipalLabel; return e },
 		"duplicate-identical":                func(e []ResidentEnrollment) []ResidentEnrollment { return []ResidentEnrollment{e[0], e[0]} },
 		"invalid-host":                       func(e []ResidentEnrollment) []ResidentEnrollment { e[1].HostLabel = "host/other"; return e },
-		"bad-key":                            func(e []ResidentEnrollment) []ResidentEnrollment { e[1].HostKey = []byte("not-a-key"); return e },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -78,21 +74,35 @@ func TestResidentEnrollmentCompatibilityRejectsWithoutPartialInstall(t *testing.
 	}
 }
 
+func TestResidentEnrollmentRejectsInvalidHostKeys(t *testing.T) {
+	for name, key := range map[string][]byte{"unsupported type": func() []byte {
+		k, _ := ssh.NewPublicKey(&rsa.PublicKey{N: big.NewInt(65537), E: 3})
+		return k.Marshal()
+	}(), "malformed": []byte("not-a-key")} {
+		t.Run(name, func(t *testing.T) {
+			g, entries := legacyEnrollmentFixture(t)
+			g.hosts["host2"] = key
+			if err := g.ConfigureResident(legacyEndpoint, legacyControl(), entries); !errors.Is(err, ErrConfig) {
+				t.Fatalf("ConfigureResident error = %v", err)
+			}
+		})
+	}
+}
+
 func TestResidentEnrollmentCompatibilityOneShotAndDetachedValues(t *testing.T) {
 	g, entries := legacyEnrollmentFixture(t)
-	wantKey := append([]byte(nil), entries[0].HostKey...)
+	wantKey := g.HostKey("host1")
 	if err := g.ConfigureResident(legacyEndpoint, legacyControl(), entries); err != nil {
 		t.Fatal(err)
 	}
 	original := g.resident
 	entry := original.entries[g.byLabel["member1"]]
 	entries[0].HostLabel = "replacement"
-	entries[0].HostKey[0] ^= 0xff
-	if entry.enrollment.HostLabel != "host1" || !bytes.Equal(entry.enrollment.HostKey, wantKey) {
+	wantKey[0] ^= 0xff
+	if entry.enrollment.HostLabel != "host1" || bytes.Equal(g.HostKey("host1"), wantKey) {
 		t.Fatal("input aliases installed enrollment")
 	}
 	_, replacement := legacyEnrollmentFixture(t)
-	replacement[0].HostLabel = "replacement"
 	if err := g.ConfigureResident(legacyEndpoint, legacyControl(), replacement); !errors.Is(err, ErrRefused) {
 		t.Fatal(err)
 	}
@@ -108,12 +118,11 @@ func TestResidentEnrollmentCompatibilitySameHostIsSeparatePrincipalSlots(t *test
 		t.Fatal(err)
 	}
 	a, b := g.resident.entries[g.byLabel["member1"]], g.resident.entries[g.byLabel["member2"]]
-	if len(g.resident.entries) != 2 || a == b || !reflect.DeepEqual(a.enrollment.HostKey, b.enrollment.HostKey) {
+	if len(g.resident.entries) != 2 || a == b || a == nil || b == nil {
 		t.Fatal("unexpected slot mapping")
 	}
 	a.works["synthetic"] = &residentWork{}
-	a.enrollment.HostKey[0] ^= 0xff
-	if len(b.works) != 0 || bytes.Equal(a.enrollment.HostKey, b.enrollment.HostKey) {
+	if len(b.works) != 0 {
 		t.Fatal("principal slots share mutable state")
 	}
 	// This is configuration acceptance only, not a shared-host authorization,

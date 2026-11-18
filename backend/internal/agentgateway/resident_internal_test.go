@@ -96,7 +96,10 @@ func residentEvidenceRig(t *testing.T) (*Gateway, *residentSession, ssh.Signer, 
 		t.Fatal(e)
 	}
 	control := &residentControlFixture{begin: make(chan struct{}), runs: make(chan residentRunCall, 8), rotated: make(chan string, 8)}
-	e = g.ConfigureResident("wss://example.test/register", control, []ResidentEnrollment{{HostLabel: "host1", PrincipalLabel: "member1", HostKey: host.PublicKey().Marshal()}})
+	if e = g.ConfigureHosts([]HostEntry{{Label: "host1", Key: host.PublicKey().Marshal(), Principals: []string{"member1"}}}); e != nil {
+		t.Fatal(e)
+	}
+	e = g.ConfigureResident("wss://example.test/register", control, []ResidentEnrollment{{HostLabel: "host1", PrincipalLabel: "member1"}})
 	if e != nil {
 		t.Fatal(e)
 	}

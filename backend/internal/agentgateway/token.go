@@ -47,14 +47,15 @@ var (
 // HTTPS refresh on an unknown kid. Exactly one of JWKS and JWKSURL is set, so a
 // key the provider removed from its JWKS is not kept trusted by static config.
 type VerifierConfig struct {
-	Issuer   string        // exact "iss"; an https URL
-	Audience string        // exact expected "aud" value
-	Scope    string        // the one required scope; empty disables the check
-	Types    []string      // accepted JOSE "typ" values, for example "at+jwt"
-	JWKS     []byte        // optional initial public JWK Set
-	JWKSURL  string        // optional HTTPS JWK Set endpoint
-	Leeway   time.Duration // clock skew tolerance, 0..MaxLeeway
-	Clock    func() time.Time
+	Issuer          string        // exact "iss"; an https URL
+	Audience        string        // exact expected "aud" value
+	Scope           string        // the one required scope; empty disables the check
+	Types           []string      // accepted JOSE "typ" values, for example "at+jwt"
+	JWKS            []byte        // optional initial public JWK Set
+	JWKSURL         string        // optional HTTPS JWK Set endpoint
+	Leeway          time.Duration // clock skew tolerance, 0..MaxLeeway
+	Clock           func() time.Time
+	RefusedAudience string
 }
 
 // Identity is an authenticated token holder. It carries no authority by
@@ -70,6 +71,7 @@ type Identity struct {
 // unknown kid arrives and a JWKS URL is configured.
 type Verifier struct {
 	issuer, audience, scope string
+	refusedAudience         string
 	types                   map[string]bool
 	keysMu                  sync.RWMutex
 	keys                    map[string]verificationKey
@@ -112,7 +114,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	v := &Verifier{issuer: cfg.Issuer, audience: cfg.Audience, scope: cfg.Scope, types: types, keys: keys, leeway: cfg.Leeway, clock: clock}
+	v := &Verifier{issuer: cfg.Issuer, audience: cfg.Audience, scope: cfg.Scope, refusedAudience: cfg.RefusedAudience, types: types, keys: keys, leeway: cfg.Leeway, clock: clock}
 	if cfg.JWKSURL != "" {
 		v.refresh = newJWKSRefresh(cfg.JWKSURL)
 	}

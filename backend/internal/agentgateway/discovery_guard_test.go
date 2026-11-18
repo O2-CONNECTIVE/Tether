@@ -29,11 +29,14 @@ func TestDiscoveryResidentGuardPrecedesOtherwiseValidEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := []ResidentEnrollment{{HostLabel: "host-1", PrincipalLabel: "member-1", HostKey: host.PublicKey().Marshal()}}
+	entries := []ResidentEnrollment{{HostLabel: "host-1", PrincipalLabel: "member-1"}}
 	// White-box defense-in-depth test: New forbids this signer in discovery.
 	// Identical otherwise-valid composition succeeds only in ordinary mode.
 	for _, discovery := range []bool{false, true} {
 		g := &Gateway{discoveryOnly: discovery, byLabel: map[string]*principal{"member-1": {label: "member-1", signer: signer}}}
+		if err := g.ConfigureHosts([]HostEntry{{Label: "host-1", Key: host.PublicKey().Marshal(), Principals: []string{"member-1"}}}); err != nil {
+			t.Fatal(err)
+		}
 		err := g.ConfigureResident("wss://gateway.example.invalid/tether-agent/v1/register", discoveryControl{}, entries)
 		if discovery && (err == nil || g.resident != nil) {
 			t.Fatal("discovery resident configuration admitted")

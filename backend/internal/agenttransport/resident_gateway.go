@@ -15,6 +15,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// testHookAfterResidentReserved runs after the resident slot is reserved and
+// before the accepted response. It makes the key-rotation race deterministic.
+var testHookAfterResidentReserved func()
+
 // ResidentPrincipal is supplied by the protected normal gateway composition.
 // A signer enables identity-only resident authentication, never an execution grant.
 type ResidentPrincipal struct {
@@ -115,6 +119,9 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 		}
 		peer = nil
 		return
+	}
+	if testHookAfterResidentReserved != nil {
+		testHookAfterResidentReserved()
 	}
 	sig, e := sign(signer, signer.PublicKey(), residentTranscript(b, "gateway-accepted"))
 	if e != nil {

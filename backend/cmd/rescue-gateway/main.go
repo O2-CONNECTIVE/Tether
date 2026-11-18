@@ -54,6 +54,13 @@ type deps struct {
 	pilotLifetime     time.Duration
 	refreshAccessKeys func(context.Context, *agentgateway.AccessVerifier) error
 	waitAccessRefresh func(context.Context, time.Duration) bool
+	openRegistry      func(context.Context, string) (registry, error)
+}
+
+type registry interface {
+	Load() []byte
+	Save(context.Context, []byte) error
+	Close() error
 }
 
 func nativeDeps() deps {
@@ -64,6 +71,7 @@ func nativeDeps() deps {
 		pilotLifetime:     pilotMaxLifetime,
 		refreshAccessKeys: func(ctx context.Context, v *agentgateway.AccessVerifier) error { return v.RefreshKeys(ctx) },
 		waitAccessRefresh: waitAccessRefresh,
+		openRegistry:      openNativeRegistry,
 	}
 }
 
