@@ -40,9 +40,8 @@ type storedPairRegistry struct {
 	Hosts []storedPairRecord `json:"hosts"`
 }
 
-// validatePairingRegistry is the validation boundary for persisted pairings.
-// Stub: the validation rules are covered by A14 and will be implemented by
-// the green change.
+// validatePairingRegistry reads the persisted pairings and refuses any record
+// that does not match an empty pairing slot and its configured identity.
 func validatePairingRegistry(raw []byte, cfg localConfig) ([]agentgateway.PairRecord, error) {
 	if len(raw) == 0 {
 		return nil, nil // no registry file yet: every slot starts empty
@@ -95,7 +94,7 @@ func validatePairingRegistry(raw []byte, cfg localConfig) ([]agentgateway.PairRe
 		host := hostByLabel(cfg.hosts, x.HostLabel)
 		p := principalByLabel(cfg.gateway.Principals, host.Principals[0])
 		tm, err := time.Parse(time.RFC3339, x.RegisteredAt)
-		if err != nil || tm.Location() != time.UTC || x.Issuer != cfg.gateway.Verifier.Issuer || x.Subject != p.Subject || keys[string(key.Marshal())] {
+		if err != nil || tm.Location() != time.UTC || x.Issuer != cfg.gateway.Verifier.Issuer || x.Subject != p.Subject {
 			return nil, errRegistry
 		}
 		keys[string(key.Marshal())] = true

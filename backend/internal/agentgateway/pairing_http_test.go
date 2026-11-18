@@ -38,7 +38,7 @@ func pairSetupWithRecords(t *testing.T, subject string, hosts []agentgateway.Hos
 		principals[i] = agentgateway.Principal{Label: label(i), Subject: subjects[i], Signer: fixtureSigner(t, byte(0x21+i))}
 	}
 	principals[0].Subject = subject
-	g, err := agentgateway.New(agentgateway.Config{Verifier: v, Resource: testResource, Principals: principals})
+	g, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), Resource: testResource, Principals: principals})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestConnectRejectsOldHostKeyAfterPairingReplacementA9(t *testing.T) {
 	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.gw.ConfigurePairing(agentgateway.PairingConfig{Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: "wss://gateway.example.invalid/register", Records: []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: newKey, Issuer: testIssuer, Subject: subjects[0]}}}); err != nil {
+	if err := r.gw.ConfigurePairing(agentgateway.PairingConfig{Verifier: pairingVerifier(t), Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: "wss://gateway.example.invalid/register", Records: []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: newKey, Issuer: testIssuer, Subject: subjects[0]}}}); err != nil {
 		t.Fatal(err)
 	}
 	d := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Identity: supervisor.Identity{LaunchID: "fresh-launch"}}, Profile: agentexec.ProfileMacCurrentUser}, Deadline: time.Now().Add(time.Minute), HostKey: oldKey}
@@ -230,7 +230,7 @@ func pairingMultiGateway(t *testing.T, save func([]agentgateway.PairRecord) erro
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := newModeRig(t, agentgateway.Config{Verifier: v, Resource: testResource})
+	r := newModeRig(t, agentgateway.Config{Verifier: verifier(t), Resource: testResource})
 	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "slot-1", Principals: []string{label(0)}, Paired: true}, {Label: "slot-2", Principals: []string{label(1)}, Paired: true}}); err != nil {
 		t.Fatal(err)
 	}
@@ -314,4 +314,14 @@ func TestConcurrentPairingSameKeyHasSingleWinnerA12(t *testing.T) {
 	if counts[200] != 1 || counts[409] != 1 {
 		t.Fatalf("concurrent outcomes = %v, want one 200 and one 409", counts)
 	}
+}
+
+// pairingVerifier accepts only tokens issued for the pair route.
+func pairingVerifier(t *testing.T) *agentgateway.Verifier {
+	t.Helper()
+	v, err := agentgateway.NewVerifier(agentgateway.VerifierConfig{Issuer: testIssuer, Audience: pairingAudience, Types: []string{"at+jwt"}, JWKS: jwks(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }

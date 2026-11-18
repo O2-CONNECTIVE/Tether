@@ -55,7 +55,7 @@ type VerifierConfig struct {
 	JWKSURL         string        // optional HTTPS JWK Set endpoint
 	Leeway          time.Duration // clock skew tolerance, 0..MaxLeeway
 	Clock           func() time.Time
-	RefusedAudience string
+	RefusedAudience string // tokens naming this audience are refused (the pair route's)
 }
 
 // Identity is an authenticated token holder. It carries no authority by

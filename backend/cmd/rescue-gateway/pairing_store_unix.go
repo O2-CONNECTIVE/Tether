@@ -34,7 +34,7 @@ func openRegistryWith(ctx context.Context, path string, ops registryOps) (regist
 	}
 
 	lockPath := path + ".lock"
-	lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	lockFile, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +116,15 @@ func (r *nativeRegistry) Save(ctx context.Context, raw []byte) error {
 		return err
 	}
 	wipe(protected)
+	if _, err := os.Lstat(r.path); err == nil {
+		current, err := readProtectedBytes(ctx, r.ops.readTrust, r.path)
+		if err != nil {
+			return err
+		}
+		wipe(current)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 
 	dir := filepath.Dir(r.path)
 	tmp, err := os.CreateTemp(dir, ".pairs-*")

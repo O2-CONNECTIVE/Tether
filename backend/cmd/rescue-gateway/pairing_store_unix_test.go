@@ -111,3 +111,57 @@ func TestNativePairingRegistryProtectedReadFailureA14(t *testing.T) {
 		t.Fatalf("protected read failure was not observed: called=%v err=%v", called, err)
 	}
 }
+
+func TestNativePairingRegistrySaveRechecksRegistryProtectionA14(t *testing.T) {
+	// A registry file that lost its protection after start must not be
+	// replaced as if nothing happened: the save fails and nothing changes.
+	path := filepath.Join(t.TempDir(), "pairs.json")
+	old := []byte(`{"hosts":[]}`)
+	if err := os.WriteFile(path, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unprotected := false
+	store, err := openRegistryWith(context.Background(), path, registryOps{
+		readTrust: func(_ context.Context, p string) ([]byte, error) {
+			if unprotected && p == path {
+				return nil, errors.New("synthetic unprotected registry")
+			}
+			return os.ReadFile(p)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	unprotected = true
+	if err := store.Save(context.Background(), []byte(`{"hosts":[{"label":"new"}]}`)); err == nil {
+		t.Fatal("save succeeded over an unprotected registry file")
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(old) {
+		t.Fatalf("registry changed after a refused save: %q", got)
+	}
+}
+
+func TestNativePairingRegistryRefusesSymlinkedLockA14(t *testing.T) {
+	// The lock file is written before its protection is checked, so a planted
+	// symlink must not let the gateway write through it.
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "pairs.json")
+	if err := os.Symlink(victim, path+".lock"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openRegistryWith(context.Background(), path, registryOps{
+		readTrust: func(context.Context, string) ([]byte, error) { return nil, nil },
+	})
+	if err == nil {
+		_ = store.Close()
+		t.Fatal("registry opened through a symlinked lock")
+	}
+	if got, _ := os.ReadFile(victim); len(got) != 0 {
+		t.Fatalf("lock text was written through the symlink: %q", got)
+	}
+}

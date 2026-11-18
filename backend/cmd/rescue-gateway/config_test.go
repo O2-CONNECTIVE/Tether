@@ -248,6 +248,7 @@ func TestPairingConfigRejectsConflictingSettingsA13(t *testing.T) {
 	}{
 		{"audience equals MCP resource", map[string]any{"registry_path": "/tmp/pair.json", "audience": "https://gateway.example.invalid/mcp", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
 		{"audience equals client with JWT", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-client", "client_id": "pair-client", "token_types": []any{"JWT"}}, nil},
+		{"audience equals client with application/JWT", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-client", "client_id": "pair-client", "token_types": []any{"application/JWT"}}, nil},
 		{"registry path equals config", map[string]any{"registry_path": configPath, "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, nil},
 		{"pair route conflicts with registration endpoint", map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}, func(d map[string]any) {
 			d["registration_endpoint"] = "wss://gateway.example.invalid/tether-agent/v1/pair"
@@ -309,6 +310,18 @@ func TestLocalConfigRefusesRawShapes(t *testing.T) {
 	} {
 		if _, err := parseLocalConfig(raw, configPath); err == nil {
 			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+func TestHostPairedMemberAcceptsOnlyTrueA13(t *testing.T) {
+	// "paired" chooses between a pinned key and a pairing slot; any other value
+	// is a typo that must not silently fall back to the static-key meaning.
+	for _, v := range []any{false, 1, "true"} {
+		doc := localDoc(t)
+		item(doc, "hosts", 0)["paired"] = v
+		if _, err := parseLocalConfig(encode(t, doc), configPath); err == nil {
+			t.Fatalf("hosts[].paired=%v was accepted", v)
 		}
 	}
 }

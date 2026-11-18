@@ -124,10 +124,8 @@ func (g *Gateway) ConfigurePairing(cfg PairingConfig) error {
 	if g.verifier == nil || g.hosts == nil || g.pairing != nil || g.closed || len(g.sessions) != 0 || g.resident != nil || !validPairEndpoint(cfg.Endpoint) || !validRegistrationURL(cfg.RegistrationEndpoint) {
 		return ErrConfig
 	}
-	if cfg.Verifier == nil {
-		cfg.Verifier = g.verifier
-	}
-	if cfg.Verifier.issuer == "" {
+	// The pair route takes only its own verifier: an MCP token must never register a host.
+	if cfg.Verifier == nil || cfg.Verifier == g.verifier || cfg.Verifier.audience == g.verifier.audience || cfg.Verifier.issuer == "" {
 		return ErrConfig
 	}
 	used := map[string]bool{}
@@ -255,8 +253,7 @@ func (g *Gateway) ServePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key, comment, options, rest, err := ssh.ParseAuthorizedKey([]byte(keyText))
-	canonical := strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(key)), "\n")
-	if err != nil || comment != "" || len(options) != 0 || len(rest) != 0 || key.Type() != ssh.KeyAlgoED25519 || canonical != keyText {
+	if err != nil || comment != "" || len(options) != 0 || len(rest) != 0 || key.Type() != ssh.KeyAlgoED25519 || strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(key)), "\n") != keyText {
 		http.Error(w, "", http.StatusBadRequest)
 		return
 	}
@@ -317,12 +314,16 @@ func (g *Gateway) ServePair(w http.ResponseWriter, r *http.Request) {
 	target.key = append([]byte(nil), key.Marshal()...)
 	target.record = &record
 	cfg.Records = clonePairRecords(records)
-	target.replacing = false
 	g.mu.Unlock()
 	g.pairMu.Unlock()
+	// The slot stays reserved until the old host's links are cut, so the old
+	// session cannot start work that would reach the replaced host.
 	if cfg.Disconnect != nil {
 		cfg.Disconnect(label)
 	}
+	g.mu.Lock()
+	target.replacing = false
+	g.mu.Unlock()
 	principalKey := ssh.MarshalAuthorizedKey(p.signer.PublicKey())
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"registration_endpoint": cfg.RegistrationEndpoint, "host_label": label, "principal_label": p.label, "principal_public_key": strings.TrimSuffix(string(principalKey), "\n")})

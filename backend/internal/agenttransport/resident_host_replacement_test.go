@@ -60,6 +60,41 @@ func TestResidentReplacementAfterReserveRejectsOldControl_A9(t *testing.T) {
 	}
 }
 
+func TestResidentReplacementAfterReserveReleasesSlot_A9(t *testing.T) {
+	// Refusing the old key after it reserved the slot must give the slot back,
+	// or the newly paired host could not connect until the gateway restarts.
+	rig := newResidentRig(t, nil)
+	registrar := &rotatingHostRegistrar{recordingRegistrar: rig.rec, key: fixtureSigner(t, 0x11).PublicKey().Marshal()}
+	rig.h.registrar = registrar
+	reserved := make(chan struct{})
+	oldHook := testHookAfterResidentReserved
+	testHookAfterResidentReserved = func() {
+		registrar.replace(fixtureSigner(t, 0x12).PublicKey().Marshal())
+		close(reserved)
+	}
+	t.Cleanup(func() { testHookAfterResidentReserved = oldHook })
+	residentRun(rig.c)
+	select {
+	case <-reserved:
+	case <-time.After(3 * time.Second):
+		t.Fatal("resident slot was not reserved")
+	}
+	k := residentMapKey(hostLabel, member1)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rig.h.mu.Lock()
+		held := rig.h.residents[k] != nil
+		rig.h.mu.Unlock()
+		if !held {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("refused old control still holds the resident slot")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 var _ interface {
 	Connect(string, agentgateway.Dispatch, net.Conn) error
 	HostKey(string) []byte

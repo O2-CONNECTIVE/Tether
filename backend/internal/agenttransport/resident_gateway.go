@@ -125,8 +125,8 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 	}
 	currentHostKey, currentHostWire := h.hostKey(b.host)
 	if currentHostKey == nil || !bytes.Equal(currentHostWire, b.hostKey) {
+		// peer stays set: the deferred cleanup releases the reserved slot.
 		_ = ws.Close(websocket.StatusPolicyViolation, "resident identity refused")
-		peer = nil
 		return
 	}
 	sig, e := sign(signer, signer.PublicKey(), residentTranscript(b, "gateway-accepted"))

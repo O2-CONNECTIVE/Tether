@@ -127,26 +127,33 @@ func pairOnlyRig(t *testing.T) (*Gateway, *principal) {
 	return g, g.byLabel["member1"]
 }
 
-func servePairForTest(t *testing.T, g *Gateway, host ssh.Signer) int {
-	t.Helper()
-	pairAud := "https://example.test" + PairPath
+func pairTokenForTest() string {
 	issuerKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
 	now := time.Now().Unix()
 	h, _ := json.Marshal(map[string]any{"alg": "EdDSA", "kid": "test", "typ": "at+jwt"})
-	c, _ := json.Marshal(map[string]any{"iss": "https://issuer.example.invalid/", "aud": pairAud, "sub": "subject", "iat": now, "exp": now + 60})
+	c, _ := json.Marshal(map[string]any{"iss": "https://issuer.example.invalid/", "aud": "https://example.test" + PairPath, "sub": "subject", "iat": now, "exp": now + 60})
 	input := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(c)
-	token := input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerKey, []byte(input)))
-	sig, err := host.Sign(nil, pairTranscriptBytesForTest(pairAud, host.PublicKey().Marshal(), sha256.Sum256([]byte(token))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded := ssh.MarshalAuthorizedKey(host.PublicKey())
-	body, _ := json.Marshal(map[string]string{"host_public_key": string(encoded[:len(encoded)-1]), "proof": base64.RawURLEncoding.EncodeToString(ssh.Marshal(sig))})
-	req := httptest.NewRequest("POST", "http://gateway.internal"+PairPath, bytes.NewReader(body))
+	return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerKey, []byte(input)))
+}
+
+func servePairBodyForTest(g *Gateway, token string, body map[string]string) int {
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "http://gateway.internal"+PairPath, bytes.NewReader(raw))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rr := httptest.NewRecorder()
 	g.ServePair(rr, req)
 	return rr.Code
+}
+
+func servePairForTest(t *testing.T, g *Gateway, host ssh.Signer) int {
+	t.Helper()
+	token := pairTokenForTest()
+	sig, err := host.Sign(nil, pairTranscriptBytesForTest("https://example.test"+PairPath, host.PublicKey().Marshal(), sha256.Sum256([]byte(token))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := ssh.MarshalAuthorizedKey(host.PublicKey())
+	return servePairBodyForTest(g, token, map[string]string{"host_public_key": string(encoded[:len(encoded)-1]), "proof": base64.RawURLEncoding.EncodeToString(ssh.Marshal(sig))})
 }
 
 func TestServePairRejectsLiveSessionRouteWithoutResidentA7(t *testing.T) {
@@ -194,5 +201,54 @@ func TestConfigureHostsRejectsPairingSlotWithoutPrincipalKeyA3(t *testing.T) {
 	defer g.Close(context.Background())
 	if err := g.ConfigureHosts([]HostEntry{{Label: "host1", Principals: []string{"member1"}, Paired: true}}); err == nil {
 		t.Fatal("a pairing slot without a principal signing key was accepted")
+	}
+}
+
+func TestServePairRejectsUnparsableHostKeyA4(t *testing.T) {
+	// A malformed key from an authenticated caller is a bad request, not a
+	// handler crash that drops the connection.
+	g, _ := pairOnlyRig(t)
+	if code := servePairBodyForTest(g, pairTokenForTest(), map[string]string{"host_public_key": "not-a-key", "proof": "AAAA"}); code != 400 {
+		t.Fatalf("unparsable host key status = %d, want 400", code)
+	}
+}
+
+func TestServePairHoldsSlotUntilOldHostIsCutA8(t *testing.T) {
+	// Between committing the new key and cutting the old host's links, the old
+	// session must not start work: it would reach the replaced host and stay
+	// uncollectable once the new key rejects that host's proofs.
+	g, s, _, _ := residentEvidenceRig(t, true)
+	defer g.Close(context.Background())
+	var during map[string]any
+	g.mu.Lock()
+	g.pairing.Disconnect = func(string) { during = s.FixedStart(context.Background(), strings.Repeat("3", 32)) }
+	g.mu.Unlock()
+	next, _ := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, 32)))
+	if code := servePairForTest(t, g, next); code != 200 {
+		t.Fatalf("replacement status = %d, want 200", code)
+	}
+	if refusal, _ := during["error"].(string); refusal == "" {
+		t.Fatalf("old session started work while its host was being cut: %v", during)
+	}
+}
+
+func TestConfigurePairingRequiresDedicatedVerifierA2(t *testing.T) {
+	// The pair route must never accept tokens issued for the MCP entry.
+	for _, tc := range []struct {
+		name     string
+		verifier func(*Gateway) *Verifier
+	}{
+		{"missing verifier", func(*Gateway) *Verifier { return nil }},
+		{"MCP verifier", func(g *Gateway) *Verifier { return g.verifier }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g, _ := pairOnlyRig(t)
+			g.mu.Lock()
+			g.pairing = nil
+			g.mu.Unlock()
+			if err := g.ConfigurePairing(PairingConfig{Verifier: tc.verifier(g), Endpoint: "https://example.test" + PairPath, RegistrationEndpoint: "wss://example.test/register"}); err == nil {
+				t.Fatal("pairing accepted a verifier that is not dedicated to the pair route")
+			}
+		})
 	}
 }

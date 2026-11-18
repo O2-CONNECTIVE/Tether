@@ -156,9 +156,11 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	return c, nil
 }
 
+// containsNormalType normalizes like the token verifier does (lower case,
+// "application/" removed), so the check matches what the verifier accepts.
 func containsNormalType(types []string, target string) bool {
 	for _, t := range types {
-		if strings.ToLower(t) == target {
+		if strings.TrimPrefix(strings.ToLower(t), "application/") == target {
 			return true
 		}
 	}
@@ -272,6 +274,10 @@ func enrolledHosts(raw json.RawMessage, labels map[string]int, keys []agentkeys.
 		encoded, hasPublicKey := text(f["public_key"], 128)
 		served, ok3 := array(f["principals"], agentgateway.MaxPrincipals)
 		paired := bytes.Equal(f["paired"], []byte("true"))
+		if f["paired"] != nil && !paired {
+			wipeMembers(f)
+			return nil, false
+		}
 		key, ok4 := parsePublicKey(encoded)
 		if paired && f["public_key"] == nil {
 			ok4 = true

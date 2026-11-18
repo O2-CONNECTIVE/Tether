@@ -51,7 +51,7 @@ pairing verifierはBearer用OAuth設定から作られます。MCP verifierはpa
 
 ## 置換と接続
 
-登録枠のprincipalに未回収作業がある、routeがある、または接続中の場合、置換は`409`です。保存中は枠をbusyとして扱い、新しい作業開始と新しいConnectを拒否します。
+登録枠のprincipalに未回収作業がある、routeがある、または接続中の場合、置換は`409`です。保存中と旧接続の切断が終わるまでは枠をbusyとして扱い、新しい作業開始と新しいConnectを拒否します。
 
 保存が成功して新鍵を反映した後、対象hostのtransport接続をすべて切断します。以後は新しい鍵でhandshakeします。旧鍵の接続は継続しません。旧MCP sessionは旧作業の結果照会だけに使え、新しい作業は開始できません。
 
@@ -70,14 +70,14 @@ pairing verifierはBearer用OAuth設定から作られます。MCP verifierはpa
 }
 ```
 
-`hosts`項目は`public_key`か`"paired": true`のどちらか一方です。paired枠はprincipalちょうど1人を持ち、そのprincipalの`resident.host_label`は同じhost labelを指します。
+`hosts`項目は`public_key`か`"paired": true`のどちらか一方です。`paired`は`true`以外の値を受け付けません。paired枠はprincipalちょうど1人を持ち、そのprincipalの`resident.host_label`は同じhost labelを指します。
 
 設定エラーとなる条件は次のとおりです。
 
 - paired hostがあるのに`pairing`がない。
 - Access方式で`pairing`を指定する。
 - `pairing.audience`がMCP audienceと同じ。
-- `audience == client_id`で、`token_types`に`JWT`（大文字小文字を正規化して`jwt`）が含まれる。
+- `audience == client_id`で、`token_types`に`JWT`（大文字小文字と`application/`を正規化して`jwt`。tokenの検証と同じ正規化）が含まれる。
 - `/tether-agent/v1/pair`がMCP resource pathまたは登録経路pathと同じ（metadata pathは`/.well-known/`で始まるため一致しません）。
 - `registry_path`が設定または鍵のpathと同じ。
 
@@ -87,9 +87,9 @@ pairing用tokenはMCP入口に通しません。`audience`はMCP audienceと別�
 
 JSONは`hosts`配列を持ち、各recordに`label`、`public_key`、`fingerprint`、`issuer`、`subject`、`registered_at`を含みます。`registered_at`はRFC 3339 UTCです。起動時、形式不正、未知またはpairedでないlabel、同じlabelの2回、鍵重複、principal鍵との重複、fingerprint不一致、issuer/subject不一致があれば拒否します。登録簿のファイルが無ければ、すべての枠が空のまま起動します。
 
-登録簿は設定・鍵とは別の保護対象です。native Unix storeは`<registry_path>.lock`を同じディレクトリに作り、`O_RDWR|O_CREATE`・0600で開いて非blocking exclusive flockを取ります。取得できなければ起動しません。空のlock fileには固定1行を書いてfsyncします。lockと登録簿は保護検査を行います。
+登録簿は設定・鍵とは別の保護対象です。native Unix storeは`<registry_path>.lock`を同じディレクトリに作り、`O_RDWR|O_CREATE|O_NOFOLLOW`・0600で開いて非blocking exclusive flockを取ります。取得できなければ起動しません。空のlock fileには固定1行を書いてfsyncします。lockと登録簿は保護検査を行います。
 
-保存は保護検査後、同じディレクトリの0600一時ファイルへ書き、fsyncしてrenameで確定し、親directoryをfsyncします。rename失敗はerrorで、旧登録簿を維持します。親directory fsync失敗は診断を出してnilを返し、rename済みの新登録簿を採用します。非Unixではpairing設定時に起動できません。
+保存はlockと既存の登録簿の保護検査後、同じディレクトリの0600一時ファイルへ書き、fsyncしてrenameで確定し、親directoryをfsyncします。rename失敗はerrorで、旧登録簿を維持します。親directory fsync失敗は診断を出してnilを返し、rename済みの新登録簿を採用します。非Unixではpairing設定時に起動できません。
 
 ## 脅威と確認範囲
 
