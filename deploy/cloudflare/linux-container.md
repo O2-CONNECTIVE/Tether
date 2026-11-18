@@ -23,12 +23,14 @@
 | network | 他workloadと共有しない専用bridge。host network禁止。待受は保護configの明示`container_private`だけ。hostへのpublishは確認済みportの **127.0.0.1のみ**。IPv6全addressや任意host公開を追加しない |
 | inbound | 指定Tunnel経路からのMCP/登録pathだけ。認証とdevice proofはアプリで維持。network分離を認可の代替にしない |
 | outbound | 必要な経路だけ。static Access verification鍵利用時に任意external fetchが必要とは仮定しない。許可経路が確定するまで広域networkアクセスを承認しない |
-| mounts | config/keyの明示fileをread-only bind mount。親directoryの同一性・置換/削除権も検査し、専用Linux native filesystemで保護する |
+| mounts | config/keyの明示fileをread-only bind mount。親directoryの同一性・置換/削除権も検査し、専用Linux native filesystemで保護する。pairingを使う場合は登録簿用に、設定・鍵とは別の書込み可能な専用directoryをmountする。runtime UIDが書込み可能で、owner・modeはnative保護検査を満たすこと |
 | 禁止mount | Docker socket、host root、home、host credential store、CI secret、`/proc`等host管理面、Windows共有drive上の不適合なkey/config |
 | 自動再開 | restart policyなし。終了・失効後の自動再接続や新grant発行をしない |
 | 診断 | 固定の終了理由とowned evidenceだけ。token、private bytes、実config全文やcontainer全環境をlogへ出さない |
 
 上記数値は最小検証用の提案で、実daemon設定変更やcontainer実行の許可ではありません。rootless/user-namespace等を利用する場合は、container UIDとhost filesystem ownerの対応を独立確認します。runtime名だけでhost UIDを推定せず、ownerを広く許すloader変更もしません。
+
+pairing登録簿のlock fileは登録簿と同じdirectoryに作られます。実配置へのmount追加やowner/mode変更は別承認が必要で、このPRでは実配置を変更しません。詳細は[ホストのペア登録](../../docs/host-pairing.md)を参照してください。
 
 ## container-private待受profile
 
