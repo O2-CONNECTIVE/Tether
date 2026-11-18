@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -102,6 +103,24 @@ func residentDelete(t *testing.T, l *fakeListener, auth, sid string) {
 }
 
 func residentPeer(t *testing.T, l *fakeListener) (*websocket.Conn, func(string, ...string) []byte) {
+	ws, transcript, err := residentPeerAttempt(t, l, 0x21)
+	if err != nil {
+		t.Fatal("resident upgrade refused", err)
+	}
+	t.Cleanup(func() { _ = ws.CloseNow() })
+	return ws, transcript
+}
+
+func residentPeerWith(t *testing.T, l *fakeListener, seed byte) (*websocket.Conn, func(string, ...string) []byte) {
+	ws, transcript, err := residentPeerAttempt(t, l, seed)
+	if err != nil {
+		t.Fatal("resident upgrade refused", err)
+	}
+	t.Cleanup(func() { _ = ws.CloseNow() })
+	return ws, transcript
+}
+
+func residentPeerAttempt(t *testing.T, l *fakeListener, seed byte) (*websocket.Conn, func(string, ...string) []byte, error) {
 	t.Helper()
 	tr := &http.Transport{DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 		if addr != "gateway.example.invalid:80" {
@@ -123,9 +142,8 @@ func residentPeer(t *testing.T, l *fakeListener) (*websocket.Conn, func(string, 
 	defer stop()
 	ws, _, err := websocket.Dial(ctx, "ws://gateway.example.invalid/agent-register", &websocket.DialOptions{HTTPClient: &http.Client{Transport: tr}, Subprotocols: []string{agenttransport.ResidentSubprotocol}})
 	if err != nil {
-		t.Fatal("resident upgrade refused", err)
+		return nil, nil, err
 	}
-	t.Cleanup(func() { _ = ws.CloseNow() })
 	enc := base64.RawURLEncoding
 	nonce := bytes.Repeat([]byte{7}, 32)
 	residentWriteMessage(t, ws, map[string]string{"type": "resident_hello", "host": "mac-1", "principal": "member-1", "client_nonce": enc.EncodeToString(nonce)})
@@ -140,7 +158,7 @@ func residentPeer(t *testing.T, l *fakeListener) (*websocket.Conn, func(string, 
 		for _, s := range []string{"rescue-host.agenttransport.resident\x00v1\x00", role, "wss://gateway.example.invalid/agent-register", "mac-1", "member-1", challenge["generation"]} {
 			field([]byte(s))
 		}
-		for _, b := range [][]byte{nonce, server, publicOf(t, 0x21).Marshal(), publicOf(t, 0x11).Marshal()} {
+		for _, b := range [][]byte{nonce, server, publicOf(t, seed).Marshal(), publicOf(t, 0x11).Marshal()} {
 			field(b)
 		}
 		for _, s := range values {
@@ -149,29 +167,41 @@ func residentPeer(t *testing.T, l *fakeListener) (*websocket.Conn, func(string, 
 		return out
 	}
 	residentVerifyMessage(t, challenge, transcript("gateway-challenge"))
-	sig, err := signerOf(t, 0x21).Sign(nil, transcript("host-proof"))
+	sig, err := signerOf(t, seed).Sign(nil, transcript("host-proof"))
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	residentWriteMessage(t, ws, map[string]string{"type": "resident_proof", "signature": enc.EncodeToString(ssh.Marshal(sig))})
-	accepted := residentReadMessage(t, ws)
+	accepted, err := residentReadMessageAttempt(t, ws)
+	if err != nil {
+		return nil, nil, err
+	}
 	if accepted["type"] != "resident_accepted" {
-		t.Fatal("resident proof refused")
+		return nil, nil, errors.New("resident proof refused")
 	}
 	residentVerifyMessage(t, accepted, transcript("gateway-accepted"))
-	return ws, transcript
+	return ws, transcript, nil
 }
 
 func residentReadMessage(t *testing.T, ws *websocket.Conn) map[string]string {
+	t.Helper()
+	m, err := residentReadMessageAttempt(t, ws)
+	if err != nil {
+		t.Fatal("resident message unavailable", err)
+	}
+	return m
+}
+
+func residentReadMessageAttempt(t *testing.T, ws *websocket.Conn) (map[string]string, error) {
 	t.Helper()
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	kind, raw, err := ws.Read(ctx)
 	var m map[string]string
 	if err != nil || kind != websocket.MessageText || json.Unmarshal(raw, &m) != nil {
-		t.Fatal("resident message unavailable", err)
+		return nil, errors.New("resident message unavailable")
 	}
-	return m
+	return m, nil
 }
 
 func residentWriteMessage(t *testing.T, ws *websocket.Conn, m map[string]string) {

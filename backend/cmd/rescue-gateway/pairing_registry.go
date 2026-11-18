@@ -10,6 +10,13 @@ import (
 
 var errRegistry = errors.New("rescue-gateway: invalid pairing registry")
 
+// registryOps is the private filesystem seam used by native-store tests.
+type registryOps struct {
+	readTrust func(context.Context, string) ([]byte, error)
+	rename    func(string, string) error
+	syncDir   func(string) error
+}
+
 type storedPairRecord struct {
 	HostLabel    string `json:"label"`
 	PublicKey    string `json:"public_key"`
@@ -35,6 +42,11 @@ func validatePairingRegistry(raw []byte, cfg localConfig) ([]agentgateway.PairRe
 }
 
 // openNativeRegistry is a compile-time stub for the unix protected store.
-func openNativeRegistry(context.Context, string) (registry, error) {
+func openNativeRegistry(ctx context.Context, path string) (registry, error) {
+	return openRegistryWith(ctx, path, registryOps{})
+}
+
+// openRegistryWith is the injection point for protected reads and atomic commit operations.
+func openRegistryWith(context.Context, string, registryOps) (registry, error) {
 	return nil, errRegistry
 }
