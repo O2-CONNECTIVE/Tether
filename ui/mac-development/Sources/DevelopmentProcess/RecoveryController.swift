@@ -5,6 +5,7 @@ protocol RecoveryOwner: AnyObject {
     var feed: Feed { get }
     var launched: Bool { get }
     var launchFailed: Bool { get }
+    var launchedAt: UInt64? { get }
     var mayQuit: Bool { get }
     var diagnostic: String { get }
     func start()
@@ -36,6 +37,10 @@ public final class RecoveryController {
     public var feed: Feed { owner.feed }
     public var launched: Bool { owner.launched }
     public var launchFailed: Bool { owner.launchFailed }
+    public var launchedAt: UInt64? { owner.launchedAt }
+    // Only this process remembers an unresolved owner. The close button then
+    // hides the window and keeps the app, owner and unknown; Quit still refuses.
+    public var closeHidesWindow: Bool { owner.feed.cleanupInvalid }
     public var mayQuit: Bool { owner.mayQuit }
     public var diagnostic: String { owner.diagnostic }
     public var preparation: Preparation {

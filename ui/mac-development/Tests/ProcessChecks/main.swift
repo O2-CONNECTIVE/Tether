@@ -14,8 +14,10 @@ let digest = SHA256.hash(data: try Data(contentsOf: helper)).map { String(format
 try digest.write(to: resources.appendingPathComponent("resident.sha256"), atomically: true, encoding: .ascii)
 let owner = ResidentProcess(fixtureBundle: root)
 precondition(owner.mayQuit && !owner.launched)
+let beforeLaunch = ResidentProcess.now()
 owner.start(); owner.start()
 precondition(owner.launched && !owner.mayQuit && !owner.launchFailed)
+precondition(owner.launchedAt.map { $0 >= beforeLaunch && $0 <= ResidentProcess.now() } == true)
 let deadline = Date().addingTimeInterval(10)
 while owner.feed.observation == nil && Date() < deadline {
     owner.poll(); Thread.sleep(forTimeInterval: 0.01)
@@ -24,6 +26,7 @@ precondition(owner.feed.can("on", at: ResidentProcess.now()))
 owner.close(); owner.close()
 while !owner.mayQuit && Date() < deadline { owner.poll(); Thread.sleep(forTimeInterval: 0.01) }
 precondition(owner.mayQuit && owner.reaped && owner.eof && owner.feed.closeConfirmed && !owner.feed.fault)
+precondition(owner.feed.unrequestedCloseAt == nil) // the GUI asked for this close
 // Real original child emits a stale observation, receives the one close request,
 // then reports collection. No alternate process or injected terminal is used.
 for mode in ["recovery", "missing", "malformed", "unknown", "trailing", "partial", "nonzero"] {
@@ -52,7 +55,7 @@ for (mode, collected) in [("expiry", true), ("expiry-nonzero", false)] {
     while (!expired.reaped || !expired.eof) && Date() < until { expired.poll(); Thread.sleep(forTimeInterval: 0.01) }
     precondition(expired.reaped && expired.eof && expired.mayQuit == collected)
     precondition(collected
-        ? !expired.feed.fault && expired.feed.closeConfirmed
+        ? !expired.feed.fault && expired.feed.closeConfirmed && expired.feed.unrequestedCloseAt != nil
         : expired.diagnostic.hasSuffix("reason=child-exit-failed collection=child-exit-failed terminal=false EOF=true reaped=true exit0=false"))
 }
 let mismatch = ResidentProcess(fixtureBundle: root)

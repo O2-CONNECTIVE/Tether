@@ -15,6 +15,7 @@ public final class ResidentProcess {
     public private(set) var reaped = false
     public private(set) var eof = false
     public private(set) var launchFailed = false
+    public private(set) var launchedAt: UInt64?
     private var process: Process?
     private var input: Pipe?
     private var output: Pipe?
@@ -50,6 +51,7 @@ public final class ResidentProcess {
             p.currentDirectoryURL = root
             p.standardInput = toChild; p.standardOutput = fromChild
             p.standardError = FileHandle.nullDevice
+            launchedAt = Self.now() // before the helper starts its own lifetime timer
             try p.run()
             process = p; input = toChild; output = fromChild; launched = true
             try? toChild.fileHandleForReading.close(); try? fromChild.fileHandleForWriting.close()
