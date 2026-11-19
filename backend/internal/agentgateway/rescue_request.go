@@ -12,7 +12,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
 	"golang.org/x/crypto/ssh"
 )
@@ -124,7 +123,7 @@ func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
 	if err == nil {
 		keyDigest, err = runbackend.KeySetDigest([]ssh.PublicKey{clientSigner.PublicKey()})
 	}
-	if err != nil || !bytes.Equal(a.Dispatch.HostKey, record.key) || a.Dispatch.Binding.KeySetDigest != keyDigest || a.Dispatch.Binding.Profile != agentexec.ProfileMacCurrentUser {
+	if err != nil || !bytes.Equal(a.Dispatch.HostKey, record.key) || a.Dispatch.Binding.KeySetDigest != keyDigest {
 		g.setRescueStateLocked(record.principal, "failed")
 		g.endRescueLocked(id, record)
 		g.rescue.mu.Unlock()

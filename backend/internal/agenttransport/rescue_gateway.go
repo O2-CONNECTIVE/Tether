@@ -265,14 +265,17 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			case <-life.Done():
 				return
 			}
-			if rr.err != nil || rr.typ != websocket.MessageText || len(rr.msg) > MaxRegistrationMessage {
+			if rr.err != nil {
 				rescueClose(ws)
 				return
 			}
 			answer, err := decodeRescueAnswer(rr.msg)
-			if err != nil || (answer.Answer == agentgateway.RescueAllow && checkDispatch(answer.Dispatch, time.Now()) != nil) {
-				rescueClose(ws)
-				return
+			if err != nil || rr.typ != websocket.MessageText || len(rr.msg) > MaxRegistrationMessage ||
+				(answer.Answer == agentgateway.RescueAllow && checkDispatch(answer.Dispatch, time.Now()) != nil) {
+				// A frame the transport cannot accept is still the host's answer:
+				// the empty answer never verifies, so the gateway records failed
+				// (timeout after RescueRequestLifetime) instead of ended.
+				answer = agentgateway.RescueAnswer{}
 			}
 			stream := newStream(life, ws, c, DefaultBudgets().Cleanup)
 			_ = h.reg.AnswerRescue(res.ID, answer, stream)
