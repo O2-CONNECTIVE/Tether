@@ -5,12 +5,32 @@ import (
 	"net"
 	"strconv"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 )
 
 // MaxConfigBytes bounds the operator configuration document.
 const MaxConfigBytes = 64 << 10
+
+// validRescueIdentity checks the configured display name and organization;
+// see docs/rescue-connection-start.md, 名前と組織の出どころ.
+func validRescueIdentity(value string) bool {
+	if value == "" {
+		return true
+	}
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > 64 {
+		return false
+	}
+	bidi := unicode.Properties["Bidi_Control"]
+	for _, r := range value {
+		if unicode.IsControl(r) || (bidi != nil && unicode.Is(bidi, r)) {
+			return false
+		}
+	}
+	return true
+}
 
 // AuthMode is the one authentication mode of a configuration document. There
 // is no default and no fallback between modes.
@@ -50,7 +70,8 @@ type FileConfig struct {
 	Listen          string            // numeric host:port admitted by Profile; see listenAllowed
 	Profile         DeploymentProfile // ProfileLoopback unless the document names another
 	Mode            AuthMode
-	Resource        string               // the public MCP resource URL in both modes
+	Resource        string // the public MCP resource URL in both modes
+	Organization    string
 	Verifier        VerifierConfig       // ModeOAuthBearer only
 	Access          AccessVerifierConfig // ModeCloudflareAccess only
 	AccessKeySource string               // empty: static access_keys; cloudflare_certs: bounded HTTPS refresh
@@ -78,8 +99,8 @@ func (c FileConfig) PairingVerifier(audience string, types []string) (*Verifier,
 // Members of each mode. The sets share only the mode-neutral members, so a
 // document can never mix the two modes' trust inputs.
 var (
-	oauthMembers  = []string{"listen", "deployment_profile", "auth_mode", "resource", "audience", "issuer", "scope", "token_types", "leeway_seconds", "jwks", "jwks_url", "principals", "role_assurance", "allowed_origins"}
-	accessMembers = []string{"listen", "deployment_profile", "auth_mode", "resource", "access_issuer", "access_aud", "access_keys", "access_key_source", "leeway_seconds", "principals", "role_assurance", "allowed_origins"}
+	oauthMembers  = []string{"listen", "deployment_profile", "auth_mode", "resource", "audience", "issuer", "scope", "token_types", "leeway_seconds", "jwks", "jwks_url", "principals", "role_assurance", "allowed_origins", "organization"}
+	accessMembers = []string{"listen", "deployment_profile", "auth_mode", "resource", "access_issuer", "access_aud", "access_keys", "access_key_source", "leeway_seconds", "principals", "role_assurance", "allowed_origins", "organization"}
 )
 
 // ParseConfig reads the strict JSON configuration. "auth_mode" is required and
@@ -115,6 +136,9 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 	}
 	var leeway int
 	ok := decodeInto(m["listen"], &c.Listen) && decodeInto(m["resource"], &c.Resource) && decodeInto(m["leeway_seconds"], &leeway)
+	if raw, has := m["organization"]; has {
+		ok = ok && firstByte(raw) == '"' && decodeInto(raw, &c.Organization) && validRescueIdentity(c.Organization) && c.Organization != ""
+	}
 	if c.Mode == ModeOAuthBearer {
 		ok = ok && decodeInto(m["issuer"], &c.Verifier.Issuer) && decodeInto(m["scope"], &c.Verifier.Scope) &&
 			decodeInto(m["token_types"], &c.Verifier.Types)
@@ -162,7 +186,7 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 		return FileConfig{}, ErrConfig
 	}
 	for i, item := range people {
-		pm, err := agentwire.Fields(item, "label", "subject", "roles")
+		pm, err := agentwire.Fields(item, "label", "subject", "roles", "display_name")
 		var p Principal
 		if err != nil || !decodeInto(pm["label"], &p.Label) || !decodeInto(pm["subject"], &p.Subject) {
 			return FileConfig{}, ErrConfig
@@ -170,6 +194,11 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 		// New checks the values; only the shape is read here.
 		if firstByte(pm["roles"]) != '[' || !decodeInto(pm["roles"], &p.Roles) {
 			return FileConfig{}, rolesError(i)
+		}
+		if raw, has := pm["display_name"]; has {
+			if firstByte(raw) != '"' || !decodeInto(raw, &p.DisplayName) || !validRescueIdentity(p.DisplayName) || p.DisplayName == "" {
+				return FileConfig{}, ErrConfig
+			}
 		}
 		c.Principals = append(c.Principals, p)
 	}
@@ -197,7 +226,7 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 // Config naming it, the principals (without signers) and the origins. Trusted
 // composition adds signers and budgets before New.
 func (c FileConfig) GatewayConfig() (Config, error) {
-	cfg := Config{Resource: c.Resource, Principals: append([]Principal(nil), c.Principals...), RoleAssurance: c.RoleAssurance, AllowedOrigins: c.AllowedOrigins}
+	cfg := Config{Resource: c.Resource, Organization: c.Organization, Principals: append([]Principal(nil), c.Principals...), RoleAssurance: c.RoleAssurance, AllowedOrigins: c.AllowedOrigins}
 	var err error
 	switch c.Mode {
 	case ModeOAuthBearer:

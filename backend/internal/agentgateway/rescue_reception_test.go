@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -258,16 +259,15 @@ func TestRescueReceptionLimits(t *testing.T) {
 	t.Run("1000 receptions refuse a new reception with busy", func(t *testing.T) {
 		now := time.Unix(1_800_000_000, 0)
 		g := rescueReceptionGateway(t, &now)
-		var first RescueReception
-		for i := range 1000 { // the design value: maxRescueReceptions
-			res := openRescue(t, g, i)
-			if i == 0 {
-				first = res
-			}
-			if (i+1)%100 == 0 {
-				now = now.Add(5 * time.Minute) // the records stay, their codes expire
-			}
+		// Since #423 a reception without a request ends with its code, so only
+		// requested ones (in session now, in grace with #425) outlive their
+		// codes and can fill the records.
+		first := openRescue(t, g, 0)
+		g.rescue.mu.Lock()
+		for i := 1; i < 1000; i++ { // the design value: maxRescueReceptions
+			g.rescue.records[fmt.Sprintf("session-%d", i)] = &rescueReceptionRecord{principal: &principal{}, answered: true, done: make(chan struct{})}
 		}
+		g.rescue.mu.Unlock()
 		if err := g.AdmitRescue(); !errors.Is(err, ErrRescueBusy) {
 			t.Fatalf("AdmitRescue with 1000 receptions and no valid code = %v, want busy", err)
 		}

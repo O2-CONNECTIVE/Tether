@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"slices"
 	"sync"
@@ -24,6 +25,7 @@ type RescueRegistry interface {
 	AdmitRescue() error
 	OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error)
 	EndRescue([]byte)
+	AnswerRescue([]byte, agentgateway.RescueAnswer, net.Conn) error
 }
 
 // RescueHandler serves the gateway end of the rescue reception route.
@@ -222,7 +224,72 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rescueClose(ws)
 		return
 	}
-	_, _, _ = ws.Read(life)
+	type readResult struct {
+		typ websocket.MessageType
+		msg []byte
+		err error
+	}
+	read := make(chan readResult, 1)
+	go func() {
+		typ, msg, err := ws.Read(life)
+		read <- readResult{typ: typ, msg: msg, err: err}
+	}()
+	request := res.Request
+	for {
+		select {
+		case <-res.Done:
+			rescueClose(ws)
+			return
+		case rr := <-read:
+			// Until the identity is delivered, any host frame ends this reception.
+			if rr.err == nil || rr.typ == websocket.MessageText || len(rr.msg) > MaxRegistrationMessage {
+				rescueClose(ws)
+			}
+			return
+		case identity, ok := <-request:
+			if !ok {
+				request = nil
+				continue
+			}
+			frame := encodeRescueRequest(identity)
+			if len(frame) > MaxRegistrationMessage || ws.Write(life, websocket.MessageText, frame) != nil {
+				rescueClose(ws)
+				return
+			}
+			var rr readResult
+			select {
+			case <-res.Done:
+				rescueClose(ws)
+				return
+			case rr = <-read:
+			case <-life.Done():
+				return
+			}
+			if rr.err != nil {
+				rescueClose(ws)
+				return
+			}
+			answer, err := decodeRescueAnswer(rr.msg)
+			if err != nil || rr.typ != websocket.MessageText || len(rr.msg) > MaxRegistrationMessage ||
+				(answer.Answer == agentgateway.RescueAllow && checkDispatch(answer.Dispatch, time.Now()) != nil) {
+				// A frame the transport cannot accept is still the host's answer:
+				// the empty answer never verifies, so the gateway records failed
+				// (timeout after RescueRequestLifetime) instead of ended.
+				answer = agentgateway.RescueAnswer{}
+			}
+			stream := newStream(life, ws, c, DefaultBudgets().Cleanup)
+			_ = h.reg.AnswerRescue(res.ID, answer, stream)
+			select {
+			case <-res.Done:
+				c.start()
+				<-life.Done()
+			case <-life.Done():
+			}
+			return
+		case <-life.Done():
+			return
+		}
+	}
 }
 
 // Close turns the reception route OFF and ends every active reception.

@@ -296,6 +296,8 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 		mcp, err = mcpadapter.NewResidentHTTPSession(resident, g.callTimeout, nil)
 	} else if residentDiscovery {
 		mcp, err = mcpadapter.NewResidentDiscoveryHTTPSession(g.callTimeout)
+	} else if rt == nil && g.rescueSigner != nil && !g.discoveryOnly && !g.residentOnly {
+		mcp, err = mcpadapter.NewRescueDiscoveryHTTPSession(rescueMCPBackend{gateway: g, principal: p}, g.callTimeout)
 	} else if rt == nil {
 		mcp, err = mcpadapter.NewDiscoveryHTTPSession(g.callTimeout)
 	} else {

@@ -2,7 +2,7 @@
 
 [文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md)
 
-**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）と WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）を実装しました。担当者の要求（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）が無いため、受付コードはまだ使われません。ほかは未実装です。**
+**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）、WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）、担当者の要求と身元の証明・回答の検証（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）を実装しました。ホストの許可の状態機械（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）と猶予（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）は未実装で、ホストの側はまだ要求に答えません。**
 切断の後の扱いは、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（accepted）が [ADR 0003](adr/0003-owned-guest-workload.md) の該当の部分を置き換えます。
 実装されるまで、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
 この文書は、ホストを接続コードで指し、要求の時点の許可のポップアップでレスキューの接続を始める流れを決めます。
@@ -81,7 +81,16 @@ proof が示すのは「K を持っている」ことだけで、ホストの身
 
 受付口は `GET /tether-agent/v1/rescue` の WSS で、subprotocol は `rescue-agent-reception.v1` だけです。text JSON frame を使い、各 message は 2 KiB 以下、nonce と署名・鍵は登録経路と同じ base64url（padding なし）です。
 ホストは `hello`（nonce）、gateway は `challenge`（nonce）、ホストは `proof`（purpose=`new`、K、署名。resume の場合は reception id も含む）、gateway は `reception`（id、12 桁コード、署名）を送ります。署名対象は `RescueTranscript` と `RescueResultTranscript` です。
-受付上限は upgrade 前に busy の 503（`Retry-After: 1`）、rate の 429（`Retry-After: 60`）で返します。拒否は reception frame を返さず close code 1008 で接続を閉じます。reception 後は双方とも追加 frame を送らず、相手の frame・close で受付を終えます。
+受付上限は upgrade 前に busy の 503（`Retry-After: 1`）、rate の 429（`Retry-After: 60`）で返します。拒否は reception frame を返さず close code 1008 で接続を閉じます。
+reception の後、gateway は担当者の要求が来たら `request`（身元の証明）を 1 つだけ送ります。ホストは `request` を受けた後に `answer` を 1 つだけ送ります。`request` の後に届いた frame は回答として扱い、受け取れない形（JSON でない、binary、dispatch の確認に通らない `allow`）なら検証に通らない回答として `failed` で受付を終えます。それ以外の frame・close は受付を終えます。
+`allow` の後、同じ WSS は登録経路と同じく binary の channel の stream になります。
+
+| frame | 向き | 欄 | 署名 |
+| --- | --- | --- | --- |
+| `request` | gateway → ホスト | `nonce`（32 byte）、`client`（C の SSH wire）、`display_name`、`organization`、`profile`（`mac_current_user`）、`signature` | 身元の証明鍵で `RescueRequestTranscript` |
+| `answer` | ホスト → gateway | `answer`（`allow`・`deny`・`timeout`）、`signature`。`allow` のときだけ、登録の frame と同じ dispatch の欄（`generation`、`launch_id`、`epoch`、`policy_digest`、`key_set_digest`、`profile`、`deadline_unix_nano`、`host_key`） | K で `RescueAnswerTranscript`。digest は `RescueRequestTranscript` の SHA-256 |
+
+transcript の byte の並びは `backend/internal/agentgateway/rescue_request.go` にあり、試験 `rescue_wire_test.go` が固定します。
 
 ### 接続コード
 
@@ -225,7 +234,13 @@ dispatch を真正に届ける責任は登録 adapter にあり（[信頼の前�
 
 ### 担当者の入口
 
-担当者は MCP の新しい tool で、コードを含めて要求します（tool の名前と、待ち方が同期か非同期かは実装で決めます）。
+担当者は MCP の新しい tool で、コードを含めて要求します。
+tool は非同期の 2 つです（#423 で決定）。Worker が MCP の 1 往復を 35 秒で切るため、75 秒まで待つ同期の tool は本番の経路で通りません。
+
+- `rescue_request`（引数は `code` だけ）: 照合して身元の証明をホストへ送ったら、すぐ `pending` を返します。拒否（コードが無効、失敗の枠、確認中・セッション中の要求がある、`rescue_operator` が無い、表示名か組織の設定が無い）は tool のエラーで返します。コードが無効の文言は、受付 OFF・失効・使用済み・存在しないで同じです。
+- `rescue_request_status`（引数なし）: 今の要求の状態（`none`・`pending`・`allow`・`deny`・`timeout`・`ended`・`failed`）を返します。`pending` の間は、呼び出しの時間の上限まで変化を待ちます。`ended` は回答の前に受付が終わったこと、`failed` は回答を検証できない・接続できないことです。
+
+2 つの tool は、route に束縛していない session（discovery session）にだけ出します。
 今の MCP は、tool の引数で host や signer を指定させません（[呼出し経路](agent-gateway.md#呼出し経路)）。
 この tool は route を選ぶものではなく、ホストに許可を求めるだけです。route は、ホストが許可した後に gateway が作ります。
 session を後から grant に束縛しない今の規則は変えません。許可の後、担当者の client は新しい `initialize` で route に束縛します。
