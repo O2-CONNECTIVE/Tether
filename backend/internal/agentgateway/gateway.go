@@ -164,6 +164,9 @@ type Gateway struct {
 	rescueCodes   *rescueCodes // rescue connection codes; guarded by its own lock
 	rescueSigner  ssh.Signer
 	rescue        *rescueReceptionState
+	// These internal barriers let race tests stop on either side of rescue route publication.
+	rescueBeforePublishHook func(*route)
+	rescueAfterPublishHook  func()
 
 	mu          sync.Mutex
 	closed      bool
@@ -373,6 +376,9 @@ func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.
 	}
 	defer g.watchers.Done() // includes failed/late acquisition and retire
 	r, err := g.openWithSigner(p, d, conn, signer, onActivity)
+	if err == nil && publication != nil && g.rescueBeforePublishHook != nil {
+		g.rescueBeforePublishHook(r)
+	}
 	if publication != nil {
 		g.rescue.mu.Lock()
 	}
@@ -403,20 +409,47 @@ func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.
 	}
 	if publication != nil {
 		record := publication.record
-		if g.rescue.records[publication.id] != record || record.attemptID != publication.attemptID || !record.opening ||
-			(record.resuming && (record.lastFrame.IsZero() || g.clock().Sub(record.lastFrame) >= RescueReconnectGrace)) {
+		publicationAt := rescueClockTime(g.clock())
+		currentAttempt := g.rescue.records[publication.id] == record && record.attemptID == publication.attemptID
+		if currentAttempt && record.resuming && rescueGraceExpired(record, publicationAt) {
+			g.mu.Unlock()
+			g.endRescueLocked([]byte(publication.id), record)
+			g.rescue.mu.Unlock()
+			g.retire(r)
+			return nil, ErrRefused
+		}
+		validState := record.opening && !record.awaitingAnswer && !record.disconnected &&
+			((record.answered && record.resuming) || (!record.answered && !record.resuming))
+		if !currentAttempt || !validState || (record.resuming && rescueGraceExpired(record, publicationAt)) {
 			g.mu.Unlock()
 			g.rescue.mu.Unlock()
 			g.retire(r)
 			return nil, ErrRefused
 		}
+		r.rescue = rescue
+		p.route = r
+		record.route = r
+		record.connectionGeneration = d.Binding.ConnectionGeneration
+		record.answered = true
+		record.active = true
+		record.opening = false
+		record.awaitingAnswer = false
+		record.resuming = false
+		record.disconnected = false
+		record.lastFrame = publicationAt
+		record.graceUntil = time.Time{}
+		g.setRescueStateLocked(p, RescueAllow)
+	} else {
+		r.rescue = rescue
+		p.route = r
 	}
-	r.rescue = rescue
-	p.route = r
 	g.watchers.Add(1)
 	g.mu.Unlock()
 	if publication != nil {
 		g.rescue.mu.Unlock()
+		if g.rescueAfterPublishHook != nil {
+			g.rescueAfterPublishHook()
+		}
 	}
 	go g.watch(r)
 	return r, nil
@@ -480,7 +513,7 @@ func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer
 	if ch.Binding() != d.Binding {
 		return nil, errors.Join(ErrRefused, g.closeChannel(ch))
 	}
-	client, err := agentwire.NewClient(ch)
+	client, err := agentwire.NewClientWithActivity(ch, onActivity)
 	if err != nil {
 		return nil, errors.Join(err, g.closeChannel(ch))
 	}

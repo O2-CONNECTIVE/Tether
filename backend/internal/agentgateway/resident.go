@@ -321,6 +321,10 @@ func (g *Gateway) ConnectResident(label string, d Dispatch, b ResidentWorkBindin
 	if conn == nil {
 		return ErrConfig
 	}
+	if d.Binding.ConnectionGeneration != 1 {
+		_ = conn.Close()
+		return ErrRefused
+	}
 	g.mu.Lock()
 	var entry *residentEntry
 	if g.resident != nil {

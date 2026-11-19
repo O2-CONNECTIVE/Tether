@@ -6,6 +6,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor"
 	"golang.org/x/crypto/ssh"
@@ -37,6 +40,7 @@ func prepareAnsweredReception(t *testing.T, g *Gateway, k ssh.Signer) (RescueRec
 	record.principal = g.byLabel["op1"]
 	record.clientKey = clientKey
 	record.answered = true
+	record.active = true
 	g.rescue.mu.Unlock()
 	g.TouchRescue(res.ID, res.AttemptID)
 	g.DisconnectRescue(res.ID, res.AttemptID)
@@ -68,8 +72,21 @@ func resumeDispatch(t *testing.T, generation uint64, hostKey ssh.Signer, clientK
 }
 
 func startFakeChannelHost(t *testing.T, conn net.Conn, hostKey ssh.Signer, clientKey ssh.PublicKey, launchID string) <-chan []byte {
+	opened, payloads := startFakeChannelHostWithData(t, conn, hostKey, clientKey, launchID)
+	close(payloads)
+	return opened
+}
+
+func startFakeChannelHostWithData(t *testing.T, conn net.Conn, hostKey ssh.Signer, clientKey ssh.PublicKey, launchID string) (<-chan []byte, chan<- []byte) {
+	opened, payloads, _ := startFakeChannelHostWithIO(t, conn, hostKey, clientKey, launchID)
+	return opened, payloads
+}
+
+func startFakeChannelHostWithIO(t *testing.T, conn net.Conn, hostKey ssh.Signer, clientKey ssh.PublicKey, launchID string) (<-chan []byte, chan<- []byte, <-chan uint64) {
 	t.Helper()
 	opened := make(chan []byte, 1)
+	payloads := make(chan []byte, 1)
+	wireRequests := make(chan uint64, 4)
 	go func() {
 		config := &ssh.ServerConfig{PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if meta.User() != launchID || !bytes.Equal(key.Marshal(), clientKey.Marshal()) {
@@ -102,16 +119,45 @@ func startFakeChannelHost(t *testing.T, conn net.Conn, hostKey ssh.Signer, clien
 			}
 			opened <- append([]byte(nil), open.ExtraData()...)
 			go func() {
+				for payload := range payloads {
+					if _, err := ch.Write(payload); err != nil {
+						return
+					}
+				}
+			}()
+			go func() {
 				for request := range channelRequests {
 					if request.WantReply {
 						_ = request.Reply(false, nil)
 					}
 				}
 			}()
-			go func() { _, _ = io.Copy(io.Discard, ch); _ = ch.Close() }()
+			go func() {
+				for {
+					var header [4]byte
+					if _, err := io.ReadFull(ch, header[:]); err != nil {
+						return
+					}
+					n := binary.BigEndian.Uint32(header[:])
+					if n == 0 || n > 128<<10 {
+						return
+					}
+					body := make([]byte, n)
+					if _, err := io.ReadFull(ch, body); err != nil {
+						return
+					}
+					var request struct {
+						ID uint64 `json:"id"`
+					}
+					if json.Unmarshal(body, &request) != nil {
+						return
+					}
+					wireRequests <- request.ID
+				}
+			}()
 		}
 	}()
-	return opened
+	return opened, payloads, wireRequests
 }
 
 type resumeMemConn struct {
@@ -352,8 +398,6 @@ func TestResumeGraceHasNoSlackAndClearsTheClientKey(t *testing.T) {
 			})
 			k := rescueHostKey(21)
 			first, _ := prepareAnsweredReception(t, g, k)
-			clock.Add(time.Minute)
-			g.TouchRescue(first.ID, first.AttemptID)
 			g.rescue.mu.Lock()
 			record := g.rescue.records[string(first.ID)]
 			g.rescue.mu.Unlock()
@@ -394,6 +438,7 @@ func TestGatewayConnectRejectsAnotherPrincipalsResume(t *testing.T) {
 	record.principal = g.byLabel["op1"]
 	record.clientKey = clientPrivate
 	record.answered = true
+	record.active = true
 	record.connectionGeneration = 1
 	record.dispatch = cloneRescueDispatch(d)
 	g.rescue.mu.Unlock()
@@ -495,8 +540,19 @@ func TestResumeAfter459SecondsOpensNextChannel(t *testing.T) {
 	default:
 	}
 	_ = duplicateHost.Close()
-	if !bytes.Equal(resumed.ID, first.ID) || resumed.Code != "" || resumed.Done != first.Done {
-		t.Fatalf("resume reception = %+v; want same id/done and no new code", resumed)
+	if !bytes.Equal(resumed.ID, first.ID) || resumed.Code != "" || resumed.Done != first.Done ||
+		first.AttemptDone == nil || resumed.AttemptDone == nil || resumed.AttemptDone == first.AttemptDone {
+		t.Fatalf("resume reception = %+v; want same reception Done, distinct attempt Done, and no new code", resumed)
+	}
+	select {
+	case <-first.AttemptDone:
+	default:
+		t.Fatal("closed generation 1 left its WSS attempt open")
+	}
+	select {
+	case <-resumed.AttemptDone:
+		t.Fatal("new attempt inherited generation 1 completion")
+	default:
 	}
 	identity2 := <-resumed.Request
 	if !bytes.Equal(identity2.Client, clientPublic.Marshal()) {
@@ -543,6 +599,46 @@ func TestResumeAttemptDoesNotExtendReconnectGrace(t *testing.T) {
 		t.Fatalf("resume after original 5m grace = %v; want ErrRefused", err)
 	}
 	waitRescueDone(t, res.Done, "expired grace after failed resume")
+}
+
+func TestExpiredResumeAttemptClosesOnlyItsAttemptDone(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(37)
+	res, _ := prepareAnsweredReception(t, g, key)
+	resumed, err := g.OpenRescue(resumeRequest(t, g, key, res.ID))
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if resumed.Done != res.Done || resumed.AttemptDone == nil || resumed.AttemptDone == res.AttemptDone {
+		t.Fatalf("attempt completion channels: reception shared=%v old=%p new=%p; want shared reception and distinct attempt channels",
+			resumed.Done == res.Done, res.AttemptDone, resumed.AttemptDone)
+	}
+	clock.Add(RescueRequestLifetime + time.Second)
+	g.sweepRescueAt(clock.Now())
+	select {
+	case <-resumed.AttemptDone:
+	default:
+		t.Fatal("expired resume attempt did not close its Done")
+	}
+	select {
+	case <-res.Done:
+		t.Fatal("attempt expiry ended the whole reception")
+	default:
+	}
+
+	next, err := g.OpenRescue(resumeRequest(t, g, key, res.ID))
+	if err != nil {
+		t.Fatalf("next resume attempt after the expired answer: %v", err)
+	}
+	if next.AttemptDone == resumed.AttemptDone || next.Done != res.Done {
+		t.Fatal("next attempt reused a completed attempt signal or changed the reception signal")
+	}
+	select {
+	case <-next.AttemptDone:
+		t.Fatal("next attempt inherited the previous attempt's completion")
+	default:
+	}
 }
 
 func TestResumeRechecksGraceAfterRouteCleanupWait(t *testing.T) {
@@ -598,6 +694,7 @@ func TestResumeAnswerDoesNotExtendReconnectGrace(t *testing.T) {
 	res, _, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
 	g.rescue.mu.Lock()
 	record.answered = true
+	record.active = true
 	record.awaitingAnswer = false
 	record.connectionGeneration = 1
 	g.rescue.mu.Unlock()
@@ -659,60 +756,215 @@ func TestAnswerRescueDoesNotPublishAfterReceptionEndsDuringSSH(t *testing.T) {
 }
 
 func TestAnswerRescueDoesNotPublishAfterGraceExpiresDuringSSH(t *testing.T) {
-	for _, sweep := range []bool{false, true} {
-		name := "publication check"
-		if sweep {
-			name = "sweep"
-		}
-		t.Run(name, func(t *testing.T) {
-			clock := newRescueExpiryClock(time.Now())
-			g := newResumeGateway(t, clock.Now, false)
-			key := rescueHostKey(34)
-			clientPrivate, clientPublic := newClientPrivateKey(t)
-			d1 := resumeDispatch(t, 1, key, clientPublic)
-			first, _, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
-			g.rescue.mu.Lock()
-			record.answered = true
-			record.awaitingAnswer = false
-			record.disconnected = true
-			record.connectionGeneration = 1
-			record.lastFrame = clock.Now().Add(-RescueReconnectGrace + time.Second)
-			g.rescue.mu.Unlock()
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(34)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d1 := resumeDispatch(t, 1, key, clientPublic)
+	first, _, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
+	g.rescue.mu.Lock()
+	record.answered = true
+	record.active = true
+	record.awaitingAnswer = false
+	record.connectionGeneration = 1
+	g.rescue.mu.Unlock()
+	g.TouchRescue(first.ID, first.AttemptID)
+	g.DisconnectRescue(first.ID, first.AttemptID)
+	g.rescue.mu.Lock()
+	lastFrame := record.lastFrame
+	g.rescue.mu.Unlock()
+	clock.Add(4*time.Minute + 59*time.Second)
 
-			resumed, err := g.OpenRescue(resumeRequest(t, g, key, first.ID))
-			if err != nil {
-				t.Fatalf("resume: %v", err)
-			}
-			identity := <-resumed.Request
-			d2 := cloneRescueDispatch(d1)
-			d2.Binding.ConnectionGeneration = 2
-			rawClient, host := resumeMemPair()
-			client := &gatedReadConn{Conn: rawClient, started: make(chan struct{}), release: make(chan struct{})}
-			_ = startFakeChannelHost(t, host, key, clientPublic, d2.Binding.Grant.Identity.LaunchID)
-			answer := signAllowedAnswer(t, g, key, first.ID, identity, d2)
-			result := make(chan error, 1)
-			go func() { result <- g.AnswerRescue(first.ID, resumed.AttemptID, answer, client, nil) }()
-			select {
-			case <-client.started:
-			case <-time.After(time.Second):
-				t.Fatal("SSH handshake did not reach the synchronized read")
-			}
-			clock.Add(2 * time.Second)
-			if sweep {
-				g.sweepRescueAt(clock.Now())
-			}
-			close(client.release)
-			if err := <-result; !errors.Is(err, ErrRefused) {
-				t.Fatalf("AnswerRescue after reconnect grace expired during SSH = %v; want ErrRefused", err)
-			}
-			g.mu.Lock()
-			route := g.byLabel["op1"].route
-			g.mu.Unlock()
-			if route != nil {
-				t.Fatal("AnswerRescue published a route after reconnect grace expired")
-			}
-			waitRescueDone(t, first.Done, "reconnect grace expiry during SSH")
-		})
+	resumed, err := g.OpenRescue(resumeRequest(t, g, key, first.ID))
+	if err != nil {
+		t.Fatalf("resume at 4m59s: %v", err)
+	}
+	identity := <-resumed.Request
+	d2 := cloneRescueDispatch(d1)
+	d2.Binding.ConnectionGeneration = 2
+	rawClient, host := resumeMemPair()
+	opened, payloads := startFakeChannelHostWithData(t, host, key, clientPublic, d2.Binding.Grant.Identity.LaunchID)
+	defer close(payloads)
+	answer := signAllowedAnswer(t, g, key, first.ID, identity, d2)
+	g.rescueBeforePublishHook = func(r *route) {
+		select {
+		case <-opened:
+		case <-time.After(time.Second):
+			t.Error("SSH channel did not open before the publication barrier")
+		}
+		payloads <- []byte{0, 0, 0, 0} // a malformed agentwire frame on the authenticated SSH channel
+		select {
+		case <-r.client.Done():
+		case <-time.After(time.Second):
+			t.Error("agentwire did not reject the synchronized malformed frame")
+		}
+		clock.Add(2 * time.Second) // the original grace expires before publication
+	}
+	err = g.AnswerRescue(first.ID, resumed.AttemptID, answer, rawClient, func() { g.TouchRescue(first.ID, resumed.AttemptID) })
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("AnswerRescue after the fixed grace expired during SSH = %v; want ErrRefused", err)
+	}
+	g.mu.Lock()
+	route := g.byLabel["op1"].route
+	g.mu.Unlock()
+	if route != nil {
+		t.Fatal("AnswerRescue published a route after the fixed reconnect grace expired")
+	}
+	g.rescue.mu.Lock()
+	_, retained := g.rescue.records[string(first.ID)]
+	unchanged := record.lastFrame.Equal(lastFrame)
+	g.rescue.mu.Unlock()
+	if retained || !unchanged {
+		t.Fatalf("expired attempt retained=%v, lastFrame unchanged=%v; want false/true", retained, unchanged)
+	}
+	waitRescueDone(t, first.Done, "reconnect grace expiry during SSH")
+}
+
+func TestRescuePublicationCommitsActiveStateBeforeSweep(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(35)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d1 := resumeDispatch(t, 1, key, clientPublic)
+	first, _, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
+	g.rescue.mu.Lock()
+	record.answered = true
+	record.active = true
+	record.awaitingAnswer = false
+	record.connectionGeneration = 1
+	g.rescue.mu.Unlock()
+	g.TouchRescue(first.ID, first.AttemptID)
+	g.DisconnectRescue(first.ID, first.AttemptID)
+	clock.Add(4*time.Minute + 59*time.Second)
+
+	resumed, err := g.OpenRescue(resumeRequest(t, g, key, first.ID))
+	if err != nil {
+		t.Fatalf("resume at 4m59s: %v", err)
+	}
+	identity := <-resumed.Request
+	d2 := cloneRescueDispatch(d1)
+	d2.Binding.ConnectionGeneration = 2
+	client, host := resumeMemPair()
+	opened := startFakeChannelHost(t, host, key, clientPublic, d2.Binding.Grant.Identity.LaunchID)
+	answer := signAllowedAnswer(t, g, key, first.ID, identity, d2)
+	var publishedAt time.Time
+	g.rescueAfterPublishHook = func() {
+		publishedAt = clock.Now()
+		clock.Add(2 * time.Second) // publication succeeded before the original deadline
+		g.sweepRescueAt(clock.Now())
+	}
+	if err := g.AnswerRescue(first.ID, resumed.AttemptID, answer, client, nil); err != nil {
+		t.Fatalf("generation 2 AnswerRescue: %v", err)
+	}
+	if data := <-opened; len(data) != 32 {
+		t.Fatalf("generation 2 commitment length = %d; want 32", len(data))
+	}
+	g.mu.Lock()
+	route2 := g.byLabel["op1"].route
+	g.mu.Unlock()
+	g.rescue.mu.Lock()
+	retained := g.rescue.records[string(first.ID)] == record
+	keyRetained := record.clientKey != nil
+	publicationTime := record.lastFrame
+	g.rescue.mu.Unlock()
+	if !retained || !keyRetained || route2 == nil || !publicationTime.Equal(publishedAt) {
+		t.Fatalf("sweep after publication retained=%v C=%v route=%v lastFrame=%v publishedAt=%v; want true/true/live/equal",
+			retained, keyRetained, route2 != nil, publicationTime, publishedAt)
+	}
+
+	_ = host.Close()
+	select {
+	case <-route2.cleanupDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("generation 2 cleanup did not finish")
+	}
+	g.DisconnectRescue(first.ID, resumed.AttemptID) // before the first heartbeat
+	clock.Add(4*time.Minute + 57*time.Second)
+	third, err := g.OpenRescue(resumeRequest(t, g, key, first.ID))
+	if err != nil {
+		t.Fatalf("resume 4m59s after generation 2 publication: %v", err)
+	}
+	g.DisconnectRescue(first.ID, third.AttemptID)
+	clock.Add(time.Second)
+	if _, err := g.OpenRescue(resumeRequest(t, g, key, first.ID)); !errors.Is(err, ErrRefused) {
+		t.Fatalf("resume at 5m after generation 2 publication = %v; want ErrRefused", err)
+	}
+	waitRescueDone(t, first.Done, "generation 2 fixed grace expiry")
+}
+
+func TestAuthenticatedMalformedAgentwireResponseDoesNotTouchRescue(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(38)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d := resumeDispatch(t, 1, key, clientPublic)
+	res, identity, record := seedRescueAnswer(t, g, key, clientPrivate, d)
+	client, host := resumeMemPair()
+	opened, payloads, requests := startFakeChannelHostWithIO(t, host, key, clientPublic, d.Binding.Grant.Identity.LaunchID)
+	defer close(payloads)
+	answer := signAllowedAnswer(t, g, key, res.ID, identity, d)
+	if err := g.AnswerRescue(res.ID, res.AttemptID, answer, client, func() { g.TouchRescue(res.ID, res.AttemptID) }); err != nil {
+		t.Fatalf("AnswerRescue: %v", err)
+	}
+	select {
+	case <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("authenticated SSH channel did not open")
+	}
+	g.mu.Lock()
+	route := g.byLabel["op1"].route
+	g.mu.Unlock()
+	if route == nil {
+		t.Fatal("authenticated route was not published")
+	}
+	commandID := fmt.Sprintf("%032x", 1)
+	writeWireReply := func(body string) {
+		t.Helper()
+		frame := []byte(body)
+		wire := make([]byte, 4+len(frame))
+		binary.BigEndian.PutUint32(wire[:4], uint32(len(frame)))
+		copy(wire[4:], frame)
+		payloads <- wire
+	}
+
+	clock.Add(time.Minute)
+	validResult := make(chan error, 1)
+	go func() { _, err := route.client.Status(context.Background(), commandID); validResult <- err }()
+	var requestID uint64
+	select {
+	case requestID = <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("valid agentwire request did not reach the SSH peer")
+	}
+	writeWireReply(fmt.Sprintf(`{"v":1,"id":%d,"status":{"profile":"mac_current_user","commandId":"%s","phase":"running","exitKnown":false,"exitCode":0,"stop":"none","cleanup":"pending","terminal":false,"outputEnd":0,"truncated":false,"dropped":0}}`, requestID, commandID))
+	if err := <-validResult; err != nil {
+		t.Fatalf("valid Status response: %v", err)
+	}
+	g.rescue.mu.Lock()
+	validTouch := record.lastFrame.Equal(clock.Now())
+	g.rescue.mu.Unlock()
+	if !validTouch {
+		t.Fatal("agentwire-validated response did not advance lastFrame")
+	}
+
+	clock.Add(time.Minute)
+	invalidResult := make(chan error, 1)
+	go func() { _, err := route.client.Status(context.Background(), commandID); invalidResult <- err }()
+	select {
+	case requestID = <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("second agentwire request did not reach the SSH peer")
+	}
+	lastValidFrame := clock.Now().Add(-time.Minute)
+	writeWireReply(fmt.Sprintf(`{"v":1,"id":%d,"status":{}}`, requestID))
+	if err := <-invalidResult; !errors.Is(err, agentwire.ErrProtocol) {
+		t.Fatalf("malformed Status response = %v; want ErrProtocol", err)
+	}
+	g.rescue.mu.Lock()
+	unchanged := record.lastFrame.Equal(lastValidFrame)
+	g.rescue.mu.Unlock()
+	if !unchanged {
+		t.Fatalf("malformed agentwire response advanced lastFrame from %v to %v", lastValidFrame, record.lastFrame)
 	}
 }
 
@@ -725,6 +977,7 @@ func TestStaleResumeAttemptEventsDoNotAffectCurrentAttempt(t *testing.T) {
 	first, identity1, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
 	g.rescue.mu.Lock()
 	record.answered = true
+	record.active = true
 	record.awaitingAnswer = false
 	record.connectionGeneration = 1
 	g.rescue.mu.Unlock()
@@ -739,8 +992,17 @@ func TestStaleResumeAttemptEventsDoNotAffectCurrentAttempt(t *testing.T) {
 		t.Fatalf("resume attempt id = %d; want a new id after %d", current.AttemptID, first.AttemptID)
 	}
 	identity2 := <-current.Request
-	clock.Add(time.Minute)
+	g.rescue.mu.Lock()
 	lastFrame := record.lastFrame
+	g.rescue.mu.Unlock()
+	clock.Add(time.Minute)
+	g.TouchRescue(first.ID, current.AttemptID) // a matching attempt is still inactive before route publication
+	g.rescue.mu.Lock()
+	unchangedBeforePublish := record.lastFrame.Equal(lastFrame)
+	g.rescue.mu.Unlock()
+	if !unchangedBeforePublish {
+		t.Fatal("matching but inactive resume attempt touched lastFrame before route publication")
+	}
 	g.TouchRescue(first.ID, first.AttemptID)
 	g.DisconnectRescue(first.ID, first.AttemptID)
 	g.EndRescueAttempt(first.ID, first.AttemptID)
@@ -774,6 +1036,32 @@ func TestStaleResumeAttemptEventsDoNotAffectCurrentAttempt(t *testing.T) {
 	}
 }
 
+func TestAnswerRescueRejectsAttemptSupersededDuringSSH(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(36)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d := resumeDispatch(t, 1, key, clientPublic)
+	res, identity, record := seedRescueAnswer(t, g, key, clientPrivate, d)
+	client, host := resumeMemPair()
+	_ = startFakeChannelHost(t, host, key, clientPublic, d.Binding.Grant.Identity.LaunchID)
+	answer := signAllowedAnswer(t, g, key, res.ID, identity, d)
+	g.rescueBeforePublishHook = func(*route) {
+		g.rescue.mu.Lock()
+		record.attemptID++ // model a newer WSS attempt winning before route publication
+		g.rescue.mu.Unlock()
+	}
+	if err := g.AnswerRescue(res.ID, res.AttemptID, answer, client, nil); !errors.Is(err, ErrRefused) {
+		t.Fatalf("stale answer published after its attempt was superseded = %v; want ErrRefused", err)
+	}
+	g.mu.Lock()
+	route := g.byLabel["op1"].route
+	g.mu.Unlock()
+	if route != nil {
+		t.Fatal("stale resume attempt published a route")
+	}
+}
+
 func TestResumeRejectsRouteCleanupFailure(t *testing.T) {
 	for _, waitForCleanup := range []bool{false, true} {
 		name := "already complete"
@@ -790,6 +1078,10 @@ func TestResumeRejectsRouteCleanupFailure(t *testing.T) {
 			g.rescue.mu.Lock()
 			record := g.rescue.records[string(res.ID)]
 			record.route = route
+			privateKey := record.clientKey
+			g.mu.Lock()
+			record.principal.rescueBusy = true
+			g.mu.Unlock()
 			g.rescue.mu.Unlock()
 			if !waitForCleanup {
 				close(cleanupDone)
@@ -823,8 +1115,20 @@ func TestResumeRejectsRouteCleanupFailure(t *testing.T) {
 				}
 			}
 			g.rescue.mu.Lock()
-			record.route = nil
+			_, retained := g.rescue.records[string(res.ID)]
+			keyCleared := record.clientKey == nil
+			zeroed := true
+			for _, b := range privateKey {
+				zeroed = zeroed && b == 0
+			}
+			g.mu.Lock()
+			busy := record.principal.rescueBusy
+			g.mu.Unlock()
 			g.rescue.mu.Unlock()
+			if retained || !keyCleared || !zeroed || busy {
+				t.Fatalf("cleanup failure retained=%v C-cleared=%v C-zeroed=%v busy=%v; want false/true/true/false",
+					retained, keyCleared, zeroed, busy)
+			}
 		})
 	}
 }
@@ -840,6 +1144,7 @@ func TestResumeRejectsStaleOrSkippedConnectionGeneration(t *testing.T) {
 			first, _, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
 			g.rescue.mu.Lock()
 			record.answered = true
+			record.active = true
 			record.awaitingAnswer = false
 			record.connectionGeneration = 1
 			g.rescue.mu.Unlock()
@@ -883,6 +1188,7 @@ func TestResumeKeepsTheHostKeyPinnedAtGenerationTwo(t *testing.T) {
 	first, _, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
 	g.rescue.mu.Lock()
 	record.answered = true
+	record.active = true
 	record.awaitingAnswer = false
 	record.connectionGeneration = 1
 	g.rescue.mu.Unlock()

@@ -413,3 +413,28 @@ func TestResidentOnlyRejectsGenericRegistrationAndClosesStream(t *testing.T) {
 		t.Fatal("generic registration consumed state")
 	}
 }
+
+func TestConnectResidentRejectsConnectionGenerationTwo(t *testing.T) {
+	g, s, host, control := residentEvidenceRig(t)
+	t.Cleanup(func() {
+		close(control.begin)
+		ctx, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		_ = g.Close(ctx)
+	})
+	id := strings.Repeat("2", 32)
+	s.FixedStart(context.Background(), id)
+	g.mu.Lock()
+	b := s.entry.works[id].binding
+	g.mu.Unlock()
+	b.Sequence = 1
+	d := Dispatch{Binding: agentchannel.Binding{
+		Grant:                supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "resident-launch-425", Epoch: "epoch-425", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}},
+		ConnectionGeneration: 2, KeySetDigest: [32]byte{1}, Profile: agentexec.ProfileMacCurrentUser,
+	}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
+	client, peer := net.Pipe()
+	defer peer.Close()
+	if err := g.ConnectResident("member1", d, b, client); !errors.Is(err, ErrRefused) {
+		t.Fatalf("ConnectResident generation 2 = %v; want ErrRefused", err)
+	}
+}

@@ -248,6 +248,9 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case <-res.Done:
 			rescueClose(ws)
 			return
+		case <-res.AttemptDone:
+			rescueClose(ws)
+			return
 		case rr := <-read:
 			// Until the identity is delivered, any host frame ends this reception.
 			if rr.err == nil && rr.typ == websocket.MessageText && isRescueEndFrame(rr.msg) {
@@ -269,6 +272,9 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var rr readResult
 			select {
 			case <-res.Done:
+				rescueClose(ws)
+				return
+			case <-res.AttemptDone:
 				rescueClose(ws)
 				return
 			case rr = <-read:
@@ -297,6 +303,9 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = h.reg.AnswerRescue(res.ID, res.AttemptID, answer, stream, func() { h.touchRescue(res.ID, res.AttemptID) })
 			select {
 			case <-res.Done:
+				c.start()
+				<-life.Done()
+			case <-res.AttemptDone:
 				c.start()
 				<-life.Done()
 			case <-life.Done():

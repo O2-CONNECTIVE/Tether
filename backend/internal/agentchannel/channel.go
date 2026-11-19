@@ -420,9 +420,6 @@ func (c *Channel) Read(p []byte) (int, error) {
 		return 0, c.closedError(ErrClosed)
 	}
 	n, err := c.ch.Read(p)
-	if n > 0 && c.onActivity != nil {
-		c.onActivity()
-	}
 	if err != nil {
 		c.teardown(ReasonTransport)
 		return n, c.closedError(err)

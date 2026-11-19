@@ -93,7 +93,7 @@ func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn
 		g.rescue.mu.Unlock()
 		return ErrRefused
 	}
-	if record.resuming && (record.lastFrame.IsZero() || g.clock().Sub(record.lastFrame) >= RescueReconnectGrace) {
+	if record.resuming && rescueGraceExpired(record, g.clock()) {
 		g.endRescueLocked(id, record)
 		g.rescue.mu.Unlock()
 		return ErrRefused
@@ -103,6 +103,11 @@ func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn
 			record.awaitingAnswer = false
 			record.resuming = false
 			record.disconnected = true
+			closeRescueAttemptLocked(record)
+			select {
+			case <-record.request:
+			default:
+			}
 		} else {
 			g.setRescueStateLocked(record.principal, RescueTimeout)
 			g.endRescueLocked(id, record)
@@ -176,16 +181,6 @@ func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn
 		if err != nil {
 			g.setRescueStateLocked(principal, "failed")
 			g.endRescueLocked(id, record)
-		} else {
-			record.dispatch = cloneRescueDispatchValue(a.Dispatch)
-			record.connectionGeneration = a.Dispatch.Binding.ConnectionGeneration
-			record.route = newRoute
-			record.answered = true
-			record.opening = false
-			record.awaitingAnswer = false
-			record.resuming = false
-			record.disconnected = false
-			g.setRescueStateLocked(principal, RescueAllow)
 		}
 	} else if newRoute != nil {
 		go g.closeChannel(newRoute.channel)

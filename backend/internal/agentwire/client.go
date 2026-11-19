@@ -23,6 +23,7 @@ import (
 // reply; one more abandonment closes the stream rather than growing the set.
 type Client struct {
 	conn      io.ReadWriteCloser
+	activity  func()
 	slots     chan struct{}
 	send      chan []byte
 	closed    chan struct{}
@@ -37,11 +38,16 @@ type Client struct {
 // NewClient takes ownership of conn, which must already be the authenticated
 // agent channel produced by trusted composition.
 func NewClient(conn io.ReadWriteCloser) (*Client, error) {
+	return NewClientWithActivity(conn, nil)
+}
+
+// NewClientWithActivity records activity only after a reply passes wire validation.
+func NewClientWithActivity(conn io.ReadWriteCloser, onActivity func()) (*Client, error) {
 	if conn == nil {
 		return nil, ErrUnconfigured
 	}
 	c := &Client{
-		conn: conn, slots: make(chan struct{}, maxClientCalls), send: make(chan []byte), closed: make(chan struct{}),
+		conn: conn, activity: onActivity, slots: make(chan struct{}, maxClientCalls), send: make(chan []byte), closed: make(chan struct{}),
 		pending: map[uint64]chan map[string]json.RawMessage{}, abandoned: map[uint64]struct{}{},
 	}
 	go c.readLoop()
@@ -230,10 +236,12 @@ func (c *Client) remote(body map[string]json.RawMessage) error {
 	var code string
 	if json.Unmarshal(raw, &code) == nil {
 		if code == "internal" {
+			c.touchActivity()
 			return ErrRemoteInternal
 		}
 		for _, e := range coreErrors {
 			if e.code == code {
+				c.touchActivity()
 				return e.err
 			}
 		}
@@ -249,7 +257,14 @@ func (c *Client) status(body map[string]json.RawMessage, commandID string) (Stat
 	if !ok || (commandID != "" && st.CommandID != commandID) {
 		return Status{}, c.protocol()
 	}
+	c.touchActivity()
 	return st, nil
+}
+
+func (c *Client) touchActivity() {
+	if c.activity != nil {
+		c.activity()
+	}
 }
 
 func invalid() error { return fmt.Errorf("%w: %w", ErrNotSent, agentexec.ErrInvalid) }
@@ -310,5 +325,6 @@ func (c *Client) Output(ctx context.Context, commandID string, cursor uint64, ma
 	if !ok {
 		return agentexec.Output{}, c.protocol()
 	}
+	c.touchActivity()
 	return out, nil
 }
