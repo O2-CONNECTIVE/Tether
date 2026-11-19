@@ -84,6 +84,25 @@ class DiagnosticBoundaryTests(unittest.TestCase):
             del incomplete[field]
             self.assertEqual(validate(incomplete)['reason'], 'incomplete-record')
 
+    def test_failure_integer_upper_bounds(self):
+        maximum = 30 * 60 * 1000
+        self.assertEqual(MODULE.INTEGER_MAXIMUMS, {
+            'failure_elapsed_ms': maximum,
+            'failure_deadline_ms': maximum,
+            'failure_iteration': 11,
+        })
+        record = {**BASE, 'failure_code': 'work-cli-response', **FAILURE_GROUP}
+        for field, upper in (
+            ('failure_elapsed_ms', maximum),
+            ('failure_deadline_ms', maximum),
+            ('failure_iteration', 11),
+        ):
+            with self.subTest(field=field):
+                accepted = dict(record, **{field: upper})
+                self.assertEqual(validate(accepted)['validation'], 'record-valid')
+                rejected = dict(record, **{field: upper + 1})
+                self.assertEqual(validate(rejected)['validation'], 'unavailable')
+
     def test_malformed_inputs(self):
         for raw in (b'', b'{', b'null', b'[]', b'"SYNTHETIC"', b'\xff',
                     b'{"stage":"complete","stage":"complete","failure_code":"none"}',

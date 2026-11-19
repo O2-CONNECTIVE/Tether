@@ -42,7 +42,7 @@ FAILURE_DIAGNOSTIC_FIELDS = (
 )
 
 
-def project(changes=None, trigger='observer'):
+def project(changes=None, trigger='observer', raw_marker=None):
     source = (ROOT / '.github/workflows/producer-connection.yml').read_text()
     source = textwrap.dedent(source.split("<<'PYFAIL'\n", 1)[1].split('\n          PYFAIL', 1)[0])
     with tempfile.TemporaryDirectory() as tmp:
@@ -51,7 +51,7 @@ def project(changes=None, trigger='observer'):
                       helper_sha256='2' * 64, outcome='failed-unknown', cleanup='unconfirmed',
                       stage='off-confirm', failure_code='producer-observation-deadline')
         record.update(changes or {})
-        report.write_text(json.dumps(record))
+        report.write_text(raw_marker if raw_marker is not None else json.dumps(record))
         env = dict(LANE='normal', CI_PRODUCER_ADAPTER='json', CI_PRODUCER_SHA256='2' * 64,
                    CI_PRODUCER_SOURCE_SHA='3' * 40, CI_PRODUCER_INVOCATION='1' * 32,
                    CI_PRODUCER_RESULT=str(report), GITHUB_STEP_SUMMARY=str(Path(tmp) / 'summary'))
@@ -121,8 +121,8 @@ class ProducerDiagnosticProjectionTests(unittest.TestCase):
                 self.assertEqual(result.get(field), 'unavailable')
 
     def test_failure_substeps_and_integer_diagnostics_project_by_code(self):
-        cases = [('run-allow', substep, 'unavailable', 'unavailable', 'unavailable', 'unavailable')
-                 for substep in ('allow-request', 'extend-request')]
+        cases = [('run-allow', 'allow-request', 12, 5000, 'unavailable', 'unavailable'),
+                 ('run-allow', 'extend-request', 13, 5000, 'unavailable', 'unavailable')]
         cases += [('gateway-setup', substep, 'unavailable', 'unavailable', 'unavailable', 'unavailable')
                   for substep in GATEWAY_SETUP_SUBSTEPS]
         cases += [('work-cli-response', substep, 37, 40000,
@@ -188,6 +188,54 @@ class ProducerDiagnosticProjectionTests(unittest.TestCase):
         result = project(incomplete)
         self.assertEqual(tuple(result.get(field) for field in FAILURE_DIAGNOSTIC_FIELDS),
                          ('unavailable',) * 4)
+
+    def test_failure_integer_bounds_match_job_timeout_and_list_limit(self):
+        source = (ROOT / '.github/workflows/producer-connection.yml').read_text()
+        timeout_minutes = int(re.search(r'^\s+timeout-minutes: (\d+)$', source, re.M).group(1))
+        self.assertIn(f'failure_job_timeout_ms = {timeout_minutes} * 60 * 1000', source)
+        timeout_ms = timeout_minutes * 60 * 1000
+        match = re.search(r'failure_integer_bounds = \{([^}]+)\}', source)
+        self.assertIsNotNone(match)
+        bounds = {}
+        for field, minimum, maximum in re.findall(
+                r"'(failure_[a-z_]+)': \((\d+), ([^)]+)\)", match.group(1)):
+            upper = timeout_ms if maximum == 'failure_job_timeout_ms' else int(maximum) if maximum.isdigit() else None
+            bounds[field] = (int(minimum), upper)
+        self.assertEqual(bounds['failure_elapsed_ms'], (0, timeout_ms))
+        self.assertEqual(bounds['failure_deadline_ms'], (1, timeout_ms))
+        self.assertEqual(bounds['failure_iteration'], (1, 11))
+        for field in ('failure_elapsed_ms', 'failure_deadline_ms'):
+            valid = dict(failure_code='work-cli-response', failure_substep='timeout',
+                         failure_elapsed_ms=37, failure_deadline_ms=40000,
+                         failure_iteration='unavailable', tool_operation='get_execution')
+            valid[field] = 30 * 60 * 1000 + 1
+            result = project(valid)
+            self.assertEqual(tuple(result.get(key) for key in FAILURE_DIAGNOSTIC_FIELDS),
+                             ('unavailable',) * 4)
+        valid = dict(failure_code='work-cli-response', failure_substep='shape-mismatch',
+                     failure_elapsed_ms=37, failure_deadline_ms=40000,
+                     failure_iteration=11, tool_operation='list')
+        self.assertEqual(project(valid)['failure_iteration'], 11)
+        valid['failure_iteration'] = 12
+        result = project(valid)
+        self.assertEqual(tuple(result.get(key) for key in FAILURE_DIAGNOSTIC_FIELDS),
+                         ('unavailable',) * 4)
+
+    def test_duplicate_failure_diagnostic_keys_reject_marker(self):
+        valid = dict(invocation='1' * 32, test='TestCIActualProducerConnection',
+                     helper_sha256='2' * 64, outcome='failed-unknown', cleanup='unconfirmed',
+                     stage='off-confirm', failure_code='work-cli-response',
+                     failure_substep='timeout', failure_elapsed_ms=37,
+                     failure_deadline_ms=40000, failure_iteration='unavailable',
+                     tool_operation='get_execution')
+        encoded = json.dumps(valid)
+        for field in FAILURE_DIAGNOSTIC_FIELDS:
+            with self.subTest(field=field):
+                duplicate = encoded[:-1] + ',' + json.dumps(field) + ':' + json.dumps(valid[field]) + '}'
+                result = project(raw_marker=duplicate)
+                self.assertEqual(result['failure_code'], 'unavailable')
+                self.assertEqual(tuple(result.get(key) for key in FAILURE_DIAGNOSTIC_FIELDS),
+                                 ('unavailable',) * 4)
 
     def test_failure_substeps_are_unavailable_for_other_failure_codes(self):
         result = project(dict(failure_code='mcp-request', failure_substep='listener-bind',

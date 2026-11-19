@@ -7,6 +7,12 @@ _ENUMS = json.loads((Path(__file__).resolve().parents[1] / 'ci-producer/DIAGNOST
 GROUPS = (_ENUMS['result_fields'], _ENUMS['native_fields'], _ENUMS['producer_fields'],
           _ENUMS['failure_fields'])
 INTEGER_FIELDS = _ENUMS['integer_fields']
+JOB_TIMEOUT_MS = 30 * 60 * 1000
+INTEGER_MAXIMUMS = {
+    'failure_elapsed_ms': JOB_TIMEOUT_MS,
+    'failure_deadline_ms': JOB_TIMEOUT_MS,
+    'failure_iteration': 11,
+}
 ALLOWED = {'stage': _ENUMS['stages'], 'failure_code': _ENUMS['failure_codes'],
            **GROUPS[0], **GROUPS[1], **GROUPS[2], **GROUPS[3]}
 
@@ -56,7 +62,8 @@ def validate_record(raw):
         if field in INTEGER_FIELDS:
             if value == 'unavailable':
                 continue
-            if type(value) is not int or value < INTEGER_FIELDS[field]['minimum']:
+            if (type(value) is not int or value < INTEGER_FIELDS[field]['minimum']
+                    or (field in INTEGER_MAXIMUMS and value > INTEGER_MAXIMUMS[field])):
                 return _reject('invalid-enum')
         elif type(value) is not str or value not in ALLOWED[field]:
             return _reject('invalid-enum')

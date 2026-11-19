@@ -305,7 +305,14 @@ jobs:
                       raw = source.read(16385)
                   if len(raw) > 16384:
                       return {}
-                  value = json.loads(raw)
+                  def unique_object(pairs):
+                      value = {}
+                      for key, item in pairs:
+                          if key in value:
+                              raise ValueError('duplicate-field')
+                          value[key] = item
+                      return value
+                  value = json.loads(raw, object_pairs_hook=unique_object)
                   if (not isinstance(value, dict) or value.get('invocation') != invocation
                           or value.get('test') != name):
                       return {}
@@ -544,21 +551,25 @@ jobs:
               },
           }
           failure_substep_values = set().union(*failure_substeps.values())
-          failure_integer_minimums = {
-              'failure_elapsed_ms': 0,
-              'failure_deadline_ms': 1,
-              'failure_iteration': 1,
+          failure_job_timeout_ms = 30 * 60 * 1000
+          failure_integer_bounds = {
+              'failure_elapsed_ms': (0, failure_job_timeout_ms),
+              'failure_deadline_ms': (1, failure_job_timeout_ms),
+              'failure_iteration': (1, 11),
           }
+          failure_request_write_deadline_ms = 5 * 1000
           failure_wait_deadlines = {
               'producer-state-wait': 10000,
+              'allow-request': failure_request_write_deadline_ms,
               'allow-receipt-wait': 10000,
+              'extend-request': failure_request_write_deadline_ms,
               'extend-receipt-wait': 10000,
               'timeout': 40000,
               'eof': 40000,
               'invalid-json': 40000,
               'shape-mismatch': 40000,
           }
-          failure_diagnostic_fields = {'failure_substep', *failure_integer_minimums}
+          failure_diagnostic_fields = {'failure_substep', *failure_integer_bounds}
           public.update({field: 'unavailable' for field in failure_diagnostic_fields})
           outcome_path = pathlib.Path(os.environ['CI_PRODUCER_RESULT'])
           result = read_marker(outcome_path)
@@ -582,7 +593,8 @@ jobs:
                   and failure_substep in failure_substep_values
                   and failure_substep in failure_substeps.get(code, {'unavailable'})
                   and all(value == 'unavailable' or
-                          (type(value) is int and value >= failure_integer_minimums[field])
+                          (type(value) is int
+                           and failure_integer_bounds[field][0] <= value <= failure_integer_bounds[field][1])
                           for field, value in (
                               ('failure_elapsed_ms', failure_elapsed),
                               ('failure_deadline_ms', failure_deadline),

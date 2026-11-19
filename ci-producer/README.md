@@ -129,11 +129,16 @@ separately with synthetic markers; it never starts a producer or native work.
 
 The failure marker also carries a fixed `failure_substep` for `run-allow`,
 `gateway-setup` and `work-cli-response`. Wait substeps include elapsed and
-deadline milliseconds; other steps use `unavailable`. Work CLI responses are
-classified as timeout, EOF, invalid JSON or shape mismatch; an unclassified
-read failure stays `unavailable`. List failures include the one-based list
-request number. All other failure codes use `unavailable` for the substep and
-integer fields. No payload, error text, path or host value is published.
+deadline milliseconds. Allow and extend request failures include those values
+only after the pipe write starts; preparation failures keep the whole
+diagnostic group `unavailable`. Elapsed and deadline values are capped by the
+30-minute job timeout. The fixture's list maximum is 11 requests: one initial
+empty list plus two checks each for one result and two results, counting each
+final empty page. Work CLI responses are classified as timeout, EOF, invalid JSON or shape
+mismatch; an unclassified read failure stays `unavailable`. List failures
+include the one-based request number. All other failure codes use `unavailable`
+for the substep and integer fields. No payload, error text, path or host value
+is published.
 
 ## Compiler-only native cleanup diagnostics
 

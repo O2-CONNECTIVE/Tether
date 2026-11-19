@@ -42,7 +42,9 @@ var ciFailureSubsteps = map[string][]string{
 
 var ciFailureWaitDeadlines = map[string]int64{
 	"producer-state-wait": 10000,
+	"allow-request":       ciRequestWriteDeadline.Milliseconds(),
 	"allow-receipt-wait":  10000,
+	"extend-request":      ciRequestWriteDeadline.Milliseconds(),
 	"extend-receipt-wait": 10000,
 	"timeout":             40000,
 	"eof":                 40000,
@@ -88,6 +90,7 @@ func (d *ciDiagnostic) noteAt(code, substep string, elapsedMS, deadlineMS *int64
 	}
 }
 func (d *ciDiagnostic) fail(t *testing.T, code string) {
+	t.Helper()
 	d.failAt(t, code, "unavailable", nil, nil, nil)
 }
 func (d *ciDiagnostic) failAt(t *testing.T, code, substep string, elapsedMS, deadlineMS *int64, iteration *int) {
@@ -96,10 +99,12 @@ func (d *ciDiagnostic) failAt(t *testing.T, code, substep string, elapsedMS, dea
 	t.Fatal("fixture assertion failed; see fixed outcome codes")
 }
 func (d *ciDiagnostic) failWait(t *testing.T, code, substep string, started time.Time, deadline time.Duration) {
+	t.Helper()
 	elapsedMS, deadlineMS := time.Since(started).Milliseconds(), deadline.Milliseconds()
 	d.failAt(t, code, substep, &elapsedMS, &deadlineMS, nil)
 }
 func (d *ciDiagnostic) failWorkResponse(t *testing.T, substep string, elapsed int64, iteration *int) {
+	t.Helper()
 	var elapsedMS, deadlineMS *int64
 	if deadline, timed := ciFailureWaitDeadlines[substep]; timed {
 		elapsedMS = &elapsed
