@@ -2,7 +2,7 @@
 
 [文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md)
 
-**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。未実装です。**
+**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の中の接続コードの発行と照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）だけを実装しました。受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）が無いので、まだどこからも呼ばれません。ほかは未実装です。**
 切断の後の扱いは、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（accepted）が [ADR 0003](adr/0003-owned-guest-workload.md) の該当の部分を置き換えます。
 実装されるまで、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
 この文書は、ホストを接続コードで指し、要求の時点の許可のポップアップでレスキューの接続を始める流れを決めます。
@@ -80,7 +80,7 @@ proof が示すのは「K を持っている」ことだけで、ホストの身
 ### 接続コード
 
 - 12 桁の 10 進数字です。gateway が `crypto/rand` から一様に作ります（棄却標本化で偏りを出さない）。有効なコードと重なったら作り直します。
-- 画面では 4 桁ずつ 3 組に区切って出します。照合の前に空白とハイフンを除きます。チェックディジットは入れません。推測の空間を減らさないためです。
+- 画面では 4 桁ずつ 3 組に区切って出します。照合の前に空白とハイフン（全角のものと、日本語の IME がハイフンのキーで打つ長音の「ー」を含む）を除き、全角の数字を半角に直します。チェックディジットは入れません。推測の空間を減らさないためです。
 - 有効時間は gateway の時計で 5 分です。照合に使われた時点で消費し、許可・拒否・時間切れのどれでも二度と使えません。
 - gateway はコードを、起動ごとの乱数の秘密を鍵にした HMAC-SHA-256 の値で引きます。コードの平文を記録やログに残しません。
 - コードが失効したら受付を終えます。ホストは新しいコードを自動では取りません。利用者がもう一度受付を ON にします。
@@ -122,7 +122,9 @@ proof が示すのは「K を持っている」ことだけで、ホストの身
 - 当たっても、ホストにはポップアップが出て、担当者の名前と組織が見えます。利用者は知らない担当者を拒否できます。
 
 匿名の外部の攻撃者は、コードを試せません。照合の前に token と役割を確かめるためです。
-principal の上限（4）を上げるときは、この計算をやり直します。
+この計算の前提は、有効なコードの上限 N（100）、principal の上限（4）、照合の失敗の上限（principal ごとに 10 分に 5 回）、gateway の再起動の頻度（1 日 1 回以下）です。
+どれかを変えるときは、先にこの計算をやり直します。
+値は gateway の `backend/internal/agentgateway/rescue_code.go` と `MaxPrincipals` にあり、どちらのコードの注記もこの節を指します。
 
 ## 2. 身元の渡し方（身元の証明）
 
