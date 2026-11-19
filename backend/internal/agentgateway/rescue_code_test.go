@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -72,14 +73,26 @@ func TestRescueCodeRedeemsOnlyOnce(t *testing.T) {
 }
 
 // The user reads the code out as 3 groups of 4; the operator may type it back
-// with the spaces or hyphens.
+// with the spaces or hyphens. A Japanese IME turns the hyphen key into "ー"
+// and may type the digits full width: such a typed code is still the code,
+// and refusing it would spend the operator's failures on its own code.
 func TestRescueCodeIgnoresSpacesAndHyphens(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	g := rescueCodeGateway(t, &now)
-	code := issueRescueCode(t, g, "reception-a")
-	typed := " " + code[:4] + " " + code[4:8] + "-" + code[8:] + "\t"
-	if got, err := g.rescueCodes.redeem(g.byLabel["op1"], typed); err != nil || got != "reception-a" {
-		t.Fatalf("redeem(%q) = %q, %v; want reception-a", typed, got, err)
+	fullWidth := func(s string) string {
+		return strings.Map(func(r rune) rune { return r - '0' + '０' }, s)
+	}
+	for i, typed := range []func(string) string{
+		func(c string) string { return " " + c[:4] + " " + c[4:8] + "-" + c[8:] + "\t" },
+		func(c string) string { return c[:4] + "ー" + c[4:8] + "ｰ" + c[8:] },                                  // IME long vowel
+		func(c string) string { return fullWidth(c[:4]) + "－" + fullWidth(c[4:8]) + "－" + fullWidth(c[8:]) }, // full width
+		func(c string) string { return c[:4] + "‐" + c[4:8] + "−" + c[8:] + "　" },                            // hyphen, minus, ideographic space
+	} {
+		reception := fmt.Sprintf("reception-%d", i)
+		code := issueRescueCode(t, g, reception)
+		if got, err := g.rescueCodes.redeem(g.byLabel["op1"], typed(code)); err != nil || got != reception {
+			t.Fatalf("redeem(%q) = %q, %v; want %s", typed(code), got, err, reception)
+		}
 	}
 }
 

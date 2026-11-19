@@ -102,9 +102,14 @@ func (s *rescueCodes) redeem(p *principal, code string) (string, error) {
 	if locked {
 		return "", errRescueLocked
 	}
+	// Spaces and hyphens go, including the full width ones and the "ー" a
+	// Japanese IME types for the hyphen key; full width digits become ASCII.
 	d := s.digest(strings.Map(func(r rune) rune {
-		if r == '-' || unicode.IsSpace(r) {
+		switch {
+		case unicode.IsSpace(r) || unicode.Is(unicode.Pd, r) || r == '−' || r == 'ー' || r == 'ｰ':
 			return -1
+		case r >= '０' && r <= '９':
+			return r - '０' + '0'
 		}
 		return r
 	}, code))
