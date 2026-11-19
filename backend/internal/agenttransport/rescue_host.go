@@ -221,9 +221,10 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 		return "", ErrRefused
 	}
 	c.mu.Lock()
-	ended := c.ended
+	off := c.ended || c.closed
 	c.mu.Unlock()
-	if ended { // 受付 OFF came while the result was verified
+	if off { // 受付 OFF came, or began, while the result was verified
+		c.end()
 		return "", ErrClosed
 	}
 	go func() { _, _, _ = ws.Read(life); c.end() }()
