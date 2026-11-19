@@ -56,13 +56,13 @@ tether-host-pair --gateway https://gateway.example --issuer https://idp.example/
 | 200 | 登録成功。JSONで`registration_endpoint`、`host_label`、`principal_label`、`principal_public_key`を返します。公開鍵は`ssh-ed25519 <base64>`形式です |
 | 400 | JSON、member、公開鍵、またはproofが不正です |
 | 401 | Bearer tokenが欠落・重複・無効です。`WWW-Authenticate`に`invalid_token`を返します（headerなしの場合は`Bearer`のみ） |
-| 403 | 検証済みsubjectに対応するprincipalまたは登録枠がありません |
+| 403 | 検証済みのissuerとsubjectに対応するprincipalまたは登録枠がありません |
 | 405 | POST以外です。`Allow: POST`を返します |
 | 409 | 鍵が他host/principal鍵と重複するか、対象principalが作業中です |
 | 413 | 本文が4 KiBを超えています |
 | 503 | 登録簿の保存に失敗しました。鍵と登録内容は旧状態のままです |
 
-pairing verifierはBearer用OAuth設定から作られます。MCP verifierはpairing audienceを含むtokenを拒否します。pairing tokenの有効期間は最大600秒で、audienceは設定値1つだけです。
+pairing verifierはBearer用OAuth設定から作られます。principalの照合はissuerとsubjectの組で行います。subjectはissuerの中でだけ一意なので、pairing verifierのissuerはMCP verifierと同じでなければならず、libraryとして別のissuerのverifierを渡すと設定エラーになります。MCP verifierはpairing audienceを含むtokenを拒否します。pairing tokenの有効期間は最大600秒で、audienceは設定値1つだけです。
 
 ## 置換と接続
 

@@ -128,7 +128,8 @@ func (g *Gateway) ConfigurePairing(cfg PairingConfig) error {
 		return ErrConfig
 	}
 	// The pair route takes only its own verifier: an MCP token must never register a host.
-	if cfg.Verifier == nil || cfg.Verifier == g.verifier || cfg.Verifier.audience == g.verifier.audience || cfg.Verifier.issuer == "" {
+	// Principal subjects are in the MCP issuer's namespace, so pairing must use that issuer too.
+	if cfg.Verifier == nil || cfg.Verifier == g.verifier || cfg.Verifier.audience == g.verifier.audience || cfg.Verifier.issuer == "" || cfg.Verifier.issuer != g.verifier.issuer {
 		return ErrConfig
 	}
 	used := map[string]bool{}
@@ -227,7 +228,11 @@ func (g *Gateway) ServePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.mu.Lock()
-	p := g.bySubject[identity.Subject]
+	// Recheck issuer here so this lookup stays safe even if configuration checks are bypassed.
+	var p *principal
+	if identity.Issuer == g.verifier.issuer {
+		p = g.bySubject[identity.Subject]
+	}
 	var label string
 	var target *hostSlot
 	for name, slot := range g.hosts {
