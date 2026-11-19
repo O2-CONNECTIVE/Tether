@@ -171,10 +171,10 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 		}
 		m.refused = nil // one ordered publication, not retained owner evidence
 	}
-	// Unknown hides every claim, the end and why the last cycle ended included.
-	m.end = standbyEnd{}
+	// Unknown hides the end, a claim about admission. Why the cycle ended was
+	// settled before its cleanup went unknown, so it stays.
+	m.end = standbyEnd{StandbyExpired: o.StandbyExpired}
 	if !m.poisoned {
-		m.end.StandbyExpired = o.StandbyExpired
 		if !o.StandbyUntil.IsZero() {
 			end := uint64(o.StandbyUntil.UnixMilli())
 			m.end.StandbyUntil, m.end.StandbyEndingSoon = &end, o.StandbyEndingSoon

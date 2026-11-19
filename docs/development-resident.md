@@ -30,9 +30,10 @@ protocol error です。`extend <request_id> <expected_revision> <hours>` は、
 方言には延長の入口がなく、その `on` には既定の2時間が付きます。期限は経過時間と
 壁時計の早い方で切れ、スリープ中も進みます。期限が来ると、待機 OFF と同じく受付を
 閉じ、所有作業を止めて回収します。延長は待機の状態遷移ではないので `transition` には
-出ません。foreground の `status` の snapshot だけが、待機の壁時計の終わり
-`standbyUntil`（Unix ミリ秒、受付が閉じていれば `null`）、期限の10分前からの
-`standbyEndingSoon`、期限で止まったことを示す `standbyExpired`（次の ON で `false`）を
+出ません。foreground の `status` の snapshot だけが、待機が終わる時刻を今の壁時計で
+表した `standbyUntil`（Unix ミリ秒、受付が閉じていれば `null`。壁時計を戻すと、経過時間で
+切れる早い方の時刻に変わります）、期限の10分前からの `standbyEndingSoon`、期限で
+止まったことを示す `standbyExpired`（次の ON で `false`。回収が unknown になっても残ります）を
 持ちます。JSON の方言の `status` は変えていません。
 
 `allow <request_id> <expected_revision>` は、署名付きの汎用コマンド

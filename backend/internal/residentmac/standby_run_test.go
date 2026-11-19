@@ -38,8 +38,9 @@ func extend(t *testing.T, s *Standby, id uint64, d time.Duration) {
 }
 
 // stepClock stands in for the two clocks standby's end is kept on. awake moves
-// both. asleep moves only the wall clock, as on a Mac whose monotonic clock
-// stops while it sleeps. setBack moves only the wall clock, backwards.
+// both. asleep moves only the wall clock: the worst case, an elapsed-time clock
+// that stops while the Mac sleeps, as Go's own does. setBack moves only the
+// wall clock, backwards.
 type stepClock struct {
 	base       time.Time
 	mono, wall atomic.Int64
@@ -199,9 +200,9 @@ func TestStandbyEndTurnsStandbyOffForEveryLength(t *testing.T) {
 	}
 }
 
-// The monotonic clock may stop while the Mac sleeps. Standby turned on before
-// a night of sleep must not still be on in the morning, so the wall clock ends
-// it too, and the Mac stops as soon as it wakes.
+// Standby turned on before a night of sleep must not still be on in the
+// morning. Should elapsed time stop while the Mac sleeps, the wall clock ends
+// standby too, and the Mac stops as soon as it wakes.
 func TestStandbyEndsByWallClockAcrossSleep(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, c, clock := clockedStandbyOn(t, 2*time.Hour)
@@ -222,11 +223,16 @@ func TestStandbyEndsByWallClockAcrossSleep(t *testing.T) {
 }
 
 // Setting the wall clock back must not stretch standby: elapsed time ends it
-// too.
+// too. The status then shows that earlier end on the wall clock as it now
+// reads, since the person plans around the end they are shown.
 func TestStandbyEndsByElapsedTimeWhenWallClockIsSetBack(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, c, clock := clockedStandbyOn(t, 2*time.Hour)
 		clock.setBack(24 * time.Hour)
+		settle()
+		if _, wall := clock.now(); !s.Snapshot().StandbyUntil.Equal(wall.Add(2 * time.Hour)) {
+			t.Fatal("status kept the wall-clock end the set-back clock no longer reaches first", s.Snapshot().StandbyUntil, wall)
+		}
 		clock.awake(2*time.Hour - time.Nanosecond)
 		settle()
 		if s.Snapshot().Standby != "on" {
@@ -239,6 +245,35 @@ func TestStandbyEndsByElapsedTimeWhenWallClockIsSetBack(t *testing.T) {
 		}
 		close(c.gate)
 		eventually(t, func() bool { return s.Snapshot().Standby == "off" })
+	})
+}
+
+// Once standby has been seen to run out it stays run out, whichever clock saw
+// it: setting the wall clock back before the monitor's next look must not
+// reopen the allowance or extension, and an OFF in that moment still records
+// the end as why standby stopped.
+func TestStandbyStaysRunOutOnceSeenRunOut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, c, clock := clockedStandbyOn(t, 2*time.Hour)
+		clock.asleep(2 * time.Hour)
+		if s.RunAllowed() {
+			t.Fatal("standby past its wall-clock end admitted command runs")
+		}
+		clock.setBack(time.Hour)
+		if r := s.AllowRun(2, s.Snapshot().Revision); r.Disposition != "rejected" {
+			t.Fatal("setting the wall clock back reopened the allowance", r)
+		}
+		if r := s.ExtendStandby(3, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "rejected" {
+			t.Fatal("setting the wall clock back reopened extension", r)
+		}
+		if r := s.RequestOff(4, s.Snapshot().Revision); r.Disposition != "accepted" {
+			t.Fatal(r)
+		}
+		if o := s.Snapshot(); !o.StandbyExpired {
+			t.Fatal("an OFF after the end lost the end as why standby stopped", o)
+		}
+		close(c.gate)
+		eventually(t, func() bool { o := s.Snapshot(); return o.Standby == "off" && o.StandbyExpired })
 	})
 }
 

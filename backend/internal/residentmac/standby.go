@@ -41,6 +41,7 @@ type standbyCycle struct {
 	initialUntil  time.Time
 	until         time.Time // guarded by Standby.mu: the end of standby (#399)
 	untilWall     int64     // the same instant on the wall clock, Unix ns
+	ranOut        bool      // guarded by Standby.mu: standby was seen to have run out
 	runAllowed    bool      // guarded by Standby.mu: the local command-run allowance
 	authenticated bool
 }
@@ -51,7 +52,7 @@ type Standby struct {
 	mu            sync.Mutex
 	factory       *FixedFactory
 	makeConnector func(context.Context) (residentConnector, error)
-	clock         func() (mono, wall time.Time) // nil reads time.Now; tests replace it
+	clock         func() (mono, wall time.Time) // nil reads elapsedNow and time.Now; tests replace it
 	updates       chan struct{}
 	observation   StandbyObservation
 	lastRequest   uint64
@@ -183,6 +184,9 @@ func (s *Standby) request(id, revision uint64, intent string, d time.Duration) S
 		if s.observation.Standby != "on" {
 			return r
 		}
+		// An OFF that comes after the end but before the monitor saw it still
+		// stops a cycle that ran out.
+		s.observation.StandbyExpired = s.standbyLeftLocked() <= 0
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
 		s.stopLocked()
 	}

@@ -68,20 +68,26 @@ func TestForegroundStatusCarriesTheStandbyEnd(t *testing.T) {
 	}
 }
 
-// Unknown hides every claim, including when standby ends and why the last
-// cycle ended.
+// Unknown hides when standby ends, a claim about admission. Why it stopped
+// was settled before its cleanup went unknown, so the status keeps it.
 func TestPoisonedForegroundStatusShowsNoStandbyEnd(t *testing.T) {
 	o := fixtureOff()
-	o.Revision, o.Standby, o.Registration, o.AdmissionSealed, o.CanRequestOn, o.CanRequestOff = 2, "on", "authenticated", false, false, true
-	o.StandbyUntil, o.StandbyEndingSoon, o.StandbyExpired = time.UnixMilli(1_900_000_000_000), true, true
-	o.Cleanup = "unknown"
+	o.Revision, o.Standby, o.Work, o.Cleanup, o.StandbyExpired = 2, "stopping", "stopping", "pending", true
 	m := mapper{foreground: true}
 	s, err := m.observe(o, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := statusSnapshot(t, &m, s); string(got["standbyUntil"]) != "null" || string(got["standbyEndingSoon"]) != "false" || string(got["standbyExpired"]) != "false" || string(got["standby"]) != `"unknown"` {
-		t.Fatal("unknown status still showed a standby end", got)
+	if got := statusSnapshot(t, &m, s); string(got["standbyExpired"]) != "true" {
+		t.Fatal("stopping status lost why standby stopped", got)
+	}
+	o.Revision, o.Standby, o.Work, o.Cleanup = 3, "unknown", "unknown", "unknown"
+	o.StandbyUntil, o.StandbyEndingSoon = time.UnixMilli(1_900_000_000_000), true
+	if s, err = m.observe(o, 20); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusSnapshot(t, &m, s); string(got["standbyUntil"]) != "null" || string(got["standbyEndingSoon"]) != "false" || string(got["standbyExpired"]) != "true" || string(got["standby"]) != `"unknown"` {
+		t.Fatal("unknown status showed a standby end or lost why standby stopped", got)
 	}
 }
 

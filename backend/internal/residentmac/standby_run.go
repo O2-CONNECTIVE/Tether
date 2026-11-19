@@ -43,8 +43,8 @@ func (s *Standby) ExtendStandby(id, revision uint64, d time.Duration) StandbyRec
 
 // endStandbyInLocked sets the current cycle to end d from now.
 //
-// The end is kept twice. The monotonic clock ignores wall-clock changes but may
-// stop while the Mac sleeps; the wall clock keeps counting through sleep but can
+// The end is kept twice. Elapsed time (elapsedNow) counts through sleep and
+// ignores wall-clock changes; the wall clock also counts through sleep but can
 // be set back. Standby has ended as soon as either says so. The wall-clock end
 // is an integer: a time.Time from time.Now carries a monotonic reading that Sub
 // would prefer, which would quietly turn the wall-clock check into a second
@@ -117,18 +117,21 @@ func (s *Standby) now() (mono, wall time.Time) {
 	if s.clock != nil {
 		return s.clock()
 	}
-	t := time.Now()
-	return t, t
+	return elapsedNow(), time.Now()
 }
 
 // standbyLeftLocked is how long the current cycle has left by the stricter of
-// its two clocks, and not positive without a cycle.
+// its two clocks, and not positive without a cycle. A cycle seen to have run
+// out stays run out: a wall clock set back before the monitor's next look must
+// not reopen admission, extension or the allowance.
 func (s *Standby) standbyLeftLocked() time.Duration {
-	if s.cycle == nil {
+	if s.cycle == nil || s.cycle.ranOut {
 		return 0
 	}
 	mono, wall := s.now()
-	return min(s.cycle.until.Sub(mono), time.Duration(s.cycle.untilWall-wall.UnixNano()))
+	left := min(s.cycle.until.Sub(mono), time.Duration(s.cycle.untilWall-wall.UnixNano()))
+	s.cycle.ranOut = left <= 0
+	return left
 }
 
 // admittingLocked reports whether the current cycle admits new work. Every state
@@ -154,6 +157,12 @@ func (s *Standby) expireStandbyLocked() bool {
 		return true
 	}
 	s.observation.StandbyEndingSoon = left <= StandbyEndingNotice
+	// The end the person reads is when standby will actually end. After the
+	// wall clock is set back, elapsed time ends it before the wall-clock end.
+	_, wall := s.now()
+	if end := wall.UnixNano() + int64(left); time.Duration(end-s.observation.StandbyUntil.UnixNano()).Abs() >= time.Second {
+		s.observation.StandbyUntil = time.Unix(0, end)
+	}
 	return false
 }
 
