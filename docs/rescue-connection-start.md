@@ -334,6 +334,32 @@ K を盗んだ者は、C を持たないので担当者として接続できま�
 ホストは gateway に接続していれば受付の終了を伝え、gateway は C を捨てます。
 接続していなければ、gateway は 5 分で受付記録と C を捨てます。
 
+### 中継の寿命
+
+受付の接続と channel は同じ WSS に載るため（[流れ](#流れ)）、Worker の中継は受付からセッションの終わりまでを 1 本で運びます。
+Worker はレスキューの受付口（subprotocol `rescue-agent-reception.v1`）の中継にだけ、登録と resident の 5 分とは別の絶対の寿命を置きます。
+
+寿命は 24 時間 10 分です。
+根拠となる時間は、受付の handshake 10 秒（agenttransport の登録予算 `DefaultBudgets().Registration`）+ コードの有効時間 5 分 + gateway の要求の失効 75 秒 + 許可の期限の上限 24 時間 = 24 時間 6 分 25 秒です。
+これに時計の進み方の違いと、期限で閉じるやりとりの余裕を足しています。
+
+frame の予算は登録と同じ率（5 分に 4096 frame）で、1,187,840 frame です。
+channel の心拍は両端が 10 秒ごとに送り、相手のものに答えます。
+これを寿命の間流しても各方向 17,400 frame で、予算の 2% に届きません。
+
+期限は今までどおりホストと gateway が判定します（[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399)）。
+中継の寿命はその外側の上限で、期限の上限より後に来るように選んでいます。
+寿命に達したら Worker は両端を close code 4000 で閉じ、再接続も延長もしません。
+
+Cloudflare 側の都合で、寿命より前に切れることがあります。
+runtime の更新では、旧い process の接続は最大 20 分の猶予の後に切れます（[runtime updates](https://developers.cloudflare.com/workers/platform/limits/#runtime-updates)）。
+障害や資源の逼迫では、もっと早く切れることがあります。
+どの場合も channel の切断なので、猶予の間に再接続します。
+再接続は新しい WSS であり、新しい中継の寿命で始まりますが、期限は延びません。
+
+期限の上限、コードの有効時間、要求の失効のどれかを変えるときは、この寿命も見直します。
+値は `deploy/cloudflare/native/worker.mjs` の `RESCUE_LIMITS` にあります。
+
 ### ゲストのアカウントとの対応
 
 | 事象 | grant | 鍵 | ゲストのアカウント | 作業 |
