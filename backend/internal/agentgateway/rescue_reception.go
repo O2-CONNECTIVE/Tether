@@ -271,9 +271,15 @@ func (g *Gateway) endRescueLocked(id []byte, record *rescueReceptionRecord) {
 		record.principal.rescueBusy = false
 		g.mu.Unlock()
 	}
-	clear(record.clientKey)
+	clearRescueClientKey(record.clientKey)
 	record.clientKey = nil
 	close(record.done)
+}
+
+func clearRescueClientKey(key ed25519.PrivateKey) {
+	for i := range key {
+		key[i] = 0
+	}
 }
 
 func (g *Gateway) setRescueStateLocked(p *principal, state string) {

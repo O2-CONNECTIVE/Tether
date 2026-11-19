@@ -118,7 +118,8 @@ func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
 		g.rescue.mu.Unlock()
 		return ErrRefused // nil only when a channel opens
 	}
-	clientSigner, err := ssh.NewSignerFromKey(ed25519.PrivateKey(record.clientKey))
+	clientSigner, clientKey, err := newRescueClientSigner(record.clientKey)
+	defer clearRescueClientKey(clientKey)
 	var keyDigest [32]byte
 	if err == nil {
 		keyDigest, err = runbackend.KeySetDigest([]ssh.PublicKey{clientSigner.PublicKey()})
@@ -145,6 +146,16 @@ func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
 	}
 	g.rescue.mu.Unlock()
 	return err
+}
+
+func newRescueClientSigner(key ed25519.PrivateKey) (ssh.Signer, ed25519.PrivateKey, error) {
+	owned := append(ed25519.PrivateKey(nil), key...)
+	signer, err := ssh.NewSignerFromKey(owned)
+	if err != nil {
+		clearRescueClientKey(owned)
+		return nil, nil, err
+	}
+	return signer, owned, nil
 }
 
 func (g *Gateway) rescueRequest(ctx context.Context, p *principal, code string) map[string]any {
