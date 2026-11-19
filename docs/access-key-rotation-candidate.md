@@ -61,7 +61,7 @@ providerの可用性や実運用での適合は未検証で、配置前に別途
 listen失敗、Serve異常終了を含む全returnでownerを取消し、goroutine終了を最大10秒待ちます。
 終了未確認を成功扱いせず、終了値1と固定診断を返します。停止のretryはしません。
 HTTP・登録・gatewayの既存終了順序は維持し、その後owner joinを確認してCLIが返ります。
-静的modeと同じく、鍵更新はMacの同意、5分のcontrol generation、コマンド実行の許可の期限を延長しません。
+静的modeと同じく、鍵更新はMacの同意、5分のcontrol generation、待機の期限を延長しません。
 
 ## 配置前の残る条件
 

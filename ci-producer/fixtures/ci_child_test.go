@@ -216,8 +216,8 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 	}
 	switch kind {
 	case "status":
-		// Only the foreground (development) dialect's status shows the run
-		// allowance; the JSON dialect's keeps its exact product keys.
+		// Only the foreground (development) dialect's status shows when standby
+		// ends; the JSON dialect's keeps its exact product keys.
 		var e statusEnvelope
 		var decoded error
 		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition"}
@@ -226,8 +226,8 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 			var f foregroundStatusEnvelope
 			decoded = ciStrictFrame(raw, &f)
 			e = statusEnvelope{f.ProtocolVersion, f.Type, f.SourceContinuousMS, f.Snapshot.Snapshot}
-			keys = append(keys, "runUntil", "runEndingSoon", "runExpired")
-			flags = append(flags, "runEndingSoon", "runExpired")
+			keys = append(keys, "standbyUntil", "standbyEndingSoon", "standbyExpired")
+			flags = append(flags, "standbyEndingSoon", "standbyExpired")
 		} else {
 			decoded = ciStrictFrame(raw, &e)
 		}
@@ -348,11 +348,15 @@ func (p *ciChild) request(intent string) (uint64, error) {
 		return id, e
 	}
 	if p.foreground {
-		line := fmt.Sprintf("%s %d %d", intent, id, s.Revision)
+		verb := intent
 		if intent == "allow-run" {
-			// The foreground dialect names the allowance by its verb and the
-			// shortest listed length, the one the GUI offers by default.
-			line = fmt.Sprintf("allow %d %d 2", id, s.Revision)
+			verb = "allow" // The foreground dialect names the allowance by its verb.
+		}
+		line := fmt.Sprintf("%s %d %d", verb, id, s.Revision)
+		if intent == "on" {
+			// The foreground on names how long standby stays on: the shortest
+			// listed length, the one the GUI offers by default (#399).
+			line += " 2"
 		}
 		raw = []byte(line + "\n")
 	}

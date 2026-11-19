@@ -129,22 +129,23 @@ func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 			}
 		}
 	}
-	// The allowance reaches the same owner through the same mapper. Standby is
-	// OFF here, so the owner refuses to open it; closing it is always accepted.
-	// Neither is a standby transition, so neither may leave one or block ON.
+	// The allowance and the extension reach the same owner through the same
+	// mapper. Standby is OFF here, so the owner refuses to open the allowance or
+	// extend standby; closing the allowance is always accepted. None is a
+	// standby transition, so none may leave one or block ON.
 	for index, tc := range []struct{ word, length, intent, disposition string }{
-		{"allow", " 2", "allow-run", "rejected"}, {"deny", "", "deny-run", "accepted"},
+		{"allow", "", "allow-run", "rejected"}, {"deny", "", "deny-run", "accepted"}, {"extend", " 2", "extend", "rejected"},
 	} {
 		id := uint64(index + 2)
 		write(fmt.Sprintf("%s %d %d%s\n", tc.word, id, status.Snapshot.Revision, tc.length))
 		var receipt receiptEnvelope
 		read(&receipt)
 		if receipt.Receipt.RequestID != id || receipt.Receipt.Intent != tc.intent || receipt.Receipt.Disposition != tc.disposition {
-			t.Fatal("allowance did not reach the original owner", receipt)
+			t.Fatal("local action did not reach the original owner", receipt)
 		}
 		read(&status)
 		if status.Snapshot.Transition != nil || !status.Snapshot.CanRequestOn || status.Snapshot.Standby != "off" {
-			t.Fatal("allowance changed standby evidence", status)
+			t.Fatal("local action changed standby evidence", status)
 		}
 	}
 	if owner.RunAllowed() {
@@ -155,7 +156,7 @@ func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 		cancel() // the same lifetime consumed by foreground's signal context
 	} else {
 		// A would-be ON after close in the same OS read is never decoded/applied.
-		write(fmt.Sprintf("close\non 2 %d\ninvalid\n", status.Snapshot.Revision))
+		write(fmt.Sprintf("close\non 2 %d 2\ninvalid\n", status.Snapshot.Revision))
 	}
 	select {
 	case err := <-done:
@@ -167,7 +168,7 @@ func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 		t.Fatal("explicit close did not join while input is still open")
 	}
 	// Later-chunk input has no remaining reader and cannot start work either.
-	write(fmt.Sprintf("on 3 %d\n", status.Snapshot.Revision))
+	write(fmt.Sprintf("on 3 %d 2\n", status.Snapshot.Revision))
 	if after := owner.Snapshot(); after.Revision != before.Revision || after.Standby != "off" || after.Owned != 0 {
 		t.Fatal("input after close affected original owner", after)
 	}
@@ -191,7 +192,7 @@ func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 }
 
 func TestForegroundPipeMalformedAndPartialEOF(t *testing.T) {
-	for _, text := range []string{"status", "on 01 1\n", "status\r\n"} {
+	for _, text := range []string{"status", "on 01 1 2\n", "status\r\n"} {
 		t.Run(fmt.Sprintf("input-%x", text), func(t *testing.T) {
 			r, w, err := os.Pipe()
 			if err != nil {

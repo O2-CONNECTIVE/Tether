@@ -69,7 +69,7 @@ func TestStandbyConsumeEndsOriginalSource(t *testing.T) {
 						t.Error("work transport was created")
 					}
 				}()
-				if receipt := s.RequestOn(1, s.Snapshot().Revision); receipt.Disposition != "accepted" {
+				if receipt := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); receipt.Disposition != "accepted" {
 					t.Fatal(receipt)
 				}
 				synctest.Wait()

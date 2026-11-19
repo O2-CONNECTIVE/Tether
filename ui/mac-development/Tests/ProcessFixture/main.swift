@@ -6,7 +6,7 @@ var revision = 0
 var on = false
 func status() {
     revision += 1
-    print("{\"protocolVersion\":1,\"type\":\"status\",\"sourceContinuousMs\":\(mode == "normal" || mode.hasPrefix("expiry") ? ResidentProcess.now() : ResidentProcess.now()-4000),\"snapshot\":{\"protocolVersion\":1,\"source\":\"resident-owner\",\"state\":\"source-observation\",\"revision\":\(revision),\"validForMs\":3000,\"standby\":\"off\",\"registration\":\"disconnected\",\"caller\":null,\"work\":\"idle\",\"cleanup\":\"confirmed\",\"canRequestOn\":true,\"canRequestOff\":false,\"transition\":null,\"runUntil\":null,\"runEndingSoon\":false,\"runExpired\":false}}")
+    print("{\"protocolVersion\":1,\"type\":\"status\",\"sourceContinuousMs\":\(mode == "normal" || mode.hasPrefix("expiry") ? ResidentProcess.now() : ResidentProcess.now()-4000),\"snapshot\":{\"protocolVersion\":1,\"source\":\"resident-owner\",\"state\":\"source-observation\",\"revision\":\(revision),\"validForMs\":3000,\"standby\":\"off\",\"registration\":\"disconnected\",\"caller\":null,\"work\":\"idle\",\"cleanup\":\"confirmed\",\"canRequestOn\":true,\"canRequestOff\":false,\"transition\":null,\"standbyUntil\":null,\"standbyEndingSoon\":false,\"standbyExpired\":false}}")
     fflush(stdout)
 }
 status()

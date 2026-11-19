@@ -7,7 +7,7 @@ func runMapperContract() {
     check(frames.count == 7, "Go mapper fixture has all phases")
     func begun() -> Feed {
         var f = Feed(); f.ingest(frames[0], at: 1000)
-        check(f.command("on", at: 1000) == "on 1 1\n", "mapper OFF admits exact ON")
+        check(f.command("on", at: 1000, hours: 2) == "on 1 1 2\n", "mapper OFF admits exact ON")
         f.ingest(frames[1], at: 1000)
         return f
     }
@@ -52,7 +52,7 @@ func runMapperContract() {
     duplicatePending.ingest(frames[2], at: 1000)
     check(duplicatePending.cleanupInvalid, "replayed pending does not earn exception")
     var noReceipt = Feed(); noReceipt.ingest(frames[0], at: 1000)
-    _ = noReceipt.command("on", at: 1000); noReceipt.ingest(frames[2], at: 1000)
+    _ = noReceipt.command("on", at: 1000, hours: 2); noReceipt.ingest(frames[2], at: 1000)
     check(noReceipt.cleanupInvalid, "pending exception requires accepted receipt")
     var unrequested = Feed(); unrequested.ingest(frames[0], at: 1000)
     unrequested.ingest(frames[2], at: 1000)

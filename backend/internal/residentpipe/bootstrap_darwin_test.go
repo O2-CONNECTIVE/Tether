@@ -136,7 +136,7 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 				if err := inW.Close(); err != nil {
 					t.Fatal(err)
 				}
-			} else if _, err := io.WriteString(inW, "close\non 1 1\n"); err != nil {
+			} else if _, err := io.WriteString(inW, "close\non 1 1 2\n"); err != nil {
 				t.Fatal(err)
 			}
 			select {

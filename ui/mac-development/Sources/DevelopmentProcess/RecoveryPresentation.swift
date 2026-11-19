@@ -3,7 +3,7 @@ import Foundation
 // Values rendered directly by AppKit; no effects or alternate cleanup proof.
 public struct RecoveryPresentation {
     public let status, detail, prepareTitle, quitTitle, diagnostic, run: String
-    public let canPrepare, canOn, canOff, canAllow, canDeny, canStop: Bool
+    public let canPrepare, canOn, canOff, canExtend, canAllow, canDeny, canStop: Bool
 }
 
 extension RecoveryController {
@@ -37,16 +37,22 @@ extension RecoveryController {
             } else if o.standby == "stopping" {
                 status = "待機を停止中"
             } else if o.standby == "on" {
-                status = connected ? "開発ホストは待機中" : "待機 ON・接続を確認中"
+                status = connected ? "待機中" : "待機 ON・接続を確認中"
+                if let until = o.standbyUntil {
+                    let clock = Self.clock(until)
+                    status = o.standbyEndingSoon
+                        ? "まもなく期限（\(clock)まで）。延長するか作業を終えてください"
+                        : status + "（\(clock)まで）"
+                }
             } else if o.standby == "off" && o.work == "idle" && o.cleanup == "confirmed" {
                 status = "待機は OFF"
             } else {
                 status = "停止と回収を確認中"
             }
             detail = f.pending != nil ? "状態変更の結果を確認しています。完了するまで新しい要求はできません。" : "接続: \(connected ? "認証済み" : "未確認") ／ 操作: \(o.work == "idle" ? "なし" : "処理中") ／ 回収: \(o.cleanup == "confirmed" ? "確認済み" : "確認中")"
-            if f.pending == nil, o.standby == "off", o.work == "idle", o.cleanup == "confirmed", o.runExpired {
+            if f.pending == nil, o.standby == "off", o.work == "idle", o.cleanup == "confirmed", o.standbyExpired {
                 status = "期限で停止しました"
-                detail = "コマンド実行の許可の期限が来たため、待機を OFF にして停止・回収しました。続けるには待機を ON にし、あらためて許可してください。"
+                detail = "待機の期限が来たため、待機を OFF にして停止・回収しました。続けるには待機を ON にし、あらためてコマンド実行を許可してください。"
             }
         } else {
             status = "まだ起動していません"
@@ -54,17 +60,9 @@ extension RecoveryController {
         }
         let diagnosticText = (launched || launchFailed ? "現在: " + diagnostic : "")
             + (previousDiagnostic.map { "\n前回: " + $0 } ?? "")
-        let run: String
-        if f.runAllowed(at: now), let o = f.observation, let until = o.runUntil {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "HH:mm"
-            let clock = formatter.string(from: Date(timeIntervalSince1970: Double(until) / 1000))
-            run = o.runEndingSoon
-                ? "コマンド実行: まもなく期限（\(clock)まで）。延長するには、もう一度許可してください"
-                : "コマンド実行: 許可中（\(clock)まで）"
-        } else {
-            run = "コマンド実行: 許可なし（待機 ON だけでは実行されません）"
-        }
+        let run = f.runAllowed
+            ? "コマンド実行: 許可中（待機を OFF にするまで）"
+            : "コマンド実行: 許可なし（待機 ON だけでは実行されません）"
         return RecoveryPresentation(
             status: status, detail: detail,
             prepareTitle: launched || launchFailed ? "もう一度準備" : "開発ホストを準備",
@@ -72,7 +70,12 @@ extension RecoveryController {
             run: run,
             canPrepare: preparation != .blocked,
             canOn: !quitRequested && f.can("on", at: now), canOff: !quitRequested && f.can("off", at: now),
-            canAllow: !quitRequested && f.can("allow", at: now), canDeny: !quitRequested && f.can("deny", at: now),
+            canExtend: !quitRequested && f.can("extend", at: now), canAllow: !quitRequested && f.can("allow", at: now), canDeny: !quitRequested && f.can("deny", at: now),
             canStop: launched && !quitRequested && !f.closing && !f.closed)
+    }
+    private static func clock(_ ms: UInt64) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "HH:mm"
+        return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
 }

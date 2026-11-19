@@ -20,9 +20,10 @@ type Intent struct {
 	RequestID        uint64 `json:"requestId"`
 	ExpectedRevision uint64 `json:"expectedRevision"`
 	Intent           string `json:"intent"`
-	// RunFor is the allowance length of an allow-run intent and zero
-	// otherwise. Only the foreground dialect can name one; JSON cannot.
-	RunFor time.Duration `json:"-"`
+	// StandbyFor is how long an on or extend intent keeps standby on, and zero
+	// otherwise. Only the foreground dialect names it; the JSON dialect's on
+	// gets the default (#399).
+	StandbyFor time.Duration `json:"-"`
 }
 type intentEnvelope struct {
 	ProtocolVersion uint64 `json:"protocolVersion"`

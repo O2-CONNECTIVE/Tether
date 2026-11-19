@@ -62,7 +62,7 @@ func TestStandbyHostStopsDuringSourceCleanup(t *testing.T) {
 					connector := &cleanupConnector{accept: make(chan error, 1), joined: make(chan struct{})}
 					var constructions atomic.Int32
 					s.makeConnector = func(context.Context) (residentConnector, error) { constructions.Add(1); return connector, nil }
-					if r := s.RequestOn(1, s.Snapshot().Revision); r.Disposition != "accepted" {
+					if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
 						t.Fatal(r)
 					}
 					synctest.Wait()
@@ -97,7 +97,7 @@ func TestStandbyHostStopsDuringSourceCleanup(t *testing.T) {
 					if o := s.Snapshot(); !o.AdmissionSealed || o.CanRequestOn || o.Standby != "stopping" {
 						t.Error("host stop did not seal UI admission", o)
 					}
-					if r := s.RequestOn(2, s.Snapshot().Revision); r.Disposition != "rejected" {
+					if r := s.RequestOn(2, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "rejected" {
 						t.Error("replacement accepted while cleanup held", r)
 					}
 					before := time.Now()

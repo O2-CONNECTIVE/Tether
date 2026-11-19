@@ -33,11 +33,11 @@ type StandbyObservation struct {
 	CanRequestOn        bool
 	CanRequestOff       bool
 	Transition          *StandbyTransition
-	// RunUntil is the wall-clock end of the local run allowance, zero without
-	// one or once admission is sealed. RunEndingSoon is true from
-	// RunEndingNotice before that end. RunExpired records that the current or
-	// last cycle ended because the allowance ran out; the next ON clears it.
-	RunUntil      time.Time
-	RunEndingSoon bool
-	RunExpired    bool
+	// StandbyUntil is the wall-clock end of standby, zero once admission is
+	// sealed. StandbyEndingSoon is true from StandbyEndingNotice before that
+	// end. StandbyExpired records that the current or last cycle ended because
+	// standby ran out; the next ON clears it.
+	StandbyUntil      time.Time
+	StandbyEndingSoon bool
+	StandbyExpired    bool
 }

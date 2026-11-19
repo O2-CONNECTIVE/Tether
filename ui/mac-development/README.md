@@ -13,12 +13,16 @@ Developer ID の結果をモックに置換しません。別 bundle ID、常時
   改変への防御、コード署名・notarization の代替ではありません。
 - 新鮮な owner 状態に対する ON/OFF だけ。固定検証操作以外の command/path/env
   入力はありません。重複クリックと pending 中の操作を拒否します。
-- コマンド実行の許可（2・4・8・12・24時間から選ぶ。既定は2時間）と取り消し、
-  実行したコマンドの本文（直近5件）の表示。許可中にもう一度許可すると、その時点から
-  選んだ時間に置き換わります（延長）。許可の有無と終わりの時刻は owner の status の
-  `runUntil` だけで表示し、receipt だけでは許可中にしません。期限の10分前からは
-  「まもなく期限」と出します。記録の制約は
-  [development-resident](../../docs/development-resident.md) を参照。
+- 待機 ON は 2・4・8・12・24時間から選んだ時間（既定は2時間）を必ず付けて送ります
+  （`on <id> <rev> <hours>`）。待機中は「延長」で、選んだ時間を今から数えて置き換えます
+  （`extend`。短くもできます。pending にはしません）。待機の期限の壁時計は owner の
+  status の `standbyUntil` で表示し、期限の10分前から（`standbyEndingSoon`）
+  「まもなく期限」と出します。
+- コマンド実行の許可（`allow`）と取り消し、実行したコマンドの本文（直近5件）の表示。
+  許可に時間は付けず、待機が OFF になる（人が OFF にする・期限が来る）まで有効です。
+  許可の有無は status に出ないため、GUI が手元で持ちます。許可の accepted receipt で
+  許可中、取り消しの accepted receipt で許可なしとし、待機が ON でなくなれば消えます。
+  記録の制約は [development-resident](../../docs/development-resident.md) を参照。
 - 受領 receipt と状態変更、認証済み接続、停止回収を区別します。未知の状態、
   JSON 異常、時刻逆行、source age 3秒以上では操作を止めます。
 - 「ホストを停止」は元 owner に close を要求し、画面を残します。完全な回収証拠が
@@ -33,9 +37,9 @@ Developer ID の結果をモックに置換しません。別 bundle ID、常時
   覚えているのはこのプロセスだけなので、アプリは終了しません。強制終了すると記録は
   残りません。「ホストを停止」とアプリの終了は別の操作です。
 - **限定CLIです。永続運転ではありません。** helper は自分の寿命では終了しません。
-  LaunchAgent、ログイン起動、自動再起動はありません。コマンド実行の許可の期限が来ると、
+  LaunchAgent、ログイン起動、自動再起動はありません。待機の期限が来ると、
   owner が待機を OFF にして停止・回収し、GUI は回収の確認後に「期限で停止しました」と
-  出します（status の `runExpired`。次の ON で消えます）。helper が GUI の要求なしに
+  出します（status の `standbyExpired`。次の ON で消えます）。helper が GUI の要求なしに
   close した場合も、従来の4点の証拠が揃ったときだけ回収を確認します。
   close が unknown なら helper は終了せず元 owner を保持します。終了frameの書込み失敗、
   serve 失敗、signal による終了は非0のままです。いずれも回収未確認として残します。
