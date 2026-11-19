@@ -173,6 +173,7 @@ head a19eb995のrun40624841399/artifact12788014753では、WebView6件は全てC
 [MicrosoftのWin32_Process仕様](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process)も、ParentProcessIdが再利用された別processを指し得ることとCreationDate照合を説明しています。
 初回探索でsnapshot行の一意性・CreationDateの取得可否・親子の生成順を検査します。
 時刻欠測・逆順・世代曖昧な候補は、黙って非所有として除外せず、探索全体をNATIVE_LINEAGE_OWNER_UNCONFIRMEDで拒否します。
+例外は、下の「起動前から居た子を非所有と確定する」のとおり、driver起動前のsnapshotで非所有と確定できる子だけです。
 匿名理由と取得可否・親子の相対時間だけを保存し、不明なcandidateをkillしません。
 正当なother子も含め、所有確定後の全Children・既存10秒・cleanup前の正常終了判定は変えません。
 
@@ -186,12 +187,28 @@ CreationDateはwall clock由来であり、順序整合は保護された所有�
 公開するのは `parentBeforeDriverIdentity` と `childBeforeDriverIdentity` の固定分類（same/different/absent/ambiguous/unavailable/not-recorded）だけです。
 snapshotが4096行を超える場合や生成時刻を取得できない場合はunavailableにし、PID・絶対時刻・path・名前・command lineは保存しません。
 
-起動前から同じ子が存在し、現在の親が起動前にはabsent/differentだった場合、無関係な既存processとPID再利用の仮説を支持しますが、過去の親や実際の生成履歴を確定しません。
-この比較は所有認可・子の除外・close・cleanup・成功条件には使わず、従来と同じ `NATIVE_LINEAGE_OWNER_UNCONFIRMED` を保持します。
-`process-contract.test.ps1` から呼ぶ独立scopeの `lineage-baseline.test.ps1` は、匿名分類、depth4の二つの逆順時刻、baseline未取得時の拒否、正当なother子の保持、情報非公開を合成行で検査します。
-合成fixtureの成功と実Windowsの原因特定・通常close成功は別の証拠です。
+### 起動前から居た子を非所有と確定する
+
+起動前のsnapshotは、driverを起動する前に取り終えます。
+そこに同じ身元（PIDとCreationDate）で載っている子は、driverの起動前から居たprocessで、driverの子孫ではありません。
+その子孫も所有ではありません。子が生きている間はそのPIDを別のprocessが使えないので、所有のprocessがその子を親に持つことはありません。
+この場合、子とその下を所有の集合（Children）から外し、`reason` が `excluded-preexisting-child` の匿名の事実を `initialLineageFacts` に残します。子がappの下にあれば、driverからとappからの二つの探索で1件ずつ残ります。
+加えて、子の親PIDが起動前と同じであることを求めます。生きているprocessの親PIDは変わらないので、違えば身元の照合が衝突しているとみて除外しません。
+根拠は起動前のsnapshotへの所属と身元の一致で、時刻の前後ではありません。子が親より新しく見える場合も同じに扱います。
+身元の照合はPIDとCreationDateの組によります。時計が戻った直後に同じPIDが同じCreationDateで再利用される衝突は、親PIDの一致でしか弾けません。
+
+条件を欠く場合は除外しません。baselineが未取得・ambiguous・unavailableの場合、子の身元がdifferentの場合、記録された親PIDが違う場合です。
+このとき逆順なら、従来どおり `NATIVE_LINEAGE_OWNER_UNCONFIRMED` で止めます。
+起動前のsnapshotは所有の認可には使いません。PIDと親PIDが同じでも身元の違う新しい子は、所有のまま残します。
+`process-contract.test.ps1` から呼ぶ独立scopeの `lineage-baseline.test.ps1` は、#365の形（子same・親PID same・親absent）の除外と子孫の非所有、時計の向きによらない除外、起動前から居た親の除外、条件を欠く場合の停止、正当なother子の保持、情報非公開を合成行で検査します。
+合成fixtureの成功と実Windowsの通常close成功は別の証拠です。
 
 2026-11-09 の #295 merge 後も debug 診断は ownership-confirmation で拒否されました。固定 artifact の事実と、未採用の作成時 owner producer 案は[Windows lineage の証拠と次の所有契約](windows-lineage-ownership-plan.md)を参照してください。PID 再利用や既存失敗の解消は断定しません。
+
+2026-11-19 の main `d168a6f` の debug 診断（[run 44442402074](https://github.com/O2-CONNECTIVE/Tether/actions/runs/44442402074)）は、同じ depth4・webview-name・子の逆順に加えて、子の親PIDが起動前と同じ（`childBaselineParentPidRelation: same`）ことを記録しました（[#365](https://github.com/O2-CONNECTIVE/Tether/issues/365)）。
+上の除外はこの形を扱います。
+#295 の debug は親PIDの関係を記録していません。子の身元はsameで、生きているprocessの親PIDは変わらないので、同じ除外の対象になる形だったと読めますが、記録からは確定できません。
+2回の release の失敗（#365 の1件目のコメント）は系譜の事実が無く、同じ形だったかは分かりません。
 
 ## session作成timeoutの原因と起動前のruntime読込
 
