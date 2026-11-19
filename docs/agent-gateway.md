@@ -92,7 +92,7 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 - 1 principalにつき、live routeは最大1本です。routeは1つのgrant（LaunchID、epoch、generation、鍵集合digest、Mac profile）と、1本のchannel・wire clientに対応します。この対応は変わりません。
 - Connectは、未知のlabel、signerのないprincipal、`rescue_operator`のないprincipal、常駐のhost（paired枠と`resident`に載るhost）からのdispatch、route取得中・保持中のprincipal、Mac以外のprofile、このprocessで既に使ったLaunchIDを拒否し、渡されたconnを閉じます。open に進んだ Connect は失敗してもその LaunchID を消費します。open 前の拒否は LaunchID を記録せず、渡された stream を閉じます。その場合の Mac 承認失効は既存 host の接続喪失処理が担い、gateway による消費とは区別します。
 - `initialize`が成功したときだけ、128 bit乱数の`Mcp-Session-Id`を発行します。sessionはそのprincipalへ固定されます。その時点で有効なrouteがあれば同routeへ束縛し、なければ恒久的に未束縛のdiscovery専用sessionを作ります。後からgrantへattachしません。
-- `rescue_request`と`rescue_request_status`はrouteの無いdiscovery sessionにだけ表示し、呼び出せます。`rescue_request`は接続コードだけを受け取り、受付先や鍵を選ばせません。受付へ身元の証明を送ると`pending`を返します。`rescue_request_status`は状態が変わるまで待つ非同期の確認口です。WorkerがMCPの1往復を35秒で切るため、75秒待つ同期toolは使いません。状態は`none`、`pending`、`allow`、`deny`、`timeout`、`ended`、`failed`です。
+- `rescue_request`と`rescue_request_status`は、受付口（`rescue_identity_key`）が有効なgatewayのrouteの無いdiscovery sessionにだけ表示し、呼び出せます。`rescue_request`は接続コードだけを受け取り、受付先や鍵を選ばせません。受付へ身元の証明を送ると`pending`を返します。`rescue_request_status`は状態が変わるまで待つ非同期の確認口です。WorkerがMCPの1往復を35秒で切るため、75秒待つ同期toolは使いません。状態は`none`、`pending`、`allow`、`deny`、`timeout`、`ended`、`failed`です。
 - 後続の各requestでは、毎回tokenを検証したうえで、次の条件をすべて確認します。いずれかが外れると404です。
   - sessionのprincipalが同じであること。他principalのsession IDは未知のものと同じに扱います
   - routeへ束縛されたsessionでは、そのrouteがprincipalの現在のrouteで、終了していないこと（discovery専用sessionにはrouteがない）
