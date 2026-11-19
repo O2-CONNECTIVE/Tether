@@ -7,7 +7,7 @@
 エージェントで開始・再開・編集委譲・レビューを行う場合は[共通エージェント開発手順](agent-workflow.md)を参照してください。
 
 対象は新規接続を無効にしたv0.2.1-devです。
-Python 3.11以上とTkinterを想定し、実行時の追加Python依存はありません。
+Python 3.11以上を想定し、実行時の追加Python依存はありません。
 全OSや全Python版での検証済み宣言ではありません。
 公開済みの結果と環境は[status](status.md)へまとめています。
 
@@ -30,7 +30,6 @@ Pythonの導入やOS設定変更はコマンドに含みません。
 `test`は既存unittestだけ、`syntax`は`src/`、`tests/`、`scripts/`のPython構文だけを確認します。
 構文チェックは組み込みの`compile()`を使い、import、GUI起動、bytecodeの保存を行いません。
 `check`はテスト成功後に構文チェックを実行し、いずれかの失敗で非0終了します。
-テストにはTkinterのimportが必要で、GUIの実画面は開きません。
 対象不存在、空の対象、テスト0件、全件skipは成功扱いしません。
 テストの総数、実行数、合格数、skip数、失敗数、エラー数を区別し、skip理由は詳細ログに表示します。
 
@@ -44,7 +43,7 @@ Windowsでは同じ引数を`py -3.13`に渡します。
 
 公開済みデザイントークンの静的検証は`python3 scripts/dev.py tokens`で実行します。
 Windowsでは`py -3.13 scripts/dev.py tokens`を使います。
-このコマンドはTkinterをimportせず、既存checkerを同じPythonの隔離モードで起動します。
+このコマンドは既存checkerを同じPythonの隔離モードで起動します。
 checkerが使用するassertを`PYTHONOPTIMIZE`環境変数で無効にしないため、[Pythonの隔離モード`-I`](https://docs.python.org/3.13/using/cmdline.html#cmdoption-I)を指定しています。
 CIも独立stepでこの入口を使い、非0終了を失敗として扱います。
 トークン関係の開発ツール試験は正常例、不正参照、白文字と白背景のコントラスト低下を確認します。
@@ -69,7 +68,7 @@ py -3 -m unittest discover -s tests -v
 ```
 
 模擬Uptermとモックによる試験で、公開中継、実PC、TCPポート22には接続しません。
-模擬ライフサイクルだけは開始ゲートをテスト内で置き換えます。
+模擬ライフサイクルはcoreの下位関数を直接呼ぶため、開始ゲートを通りません。
 この成功は実接続の安全性を証明しません。
 モデルだけの試験は[既存の実行手順](OFFLINE_BACKEND_MODEL.md#実行)を参照してください。
 
@@ -88,13 +87,13 @@ shellにも接続や停止のバックエンドは配線していません。
 
 ## GUIとWindowsビルド
 
-`python src/rescue_host.py`はGUIを開きます。
-保存された旧セッションがあると回復処理を実行するため、本番PCでは承認前に実行しないでください。
-回復動作は[回復と画面終了](recovery.md)を参照してください。
+旧Tkinter GUI（`src/rescue_host.py`）は[#407](https://github.com/O2-CONNECTIVE/Tether/issues/407)で削除しました。
+保存された旧セッションを起動時に回復する処理も、このGUIとともになくなっています。
 
 [build_windows.ps1](../build_windows.ps1)はWindows x64向けの未検証スクリプトです。
 想定前提はWindows 10/11 x64、CPython 3.11–3.15 x64、Pythonランチャー`py`、インターネット接続です。
 EXEは未生成で、ARM64も未検証です。
+PyInstallerの入口だった`src/rescue_host.py`を削除したため、現状のスクリプトは最後のbuild手順で失敗します。このスクリプトの扱いは未決です。
 実行時に固定版Upterm v0.39.0とPyInstallerを取得します。
 `-UseLocalUpterm`には独立に確認した`-LocalUptermSha256`と対応ライセンスが必要です。
 ダウンロードと同じ経路のチェックサムだけでは配布元侵害を防げません。

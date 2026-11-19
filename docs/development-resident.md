@@ -54,6 +54,13 @@ ON で `allow` が受理される経路は source 試験では通しておらず
 別途固定した server-side bounded pilot の期限・同じ対象の停止確認が必要です。
 LaunchAgent、ログイン起動、自動更新・再起動はありません。
 
+この文書の15分（`allow` の最大15分と、起動から15分の終了要求期限）は現在の実装です。
+[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399) で、常駐の許可の期限を
+2・4・8・12・24 時間からの選択（既定2時間）にし、期限が来たら待機 OFF と同じ扱い
+（停止と回収）にすると決まりました（2026-11-18）。開発用の常駐の15分は、この期限に
+置き換える予定です。実装は [#406](https://github.com/O2-CONNECTIVE/Tether/issues/406) です。
+試験運転の gateway の15分（`pilotMaxLifetime`、[agent CLI](agent-cli.md)）は据え置きます。
+
 source 検証の入口（実 enrollment/接続は開始しない）:
 
 ```sh

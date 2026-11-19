@@ -1,19 +1,17 @@
-"""オフラインで行う復旧と設定のテスト。Tk の画面表示や実際の接続は不要。"""
+"""オフラインで行う復旧と設定のテスト。実際の接続は不要。"""
 import json
 import os
 from pathlib import Path
-import queue
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from rescue_core import (RescueError, Settings, get_session_info, load_settings,
                          save_settings, record_session_state, session_state_path,
                          remove_session_state_if_name, stop_session)
-from rescue_host import RescueApp
 from rescue_watchdog import watchdog_main
 from test_core import key_line
 
@@ -98,34 +96,6 @@ class RecoveryModeTests(unittest.TestCase):
             with self.assertRaises(RescueError):
                 stop_session(Path('fake'), NAME)
 
-    def test_ended_poll_preserves_legacy_evidence(self):
-        app = object.__new__(RescueApp)
-        app.session = {'name': NAME, 'deadline': 1}
-        app._log = Mock()
-        with patch('rescue_host.remove_session_state_if_name') as cleanup:
-            app._apply_info({'name': NAME, 'status': 'ended', 'launch_id': 'forged'})
-        cleanup.assert_not_called()
-        self.assertIsNotNone(app.session)
-
-    def test_event_error_reschedules_and_next_drain_runs(self):
-        app = object.__new__(RescueApp)
-        app.root = Mock()
-        app.events = queue.Queue()
-        app.events.put(('info_ok', {'name': NAME, 'status': 'ended'}))
-        app.events.put(('info_error', 'retry'))
-        app.session = {'name': NAME}
-        app.busy = app.poll_busy = app.expiry_stop_attempted = True
-        app._apply_info = Mock(side_effect=PermissionError('cleanup denied'))
-        app._refresh_state = Mock()
-        app._log = Mock()
-        app._drain_events()
-        app.root.after.assert_called_with(150, app._drain_events)
-        self.assertIsNotNone(app.session)
-        self.assertFalse(app.expiry_stop_attempted)
-        app._drain_events()
-        self.assertTrue(app.events.empty())
-        self.assertEqual(app.root.after.call_count, 2)
-
     def test_key_cleanup_permission_error_retains_record(self):
         record_session_state({'name': NAME, 'deadline': 1}, self.folder)
         original_unlink = Path.unlink
@@ -152,68 +122,6 @@ class RecoveryModeTests(unittest.TestCase):
             self.assertEqual(watchdog_main(NAME, '1', 'fake'), 1)
         self.assertTrue(session_state_path().exists())
         self.assertIn('UNCONFIRMED', (data_dir() / 'watchdog.log').read_text())
-
-    def test_full_selection_cancel_restores_restricted(self):
-        app = object.__new__(RescueApp)
-        app.operation_var = Mock()
-        app.operation_var.get.return_value = 'full'
-        app._operation_note = Mock()
-        with patch('rescue_host.messagebox.askyesno', return_value=False):
-            app._operation_changed()
-        app.operation_var.set.assert_called_once_with('restricted')
-        app._operation_note.assert_called_once()
-
-    def test_full_selection_is_preference_not_launch(self):
-        app = object.__new__(RescueApp)
-        app.operation_var = Mock()
-        app.operation_var.get.return_value = 'full'
-        app._operation_note = Mock()
-        with patch('rescue_host.messagebox.askyesno', return_value=True), patch('rescue_host.run_upterm') as run:
-            app._operation_changed()
-        app.operation_var.set.assert_not_called()
-        run.assert_not_called()
-
-    def test_gate_blocked_for_both_operation_modes(self):
-        app = object.__new__(RescueApp)
-        for mode in ('restricted', 'full'):
-            with patch('rescue_host.run_upterm') as run, self.assertRaises(RescueError):
-                app._start_worker(Settings(operation_mode=mode), Path('fake'))
-            run.assert_not_called()
-
-    def test_close_unconfirmed_accept_retains_evidence(self):
-        record_session_state({'name': NAME, 'deadline': 1})
-        app = object.__new__(RescueApp)
-        app.root = Mock()
-        app.busy = False
-        app.session = {'name': NAME, 'deadline': 1}
-        with patch('rescue_host.messagebox.askyesno', return_value=True) as prompt, patch('rescue_host.stop_session') as stop, patch('rescue_host.remove_session_state_if_name') as cleanup:
-            app._close_unconfirmed()
-        self.assertEqual(prompt.call_args.kwargs['default'], 'no')
-        app.root.destroy.assert_called_once()
-        stop.assert_not_called()
-        cleanup.assert_not_called()
-        self.assertTrue(session_state_path().exists())
-        self.assertIsNotNone(app.session)
-
-    def test_close_unconfirmed_cancel_or_busy_stays_open(self):
-        app = object.__new__(RescueApp)
-        app.root = Mock()
-        app.session = {'name': NAME}
-        for busy in (False, True):
-            app.busy = busy
-            with patch('rescue_host.messagebox.askyesno', return_value=False), patch('rescue_host.messagebox.showwarning'):
-                app._close_unconfirmed()
-        app.root.destroy.assert_not_called()
-
-    def test_corrupt_settings_does_not_block_recovery_scheduling(self):
-        app = object.__new__(RescueApp)
-        root = Mock()
-        state = {'name': NAME, 'deadline': 1}
-        with patch('rescue_host.load_session_state', return_value=state), patch('rescue_host.load_settings', side_effect=RescueError('bad config')), patch('rescue_host.messagebox.showwarning'), patch.object(RescueApp, '_styles'), patch.object(RescueApp, '_layout'), patch.object(RescueApp, '_load_into_form'), patch.object(RescueApp, '_refresh_state'):
-            app.__init__(root)
-        self.assertEqual(app.config.operation_mode, 'restricted')
-        self.assertEqual(app.session, state)
-        root.after.assert_any_call(400, app._recover)
 
 
 if __name__ == '__main__':

@@ -30,9 +30,6 @@ def python_files(directory):
 
 
 def run_tests():
-    import tkinter
-
-    print(f'Tk import: {tkinter.TkVersion}', flush=True)
     sys.path.insert(0, str(ROOT / 'src'))
     suite = unittest.defaultTestLoader.discover(str(ROOT / 'tests'))
     if suite.countTestCases() == 0:
