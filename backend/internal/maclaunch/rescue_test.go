@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
 	"golang.org/x/crypto/ssh"
 )
@@ -347,6 +350,81 @@ func TestRescuePromptShowsVerifiedIdentity(t *testing.T) {
 	if again := newRescueFixture(t, 0).prompt(t); again.RequestID == p.RequestID {
 		t.Fatal("two receptions chose the same RequestID")
 	}
+}
+
+// verifiedFor is C's request as the reception verifies it on the wire: the
+// gateway's pinned identity key signed it for this reception and K.
+func verifiedFor(t *testing.T, c ssh.PublicKey) agenttransport.VerifiedRescueIdentity {
+	t.Helper()
+	const endpoint = "wss://gateway.example.invalid" + agentgateway.RescuePath
+	identity, reception := rescueSigner(0x49), bytes.Repeat([]byte{0x72}, agentgateway.RescueReceptionSize)
+	k, nonce := rescueK.PublicKey().Marshal(), bytes.Repeat([]byte{0x6e}, agentgateway.RescueNonceSize)
+	id := agentgateway.RescueIdentity{Nonce: nonce, Client: c.Marshal(), DisplayName: "山田（サポート）", Organization: "O2 CONNECTIVE", Profile: agentgateway.RescueProfile}
+	sig, err := identity.Sign(rand.Reader, agentgateway.RescueRequestTranscript(endpoint, reception, k, id.Nonce, id.Client, id.DisplayName, id.Organization, id.Profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id.Signature = sig.Blob
+	v, err := agenttransport.VerifyRescueRequest(endpoint, reception, k, []ssh.PublicKey{identity.PublicKey()}, id)
+	if err != nil {
+		t.Fatalf("VerifyRescueRequest = %v", err)
+	}
+	return v
+}
+
+// The wire reaches the state machine only through the reception's verified
+// request: the popup shows exactly what the identity key signed, and a value
+// that was never verified shows nothing.
+func TestRescueReceivesOnlyARequestTheReceptionVerified(t *testing.T) {
+	t.Run("verified", func(t *testing.T) {
+		f := newRescueFixture(t, 0)
+		requests := make(chan agenttransport.VerifiedRescueIdentity, 1)
+		requests <- verifiedFor(t, rescueC.PublicKey())
+		if err := f.r.ReceiveFrom(requests); err != nil {
+			t.Fatalf("ReceiveFrom = %v", err)
+		}
+		shown := f.helper.shown()
+		if len(shown) != 1 {
+			t.Fatalf("showed %d prompts, want 1", len(shown))
+		}
+		p := shown[0]
+		if p.ClientFingerprint != ssh.FingerprintSHA256(rescueC.PublicKey()) || p.DisplayName != "山田（サポート）" ||
+			p.Organization != "O2 CONNECTIVE" || p.Profile != agentgateway.RescueProfile {
+			t.Fatalf("prompt = %+v, want the verified identity", p)
+		}
+		// The grant goes to that C.
+		d := f.allow(t, p)
+		want, err := runbackend.KeySetDigest([]ssh.PublicKey{rescueC.PublicKey()})
+		if err != nil || d.Binding.KeySetDigest != want {
+			t.Fatal("the grant does not allow exactly the verified C")
+		}
+	})
+	t.Run("never verified", func(t *testing.T) {
+		f := newRescueFixture(t, 0)
+		requests := make(chan agenttransport.VerifiedRescueIdentity, 1)
+		requests <- agenttransport.VerifiedRescueIdentity{}
+		if err := f.r.ReceiveFrom(requests); !errors.Is(err, ErrDenied) {
+			t.Fatalf("ReceiveFrom = %v, want ErrDenied", err)
+		}
+		if shown := f.helper.shown(); len(shown) != 0 {
+			t.Fatalf("showed %d prompts for an unverified value", len(shown))
+		}
+	})
+	t.Run("after the end", func(t *testing.T) {
+		f := newRescueFixture(t, 0)
+		f.r.Stop()
+		f.waitDone(t)
+		returned := make(chan error, 1)
+		go func() { returned <- f.r.ReceiveFrom(make(chan agenttransport.VerifiedRescueIdentity)) }()
+		select {
+		case err := <-returned:
+			if !errors.Is(err, ErrDenied) {
+				t.Fatalf("ReceiveFrom = %v, want ErrDenied", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("ReceiveFrom waited for a request after the end")
+		}
+	})
 }
 
 // One code, one prompt: a second request on the same reception never reaches the user.

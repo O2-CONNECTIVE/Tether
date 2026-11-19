@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -272,3 +273,39 @@ func (c *RescueClient) Close() error {
 	c.end()
 	return nil
 }
+
+// VerifiedRescueIdentity is an identity proof VerifyRescueRequest verified
+// for one reception. Its zero value is not verified and has no Client.
+type VerifiedRescueIdentity struct {
+	client                             ssh.PublicKey
+	displayName, organization, profile string
+}
+
+func (v VerifiedRescueIdentity) Client() ssh.PublicKey { return v.client }
+func (v VerifiedRescueIdentity) DisplayName() string   { return v.displayName }
+func (v VerifiedRescueIdentity) Organization() string  { return v.organization }
+func (v VerifiedRescueIdentity) Profile() string       { return v.profile }
+
+// VerifyRescueRequest verifies the identity proof of a request on reception
+// id at endpoint, whose host key is K (hostKey, SSH wire form): one of pins
+// signed RescueRequestTranscript over exactly these values, the nonce is
+// RescueNonceSize bytes, C is an Ed25519 key and the profile is RescueProfile.
+// See docs/rescue-connection-start.md, 受付口の wire.
+func VerifyRescueRequest(endpoint string, reception, hostKey []byte, pins []ssh.PublicKey, id agentgateway.RescueIdentity) (VerifiedRescueIdentity, error) {
+	return VerifiedRescueIdentity{}, ErrRefused
+}
+
+// Request delivers the reception's one request once it verifies; a request
+// that does not verify ends the reception instead.
+func (c *RescueClient) Request() <-chan VerifiedRescueIdentity { return nil }
+
+// Refuse answers the request with a K-signed deny, or timeout when timedOut.
+func (c *RescueClient) Refuse(timedOut bool) error { return ErrRefused }
+
+// Allow answers the request with a K-signed allow carrying d and returns the
+// reception's stream, which now carries the channel.
+func (c *RescueClient) Allow(d agentgateway.Dispatch) (net.Conn, error) { return nil, ErrRefused }
+
+// HostKey signs with K until the reception ends. The grant answered by Allow
+// uses it as its host key, so K and the grant end together.
+func (c *RescueClient) HostKey() ssh.Signer { return nil }

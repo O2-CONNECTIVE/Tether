@@ -14,6 +14,7 @@ import (
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent"
 	"golang.org/x/crypto/ssh"
 )
@@ -104,6 +105,9 @@ type RescueReception interface {
 	// wait for those calls to return.
 	Close() error
 }
+
+// The reception the product uses is the one-reception client.
+var _ RescueReception = (*agenttransport.RescueClient)(nil)
 
 // RescueConfig is supplied at 受付 ON.
 type RescueConfig struct {
@@ -243,6 +247,12 @@ func (r *Rescue) Receive(req RescueRequest) error {
 		return errors.Join(ErrDenied, err)
 	}
 	return nil
+}
+
+// ReceiveFrom passes the reception's one verified request to Receive. It
+// returns ErrDenied without a request once the state machine has ended.
+func (r *Rescue) ReceiveFrom(requests <-chan agenttransport.VerifiedRescueIdentity) error {
+	return ErrDenied
 }
 
 // Answer accepts reply only from the helper this Rescue was built with, for the
