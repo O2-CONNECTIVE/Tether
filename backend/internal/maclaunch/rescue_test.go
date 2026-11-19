@@ -69,6 +69,9 @@ type rescueReception struct {
 	allows  []Dispatch
 	client  net.Conn
 	closes  int
+	// entered and gate, when set before the answer, hold Allow open as a slow
+	// write to the gateway would.
+	entered, gate chan struct{}
 }
 
 func newRescueReception() *rescueReception { return &rescueReception{done: make(chan struct{})} }
@@ -83,6 +86,10 @@ func (r *rescueReception) Refuse(timedOut bool) error {
 }
 
 func (r *rescueReception) Allow(d Dispatch) (net.Conn, error) {
+	if r.entered != nil {
+		close(r.entered)
+		<-r.gate
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	host, client := memPair()
@@ -569,6 +576,46 @@ func TestRescueGrantAllowsOnlyCUntilChosenLifetime(t *testing.T) {
 	f.waitDone(t)
 	if _, _, closes := f.rec.state(); closes != 1 {
 		t.Fatalf("the reception was closed %d times, want 1", closes)
+	}
+}
+
+// A host-side end while the grant is handed to the reception waits for that
+// hand-over and then revokes the grant: Done never closes over a live grant.
+func TestRescueStopWhileIssuingRevokesGrant(t *testing.T) {
+	f := newRescueFixture(t, 0)
+	p := f.prompt(t)
+	f.rec.entered, f.rec.gate = make(chan struct{}), make(chan struct{})
+	answered := make(chan error, 1)
+	go func() {
+		answered <- f.r.Answer(f.helper, RescueReply{RequestID: p.RequestID, Digest: p.Digest(), Allow: true})
+	}()
+	select {
+	case <-f.rec.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the grant was not handed to the reception within 10s")
+	}
+	f.r.Stop()
+	select {
+	case <-f.r.Done():
+		t.Fatal("Rescue ended while its issued grant was still being handed over")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(f.rec.gate)
+	select {
+	case <-answered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Answer did not return within 10s")
+	}
+	f.waitDone(t)
+	_, allows, closes := f.rec.state()
+	if len(allows) != 1 || closes != 1 {
+		t.Fatalf("allows %d, closes %d, want 1 and 1", len(allows), closes)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if ch, err := openChannel(ctx, t, f, allows[0], rescueC); err == nil {
+		_ = ch.Close()
+		t.Fatal("C opened a channel after the end")
 	}
 }
 
