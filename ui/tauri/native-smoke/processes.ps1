@@ -62,12 +62,11 @@ function Get-LineageBaselineParentRelation($Entry, $Snapshot) {
         return 'different'
     } catch { return 'unavailable' }
 }
-# 起動前のsnapshotに同じ身元・同じ親PIDで載っていた子は、driverより前から居たので所有ではない。
-# 現在の親は起動前にabsent/differentで、子の親PIDは再利用前の別processを指していた。時刻の前後は使わない。
-function Test-PreexistingChild($Parent, $Child, $Context) {
+# 起動前のsnapshotはdriverの起動前に取り終える。そこに同じ身元で載っていた子はdriverより前から居たので、
+# driverの子孫ではない。親PIDの一致は身元(PID+CreationDate)の衝突を弾く確認。時刻の前後は使わない。
+function Test-PreexistingChild($Child, $Context) {
     if ($Context -isnot [hashtable] -or -not $Context.ContainsKey('BeforeDriverSnapshot')) { return $false }
-    $baseline = $Context.BeforeDriverSnapshot
-    return (Get-LineageBaselineParentRelation $Child $baseline) -eq 'same' -and (Get-LineageBaselineIdentity $Parent $baseline) -in @('absent', 'different')
+    return (Get-LineageBaselineParentRelation $Child $Context.BeforeDriverSnapshot) -eq 'same'
 }
 function Add-LineageFact($Evidence, [string]$Reason, $Parent, $Child, $Snapshot, $ParentDepth, $Context, [string]$SearchRoot) {
     if ($null -ne $Evidence) {
@@ -117,7 +116,8 @@ function Get-Descendants([int]$RootId, $Snapshot, $LineageEvidence = $null, $Con
                     Stop-UnconfirmedLineage $LineageEvidence 'child-row-ambiguous' $parent $child $Snapshot $parentDepth $Context $SearchRoot
                 }
                 if (-not (Test-LineageCreation $child)) { Stop-UnconfirmedLineage $LineageEvidence 'child-creation-unavailable' $parent $child $Snapshot $parentDepth $Context $SearchRoot }
-                if (Test-PreexistingChild $parent $child $Context) {
+                if (Test-PreexistingChild $child $Context) {
+                    # ponytail: 除外の事実に上限は無い。約50辺でnative-result.jsonが64KBを超えるので、要るなら件数で切る。
                     Add-LineageFact $LineageEvidence 'excluded-preexisting-child' $parent $child $Snapshot $parentDepth $Context $SearchRoot
                     continue
                 }

@@ -67,12 +67,13 @@ try { Get-OwnedApp $driver $edge 'app.exe' $reuseGraph ([ref]$facts) @($reuseBef
 catch { $caught = $_.Exception.Message }
 Equal $caught 'NATIVE_LINEAGE_OWNER_UNCONFIRMED' 'REUSED_PID_GENERATION_EXCLUDED'
 Equal "$($facts[0].reason)/$($facts[0].childBeforeDriverIdentity)" 'child-older/different'
+# 親も起動前から居たなら、親が自分の辺で先に除外され、その下は探索しない。
 $reuseBefore.CreationDate = $reuseChild.CreationDate
-$facts = @(); $caught = 'none'
-try { Get-OwnedApp $driver $edge 'app.exe' $reuseGraph ([ref]$facts) @($reuseBefore, (Row 14 13 'msedgewebview2.exe' 205)) | Out-Null }
+$facts = @(); $caught = 'none'; $observed = $null
+try { $observed = Get-OwnedApp $driver $edge 'app.exe' $reuseGraph ([ref]$facts) @($reuseBefore, (Row 14 13 'msedgewebview2.exe' 205)) }
 catch { $caught = $_.Exception.Message }
-Equal $caught 'NATIVE_LINEAGE_OWNER_UNCONFIRMED' 'PREEXISTING_PARENT_EDGE_EXCLUDED'
-Equal "$($facts[0].reason)/$($facts[0].parentBeforeDriverIdentity)" 'child-older/same'
+Equal "$caught/$($facts.Count)/$($facts[0].reason)/$($facts[0].parentDepth)" 'none/2/excluded-preexisting-child/3' 'PREEXISTING_PARENT_NOT_EXCLUDED'
+Equal (@($observed.Children | ForEach-Object ProcessId) -join ',') '13' 'PREEXISTING_PARENT_CLAIMED'
 $facts = @(); $caught = 'none'
 try { Get-OwnedApp $driver $edge 'app.exe' $reuseGraph ([ref]$facts) @($reuseBefore, $reuseBefore) | Out-Null }
 catch { $caught = $_.Exception.Message }
