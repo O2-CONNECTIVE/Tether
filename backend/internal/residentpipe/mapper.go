@@ -64,6 +64,7 @@ type mapper struct {
 	view                         Snapshot
 	pending                      *Intent
 	refused                      *Transition
+	closedOn                     uint64 // an ON closed as rejected at its cycle's end; kept, since the GUI polls only the latest status
 	poisoned                     bool
 	cleanupUnknown               bool
 	foreground                   bool // fixed by the trusted dialect, never by input
@@ -128,9 +129,19 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 	if t := o.Transition; t != nil {
 		s.Transition = &Transition{t.RequestID, t.Intent, t.Outcome}
 		if t.Outcome == "applied" && ((t.Intent == "on" && !on) || (t.Intent == "off" && !off)) {
-			if m.pending != nil && m.pending.RequestID == t.RequestID && m.pending.Intent == t.Intent {
+			mine := m.pending != nil && m.pending.RequestID == t.RequestID && m.pending.Intent == t.Intent
+			switch {
+			// An ON this pipe never showed applied can no longer be shown once
+			// its cycle ended: standby never comes back on for that request. It
+			// ends as rejected, the pipe's word for a request that ended without
+			// showing its state, as the owner ends an ON whose cycle ended
+			// before authentication (#420).
+			case t.Intent == "on" && (m.closedOn == t.RequestID || (mine && oneOf(o.Standby, "stopping", "off"))):
+				m.closedOn = t.RequestID
+				s.Transition.Outcome = "rejected"
+			case mine:
 				s.Transition.Outcome = "pending"
-			} else {
+			default:
 				s.Transition = nil
 			}
 		}
@@ -162,8 +173,9 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 			s.Transition.Outcome = "unknown"
 		}
 	}
-	// Only a new command refused here before owner dispatch earns correlated
-	// rejection evidence. Refresh the owner first: never hide pending, Unknown,
+	// Only a new command found stale, here or by the owner's admission check
+	// (which refuses before changing anything), earns correlated rejection
+	// evidence. Refresh the owner first: never hide pending, Unknown,
 	// late cleanup failure, or a newer owner identity with a local refusal.
 	if t := m.refused; t != nil {
 		if !m.poisoned && m.pending == nil && (o.Transition == nil || o.Transition.RequestID < t.RequestID) {
@@ -237,6 +249,9 @@ func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receip
 		m.poisoned = true
 		out.Disposition = "unknown"
 		return out
+	}
+	if transition && receipt.Disposition == "stale" {
+		m.refused = &Transition{r.RequestID, r.Intent, "rejected"}
 	}
 	out.Disposition = receipt.Disposition
 	// The allowance and the extension are not standby transitions: nothing to

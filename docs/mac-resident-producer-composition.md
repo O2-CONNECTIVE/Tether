@@ -20,7 +20,10 @@ Close の caller 待機期限は別です。caller が待ち切れず返した E
 codec は有限 frame、LF、strict UTF-8 / JSON、重複 field、canonical integer、固定 intent を検査します。
 mapper は元 revision、monotonic freshness、request high-water、receipt と transition を分け、観測だけで実行許可を作りません。unknown は sticky で、過去の認証履歴を現在の認証と表示しません。
 
-新しい request ID を owner 呼出し前の freshness / revision 照合で stale と拒否した場合に限り、mapper は同じ ID / intent の rejected transition を新しい wire revision で一度送信し、その後に stale receipt を同じ pipe へ送ります。直前に owner を再観測し、pending・unknown・遅れて判明した cleanup failure・同じか新しい owner identity を上書きしません。観測または書込みの失敗時は receipt を送らず終了します。Rust はこの一致する観測で pending を解放しても、元 receipt を受け取るまで awaiting を保持します。duplicate ID、既存 pending、accepted / unknown receipt だけを終了証拠へ変換しません。owner 呼出し後の stale を、この未配送の証拠で救済するものではありません。
+新しい request ID を mapper の freshness / revision 照合、または owner の受付照合で stale と拒否した場合、mapper は同じ ID / intent の rejected transition を新しい wire revision で一度送信し、その後に stale receipt を同じ pipe へ送ります。owner は何も変える前に stale を返すため、owner の受付照合で拒否した場合も同じ証拠になります。直前に owner を再観測し、pending・unknown・遅れて判明した cleanup failure・同じか新しい owner identity を上書きしません。観測または書込みの失敗時は receipt を送らず終了します。Rust はこの一致する観測で pending を解放しても、元 receipt を受け取るまで awaiting を保持します。duplicate ID、既存 pending、accepted / unknown receipt だけを終了証拠へ変換しません。
+
+mapper が applied を示せないまま ON の周期が終わった場合、その request ID の rejected を出し、新しい要求まで出し続けます。applied を一度示した ON は後から rejected にしません。
+この rejected は、要求が終わり、pipe がその要求の状態を示さなかったことを表します。owner も、認証の前に周期が終わった ON を rejected で閉じます。GUI は最新の status を間引いて読むため、一度だけの送信にしません。
 
 回帰の境界は、Go mapper、Darwin の自己所有 pipe による順序、Rust Tracking、実 UI controller / driver を用いたモデルを分けます。UI モデルは旧順序の off:receipt 失敗と新順序の成功、accepted 未完了と unknown の非再試行を比較します。これだけでは Go–Rust 実 IPC・native 起動・個別の失敗 CI の原因を実証しません。
 Darwin / cgo の owned pipe は決められた stdin / stdout の匿名 FIFO だけを取得し、nonblocking / CLOEXEC の元 duplicate を所有します。FIFO metadata は相手認証ではありません。

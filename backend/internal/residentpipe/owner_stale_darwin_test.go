@@ -42,3 +42,24 @@ func TestOwnerStaleRefusalHasCorrelatedRejection(t *testing.T) {
 		t.Fatal("stale ON changed the owner")
 	}
 }
+
+// An allowance or an extension is not a standby transition. Reporting the
+// owner's stale refusal of one as a transition would show an ON/OFF change
+// that never happened (TestStaleLocalActionLeavesNoTransitionEvidence).
+func TestOwnerStaleLocalActionLeavesNoTransitionEvidence(t *testing.T) {
+	owner := idleProtectedOwner(t)
+	if r := owner.RequestOff(9, owner.Snapshot().Revision); r.Disposition != "rejected" {
+		t.Fatal(r)
+	}
+	for i, intent := range []string{"allow-run", "deny-run", "extend"} {
+		var m mapper
+		s, err := m.observe(owner.Snapshot(), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := m.submit(owner, Intent{RequestID: uint64(5 + i), Intent: intent, ExpectedRevision: s.Snapshot.Revision, StandbyFor: 2 * time.Hour}, 100)
+		if r.Disposition != "stale" || m.refused != nil || m.pending != nil || m.poisoned {
+			t.Fatalf("%s: %+v refused=%v", intent, r, m.refused)
+		}
+	}
+}
