@@ -157,6 +157,19 @@ func (s *rescueCodes) end(reception string) {
 	}
 }
 
+// liveCount expires stale codes and returns the number that remain valid.
+func (s *rescueCodes) liveCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.clock()
+	for d, c := range s.codes {
+		if !now.Before(c.expires) {
+			delete(s.codes, d)
+		}
+	}
+	return len(s.codes)
+}
+
 func (s *rescueCodes) digest(code string) [32]byte {
 	m := hmac.New(sha256.New, s.key[:])
 	m.Write([]byte(code))
