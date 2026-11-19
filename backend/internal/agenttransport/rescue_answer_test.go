@@ -862,6 +862,71 @@ func TestRescueStreamCloseStartsTheCloserBeforeItsDeadline(t *testing.T) {
 	}
 }
 
+func TestRescueDisconnectStartsBoundedCloserBeforeReturning(t *testing.T) {
+	reg := newAnswerRegistry()
+	transport := newMemTransport(newRescueHandler(t, reg))
+	closeStarted, releaseClose := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, transport)
+	c.transport = func(own acquirer) http.RoundTripper {
+		transport.own = own
+		transport.track = func(conn net.Conn) (net.Conn, error) {
+			return own.attach(&deadlineCloseConn{Conn: conn, started: closeStarted, release: releaseClose})
+		}
+		return transport
+	}
+	t.Cleanup(reg.end)
+	t.Cleanup(release)
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c.mu.Lock()
+	attempt, link := c.attempt, c.closer
+	c.closed = true
+	c.mu.Unlock()
+	if link == nil {
+		t.Fatal("Open did not retain its closer")
+	}
+	notificationDone := make(chan struct{})
+	go func() {
+		c.disconnectAttempt(attempt)
+		close(notificationDone)
+	}()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect did not start closing the base connection")
+	}
+	returned := false
+	select {
+	case <-notificationDone:
+		returned = true
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	cleanupErr := link.wait(ctx)
+	cancel()
+	release()
+	select {
+	case <-notificationDone:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect notification remained blocked after the base Close was released")
+	}
+	if !errors.Is(cleanupErr, ErrCleanupUnknown) {
+		t.Fatalf("bounded closer wait = %v, want ErrCleanupUnknown while Close is blocked", cleanupErr)
+	}
+	if !returned {
+		t.Fatal("disconnect notification blocked in synchronous WebSocket CloseNow")
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := link.wait(ctx); err != nil {
+		t.Fatalf("closer wait after releasing the same connection = %v", err)
+	}
+}
+
 // Between the request and the answer the gateway sends nothing; a frame there
 // is not the channel's, so the reception ends rather than hand it to a grant.
 func TestRescueHostEndsWhenTheGatewaySpeaksBeforeTheAnswer(t *testing.T) {

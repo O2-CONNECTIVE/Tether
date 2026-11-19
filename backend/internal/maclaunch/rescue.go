@@ -160,6 +160,17 @@ const (
 	rescueEnded
 )
 
+type rescueReceptionCandidate struct {
+	reception RescueReception
+	once      sync.Once
+}
+
+func (c *rescueReceptionCandidate) close() {
+	if c != nil {
+		c.once.Do(func() { _ = c.reception.Close() })
+	}
+}
+
 // Rescue owns the reception factory, current K, approval, and every connection
 // generation from 受付中 through expiry or a host-side end.
 type Rescue struct {
@@ -173,6 +184,7 @@ type Rescue struct {
 	runtime          agentexec.ProfiledRuntime
 	helper           RescueHelper
 	reception        RescueReception
+	pendingReception *rescueReceptionCandidate
 	clock            rescueClock
 	prompt           RescuePrompt
 	client           ssh.PublicKey
@@ -279,47 +291,55 @@ func validRescueCode(code string) bool {
 }
 
 func (r *Rescue) openReception(parent context.Context, previousKey []byte) (RescueReception, string, []byte, error) {
+	reception, code, hostKey, _, err := r.openReceptionCandidate(parent, previousKey, nil)
+	return reception, code, hostKey, err
+}
+
+func (r *Rescue) openReceptionCandidate(parent context.Context, previousKey []byte, publish func(*rescueReceptionCandidate) bool) (RescueReception, string, []byte, *rescueReceptionCandidate, error) {
 	if parent == nil || parent.Err() != nil {
-		return nil, "", nil, context.Canceled
+		return nil, "", nil, nil, context.Canceled
 	}
 	reception, err := r.cfg.ReceptionFactory(parent)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	if reception == nil {
-		return nil, "", nil, ErrConfig
+		return nil, "", nil, nil, ErrConfig
+	}
+	candidate := &rescueReceptionCandidate{reception: reception}
+	if publish != nil && !publish(candidate) {
+		candidate.close()
+		return nil, "", nil, candidate, context.Canceled
 	}
 	if err := parent.Err(); err != nil {
-		_ = reception.Close()
-		return nil, "", nil, err
+		candidate.close()
+		return nil, "", nil, candidate, err
 	}
 	hostKey := reception.HostKey()
 	if hostKey == nil || hostKey.PublicKey() == nil {
-		if reception != nil {
-			_ = reception.Close()
-		}
-		return nil, "", nil, ErrConfig
+		candidate.close()
+		return nil, "", nil, candidate, ErrConfig
 	}
 	public := hostKey.PublicKey()
 	if _, err := agentchannel.CanonicalKeys([]ssh.PublicKey{public}); err != nil || (previousKey != nil && bytes.Equal(public.Marshal(), previousKey)) {
-		_ = reception.Close()
-		return nil, "", nil, ErrConfig
+		candidate.close()
+		return nil, "", nil, candidate, ErrConfig
 	}
 	ctx, cancel := context.WithTimeout(parent, agentchannel.MaxHandshake)
 	defer cancel()
 	code, err := reception.Open(ctx)
 	if err != nil || !validRescueCode(code) {
-		_ = reception.Close()
+		candidate.close()
 		if err == nil {
 			err = ErrConfig
 		}
-		return nil, "", nil, err
+		return nil, "", nil, candidate, err
 	}
 	if err := parent.Err(); err != nil {
-		_ = reception.Close()
-		return nil, "", nil, err
+		candidate.close()
+		return nil, "", nil, candidate, err
 	}
-	return reception, code, append([]byte(nil), public.Marshal()...), nil
+	return reception, code, append([]byte(nil), public.Marshal()...), candidate, nil
 }
 
 func (r *Rescue) emit(event RescueEvent) {
@@ -699,7 +719,9 @@ func (r *Rescue) Stop() {
 	if r.reopenCancel != nil {
 		r.reopenCancel()
 	}
+	candidate := r.pendingReception
 	r.mu.Unlock()
+	candidate.close()
 }
 
 // Done closes after the end: the grant revoked, its cleanup run within
@@ -817,6 +839,8 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	}
 	confirming, id, a := r.state == rescueConfirming, r.prompt.RequestID, r.approved
 	reception := r.reception
+	pending := r.pendingReception
+	r.pendingReception = nil
 	reopenCancel := r.reopenCancel
 	r.reopenCancel = nil
 	r.reopenRunning = false
@@ -838,6 +862,7 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	if reception != nil {
 		_ = reception.Close()
 	}
+	pending.close()
 	var cleanupErr error
 	if a != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
@@ -941,16 +966,25 @@ func (r *Rescue) retryReceptionLocked() {
 
 func (r *Rescue) openReceptionLocked(previousKey []byte, ctx context.Context, cancel context.CancelFunc, sequence uint64) {
 	go func() {
-		reception, code, hostKey, err := r.openReception(ctx, previousKey)
+		reception, code, hostKey, candidate, err := r.openReceptionCandidate(ctx, previousKey, func(candidate *rescueReceptionCandidate) bool {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.state != rescueReopening || r.reopenActive != sequence || r.stopRequested {
+				return false
+			}
+			r.pendingReception = candidate
+			return true
+		})
 		r.step.Lock()
 		defer r.step.Unlock()
 		r.mu.Lock()
 		if r.state != rescueReopening || r.reopenActive != sequence {
+			if r.pendingReception == candidate {
+				r.pendingReception = nil
+			}
 			r.mu.Unlock()
 			cancel()
-			if reception != nil {
-				_ = reception.Close()
-			}
+			candidate.close()
 			return
 		}
 		wall, mono := r.clock.wall(), r.clock.mono()
@@ -958,11 +992,12 @@ func (r *Rescue) openReceptionLocked(previousKey []byte, ctx context.Context, ca
 			r.reopenRunning = false
 			r.reopenCancel = nil
 			r.reopenActive = 0
+			if r.pendingReception == candidate {
+				r.pendingReception = nil
+			}
 			r.mu.Unlock()
 			cancel()
-			if reception != nil {
-				_ = reception.Close()
-			}
+			candidate.close()
 			r.end(false, false, false)
 			return
 		}
@@ -970,11 +1005,16 @@ func (r *Rescue) openReceptionLocked(previousKey []byte, ctx context.Context, ca
 			r.reopenRunning = false
 			r.reopenCancel = nil
 			r.reopenActive = 0
+			if r.pendingReception == candidate {
+				r.pendingReception = nil
+			}
 			r.mu.Unlock()
 			cancel()
+			candidate.close()
 			return
 		}
 		r.reception, r.lastHostKey, r.state = reception, hostKey, rescueAccepting
+		r.pendingReception = nil
 		r.reopenRunning = false
 		r.reopenCancel = nil
 		r.reopenActive = 0

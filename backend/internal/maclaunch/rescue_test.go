@@ -85,16 +85,18 @@ type rescueReception struct {
 	onAllow  func(Dispatch, net.Conn)
 	// entered and gate, when set before the answer, hold Allow open as a slow
 	// write to the gateway would.
-	entered, gate  chan struct{}
-	openEntered    chan struct{}
-	openGate       chan struct{}
-	openCanceled   chan error
-	acceptRead     chan struct{}
-	requestEntered chan struct{}
-	requestGate    chan struct{}
-	requestCalls   chan struct{}
-	requestCount   int
-	requestGateAt  int
+	entered, gate    chan struct{}
+	openEntered      chan struct{}
+	openGate         chan struct{}
+	openCanceled     chan error
+	openReturned     chan struct{}
+	ignoreOpenCancel bool
+	acceptRead       chan struct{}
+	requestEntered   chan struct{}
+	requestGate      chan struct{}
+	requestCalls     chan struct{}
+	requestCount     int
+	requestGateAt    int
 }
 
 func newRescueReception() *rescueReception {
@@ -110,19 +112,28 @@ func freshRescueReception(seed byte, code string) *rescueReception {
 func (r *rescueReception) Open(ctx context.Context) (string, error) {
 	if r.openEntered != nil {
 		close(r.openEntered)
-		select {
-		case <-r.openGate:
-		case <-ctx.Done():
-			if r.openCanceled != nil {
-				r.openCanceled <- ctx.Err()
+		if r.ignoreOpenCancel {
+			<-r.openGate
+		} else {
+			select {
+			case <-r.openGate:
+			case <-ctx.Done():
+				if r.openCanceled != nil {
+					r.openCanceled <- ctx.Err()
+				}
+				return "", ctx.Err()
 			}
-			return "", ctx.Err()
 		}
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.opens++
-	return r.code, nil
+	code := r.code
+	openReturned := r.openReturned
+	r.mu.Unlock()
+	if openReturned != nil {
+		close(openReturned)
+	}
+	return code, nil
 }
 func (r *rescueReception) Resume(context.Context) error {
 	r.mu.Lock()
@@ -1494,6 +1505,41 @@ func TestStopCancelsInProgressReceptionOpen(t *testing.T) {
 	f.waitDone(t)
 	if next.opens != 0 {
 		t.Fatalf("canceled reception Open completed %d times", next.opens)
+	}
+}
+
+func TestStopClosesUnadoptedReceptionBeforeReturning(t *testing.T) {
+	f, _, _ := rescueInGrace(t, 4*time.Hour)
+	next := freshRescueReception(0x4e, "987654321098")
+	next.openEntered, next.openGate, next.openReturned = make(chan struct{}), make(chan struct{}), make(chan struct{})
+	next.ignoreOpenCancel = true
+	f.queueReception(next, nil)
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	f.r.recheck()
+	select {
+	case <-next.openEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement reception did not reach Open")
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(next.openGate) }) }
+	t.Cleanup(release)
+
+	f.r.Stop()
+	_, _, closes := next.state()
+	if closes != 1 {
+		t.Fatalf("Stop returned with pending reception close count = %d, want 1", closes)
+	}
+	release()
+	select {
+	case <-next.openReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement Open did not return after its gate was released")
+	}
+	f.waitDone(t)
+	_, _, closes = next.state()
+	if closes != 1 {
+		t.Fatalf("Stop returned with pending reception close count = %d, want 1", closes)
 	}
 }
 

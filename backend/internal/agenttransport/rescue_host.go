@@ -436,11 +436,10 @@ func (c *RescueClient) end() {
 	if cancel != nil {
 		cancel()
 	}
-	if ws != nil {
-		_ = ws.CloseNow()
-	}
 	if link != nil {
 		link.start()
+	} else if ws != nil {
+		go func() { _ = ws.CloseNow() }()
 	}
 }
 
