@@ -55,6 +55,7 @@ transport / policy 段階は43 package、cgo有効時 Linux341 / Darwin342 / Win
 詳しくは[境界と未実証](mac-resident-transport-policy.md)を参照してください。
 実行対象は公開`backend/`だけで、存在しない対象やテスト0件を成功にしません。
 native enrollment 選択では residentmac の共通 `enrollment.go` と、Darwin/cgo の `enrollment_darwin.go` または拒否側 `enrollment_other.go` を追加します。
+待機の経過時間の時計は、Darwin の `elapsed_darwin.go`（スリープ中も進む時計）またはそれ以外の `elapsed_other.go` を追加します（[#406](https://github.com/O2-CONNECTIVE/Tether/issues/406)）。
 現 inventory は 45 package、cgo 有効時 Linux350 / Darwin353 / Windows381 production file、Darwin の cgo 無効時は351 fileです。
 不足・未知 file の拒否と package 集合は維持し、selector の合成 account 試験を実 policy・鍵・producer の検証に広げません。
 通常試験は`-cpu=1`、raceは`-cpu=2`で、試験内のGOMAXPROCS観測と照合します。
@@ -349,4 +350,4 @@ Linux/Windowsは非対応の拒否・root handle消費と共通permission契約�
 
 ホストのpair CLIは `cmd/tether-host-pair` の共通3 fileと、lock / browser起動のOS別2 fileを製品fileとして照合します。linux / darwinは `platform_unix.go`、windowsは拒否stubを選びます。browser起動はdarwinだけ `/usr/bin/open` を使います。
 
-現inventoryは53 packageです。cgo有効時のfile数はLinux392 / Darwin397 / Windows423、Darwinのcgo無効時は394です。
+現inventoryは53 packageです。cgo有効時のfile数はLinux393 / Darwin398 / Windows424、Darwinのcgo無効時は395です。
