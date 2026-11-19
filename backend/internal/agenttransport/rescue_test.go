@@ -110,7 +110,7 @@ func (r *rescueRecorder) expectEnded(t *testing.T, id []byte) {
 		if !bytes.Equal(got, id) {
 			t.Fatalf("ended reception %x, want %x", got, id)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(2 * time.Second): // shorter than DefaultBudgets().Cleanup
 		t.Fatal("the gateway did not end the reception")
 	}
 }
@@ -161,6 +161,21 @@ func expectDone(t *testing.T, c *RescueClient) {
 	case <-c.Done():
 	case <-time.After(3 * time.Second):
 		t.Fatal("the reception did not end")
+	}
+}
+
+// expectLive requires the reception to outlive Open's context: openRescue
+// cancels it as Open returns, and only 受付 OFF, the expiry or the connection
+// may end a reception.
+func expectLive(t *testing.T, c *RescueClient, reg *rescueRecorder) {
+	t.Helper()
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-c.Done():
+		t.Fatal("the reception ended with Open's context")
+	case id := <-reg.ended:
+		t.Fatalf("the gateway ended reception %x with Open's context", id)
+	default:
 	}
 }
 
@@ -259,11 +274,7 @@ func TestRescueHostShowsOnlyAVerifiedCode(t *testing.T) {
 			if code != want.Code {
 				t.Fatalf("code %q, the gateway issued %q", code, want.Code)
 			}
-			select {
-			case <-c.Done():
-				t.Fatal("the reception ended after its code was shown")
-			default:
-			}
+			expectLive(t, c, reg)
 		})
 	}
 }
@@ -312,25 +323,34 @@ func TestRescueClientPinsTheCurrentAndAtMostOneNextKey(t *testing.T) {
 // and the host drops K without reconnecting.
 func TestRescueOffAndDisconnectEndTheReceptionAtOnce(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		end  func(*RescueClient, *memTransport)
+		name  string
+		stall bool // the gateway's own close of the connection does not finish
+		end   func(*RescueClient, *memTransport)
 	}{
-		{"受付 OFF", func(c *RescueClient, _ *memTransport) { _ = c.Close() }},
-		{"the connection drops", func(_ *RescueClient, m *memTransport) {
+		{"受付 OFF", false, func(c *RescueClient, _ *memTransport) { _ = c.Close() }},
+		{"the connection drops", false, func(_ *RescueClient, m *memTransport) {
 			ends := <-m.pairs
 			_ = ends.server.Close()
 		}},
+		// The code goes before the transport's close is confirmed.
+		{"受付 OFF while the gateway's close stalls", true, func(c *RescueClient, _ *memTransport) { _ = c.Close() }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Now()
 			reg := newRescueRecorder(newRescueGateway(t, &now))
 			m := newMemTransport(newRescueHandler(t, reg))
+			if tc.stall {
+				gate := make(chan struct{})
+				m.prepare = func(_, server *memConn) { server.setGate(gate) }
+				t.Cleanup(func() { close(gate) }) // before the handler's Close
+			}
 			c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, m)
 			k := c.key
 			if _, err := openRescue(t, c); err != nil {
 				t.Fatalf("Open: %v", err)
 			}
 			opened := <-reg.opened
+			expectLive(t, c, reg)
 			tc.end(c, m)
 			reg.expectEnded(t, opened.ID)
 			expectDone(t, c)
@@ -369,11 +389,7 @@ func TestRescueHostEndsWhenTheCodeExpiresAndTakesNoNewCode(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the host never timed its code")
 	}
-	select {
-	case <-c.Done():
-		t.Fatal("the reception ended before its code expired")
-	default:
-	}
+	expectLive(t, c, reg)
 	fire <- time.Now()
 	reg.expectEnded(t, opened.ID)
 	expectDone(t, c)

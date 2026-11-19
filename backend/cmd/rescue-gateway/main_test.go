@@ -678,3 +678,36 @@ func TestHTTPServerBounds(t *testing.T) {
 		t.Fatalf("server bounds = %+v", srv)
 	}
 }
+
+// Without rescue_identity_key the composition mounts no reception: the route
+// is 404 through execute, not only through routes.
+func TestEntryLeavesTheRescueRouteUnmountedWithoutTheIdentityKey(t *testing.T) {
+	r := newRecorder(t, encode(t, localDoc(t)))
+	r.listener = newFakeListener()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var diagnostic bytes.Buffer
+	exited := make(chan int, 1)
+	go func() { exited <- execute(ctx, []string{"-config", configPath}, &diagnostic, r.deps()) }()
+	select {
+	case <-r.listened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("never listened")
+	}
+	const host = "Host: gateway.example.invalid\r\nConnection: close\r\n"
+	if code, _ := roundTrip(t, r.listener, "GET /agent-register HTTP/1.1\r\n"+host+"\r\n"); code != http.StatusBadRequest {
+		t.Fatalf("registration without subprotocol: %d", code)
+	}
+	if code, _ := roundTrip(t, r.listener, "GET "+agentgateway.RescuePath+" HTTP/1.1\r\n"+host+"Sec-WebSocket-Protocol: "+agenttransport.RescueSubprotocol+"\r\n\r\n"); code != http.StatusNotFound {
+		t.Fatalf("unconfigured rescue route: %d", code)
+	}
+	cancel()
+	select {
+	case code := <-exited:
+		if code != 0 {
+			t.Fatalf("exit = %d (%q)", code, diagnostic.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("shutdown did not finish")
+	}
+}
