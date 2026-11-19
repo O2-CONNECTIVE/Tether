@@ -50,6 +50,7 @@ type Standby struct {
 	mu            sync.Mutex
 	factory       *FixedFactory
 	makeConnector func(context.Context) (residentConnector, error)
+	clock         func() (mono, wall time.Time) // nil reads time.Now; tests replace it
 	updates       chan struct{}
 	observation   StandbyObservation
 	lastRequest   uint64
@@ -132,6 +133,10 @@ func (s *Standby) changedLocked() {
 			s.cycle.cancel()
 		}
 	}
+	// A sealed standby admits nothing, so it publishes no allowance end.
+	if s.observation.AdmissionSealed {
+		s.observation.RunUntil, s.observation.RunEndingSoon = time.Time{}, false
+	}
 	s.observation.CanRequestOn = !s.closed && s.observation.Standby == "off" && s.observation.Cleanup == "confirmed"
 	s.observation.CanRequestOff = !s.closed && s.observation.Standby == "on"
 	select {
@@ -163,6 +168,7 @@ func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
 		s.observation.Standby = "on"
 		s.observation.Registration = "connecting"
 		s.observation.AdmissionSealed = false
+		s.observation.RunExpired = false
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
 		s.changedLocked()
 		go s.run(c)
@@ -170,18 +176,25 @@ func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
 		if s.observation.Standby != "on" {
 			return r
 		}
-		s.observation.Standby = "stopping"
-		s.observation.AdmissionSealed = true
-		s.observation.Work = "stopping"
-		s.observation.Cleanup = "pending"
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
-		s.changedLocked()
-		s.sealSourceLocked()
-		s.cycle.cancelAfterProof()
+		s.stopLocked()
 	}
 	r.Disposition = "accepted"
 	r.Revision = s.observation.Revision
 	return r
+}
+
+// stopLocked is standby OFF, whether the person asked for it or the run
+// allowance ran out: admission sealed, the source closed so owned work stops,
+// and the cycle ended once the open source's cleanup proof was attempted.
+func (s *Standby) stopLocked() {
+	s.observation.Standby = "stopping"
+	s.observation.AdmissionSealed = true
+	s.observation.Work = "stopping"
+	s.observation.Cleanup = "pending"
+	s.changedLocked()
+	s.sealSourceLocked()
+	s.cycle.cancelAfterProof()
 }
 
 // admitLocked is the one replay and staleness check for every local request.
@@ -567,6 +580,10 @@ func (s *Standby) monitor(c *standbyCycle) {
 		if s.cycle != c {
 			s.mu.Unlock()
 			return
+		}
+		if s.expireRunLocked() {
+			s.mu.Unlock()
+			continue
 		}
 		if s.observation.Standby == "on" {
 			// Generation is retained by the real connector only AFTER full auth;

@@ -3,6 +3,7 @@ package residentpipe
 import (
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The input dialect is fixed by trusted composition, never by a stream, flag,
@@ -43,9 +44,17 @@ func decodeControl(line []byte, dialect inputDialect) (controlCommand, error) {
 		return controlCommand{kind: controlClose}, nil
 	}
 	fields := strings.Split(text, " ")
-	// allow and deny switch the local command-run allowance. They take no
-	// duration: residentmac.MaxRunAllowance is the only one.
+	// allow and deny switch the local command-run allowance. allow names its
+	// length in hours, spelled exactly as one of the listed lengths (#399):
+	// no other number is parsed, so none can wrap around into a listed one.
 	intent, ok := map[string]string{"on": "on", "off": "off", "allow": "allow-run", "deny": "deny-run"}[fields[0]]
+	var runFor time.Duration
+	if ok && intent == "allow-run" && len(fields) == 4 {
+		runFor, ok = map[string]time.Duration{"2": 2 * time.Hour, "4": 4 * time.Hour, "8": 8 * time.Hour, "12": 12 * time.Hour, "24": 24 * time.Hour}[fields[3]]
+		fields = fields[:3]
+	} else if intent == "allow-run" {
+		ok = false
+	}
 	if len(fields) != 3 || !ok {
 		return controlCommand{}, ErrProtocol
 	}
@@ -60,5 +69,5 @@ func decodeControl(line []byte, dialect inputDialect) (controlCommand, error) {
 	if numbers[0] == 0 {
 		return controlCommand{}, ErrProtocol
 	}
-	return controlCommand{kind: controlIntent, intent: Intent{1, numbers[0], numbers[1], intent}}, nil
+	return controlCommand{kind: controlIntent, intent: Intent{1, numbers[0], numbers[1], intent, runFor}}, nil
 }

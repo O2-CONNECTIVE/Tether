@@ -132,11 +132,11 @@ func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 	// The allowance reaches the same owner through the same mapper. Standby is
 	// OFF here, so the owner refuses to open it; closing it is always accepted.
 	// Neither is a standby transition, so neither may leave one or block ON.
-	for index, tc := range []struct{ word, intent, disposition string }{
-		{"allow", "allow-run", "rejected"}, {"deny", "deny-run", "accepted"},
+	for index, tc := range []struct{ word, length, intent, disposition string }{
+		{"allow", " 2", "allow-run", "rejected"}, {"deny", "", "deny-run", "accepted"},
 	} {
 		id := uint64(index + 2)
-		write(fmt.Sprintf("%s %d %d\n", tc.word, id, status.Snapshot.Revision))
+		write(fmt.Sprintf("%s %d %d%s\n", tc.word, id, status.Snapshot.Revision, tc.length))
 		var receipt receiptEnvelope
 		read(&receipt)
 		if receipt.Receipt.RequestID != id || receipt.Receipt.Intent != tc.intent || receipt.Receipt.Disposition != tc.disposition {

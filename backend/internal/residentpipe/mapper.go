@@ -183,7 +183,7 @@ func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receip
 	case "on":
 		receipt = owner.RequestOn(r.RequestID, m.raw.Revision)
 	case "allow-run":
-		receipt = owner.AllowRun(r.RequestID, m.raw.Revision, residentmac.MaxRunAllowance)
+		receipt = owner.AllowRun(r.RequestID, m.raw.Revision, r.RunFor)
 	case "deny-run":
 		receipt = owner.DenyRun(r.RequestID, m.raw.Revision)
 	default:

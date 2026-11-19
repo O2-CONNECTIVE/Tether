@@ -329,16 +329,18 @@ func (p *ciChild) request(intent string) (uint64, error) {
 	}
 	p.nextID++
 	id := p.nextID
-	raw, e := Encode(intentEnvelope{1, "intent", Intent{1, id, s.Revision, intent}})
+	raw, e := Encode(intentEnvelope{1, "intent", Intent{1, id, s.Revision, intent, 0}})
 	if e != nil {
 		return id, e
 	}
 	if p.foreground {
-		verb := intent
+		line := fmt.Sprintf("%s %d %d", intent, id, s.Revision)
 		if intent == "allow-run" {
-			verb = "allow" // The foreground dialect names the allowance by its verb.
+			// The foreground dialect names the allowance by its verb and the
+			// shortest listed length, the one the GUI offers by default.
+			line = fmt.Sprintf("allow %d %d 2", id, s.Revision)
 		}
-		raw = []byte(fmt.Sprintf("%s %d %d\n", verb, id, s.Revision))
+		raw = []byte(line + "\n")
 	}
 	if e = p.input.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
 		return id, e

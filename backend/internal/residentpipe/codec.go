@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strconv"
+	"time"
 	"unicode/utf8"
 )
 
@@ -19,6 +20,9 @@ type Intent struct {
 	RequestID        uint64 `json:"requestId"`
 	ExpectedRevision uint64 `json:"expectedRevision"`
 	Intent           string `json:"intent"`
+	// RunFor is the allowance length of an allow-run intent and zero
+	// otherwise. Only the foreground dialect can name one; JSON cannot.
+	RunFor time.Duration `json:"-"`
 }
 type intentEnvelope struct {
 	ProtocolVersion uint64 `json:"protocolVersion"`
