@@ -24,6 +24,15 @@ Tauri shell の IPC、子プロセス、実接続、配布物、ダークテー�
 実画面へ移す際は、バックエンド未接続を明示し、未配線の開始・停止を無効にします。
 カウントダウン、選択値、ボタン状態は権限や終了の証拠になりません。
 
+## ホスト GUI の基盤
+
+2026-11-18 に [#404](https://github.com/O2-CONNECTIVE/Tether/issues/404) で、利用者の裁定により決まりました。
+実装は [#410](https://github.com/O2-CONNECTIVE/Tether/issues/410)（Tauri のホスト GUI）と [#407](https://github.com/O2-CONNECTIVE/Tether/issues/407)（旧 GUI を捨てる）です。
+
+- ホスト GUI は、Mac も Windows も Tauri の同じアプリにします。レスキューと常駐は、このアプリの全体のトグルで切り替えます（[製品目標](product/goals-and-acceptance.md#レスキューと常駐を-1-つのホスト-gui-で切り替える)）。
+- Mac に固有の処理（同意の起動、鍵の保管）は、Tauri の外のネイティブの補助に分けます。今の SwiftUI の部品（`ui/mac-status`）をどう移すかは未定です（#410 で案を出して決めます）。
+- 旧 Tkinter のレスキュー GUI（`src/rescue_host.py`）は捨てます。この文書や他の文書にある「既存 Tkinter の評価経路・起動経路を変更しない」は、それぞれの変更の範囲を述べたものです。捨てる作業は #407 で行います。
+
 ## 三層の責務
 
 CSS の正本は [tokens.css](../ui/tauri/design/tokens.css) です。
