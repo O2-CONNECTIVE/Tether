@@ -87,7 +87,8 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 		f, e := agentwire.Fields(rawKey, "path", "fingerprint")
 		path, pOK := text(f["path"], maxPathBytes)
 		fingerprint, fOK := text(f["fingerprint"], 64)
-		if e != nil || len(f) != 2 || !pOK || !fOK || !absolutePath(path) || !validFingerprint(fingerprint) || samePath(path, configPath) {
+		if e != nil || len(f) != 2 || !pOK || !fOK || !absolutePath(path) || !validFingerprint(fingerprint) || samePath(path, configPath) ||
+			fixedPathConflict(c.gateway.Resource, c.endpoint, agentgateway.RescuePath) {
 			wipeMembers(f)
 			return localConfig{}, errConfig
 		}
@@ -146,7 +147,7 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 		}
 		if c.gateway.Mode != agentgateway.ModeOAuthBearer || p.Audience == c.gateway.Verifier.Audience ||
 			(p.Audience == p.ClientID && containsNormalType(p.TokenTypes, "jwt")) ||
-			pairingPathConflict(c.gateway.Resource, c.endpoint) || samePath(p.RegistryPath, configPath) {
+			fixedPathConflict(c.gateway.Resource, c.endpoint, agentgateway.PairPath) || samePath(p.RegistryPath, configPath) {
 			return localConfig{}, errConfig
 		}
 		for _, k := range c.keys {
@@ -216,13 +217,13 @@ func containsNormalType(types []string, target string) bool {
 	return false
 }
 
-// pairingPathConflict reports whether the fixed pair route would shadow the MCP
-// resource or the host registration route. Metadata paths start with
-// MetadataPrefix and cannot equal the fixed PairPath.
-func pairingPathConflict(resource, endpoint string) bool {
+// fixedPathConflict reports whether a fixed route (PairPath or RescuePath)
+// would shadow the MCP resource or the host registration route. Metadata
+// paths start with MetadataPrefix and cannot equal either fixed path.
+func fixedPathConflict(resource, endpoint, fixed string) bool {
 	r, err := url.Parse(resource)
 	e, ok := wssEndpoint(endpoint)
-	return err != nil || !ok || r.Path == agentgateway.PairPath || e.Path == agentgateway.PairPath
+	return err != nil || !ok || r.Path == fixed || e.Path == fixed
 }
 
 // residentEnrollments selects an existing, unambiguous principal/host pair.

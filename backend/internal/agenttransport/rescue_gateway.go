@@ -28,14 +28,19 @@ type RescueRegistry interface {
 
 // RescueHandler serves the gateway end of the rescue reception route.
 // See docs/rescue-connection-start.md, 受付の登録 and 受付 OFF のホストへの要求.
+//
+// Like the registration Handler, it keeps each connection until its close is
+// confirmed, so Close reports a close still in progress.
 type RescueHandler struct {
-	reg    RescueRegistry
-	mu     sync.Mutex
-	closed bool
-	active map[*closer][]byte
-	idle   chan struct{}
-	ctx    context.Context
-	cancel context.CancelFunc
+	reg        RescueRegistry
+	mu         sync.Mutex
+	closed     bool
+	serving    int                // ServeHTTP calls past admission
+	active     map[*closer][]byte // serving or unconfirmed; the id while the reception is open
+	idle       chan struct{}
+	idleClosed bool
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // NewRescueHandler creates a handler backed by the given reception registry.
@@ -103,15 +108,14 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
+	h.prune()
+	h.serving++
 	h.active[c] = nil
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
 		id := h.active[c]
-		delete(h.active, c)
-		if h.closed && len(h.active) == 0 {
-			close(h.idle)
-		}
+		h.active[c] = nil
 		h.mu.Unlock()
 		// End the registry entry before waiting for transport close confirmation.
 		if id != nil {
@@ -121,6 +125,13 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cleanup, stop := context.WithTimeout(context.Background(), DefaultBudgets().Cleanup)
 		_ = c.wait(cleanup)
 		stop()
+		h.mu.Lock()
+		h.prune()
+		h.serving--
+		if h.closed && h.serving == 0 {
+			h.markIdle()
+		}
+		h.mu.Unlock()
 	}()
 	timer := time.AfterFunc(DefaultBudgets().Registration, cancel)
 	ws, err := websocket.Accept(&hijackWriter{ResponseWriter: w, closer: c}, r, &websocket.AcceptOptions{Subprotocols: []string{RescueSubprotocol}, CompressionMode: websocket.CompressionDisabled})
@@ -222,40 +233,69 @@ func (h *RescueHandler) Close(ctx context.Context) error {
 	}
 	h.mu.Lock()
 	h.closed = true
-	if len(h.active) == 0 {
-		select {
-		case <-h.idle:
-		default:
-			close(h.idle)
-		}
+	if h.serving == 0 {
+		h.markIdle()
 	}
-	active := make([]*closer, 0, len(h.active))
-	ids := make([][]byte, 0, len(h.active))
+	var ids [][]byte
+	var active []*closer
 	for c, id := range h.active {
+		if id != nil {
+			ids = append(ids, id)
+			h.active[c] = nil
+		}
 		active = append(active, c)
-		ids = append(ids, id)
-		h.active[c] = nil
 	}
 	h.mu.Unlock()
 	h.cancel()
-	for i, c := range active {
-		if i < len(ids) && ids[i] != nil {
-			h.reg.EndRescue(ids[i])
-		}
+	for _, id := range ids {
+		h.reg.EndRescue(id)
+	}
+	for _, c := range active {
 		c.start()
 	}
 	select {
 	case <-h.idle:
 	case <-ctx.Done():
-		return ctx.Err()
+		select {
+		case <-h.idle:
+		default:
+			return errors.Join(ErrCleanupUnknown, ctx.Err())
+		}
 	}
+	h.mu.Lock()
+	active = active[:0]
+	for c := range h.active {
+		active = append(active, c)
+	}
+	h.mu.Unlock()
 	var errs []error
 	for _, c := range active {
 		if err := c.wait(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}
+	h.mu.Lock()
+	h.prune()
+	h.mu.Unlock()
 	return errors.Join(errs...)
+}
+
+// markIdle closes idle once. Caller holds h.mu.
+func (h *RescueHandler) markIdle() {
+	if !h.idleClosed {
+		h.idleClosed = true
+		close(h.idle)
+	}
+}
+
+// prune drops connections whose close is confirmed and that no ServeHTTP
+// still serves. Caller holds h.mu.
+func (h *RescueHandler) prune() {
+	for c, id := range h.active {
+		if id == nil && c.confirmed() {
+			delete(h.active, c)
+		}
+	}
 }
 
 func rescueClose(ws *websocket.Conn) {

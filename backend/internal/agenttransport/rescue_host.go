@@ -70,8 +70,9 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	}
 	c.mu.Lock()
 	if c.used || c.closed {
+		closed := c.closed
 		c.mu.Unlock()
-		if c.closed {
+		if closed {
 			return "", ErrClosed
 		}
 		return "", ErrUsed
@@ -99,7 +100,7 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	c.ws = ws
 	c.mu.Unlock()
-	if err != nil || !transported {
+	if err != nil || !transported || ws.Subprotocol() != RescueSubprotocol {
 		c.end()
 		return "", ErrRefused
 	}
@@ -168,14 +169,11 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 		expiry = time.After
 	}
 	expires := expiry(agentgateway.RescueCodeLifetime)
-	expired := make(chan struct{})
 	go func() {
 		select {
 		case <-expires:
 			c.end()
-			close(expired)
 		case <-c.done:
-			close(expired)
 		}
 	}()
 	typ, msg, e = ws.Read(life)
@@ -221,6 +219,12 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	if !stopHandshake() || !reg.Stop() {
 		c.end()
 		return "", ErrRefused
+	}
+	c.mu.Lock()
+	ended := c.ended
+	c.mu.Unlock()
+	if ended { // 受付 OFF came while the result was verified
+		return "", ErrClosed
 	}
 	go func() { _, _, _ = ws.Read(life); c.end() }()
 	return m["code"], nil

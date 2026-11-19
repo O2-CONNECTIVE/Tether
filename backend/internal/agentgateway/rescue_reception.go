@@ -204,6 +204,12 @@ func (g *Gateway) EndRescue(id []byte) {
 }
 
 func (g *Gateway) rescueCapacityLocked() error {
+	g.mu.Lock() // order: rescue.mu, then g.mu; nothing takes them the other way
+	closed := g.closed
+	g.mu.Unlock()
+	if closed {
+		return ErrClosed
+	}
 	if len(g.rescue.records) >= maxRescueReceptions || g.rescueCodes.liveCount() >= maxRescueCodes {
 		return ErrRescueBusy
 	}
