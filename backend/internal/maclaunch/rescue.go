@@ -99,7 +99,9 @@ type RescueReception interface {
 	Refuse(timedOut bool) error
 	// Allow returns a K-signed allow with d and the stream that now carries the channel.
 	Allow(d Dispatch) (net.Conn, error)
-	// Close ends the reception and discards K.
+	// Close ends the reception and discards K. The state machine may call it
+	// from any goroutine, including one in Receive or Answer, so it must not
+	// wait for those calls to return.
 	Close() error
 }
 
@@ -225,8 +227,7 @@ func (r *Rescue) Receive(req RescueRequest) error {
 	p := RescuePrompt{RequestID: hex.EncodeToString(id[:]), Organization: req.organization, DisplayName: req.displayName, Profile: req.profile, Duration: r.cfg.Duration, ClientFingerprint: ssh.FingerprintSHA256(req.client), Warning: RescueWarning}
 	r.step.Lock()
 	defer r.step.Unlock()
-	if r.cutOff() {
-		r.end(false, false, true)
+	if r.cutOff() { // the loop ends it
 		return ErrDenied
 	}
 	r.mu.Lock()
@@ -250,8 +251,7 @@ func (r *Rescue) Receive(req RescueRequest) error {
 func (r *Rescue) Answer(from RescueHelper, reply RescueReply) error {
 	r.step.Lock()
 	defer r.step.Unlock()
-	if r.cutOff() {
-		r.end(false, false, true)
+	if r.cutOff() { // the loop ends it
 		return ErrDenied
 	}
 	r.mu.Lock()
