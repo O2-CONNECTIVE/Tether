@@ -230,6 +230,12 @@ func (rescueRegistryStub) OpenRescue(agentgateway.RescueRequest) (agentgateway.R
 	return agentgateway.RescueReception{}, nil
 }
 func (rescueRegistryStub) EndRescue([]byte) {}
+func (rescueRegistryStub) AnswerRescue(_ []byte, _ agentgateway.RescueAnswer, conn net.Conn) error {
+	if conn != nil {
+		return conn.Close()
+	}
+	return nil
+}
 
 func TestRescueRouteMountedOnlyWithIdentityHandler(t *testing.T) {
 	h, err := agenttransport.NewRescueHandler(rescueRegistryStub{})

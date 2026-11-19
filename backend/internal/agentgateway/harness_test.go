@@ -200,12 +200,16 @@ type mac struct {
 // waitHost returns the host Serve result; the host always ends by revoking
 // the grant and joining its own cleanup.
 func (m *mac) waitHost(t *testing.T) error {
+	return m.waitHostWithin(t, 5*time.Second)
+}
+
+func (m *mac) waitHostWithin(t *testing.T, timeout time.Duration) error {
 	t.Helper()
 	m.hostOnce.Do(func() {
 		select {
 		case m.hostErr = <-m.hostDone:
-		case <-time.After(10 * time.Second):
-			t.Error("host Serve did not return")
+		case <-time.After(timeout):
+			t.Fatal("host Serve did not return")
 			m.hostErr = io.ErrNoProgress
 		}
 	})
@@ -224,35 +228,46 @@ func (r *rig) approve(i int, lifetime time.Duration) *mac {
 // connectApproved is approve that returns the Connect result instead of
 // failing the test, for the cases where the gateway must refuse.
 func (r *rig) connectApproved(i int, lifetime time.Duration) (*mac, error) {
+	return r.connectApprovedWithKeys(i, lifetime, fixtureSigner(r.t, byte(0x21+i)), fixtureSigner(r.t, byte(0x61+i)))
+}
+
+// connectApprovedWithKeys makes the host's allow list and host key explicit.
+// Rescue tests use a per-request client key C and the reception key K here.
+func (r *rig) connectApprovedWithKeys(i int, lifetime time.Duration, client, host ssh.Signer) (*mac, error) {
+	m, cConn, err := r.prepareApprovedHost(i, lifetime, []ssh.PublicKey{client.PublicKey()}, host, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return m, r.gw.Connect(label(i), m.dispatch, cConn)
+}
+
+func (r *rig) prepareApprovedHost(i int, lifetime time.Duration, keys []ssh.PublicKey, host ssh.Signer, hostWait time.Duration) (*mac, *memConn, error) {
 	t := r.t
 	t.Helper()
-	client := fixtureSigner(t, byte(0x21+i))
-	host := fixtureSigner(t, byte(0x61+i))
-	keys := []ssh.PublicKey{client.PublicKey()}
 	digest, err := runbackend.KeySetDigest(keys)
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	m := &mac{runtime: &macRuntime{procs: make(chan *fakeProc, 4)}, hostDone: make(chan error, 1)}
 	if m.issuer, err = ephemeral.NewCurrentUser(); err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	challenge, err := m.issuer.Prepare(ephemeral.ApprovedPolicy{
 		PolicyDigest: agentexec.MacCurrentUserPolicyDigest(), KeySetDigest: digest, GuestBoundary: supervisor.CurrentUserNoIsolation,
 		HardDeadline: time.Now().Add(lifetime), BackendLeaseCeiling: time.Millisecond,
 	})
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	if m.authority, err = m.issuer.Launch(context.Background(), challenge, time.Now, func(context.Context, *supervisor.Authority) error { return nil }); err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	if m.session, err = agentexec.New(agentexec.Config{Issuer: m.issuer, Authority: m.authority, Runtime: m.runtime, Clock: time.Now, CleanupTimeout: time.Second}); err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	h, err := agentlink.NewHost(agentlink.HostConfig{Session: m.session, AllowedKeys: keys, HostKey: host, Budgets: budgets()})
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	g := m.authority.Grant()
 	m.dispatch = agentgateway.Dispatch{
@@ -264,13 +279,13 @@ func (r *rig) connectApproved(i int, lifetime time.Duration) (*mac, error) {
 	go func() { m.hostDone <- h.Serve(context.Background(), sConn) }()
 	t.Cleanup(func() {
 		_ = sConn.Close()
-		_ = m.waitHost(t)
+		_ = m.waitHostWithin(t, hostWait)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = m.session.Close(ctx)
 		_ = m.issuer.Close()
 	})
-	return m, r.gw.Connect(label(i), m.dispatch, cConn)
+	return m, cConn, nil
 }
 
 func (m *mac) proc(t *testing.T) *fakeProc {
