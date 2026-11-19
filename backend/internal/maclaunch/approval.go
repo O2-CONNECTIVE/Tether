@@ -419,6 +419,15 @@ func (a *Approved) CanResume() bool {
 // acquisition returns its completed cleanup result without retrying. Successful
 // owners retain explicit same-owner cleanup retry behavior, never replacement.
 func (a *Approved) Close(ctx context.Context) error {
+	return a.close(ctx, false)
+}
+
+func (a *Approved) closeForRescue(ctx context.Context) error {
+	// Rescue reports an active Host's Serve cleanup only after it is observed.
+	return a.close(ctx, true)
+}
+
+func (a *Approved) close(ctx context.Context, requireServeCleanup bool) error {
 	if a == nil || a.issuer == nil {
 		return ErrConfig
 	}
@@ -429,13 +438,29 @@ func (a *Approved) Close(ctx context.Context) error {
 			return err
 		}
 	}
+	var host *agentlink.Host
+	hostAccepting := false
+	if requireServeCleanup {
+		a.hostMu.Lock()
+		host = a.host
+		a.hostMu.Unlock()
+		if host != nil {
+			// Host.Close may see accepting=false after issuer.Close ends Accept.
+			hostAccepting = host.Accepting()
+		}
+	}
 	closed := a.issuer.Close()
-	a.hostMu.Lock()
-	host := a.host
-	a.hostMu.Unlock()
+	if !requireServeCleanup {
+		a.hostMu.Lock()
+		host = a.host
+		a.hostMu.Unlock()
+	}
 	switch {
 	case host != nil:
 		closed = errors.Join(closed, host.Close(ctx))
+		if requireServeCleanup && hostAccepting {
+			closed = errors.Join(closed, agentchannel.ErrCleanupUnknown)
+		}
 	case a.session != nil:
 		closed = errors.Join(closed, a.session.Close(ctx))
 	default:

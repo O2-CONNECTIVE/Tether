@@ -106,11 +106,13 @@ type RescueReception interface {
 	Refuse(timedOut bool) error
 	// Allow returns a K-signed allow with d and the stream that now carries the channel.
 	Allow(d Dispatch) (net.Conn, error)
-	// Close ends the reception and discards K. The state machine may call it
-	// from any goroutine, including one in Receive or Answer, so it must not
-	// wait for those calls to return. StartClose may be provided to separate the
-	// synchronous logical close from its bounded physical wait.
+	// Close ends the reception and reports physical cleanup. The state machine
+	// may call it from any goroutine, including one in Receive or Answer, so it
+	// must not wait for those calls to return.
 	Close() error
+	// StartClose synchronously turns reception off and discards K. It must not
+	// wait for physical I/O; Close performs the bounded physical cleanup.
+	StartClose()
 }
 
 type RescueEventKind uint8
@@ -139,7 +141,10 @@ type RescueConfig struct {
 	Budgets          agentchannel.Budgets
 	Helper           RescueHelper
 	ReceptionFactory func(context.Context) (RescueReception, error)
-	OnStateChange    func(RescueEvent)
+	// OnStateChange reports Rescue status and ReceptionOpened codes. Its final
+	// ReceptionOpened check may race with Stop before callback delivery; a code
+	// delivered after Stop may be discarded because StartClose has already dropped K.
+	OnStateChange func(RescueEvent)
 }
 
 type rescueClock struct {
@@ -181,9 +186,7 @@ func (c *rescueReceptionCandidate) startClose() {
 	}
 	c.initOnce.Do(func() { c.done = make(chan struct{}) })
 	c.startOnce.Do(func() {
-		if starter, ok := c.reception.(interface{ StartClose() }); ok {
-			starter.StartClose()
-		}
+		c.reception.StartClose()
 		c.waitOnce.Do(func() {
 			go func() {
 				err := c.reception.Close()
@@ -1012,7 +1015,7 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 
 func closeApprovedWithin(ctx context.Context, approved *Approved) error {
 	done := make(chan error, 1)
-	go func() { done <- approved.Close(ctx) }()
+	go func() { done <- approved.closeForRescue(ctx) }()
 	select {
 	case err := <-done:
 		return err

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -143,6 +144,10 @@ func (r *rescueReception) Open(ctx context.Context) (string, error) {
 }
 func (r *rescueReception) Resume(context.Context) error {
 	r.mu.Lock()
+	if r.logicallyClosed {
+		r.mu.Unlock()
+		return ErrDenied
+	}
 	r.resumes++
 	onResume := r.onResume
 	r.mu.Unlock()
@@ -193,10 +198,8 @@ func (r *rescueReception) HostKey() ssh.Signer {
 func (r *rescueReception) StartClose() {
 	r.closeOnce.Do(func() {
 		r.mu.Lock()
-		if r.closeStarted != nil {
-			r.logicallyClosed = true
-			r.key = nil
-		}
+		r.logicallyClosed = true
+		r.key = nil
 		r.closes++
 		onClose, started, returned := r.onClose, r.closeStarted, r.closeReturned
 		r.mu.Unlock()
@@ -550,11 +553,30 @@ func rescueInGrace(t *testing.T, duration time.Duration) (*rescueFixture, Dispat
 	if err != nil {
 		t.Fatalf("generation 1 channel: %v", err)
 	}
+	waitHostAuthenticated(t, approved)
 	if err := channel.Close(); err != nil {
 		t.Fatalf("close generation 1: %v", err)
 	}
 	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
 	return f, d, approved
+}
+
+func waitHostAuthenticated(t *testing.T, approved *Approved) {
+	t.Helper()
+	if approved == nil || approved.host == nil {
+		t.Fatal("approved Host is unavailable")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		connected, observed := approved.host.LocallyAuthenticated()
+		if connected && observed {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("Host did not reach authenticated channel state")
+		}
+		runtime.Gosched()
+	}
 }
 
 func (f *rescueFixture) waitDone(t *testing.T) {
@@ -1060,6 +1082,7 @@ func TestRescueGraceExpiresUsingBothClocksAndWallRollback(t *testing.T) {
 			if err != nil {
 				t.Fatalf("channel: %v", err)
 			}
+			waitHostAuthenticated(t, approved)
 			if err := ch.Close(); err != nil {
 				t.Fatalf("close channel: %v", err)
 			}
@@ -1260,6 +1283,7 @@ func TestRescueReconnectionRechecksGraceBeforeAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generation 1 channel: %v", err)
 	}
+	waitHostAuthenticated(t, approved)
 	if err := first.Close(); err != nil {
 		t.Fatalf("close generation 1: %v", err)
 	}
@@ -1634,6 +1658,70 @@ func TestReceptionOpenedNotificationIsSuppressedAfterStop(t *testing.T) {
 		t.Fatalf("notification after Stop = %+v", event)
 	default:
 	}
+}
+
+func TestReceptionOpenedNotificationRacingStopCannotResume(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	_ = waitRescueEvent(t, f.events, RescueEventReceptionOpened)
+	code := f.rec.code
+	originalNotify := f.r.cfg.OnStateChange
+	notificationEntered := make(chan RescueEvent, 1)
+	releaseNotification := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseNotification) }) }
+	defer release()
+	f.r.cfg.OnStateChange = func(event RescueEvent) {
+		if event.Kind == RescueEventReceptionOpened && event.Code == code {
+			notificationEntered <- event
+			<-releaseNotification
+		}
+		originalNotify(event)
+	}
+	emitDone := make(chan struct{})
+	go func() {
+		f.r.emit(RescueEvent{Kind: RescueEventReceptionOpened, Code: code})
+		close(emitDone)
+	}()
+	select {
+	case event := <-notificationEntered:
+		if event.Code != code {
+			t.Fatalf("matched code = %q, want %q", event.Code, code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("code did not reach the notification sync point")
+	}
+	stopReturned := make(chan struct{})
+	go func() {
+		f.r.Stop()
+		close(stopReturned)
+	}()
+	select {
+	case <-stopReturned:
+	case <-time.After(2 * time.Second):
+		release()
+		<-stopReturned
+		t.Fatal("Stop waited for the blocked notification callback")
+	}
+	if f.rec.HostKey() != nil {
+		t.Fatal("the post-Stop notification still had a usable K")
+	}
+	release()
+	late := waitRescueEvent(t, f.events, RescueEventReceptionOpened)
+	if late.Code != code {
+		t.Fatalf("late code = %q, want %q", late.Code, code)
+	}
+	if err := f.rec.Resume(context.Background()); !errors.Is(err, ErrDenied) {
+		t.Fatalf("resume using the late code = %v, want ErrDenied", err)
+	}
+	if err := f.r.Receive(rescueRequestFor(rescueC.PublicKey())); !errors.Is(err, ErrDenied) {
+		t.Fatalf("request after the late code = %v, want ErrDenied", err)
+	}
+	select {
+	case <-emitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("late notification callback did not return")
+	}
+	f.waitDone(t)
 }
 
 func TestRescueStopStartsDetachedReceptionCloseBeforeReturning(t *testing.T) {
@@ -2067,7 +2155,8 @@ func TestRescueEndsReceptionBeforeClosingApprovedChannel(t *testing.T) {
 	}
 	approvedErr, observed := a.CleanupResult()
 	if !observed || !errors.Is(approvedErr, agentchannel.ErrCleanupUnknown) {
-		t.Fatalf("Approved cleanup result = (%v, %v), want ErrCleanupUnknown and observed", approvedErr, observed)
+		serveErr, serveObserved := a.host.CleanupResult()
+		t.Fatalf("Approved cleanup result = (%v, %v), want ErrCleanupUnknown and observed; Serve cleanup = (%v, %v)", approvedErr, observed, serveErr, serveObserved)
 	}
 	rescueErr, observed := cleanupReporter.CleanupResult()
 	if !observed || !errors.Is(rescueErr, agentchannel.ErrCleanupUnknown) {
@@ -2075,9 +2164,41 @@ func TestRescueEndsReceptionBeforeClosingApprovedChannel(t *testing.T) {
 	}
 }
 
+func TestRescueStopAfterEstablishedChannelDoesNotRequireCleanup(t *testing.T) {
+	f := newRescueFixture(t, 2*time.Hour)
+	_ = waitRescueEvent(t, f.events, RescueEventReceptionOpened)
+	d := f.allow(t, f.prompt(t))
+	approved := f.r.approved
+	channel, err := openChannel(context.Background(), t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	t.Cleanup(func() { _ = channel.Close() })
+	waitHostAuthenticated(t, approved)
+
+	f.r.Stop()
+	f.waitDone(t)
+	if cleanupErr, observed := approved.CleanupResult(); !observed || cleanupErr != nil {
+		t.Fatalf("Approved cleanup result = (%v, %v), want successful observed cleanup", cleanupErr, observed)
+	}
+	for {
+		select {
+		case event := <-f.events:
+			if event.Kind == RescueEventCleanupRequired {
+				t.Fatal("normal Stop after channel establishment reported CleanupRequired")
+			}
+		default:
+			return
+		}
+	}
+}
+
 // Only the #399 lifetimes; zero selects the 2-hour default.
 func TestNewRescueAcceptsOnlyChosenLifetimes(t *testing.T) {
 	base := newRescueFixture(t, 0).cfg
+	base.ReceptionFactory = func(context.Context) (RescueReception, error) {
+		return newRescueReception(), nil
+	}
 	for _, d := range []time.Duration{0, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour, 12 * time.Hour, 24 * time.Hour} {
 		cfg := base
 		cfg.Duration = d

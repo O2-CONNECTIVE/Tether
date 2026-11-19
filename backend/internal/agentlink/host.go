@@ -197,6 +197,16 @@ func (h *Host) Unused() bool {
 	return !h.started
 }
 
+// Accepting reports whether Serve is still acquiring its channel.
+func (h *Host) Accepting() bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.accepting
+}
+
 // Close retains and retries only this Host's channel and Session. A Close while
 // Accept is still acquiring its channel reports unknown; call again after Serve
 // returns. It never drops an unconfirmed channel or adopts a replacement.
