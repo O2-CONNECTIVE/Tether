@@ -2,7 +2,7 @@
 
 [文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md)
 
-**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。未実装です。**
+**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の中の接続コードの発行と照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）だけを実装しました。受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）が無いので、まだどこからも呼ばれません。ほかは未実装です。**
 切断の後の扱いは、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（accepted）が [ADR 0003](adr/0003-owned-guest-workload.md) の該当の部分を置き換えます。
 実装されるまで、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
 この文書は、ホストを接続コードで指し、要求の時点の許可のポップアップでレスキューの接続を始める流れを決めます。
@@ -122,7 +122,9 @@ proof が示すのは「K を持っている」ことだけで、ホストの身
 - 当たっても、ホストにはポップアップが出て、担当者の名前と組織が見えます。利用者は知らない担当者を拒否できます。
 
 匿名の外部の攻撃者は、コードを試せません。照合の前に token と役割を確かめるためです。
-principal の上限（4）を上げるときは、この計算をやり直します。
+この計算の前提は、有効なコードの上限 N（100）、principal の上限（4）、照合の失敗の上限（principal ごとに 10 分に 5 回）、gateway の再起動の頻度（1 日 1 回以下）です。
+どれかを変えるときは、先にこの計算をやり直します。
+値は gateway の `backend/internal/agentgateway/rescue_code.go` と `MaxPrincipals` にあり、どちらのコードの注記もこの節を指します。
 
 ## 2. 身元の渡し方（身元の証明）
 

@@ -26,6 +26,8 @@ import (
 )
 
 const (
+	// MaxPrincipals is also a premise of the rescue code guessing bound
+	// (docs/rescue-connection-start.md, 推測への耐性): redo it before raising.
 	MaxPrincipals           = 4
 	MaxSessionsPerPrincipal = 4
 	MaxInflightRequests     = 32
@@ -142,6 +144,7 @@ type Gateway struct {
 	callTimeout   time.Duration
 	clock         func() time.Time
 	inflight      chan struct{}
+	rescueCodes   *rescueCodes // rescue connection codes; guarded by its own lock
 
 	mu          sync.Mutex
 	closed      bool
@@ -188,6 +191,7 @@ func New(cfg Config) (*Gateway, error) {
 	if g.clock == nil {
 		g.clock = time.Now
 	}
+	g.rescueCodes = newRescueCodes(g.clock)
 	if err := checkAssurance(cfg.RoleAssurance); err != nil {
 		return nil, err
 	}
