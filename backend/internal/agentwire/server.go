@@ -33,6 +33,7 @@ type ServerConfig struct {
 	ApprovedKeys         []ssh.PublicKey
 	Liveness             <-chan struct{}
 	ConnectionGeneration uint64
+	AllowReconnect       bool
 	OnActivity           func()
 }
 
@@ -40,12 +41,13 @@ type ServerConfig struct {
 // single adapter claim, so no second Server can serve the same grant. The
 // Server owns only the command IDs that its own Start replies returned.
 type Server struct {
-	session    *agentexec.Session
-	binding    supervisor.Binding
-	mode       agentexec.Mode
-	profile    agentexec.Profile
-	liveness   <-chan struct{}
-	onActivity func()
+	session        *agentexec.Session
+	binding        supervisor.Binding
+	mode           agentexec.Mode
+	profile        agentexec.Profile
+	liveness       <-chan struct{}
+	onActivity     func()
+	allowReconnect bool
 	// prefix namespaces core request IDs, so a Start issued directly by the
 	// local owner can never be replayed into and adopted through the wire.
 	prefix string
@@ -83,7 +85,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	return &Server{
 		session: s, binding: binding, mode: s.Mode(), profile: s.Profile(), liveness: cfg.Liveness,
-		prefix: prefix, owned: map[string]struct{}{}, onActivity: cfg.OnActivity,
+		prefix: prefix, owned: map[string]struct{}{}, onActivity: cfg.OnActivity, allowReconnect: cfg.AllowReconnect,
 	}, nil
 }
 
@@ -169,10 +171,27 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	}
 
 	stop := make(chan struct{})
-	var once sync.Once
+	var stopMu sync.Mutex
+	stopped, revoked := false, false
 	var lost atomic.Bool
 	halt := func(reconnectable bool) {
-		once.Do(func() {
+		reconnectable = reconnectable && s.allowReconnect
+		stopMu.Lock()
+		if stopped {
+			escalate := !reconnectable && !revoked
+			if escalate {
+				revoked = true
+			}
+			stopMu.Unlock()
+			if escalate {
+				s.session.TransportLost()
+			}
+			return
+		}
+		stopped = true
+		revoked = !reconnectable
+		stopMu.Unlock()
+		if reconnectable {
 			s.session.ObserveDeadline()
 			live := false
 			select {
@@ -180,14 +199,20 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			default:
 				live = s.session.StopReason() == agentexec.StopNone
 			}
-			if reconnectable && live {
+			if live {
 				s.session.InterruptTransport()
 			} else {
+				stopMu.Lock()
+				revoked = true
+				stopMu.Unlock()
 				s.session.TransportLost()
 			}
-			close(stop)
-			_ = conn.Close()
-		})
+		} else {
+			s.session.ObserveDeadline()
+			s.session.TransportLost()
+		}
+		close(stop)
+		_ = conn.Close()
 	}
 	go func() {
 		select {
@@ -252,7 +277,8 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			}()
 		}
 	}()
-	reconnectable := lost.Load() || err == nil || errors.Is(err, ErrClosed)
+	reconnectable := (lost.Load() || err == nil || errors.Is(err, ErrClosed)) &&
+		!errors.Is(err, ErrProtocol) && ctx.Err() == nil
 	halt(reconnectable)
 	handlers.Wait()
 	return err

@@ -318,6 +318,9 @@ func (s *stream) Write(p []byte) (int, error) {
 // at most the cleanup budget. An unconfirmed result is ErrCleanupUnknown and a
 // later Close waits again on the same attempt.
 func (s *stream) Close() error {
+	if m, ok := s.Conn.(*msgConn); ok {
+		m.notifyEnd()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.cleanup)
 	defer cancel()
 	return s.closer.wait(ctx)
@@ -350,6 +353,14 @@ type msgConn struct {
 	readErr error  // sticky
 
 	writeMu *sync.Mutex
+	onEnd   func()
+	endOnce sync.Once
+}
+
+func (m *msgConn) notifyEnd() {
+	if m.onEnd != nil {
+		m.endOnce.Do(m.onEnd)
+	}
 }
 
 func (m *msgConn) Read(p []byte) (int, error) {
@@ -368,6 +379,7 @@ func (m *msgConn) Read(p []byte) (int, error) {
 		msg, err := m.next()
 		if err != nil {
 			m.readErr = m.read.finish(err)
+			m.notifyEnd()
 			return 0, m.readErr
 		}
 		m.rest = msg // an empty message delivers nothing; read the next one
@@ -393,6 +405,7 @@ func (m *msgConn) fill() error {
 	msg, err := m.next()
 	if err != nil {
 		m.readErr = m.read.finish(err)
+		m.notifyEnd()
 		return m.readErr
 	}
 	m.rest = msg
@@ -485,6 +498,7 @@ func (m *msgConn) Write(p []byte) (int, error) {
 // Close is not the owner's close; stream.Close is.
 func (m *msgConn) Close() error {
 	m.fail()
+	m.notifyEnd()
 	return errStreamClose
 }
 

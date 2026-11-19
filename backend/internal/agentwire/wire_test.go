@@ -220,7 +220,70 @@ func TestMalformedFramesEndTheStreamAndRevokeTheGrant(t *testing.T) {
 	}
 }
 
-func TestTransportLossPausesBeforeTerminateForResume(t *testing.T) {
+type protocolRaceConn struct {
+	data         *bytes.Reader
+	readStarted  chan struct{}
+	continueRead chan struct{}
+	closed       chan struct{}
+	readOnce     sync.Once
+	closeOnce    sync.Once
+}
+
+func (c *protocolRaceConn) Read(p []byte) (int, error) {
+	c.readOnce.Do(func() {
+		close(c.readStarted)
+		<-c.continueRead
+	})
+	return c.data.Read(p)
+}
+
+func (c *protocolRaceConn) Write(p []byte) (int, error) { return len(p), nil }
+func (c *protocolRaceConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
+
+func TestProtocolViolationObservedAfterLivenessPauseRevokesGrant(t *testing.T) {
+	r := newSessionRig(t, agentexec.ProfileWindowsGuest)
+	liveness := make(chan struct{})
+	cfg := r.config()
+	cfg.Liveness = liveness
+	server, err := agentwire.NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &protocolRaceConn{
+		data:        bytes.NewReader([]byte{0, 0, 0, 0}),
+		readStarted: make(chan struct{}), continueRead: make(chan struct{}), closed: make(chan struct{}),
+	}
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(context.Background(), conn) }()
+	select {
+	case <-conn.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not reach the gated frame read")
+	}
+	close(liveness)
+	select {
+	case <-conn.closed:
+	case <-time.After(time.Second):
+		t.Fatal("liveness did not close the stream")
+	}
+	close(conn.continueRead)
+	select {
+	case err := <-served:
+		if !errors.Is(err, agentwire.ErrProtocol) {
+			t.Fatalf("Serve = %v, want ErrProtocol", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after the gated frame")
+	}
+	if r.issuer.Snapshot().HasAuthority {
+		t.Fatal("observed wire protocol violation left the grant live after liveness loss")
+	}
+}
+
+func TestTransportLossRevokesBeforeTerminateWithoutResume(t *testing.T) {
 	r := newRig(t, agentexec.ProfileWindowsGuest)
 	ctx := finite(t)
 	st, err := r.client.Start(ctx, "req-1", []byte("whoami\n"), 60_000)
@@ -249,7 +312,7 @@ func TestTransportLossPausesBeforeTerminateForResume(t *testing.T) {
 	mu.Lock()
 	state := atTerminate
 	mu.Unlock()
-	if state != supervisor.Granted {
+	if state != supervisor.Revoked {
 		t.Fatalf("authority at Terminate = %q", state)
 	}
 	if err := r.session.Close(ctx); err != nil {
@@ -283,11 +346,21 @@ func TestEndOfStreamAndOwnerCancelRevokeTheGrant(t *testing.T) {
 	if err := cancelled.waitServed(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Serve after owner cancel = %v", err)
 	}
-	if !closed.issuer.Snapshot().HasAuthority {
-		t.Fatal("transport EOF revoked the grant instead of pausing it")
+	for _, r := range []*rig{closed, cancelled} {
+		if r.issuer.Snapshot().HasAuthority {
+			t.Fatal("the stream ended but the grant stayed live")
+		}
 	}
-	if cancelled.issuer.Snapshot().HasAuthority {
-		t.Fatal("owner cancellation left the grant live")
+}
+
+func TestStandaloneWireEOFWithoutReconnectOptInRevokesGrant(t *testing.T) {
+	r := newServed(t, agentexec.ProfileWindowsGuest)
+	_ = r.peer.Close()
+	if err := r.waitServed(); err != nil {
+		t.Fatalf("Serve after end of stream = %v", err)
+	}
+	if r.issuer.Snapshot().HasAuthority {
+		t.Fatal("standalone wire EOF preserved the grant without reconnect opt-in")
 	}
 }
 
@@ -455,9 +528,10 @@ func TestServerRequiresAnApprovedPeerAndTakesTheOnlyClaim(t *testing.T) {
 	}
 }
 
-// Liveness loss of a stalled stream pauses admission before it is closed, and
-// that close unblocks the stalled Write. Serve has no idle timer: the signal is the owner's.
-func TestLivenessLossPausesBeforeClosingAStalledStream(t *testing.T) {
+// Liveness loss of a stalled stream revokes the grant before the stream is
+// closed, and only that close unblocks the stalled Write. Serve has no idle
+// timer: the signal is the owner's.
+func TestLivenessLossRevokesBeforeClosingAStalledStream(t *testing.T) {
 	r := newRig(t, agentexec.ProfileWindowsGuest)
 	ctx := finite(t)
 	st, err := r.client.Start(ctx, "req-1", []byte("sleep 60\n"), 60_000)
@@ -482,11 +556,8 @@ func TestLivenessLossPausesBeforeClosingAStalledStream(t *testing.T) {
 	if err := r.waitServed(); !errors.Is(err, agentwire.ErrPeerLost) {
 		t.Fatalf("Serve = %v", err)
 	}
-	if got := state.Load(); got != supervisor.Granted {
+	if got := state.Load(); got != supervisor.Revoked {
 		t.Fatalf("authority when the stream closed = %v", got)
-	}
-	if !r.issuer.Snapshot().HasAuthority {
-		t.Fatal("liveness loss revoked the grant instead of pausing it")
 	}
 	if final := r.awaitTerminal(st.CommandID); final.Stop != agentexec.StopTransportLost {
 		t.Fatalf("final = %+v", final)

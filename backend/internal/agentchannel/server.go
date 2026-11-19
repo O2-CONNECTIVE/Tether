@@ -26,20 +26,22 @@ type ServerConfig struct {
 	HostKey              ssh.Signer
 	Budgets              Budgets
 	ConnectionGeneration uint64 // the next connection for this grant; zero selects generation 1
+	AllowReconnect       bool   // only an explicitly opted-in owner may preserve the grant on transport loss
 	OnActivity           func()
 }
 
 // Server serves one grant on exactly one supplied connection generation.
 type Server struct {
-	session    *agentexec.Session
-	binding    Binding
-	deadline   time.Time
-	host       *fixedSigner
-	keys       []ssh.PublicKey // canonical copies, parsed once
-	allowed    map[string]struct{}
-	expect     [32]byte
-	budgets    Budgets
-	onActivity func()
+	session        *agentexec.Session
+	binding        Binding
+	deadline       time.Time
+	host           *fixedSigner
+	keys           []ssh.PublicKey // canonical copies, parsed once
+	allowed        map[string]struct{}
+	expect         [32]byte
+	budgets        Budgets
+	onActivity     func()
+	allowReconnect bool
 
 	mu   sync.Mutex
 	used bool
@@ -102,7 +104,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	return &Server{
 		session: cfg.Session, binding: binding, deadline: grant.HardDeadline,
 		host: host, keys: keys, allowed: allowed, expect: commitment(binding, host.public.Marshal()), budgets: cfg.Budgets,
-		onActivity: cfg.OnActivity,
+		onActivity: cfg.OnActivity, allowReconnect: cfg.AllowReconnect,
 	}, nil
 }
 
@@ -158,6 +160,7 @@ func (s *Server) Accept(ctx context.Context, conn net.Conn) (*Channel, error) {
 	}
 	c := newChannel(conn, s.budgets, s.deadline, s.binding, s.session)
 	c.onActivity = s.onActivity
+	c.allowReconnect = s.allowReconnect
 	if ctx == nil {
 		return c.fail(ReasonHandshake, ErrConfig)
 	}

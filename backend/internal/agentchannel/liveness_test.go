@@ -30,10 +30,44 @@ func TestQuietChannelStaysOpenWhileHeartbeatsAnswer(t *testing.T) {
 	roundTrip(t, p.client, p.server, "after a long quiet period")
 }
 
-func TestHalfOpenRelayPausesSessionForReconnect(t *testing.T) {
+func TestTransportLossWithoutReconnectOptInRevokesGrant(t *testing.T) {
+	env := newEnv(t, 30*time.Second)
+	b := quickBudgets()
+	p := connect(t, env, context.Background(), b, b)
+	p.server.teardown(ReasonTransport)
+	waitDone(t, p.server.Done(), 2*time.Second, "transport teardown without reconnect opt-in")
+	if !env.revoked() {
+		t.Fatal("transport loss preserved the grant without reconnect opt-in")
+	}
+}
+
+func TestHalfOpenRelayRevokesBeforeClose(t *testing.T) {
 	env := newEnv(t, 30*time.Second)
 	b := Budgets{Handshake: 5 * time.Second, HeartbeatInterval: 20 * time.Millisecond, HeartbeatTimeout: 200 * time.Millisecond, ReadStall: 2 * time.Second, WriteStall: 2 * time.Second, Cleanup: 2 * time.Second}
 	p := connect(t, env, context.Background(), b, b)
+	early := env.closedBeforeRevoke(p.sConn)
+	p.sConn.link.setBlackhole() // bytes vanish and neither end sees a close
+	waitDone(t, p.server.Done(), 2*time.Second, "server teardown on a missing heartbeat")
+	if p.server.Reason() != ReasonHeartbeat || !env.revoked() {
+		t.Fatalf("reason %v revoked %v", p.server.Reason(), env.revoked())
+	}
+	// The blocked heartbeat sender is unblocked by closing the same conn and joined.
+	if err := p.server.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if early.Load() || !p.sConn.isClosed() {
+		t.Fatal("not revoked before closing the owned conn")
+	}
+	waitDone(t, p.client.Done(), 2*time.Second, "client teardown on its own missing heartbeat")
+	if p.client.Reason() != ReasonHeartbeat {
+		t.Fatalf("client reason %v", p.client.Reason())
+	}
+}
+
+func TestHalfOpenRelayPausesSessionForReconnect(t *testing.T) {
+	env := newEnv(t, 30*time.Second)
+	b := Budgets{Handshake: 5 * time.Second, HeartbeatInterval: 20 * time.Millisecond, HeartbeatTimeout: 200 * time.Millisecond, ReadStall: 2 * time.Second, WriteStall: 2 * time.Second, Cleanup: 2 * time.Second}
+	p := connect(t, env, context.Background(), b, b, true)
 	early := env.closedBeforeRevoke(p.sConn)
 	p.sConn.link.setBlackhole() // bytes vanish and neither end sees a close
 	waitDone(t, p.server.Done(), 2*time.Second, "server teardown on a missing heartbeat")
@@ -76,7 +110,7 @@ func TestChannelTeardownPreservesGrantOnlyForGraceReasonsAfterAdmission(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			env := newEnv(t, time.Minute)
 			b := quickBudgets()
-			p := connect(t, env, context.Background(), b, b)
+			p := connect(t, env, context.Background(), b, b, true)
 			p.server.teardown(tc.reason)
 			waitDone(t, p.server.Done(), 2*time.Second, "channel teardown")
 			if got := env.revoked(); got == tc.grace {
@@ -110,7 +144,7 @@ func TestTransportBeforeChannelAdmissionStillRevokes(t *testing.T) {
 func TestNextConnectionGenerationReusesSessionAndHardDeadline(t *testing.T) {
 	env := newEnv(t, time.Minute)
 	b := quickBudgets()
-	first := connect(t, env, context.Background(), b, b)
+	first := connect(t, env, context.Background(), b, b, true)
 	firstDeadline := first.srv.Dispatch().Deadline
 	first.server.teardown(ReasonTransport)
 	waitDone(t, first.server.Done(), 2*time.Second, "first generation teardown")
@@ -124,7 +158,7 @@ func TestNextConnectionGenerationReusesSessionAndHardDeadline(t *testing.T) {
 	}
 	cancel()
 
-	cfg := env.serverConfig(b)
+	cfg := env.serverConfig(b, true)
 	cfg.ConnectionGeneration = 2
 	second, err := NewServer(cfg)
 	if err != nil {
@@ -159,7 +193,7 @@ func TestNextConnectionGenerationReusesSessionAndHardDeadline(t *testing.T) {
 func TestNextConnectionGenerationStillRejectsAnotherClientKey(t *testing.T) {
 	env := newEnv(t, time.Minute)
 	b := quickBudgets()
-	first := connect(t, env, context.Background(), b, b)
+	first := connect(t, env, context.Background(), b, b, true)
 	first.server.teardown(ReasonTransport)
 	waitDone(t, first.server.Done(), 2*time.Second, "first generation teardown")
 	cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -168,7 +202,7 @@ func TestNextConnectionGenerationStillRejectsAnotherClientKey(t *testing.T) {
 		t.Fatalf("clean first generation work: %v", err)
 	}
 	cancel()
-	cfg := env.serverConfig(b)
+	cfg := env.serverConfig(b, true)
 	cfg.ConnectionGeneration = 2
 	second, err := NewServer(cfg)
 	if err != nil {
@@ -190,10 +224,10 @@ func TestNextConnectionGenerationStillRejectsAnotherClientKey(t *testing.T) {
 	}
 }
 
-func TestStalledPeerReaderBoundsWrite(t *testing.T) {
+func TestStalledPeerReaderBoundsWritePreservesGrantForReconnect(t *testing.T) {
 	env := newEnv(t, 30*time.Second)
 	b := Budgets{Handshake: 5 * time.Second, HeartbeatInterval: 20 * time.Millisecond, HeartbeatTimeout: time.Second, ReadStall: 2 * time.Second, WriteStall: 150 * time.Millisecond, Cleanup: 2 * time.Second}
-	p := connect(t, env, context.Background(), b, quickBudgets())
+	p := connect(t, env, context.Background(), b, quickBudgets(), true)
 	early := env.closedBeforeRevoke(p.sConn)
 	p.cConn.rd.setFrozen(true) // the relay stops delivering to the client
 	errs := make(chan error, 1)
@@ -217,6 +251,36 @@ func TestStalledPeerReaderBoundsWrite(t *testing.T) {
 	}
 	if !early.Load() {
 		t.Fatal("write-stall transport closed without preserving the grant")
+	}
+}
+
+func TestStalledPeerReaderBoundsWrite(t *testing.T) {
+	env := newEnv(t, 30*time.Second)
+	b := Budgets{Handshake: 5 * time.Second, HeartbeatInterval: 20 * time.Millisecond, HeartbeatTimeout: time.Second, ReadStall: 2 * time.Second, WriteStall: 150 * time.Millisecond, Cleanup: 2 * time.Second}
+	p := connect(t, env, context.Background(), b, quickBudgets())
+	early := env.closedBeforeRevoke(p.sConn)
+	p.cConn.rd.setFrozen(true) // the relay stops delivering to the client
+	errs := make(chan error, 1)
+	go func() {
+		_, err := p.server.Write(make([]byte, 256<<10))
+		errs <- err
+	}()
+	select {
+	case err := <-errs:
+		if reasonOf(err) != ReasonWriteStall {
+			t.Fatalf("write = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stalled write was not bounded")
+	}
+	if p.server.Reason() != ReasonWriteStall || !env.revoked() {
+		t.Fatalf("reason %v revoked %v", p.server.Reason(), env.revoked())
+	}
+	if err := p.server.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if early.Load() {
+		t.Fatal("transport closed before the grant was revoked")
 	}
 }
 
@@ -303,6 +367,14 @@ func TestContextCancelClosesChannel(t *testing.T) {
 	if err := p.server.Close(); err != nil || early.Load() {
 		t.Fatalf("close %v early %v", err, early.Load())
 	}
+}
+
+func TestRefusedHeartbeatClosesChannelDuringReconnectGrace(t *testing.T) {
+	env := newEnv(t, 30*time.Second)
+	b := quietBudgets()
+	b.HeartbeatInterval = 20 * time.Millisecond
+	p := rawAdmitted(t, env, b, false, true) // answers like a stock server: false
+	endsWith(t, env, p, ReasonHeartbeat)
 }
 
 func TestRefusedHeartbeatClosesChannel(t *testing.T) {

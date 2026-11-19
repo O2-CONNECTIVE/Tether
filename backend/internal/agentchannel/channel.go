@@ -186,12 +186,13 @@ func (e *Error) Unwrap() error { return e.Err }
 // for the conn close and every worker. The peer learns of it later, through
 // the closed conn or its own heartbeat or stall budget, never synchronously.
 type Channel struct {
-	raw       *guardedConn
-	budgets   Budgets
-	deadline  time.Time
-	handshake time.Time
-	binding   Binding
-	session   *agentexec.Session // server only; its canonical Authority is the only grant source
+	raw            *guardedConn
+	budgets        Budgets
+	deadline       time.Time
+	handshake      time.Time
+	binding        Binding
+	session        *agentexec.Session // server only; its canonical Authority is the only grant source
+	allowReconnect bool
 
 	revokeOnce sync.Once
 	revokeDone chan struct{}
@@ -319,7 +320,7 @@ func (c *Channel) revokeFirst() {
 // Reconnectable reports only an admitted channel ending for a transport
 // liveness reason while its canonical Session is still live.
 func (c *Channel) Reconnectable() bool {
-	if c == nil || c.session == nil || !c.raw.isAdmitted() {
+	if c == nil || c.session == nil || !c.allowReconnect || !c.raw.isAdmitted() {
 		return false
 	}
 	switch c.Reason() {

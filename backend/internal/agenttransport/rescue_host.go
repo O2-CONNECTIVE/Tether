@@ -49,7 +49,9 @@ type RescueClient struct {
 	active              bool
 	everAllowed         bool
 	resumeAttempt       bool
+	attempt             uint64
 	requested, answered bool
+	requestedOnce       bool
 	expired             bool
 	code                string
 	cancel              context.CancelFunc
@@ -166,11 +168,13 @@ func (c *RescueClient) openAttempt(ctx context.Context, purpose string, receptio
 	c.resumeAttempt = resuming
 	c.requested, c.answered, c.expired = false, false, false
 	c.stream = nil
+	c.attempt++
+	attempt := c.attempt
 	c.attemptDone = make(chan struct{})
 	c.mu.Unlock()
 	fail := func() (string, error) {
 		if resuming {
-			c.disconnectAttempt()
+			c.disconnectAttempt(attempt)
 		} else {
 			c.end()
 		}
@@ -272,8 +276,8 @@ func (c *RescueClient) openAttempt(ctx context.Context, purpose string, receptio
 			select {
 			case <-expires:
 				c.mu.Lock()
-				requested := c.requested
-				c.expired = !requested // serve passes on no request after this
+				requested := c.requestedOnce
+				c.expired = !requested // serve passes on no accepted request after this
 				c.mu.Unlock()
 				if !requested {
 					c.end()
@@ -340,11 +344,11 @@ func (c *RescueClient) openAttempt(ctx context.Context, purpose string, receptio
 	if off { // 受付 OFF came, or began, while the result was verified
 		return fail()
 	}
-	go c.serve()
+	go c.serve(attempt)
 	return m["code"], nil
 }
 
-func (c *RescueClient) serve() {
+func (c *RescueClient) serve(attempt uint64) {
 	c.mu.Lock()
 	if c.ended {
 		c.mu.Unlock()
@@ -356,7 +360,7 @@ func (c *RescueClient) serve() {
 
 	typ, msg, err := ws.Read(life)
 	if err != nil || typ != websocket.MessageText || len(msg) > MaxRegistrationMessage {
-		c.disconnectAttempt()
+		c.disconnectAttempt(attempt)
 		return
 	}
 	id, err := decodeRescueRequest(msg)
@@ -373,12 +377,14 @@ func (c *RescueClient) serve() {
 		return
 	}
 	stream := newStreamObserved(life, ws, link, DefaultBudgets().Cleanup, nil, nil, &c.wsWriteMu)
+	stream.Conn.(*msgConn).onEnd = func() { c.disconnectAttempt(attempt) }
 	c.mu.Lock()
 	if c.ended || c.expired {
 		c.mu.Unlock()
 		return
 	}
 	c.requested = true
+	c.requestedOnce = true
 	c.nonce = append([]byte(nil), id.Nonce...)
 	c.digest = digest
 	c.stream = stream
@@ -386,14 +392,13 @@ func (c *RescueClient) serve() {
 	c.mu.Unlock()
 
 	if err := stream.Conn.(*msgConn).fill(); err != nil {
-		c.disconnectAttempt()
 		return
 	}
 	c.mu.Lock()
 	answered := c.answered
 	c.mu.Unlock()
 	if !answered {
-		c.disconnectAttempt()
+		c.disconnectAttempt(attempt)
 	}
 }
 
@@ -442,12 +447,12 @@ func (c *RescueClient) end() {
 // disconnectAttempt ends one WSS while retaining K and the reception id after
 // an allowed channel or a resume attempt. A reception that never reached an
 // allowed channel remains one-shot and is ended on transport loss.
-func (c *RescueClient) disconnectAttempt() {
+func (c *RescueClient) disconnectAttempt(attempt uint64) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	if c.ended {
+	if c.ended || !c.active || c.attempt != attempt {
 		c.mu.Unlock()
 		return
 	}

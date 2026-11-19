@@ -86,6 +86,10 @@ type rescueReception struct {
 	// entered and gate, when set before the answer, hold Allow open as a slow
 	// write to the gateway would.
 	entered, gate chan struct{}
+	openEntered   chan struct{}
+	openGate      chan struct{}
+	openCanceled  chan error
+	acceptRead    chan struct{}
 }
 
 func newRescueReception() *rescueReception {
@@ -98,7 +102,18 @@ func freshRescueReception(seed byte, code string) *rescueReception {
 	return r
 }
 
-func (r *rescueReception) Open(context.Context) (string, error) {
+func (r *rescueReception) Open(ctx context.Context) (string, error) {
+	if r.openEntered != nil {
+		close(r.openEntered)
+		select {
+		case <-r.openGate:
+		case <-ctx.Done():
+			if r.openCanceled != nil {
+				r.openCanceled <- ctx.Err()
+			}
+			return "", ctx.Err()
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.opens++
@@ -139,7 +154,11 @@ func (r *rescueReception) Allow(d Dispatch) (net.Conn, error) {
 		<-r.gate
 	}
 	r.mu.Lock()
-	host, client := memPair()
+	rawHost, client := memPair()
+	var host net.Conn = rawHost
+	if r.acceptRead != nil {
+		host = &signalReadConn{Conn: host, started: r.acceptRead}
+	}
 	r.allows = append(r.allows, d)
 	r.client = client
 	onAllow := r.onAllow
@@ -148,6 +167,17 @@ func (r *rescueReception) Allow(d Dispatch) (net.Conn, error) {
 		onAllow(d, client)
 	}
 	return host, nil
+}
+
+type signalReadConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *signalReadConn) Read(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Read(p)
 }
 
 func (r *rescueReception) Close() error {
@@ -384,6 +414,10 @@ func waitShownCount(t *testing.T, helper *rescueHelper, want int) {
 }
 
 func newRescueFixture(t *testing.T, d time.Duration) *rescueFixture {
+	return newRescueFixtureWithTicker(t, d, false)
+}
+
+func newRescueFixtureWithTicker(t *testing.T, d time.Duration, realTicker bool) *rescueFixture {
 	t.Helper()
 	base := config(t)
 	budgets := base.Budgets
@@ -391,7 +425,11 @@ func newRescueFixture(t *testing.T, d time.Duration) *rescueFixture {
 	f := &rescueFixture{helper: &rescueHelper{}, rec: newRescueReception(), clocks: newRescueClocks(), events: make(chan RescueEvent, 16)}
 	f.factoryQueue = []rescueReceptionResult{{rec: f.rec}}
 	f.cfg = RescueConfig{Runtime: base.Runtime, Duration: d, CleanupTimeout: base.CleanupTimeout, Budgets: budgets, Helper: f.helper, ReceptionFactory: f.makeReception, OnStateChange: func(event RescueEvent) { f.events <- event }}
-	r, err := newRescue(f.cfg, &neverRuntime{}, f.clocks.clock())
+	clock := f.clocks.clock()
+	if realTicker {
+		clock.tick = nil
+	}
+	r, err := newRescue(f.cfg, &neverRuntime{}, clock)
 	if err != nil {
 		t.Fatalf("newRescue = %v", err)
 	}
@@ -430,6 +468,22 @@ func (f *rescueFixture) allow(t *testing.T, p RescuePrompt) Dispatch {
 		t.Fatalf("the reception was asked for %d allows, want 1", len(allows))
 	}
 	return allows[0]
+}
+
+func rescueInGrace(t *testing.T, duration time.Duration) (*rescueFixture, Dispatch, *Approved) {
+	t.Helper()
+	f := newRescueFixture(t, duration)
+	d := f.allow(t, f.prompt(t))
+	approved := f.r.approved
+	channel, err := openChannel(context.Background(), t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("generation 1 channel: %v", err)
+	}
+	if err := channel.Close(); err != nil {
+		t.Fatalf("close generation 1: %v", err)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	return f, d, approved
 }
 
 func (f *rescueFixture) waitDone(t *testing.T) {
@@ -1001,7 +1055,7 @@ func TestRescueGraceUsesLastValidFrameRatherThanDetectionTime(t *testing.T) {
 }
 
 func TestRescueGraceRechecksWallClockAfterSleepWithinOneSecond(t *testing.T) {
-	f := newRescueFixture(t, 4*time.Hour)
+	f := newRescueFixtureWithTicker(t, 4*time.Hour, true)
 	prompt := f.prompt(t)
 	d := f.allow(t, prompt)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1025,10 +1079,9 @@ func TestRescueGraceRechecksWallClockAfterSleepWithinOneSecond(t *testing.T) {
 	f.queueReception(next, nil)
 	f.clocks.advance(0, 6*time.Minute)
 	started := time.Now()
-	f.r.recheck()
 	opened := waitRescueEvent(t, f.events, RescueEventReceptionOpened)
-	if time.Since(started) > time.Second {
-		t.Fatalf("wall-clock expiry took %v after recheck", time.Since(started))
+	if time.Since(started) > 1250*time.Millisecond {
+		t.Fatalf("wall-clock expiry took %v without a direct recheck", time.Since(started))
 	}
 	if opened.Code != next.code || approved.issuer.Snapshot().HasAuthority {
 		t.Fatalf("wall-clock expiry code=%q old-grant-live=%v", opened.Code, approved.issuer.Snapshot().HasAuthority)
@@ -1090,6 +1143,266 @@ func TestRescueGraceExpiryOpensNewReceptionAndShowsOnlyOnItsRequest(t *testing.T
 	}
 	f.r.Stop()
 	f.waitDone(t)
+}
+
+func TestRescueReconnectionRechecksGraceBeforeAdmission(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	next := freshRescueReception(0x4e, "987654321098")
+	f.queueReception(next, nil)
+	offered := make(chan struct {
+		dispatch Dispatch
+		conn     net.Conn
+	}, 1)
+	identity := verifiedFor(t, rescueC.PublicKey(), rescueK)
+	f.rec.onResume = func() { f.rec.requests <- identity }
+	f.rec.onAllow = func(dispatch Dispatch, conn net.Conn) {
+		if dispatch.Binding.ConnectionGeneration == 2 {
+			f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+			offered <- struct {
+				dispatch Dispatch
+				conn     net.Conn
+			}{dispatch: dispatch, conn: conn}
+		}
+	}
+	prompt := f.prompt(t)
+	d := f.allow(t, prompt)
+	approved := f.r.approved
+	first, err := openChannel(context.Background(), t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("generation 1 channel: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close generation 1: %v", err)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	var offer struct {
+		dispatch Dispatch
+		conn     net.Conn
+	}
+	select {
+	case offer = <-offered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("resume did not reach the generation 2 reception handoff")
+	}
+	if offer.dispatch.Binding.ConnectionGeneration != 2 {
+		t.Fatalf("resumed generation = %d, want 2", offer.dispatch.Binding.ConnectionGeneration)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		f.r.mu.Lock()
+		handoff := f.r.resumeHandoff
+		f.r.mu.Unlock()
+		if handoff {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	f.r.mu.Lock()
+	handoff := f.r.resumeHandoff
+	f.r.mu.Unlock()
+	if !handoff {
+		t.Fatal("resume handoff was not recorded")
+	}
+	opened := make(chan error, 1)
+	go func() {
+		hostKey, parseErr := ssh.ParsePublicKey(offer.dispatch.HostKey)
+		if parseErr != nil {
+			opened <- parseErr
+			return
+		}
+		channel, openErr := agentchannel.Open(context.Background(), agentchannel.ClientConfig{
+			Binding: offer.dispatch.Binding, HostKey: hostKey, Signer: rescueC,
+			Deadline: offer.dispatch.Deadline, Budgets: f.cfg.Budgets,
+		}, offer.conn)
+		if channel != nil {
+			_ = channel.Close()
+		}
+		opened <- openErr
+	}()
+	var openedReception RescueEvent
+	deadlineTimer := time.NewTimer(3 * time.Second)
+	defer deadlineTimer.Stop()
+	for {
+		select {
+		case event := <-f.events:
+			if event.Kind == RescueEventReceptionOpened {
+				openedReception = event
+				goto receptionOpened
+			}
+		case <-f.r.Done():
+			t.Fatal("grace-only expiry ended Rescue instead of opening a new reception")
+		case <-deadlineTimer.C:
+			t.Fatal("grace-only expiry did not open a new reception")
+		}
+	}
+
+receptionOpened:
+	if openedReception.Code != next.code || f.factoryCallCount() != 2 {
+		t.Fatalf("grace-only expiry opened code=%q factory calls=%d", openedReception.Code, f.factoryCallCount())
+	}
+	if approved.issuer.Snapshot().HasAuthority {
+		t.Fatal("expired grace reopened the previous grant")
+	}
+	f.r.mu.Lock()
+	state := f.r.state
+	f.r.mu.Unlock()
+	if state != rescueAccepting {
+		t.Fatalf("state after grace-only expiry = %v, want accepting", state)
+	}
+	f.requireLive(t)
+	select {
+	case <-opened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stale generation 2 SSH attempt did not finish")
+	}
+}
+
+func TestOldAfterServeCannotEndReplacementReception(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	d := f.allow(t, f.prompt(t))
+	approved := f.r.approved
+	first, err := openChannel(context.Background(), t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("generation 1 channel: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close generation 1: %v", err)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	next := freshRescueReception(0x4e, "987654321098")
+	next.openEntered, next.openGate = make(chan struct{}), make(chan struct{})
+	f.queueReception(next, nil)
+	f.r.step.Lock()
+	afterDone := make(chan struct{})
+	go func() {
+		f.r.afterServe(approved, 1)
+		close(afterDone)
+	}()
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	f.r.expireGrace()
+	select {
+	case <-next.openEntered:
+	case <-time.After(3 * time.Second):
+		f.r.step.Unlock()
+		t.Fatal("replacement reception did not begin opening")
+	}
+	f.r.step.Unlock()
+	close(next.openGate)
+	select {
+	case <-afterDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("old afterServe did not finish")
+	}
+	opened := waitRescueEvent(t, f.events, RescueEventReceptionOpened)
+	if opened.Code != next.code {
+		t.Fatalf("replacement code = %q, want %q", opened.Code, next.code)
+	}
+	f.requireLive(t)
+	f.r.mu.Lock()
+	state, current := f.r.state, f.r.reception
+	f.r.mu.Unlock()
+	if state != rescueAccepting || current != next {
+		t.Fatalf("old afterServe changed replacement: state=%v current=%p", state, current)
+	}
+}
+
+func TestStopAndGraceTickDoNotStartReception(t *testing.T) {
+	f, _, _ := rescueInGrace(t, 4*time.Hour)
+	f.queueReception(freshRescueReception(0x4e, "987654321098"), nil)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	f.rec.onClose = func() { once.Do(func() { close(entered); <-release }) }
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	rechecked := make(chan struct{})
+	go func() {
+		f.r.recheck()
+		close(rechecked)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("grace tick did not begin closing the old reception")
+	}
+	f.r.Stop()
+	close(release)
+	select {
+	case <-rechecked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("grace tick did not finish after reception close")
+	}
+	f.waitDone(t)
+	deadline := time.Now().Add(2 * time.Second)
+	for f.factoryCallCount() == 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if calls := f.factoryCallCount(); calls != 1 {
+		t.Fatalf("factory calls after Stop raced with grace tick = %d, want 1", calls)
+	}
+}
+
+func TestDeadlineDuringGraceCleanupDoesNotStartReception(t *testing.T) {
+	f, _, approved := rescueInGrace(t, 4*time.Hour)
+	next := freshRescueReception(0x4e, "987654321098")
+	f.queueReception(next, nil)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	f.rec.onClose = func() { once.Do(func() { close(entered); <-release }) }
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	rechecked := make(chan struct{})
+	go func() {
+		f.r.recheck()
+		close(rechecked)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("grace expiry did not start closing the old reception")
+	}
+	f.clocks.advance(4*time.Hour, 4*time.Hour)
+	close(release)
+	select {
+	case <-rechecked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("grace cleanup did not finish")
+	}
+	f.waitDone(t)
+	if calls := f.factoryCallCount(); calls != 1 {
+		t.Fatalf("factory calls after the grant deadline during cleanup = %d, want 1", calls)
+	}
+	if next.opens != 0 || approved.issuer.Snapshot().HasAuthority {
+		t.Fatalf("expired grant reopened reception %d times or remained live", next.opens)
+	}
+}
+
+func TestStopCancelsInProgressReceptionOpen(t *testing.T) {
+	f, _, _ := rescueInGrace(t, 4*time.Hour)
+	next := freshRescueReception(0x4e, "987654321098")
+	next.openEntered, next.openGate, next.openCanceled = make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	f.queueReception(next, nil)
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	f.r.recheck()
+	select {
+	case <-next.openEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement reception did not reach Open")
+	}
+	f.r.step.Lock()
+	f.r.Stop()
+	select {
+	case err := <-next.openCanceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Open cancellation = %v, want context.Canceled", err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		f.r.step.Unlock()
+		f.waitDone(t)
+		t.Fatal("Stop did not cancel the in-progress reception Open before end acquired step")
+	}
+	f.r.step.Unlock()
+	f.waitDone(t)
+	if next.opens != 0 {
+		t.Fatalf("canceled reception Open completed %d times", next.opens)
+	}
 }
 
 func TestRescueResumeNotifiesWithoutShowingNativePrompt(t *testing.T) {
@@ -1355,7 +1668,13 @@ func TestRescueEndRevokesGrant(t *testing.T) {
 
 func TestRescueEndsReceptionBeforeClosingApprovedChannel(t *testing.T) {
 	f := newRescueFixture(t, 2*time.Hour)
+	f.rec.acceptRead = make(chan struct{})
 	f.allow(t, f.prompt(t))
+	select {
+	case <-f.rec.acceptRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the approved channel did not enter Accept before Stop")
+	}
 	a := f.r.approved
 	cleanupReporter, ok := any(f.r).(interface{ CleanupResult() (error, bool) })
 	if !ok {

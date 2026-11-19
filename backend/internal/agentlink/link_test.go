@@ -479,6 +479,39 @@ func TestOwnedChannelLossPreservesGrantAndCleansUpForReconnect(t *testing.T) {
 	}
 }
 
+// The default path revokes the grant before stopping the shell, then joins
+// and confirms cleanup, MCP stops, and nothing reconnects or restarts.
+func TestOwnedChannelLossRevokesThenCleansUp(t *testing.T) {
+	p := newPath(t, 30*time.Second, nil)
+	st, _ := p.start("req-1", "sleep 60\n")
+	id := commandID(t, st)
+	proc := p.proc()
+	observed := p.revokedBeforeTerminate(proc)
+	p.hostConn.link.setBlackhole()
+	if err := p.waitHost(); errors.Is(err, agentchannel.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown) || err == nil {
+		t.Fatalf("host Serve after channel loss = %v", err)
+	}
+	if state := <-observed; state != supervisor.Revoked {
+		t.Fatalf("shell stopped while the grant was %s", state)
+	}
+	final := p.ownerStatus(id)
+	if final.Stop != agentexec.StopTransportLost || final.Cleanup != agentexec.CleanupConfirmed {
+		t.Fatalf("owner status = %+v", final)
+	}
+	select {
+	case err := <-p.mcpDone:
+		p.mcpDone <- err
+		if !errors.Is(err, mcpadapter.ErrChannelClosed) {
+			t.Fatalf("MCP Serve = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("MCP kept serving a lost channel")
+	}
+	if p.issuer.Snapshot().HasAuthority || p.runtime.startCount() != 1 || !p.hostConn.isClosed() {
+		t.Fatal("lost channel left the grant live, restarted the shell or kept the conn")
+	}
+}
+
 // Scenario 4: a short hard deadline with no further requests ends the grant
 // with StopHardDeadline, revokes before stopping the shell and is joined.
 func TestShortHardDeadlineWithoutRequests(t *testing.T) {

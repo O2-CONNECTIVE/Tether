@@ -72,7 +72,7 @@ type Pending struct {
 	fixedStart     *agentexec.FixedStartConstraint
 	clock          func() time.Time
 	onActivity     func()
-	onConnected    func()
+	onConnected    func(uint64, func() error) bool
 	allowReconnect bool
 }
 

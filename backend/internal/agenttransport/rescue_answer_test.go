@@ -129,6 +129,22 @@ func openAnswer(t *testing.T, reg *answerRegistry) (*RescueClient, []byte, ed255
 	return c, <-reg.key, k
 }
 
+func openAnswerWithCodeExpiry(t *testing.T, reg *answerRegistry) (*RescueClient, []byte, chan time.Time) {
+	t.Helper()
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, newMemTransport(newRescueHandler(t, reg)))
+	expires := make(chan time.Time)
+	c.after = func(time.Duration) <-chan time.Time { return expires }
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(reg.end)
+	k := <-reg.key
+	if opened := <-reg.opened; opened.Purpose != agentgateway.RescuePurposeNew {
+		t.Fatalf("initial purpose = %q", opened.Purpose)
+	}
+	return c, k, expires
+}
+
 // identityValues are the values one identity proof binds.
 type identityValues struct {
 	endpoint                          string
@@ -450,6 +466,93 @@ func TestRescueRequestOutlivesTheCodeExpiry(t *testing.T) {
 	reg.answer(t)
 }
 
+func TestAcceptedRescueRequestOutlivesCodeExpiryDuringDisconnect(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	c, kWire, expires := openAnswerWithCodeExpiry(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	hostConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	first := reg.answer(t)
+	if err := first.conn.Close(); err != nil {
+		t.Fatalf("close stream before SSH bytes: %v", err)
+	}
+	if _, err := hostConn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("host stream read after transport close succeeded")
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the channel transport loss")
+	}
+	expires <- time.Now()
+	select {
+	case <-c.Done():
+		t.Fatal("the first accepted request did not outlive code expiry while disconnected")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := c.HostKey().Sign(rand.Reader, []byte("still live")); err != nil {
+		t.Fatalf("K was discarded during the reconnect grace: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.Resume(ctx); err != nil {
+		t.Fatalf("Resume after code expiry: %v", err)
+	}
+}
+
+func TestAcceptedRescueRequestOutlivesCodeExpiryBeforeResumeIdentity(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	c, kWire, expires := openAnswerWithCodeExpiry(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	hostConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	first := reg.answer(t)
+	if err := first.conn.Close(); err != nil {
+		t.Fatalf("close stream before SSH bytes: %v", err)
+	}
+	if _, err := hostConn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("host stream read after transport close succeeded")
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the channel transport loss")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.Resume(ctx); err != nil {
+		t.Fatalf("Resume before the next identity request: %v", err)
+	}
+	if attempt := <-reg.opened; attempt.Purpose != agentgateway.RescuePurposeResume {
+		t.Fatalf("resume purpose = %q", attempt.Purpose)
+	}
+	expires <- time.Now()
+	select {
+	case <-c.Done():
+		t.Fatal("the first accepted request did not outlive code expiry before the resumed identity")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := c.HostKey().Sign(rand.Reader, []byte("still live")); err != nil {
+		t.Fatalf("K was discarded before the resumed identity: %v", err)
+	}
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow after resume: %v", err)
+	}
+	reg.answer(t)
+}
+
 // The grant's host key is K itself, so the channel's host key dies with the
 // reception.
 func TestRescueHostKeyIsKUntilTheReceptionEnds(t *testing.T) {
@@ -575,6 +678,53 @@ func TestRescueClientKeepsTheReceptionKeyAfterChannelTransportLoss(t *testing.T)
 		t.Fatal("resumed answer did not use the same reception and K")
 	}
 	_ = secondConn.Close()
+}
+
+func TestRescueClientResumesWhenStreamEndsAfterInitialSSHData(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	c, kWire, _ := openAnswer(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	hostConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	first := reg.answer(t)
+	initial := []byte("initial SSH transport bytes")
+	if _, err := first.conn.Write(initial); err != nil {
+		t.Fatalf("write initial SSH bytes: %v", err)
+	}
+	got := make([]byte, len(initial))
+	if _, err := io.ReadFull(hostConn, got); err != nil || !bytes.Equal(got, initial) {
+		t.Fatalf("initial SSH bytes = %q, %v", got, err)
+	}
+	if err := first.conn.Close(); err != nil {
+		t.Fatalf("close stream after initial SSH bytes: %v", err)
+	}
+	if _, err := hostConn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("host stream read after transport close succeeded")
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the channel transport loss")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.Resume(ctx); err != nil {
+		t.Fatalf("Resume after the established stream ended: %v", err)
+	}
+	if got := <-reg.key; !bytes.Equal(got, kWire) {
+		t.Fatal("resume proof used a different K")
+	}
+	initialOpen, resumedOpen := <-reg.opened, <-reg.opened
+	if initialOpen.Purpose != agentgateway.RescuePurposeNew ||
+		resumedOpen.Purpose != agentgateway.RescuePurposeResume ||
+		!bytes.Equal(resumedOpen.Reception, answerReception) || !bytes.Equal(resumedOpen.Key, kWire) {
+		t.Fatalf("open attempts = %q/%q, resumed reception/key = %x/%x", initialOpen.Purpose, resumedOpen.Purpose, resumedOpen.Reception, resumedOpen.Key)
+	}
 }
 
 func TestRescueClientRefusesResumeAfterReceptionClose(t *testing.T) {

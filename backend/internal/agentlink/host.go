@@ -32,7 +32,7 @@ type HostConfig struct {
 	ConnectionGeneration uint64
 	AllowReconnect       bool
 	OnActivity           func()
-	OnConnected          func()
+	OnConnected          func(uint64, func() error) bool
 }
 
 // Host serves one granted Session over one supplied connection generation.
@@ -53,7 +53,7 @@ type Host struct {
 	generation           uint64
 	allowReconnect       bool
 	onActivity           func()
-	onConnected          func()
+	onConnected          func(uint64, func() error) bool
 }
 
 // NewHost takes the Session's single transport claim through
@@ -69,7 +69,7 @@ func NewHost(cfg HostConfig) (*Host, error) {
 	}
 	server, err := agentchannel.NewServer(agentchannel.ServerConfig{
 		Session: cfg.Session, AllowedKeys: cfg.AllowedKeys, HostKey: cfg.HostKey, Budgets: cfg.Budgets,
-		ConnectionGeneration: generation, OnActivity: cfg.OnActivity,
+		ConnectionGeneration: generation, AllowReconnect: cfg.AllowReconnect, OnActivity: cfg.OnActivity,
 	})
 	if err != nil {
 		return nil, errors.Join(ErrConfig, err)
@@ -126,12 +126,17 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 	if err != nil {
 		return h.finish(ch, errors.Join(ErrConfig, err))
 	}
-	if err := h.session.ResumeTransport(h.generation); err != nil {
+	resumeTransport := func() error { return h.session.ResumeTransport(h.generation) }
+	if h.generation > 1 && h.onConnected != nil {
+		if !h.onConnected(h.generation, resumeTransport) {
+			return h.finish(ch, agentchannel.ErrRejected)
+		}
+	} else if err := resumeTransport(); err != nil {
 		return h.finish(ch, err)
 	}
 	wire, err := agentwire.NewServer(agentwire.ServerConfig{
 		Session: h.session, Peer: peer, ApprovedKeys: h.channel.ApprovedKeys(), Liveness: ch.Done(),
-		ConnectionGeneration: h.generation, OnActivity: h.onActivity,
+		ConnectionGeneration: h.generation, AllowReconnect: h.allowReconnect, OnActivity: h.onActivity,
 	})
 	if err != nil {
 		return h.finish(ch, errors.Join(ErrConfig, err))
@@ -139,9 +144,6 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 	h.mu.Lock()
 	h.authenticated = !h.statusClosing
 	h.mu.Unlock()
-	if h.generation > 1 && h.onConnected != nil {
-		h.onConnected()
-	}
 	// Serve ends ch; finish then confirms the same channel and Session cleanup.
 	return h.finish(ch, errors.Join(agentwire.ErrPeerLost, wire.Serve(ctx, ch)))
 }
@@ -151,7 +153,8 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 func (h *Host) finish(ch *agentchannel.Channel, served error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), h.budget.Cleanup)
 	defer cancel()
-	reconnectable := h.allowReconnect && ch != nil && ch.Reconnectable()
+	wireEndedFatally := errors.Is(served, agentwire.ErrProtocol) || errors.Is(served, context.Canceled)
+	reconnectable := h.allowReconnect && !wireEndedFatally && ch != nil && ch.Reconnectable()
 	var cleanupErr error
 	if reconnectable {
 		cleanupErr = ch.Close()

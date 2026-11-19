@@ -166,38 +166,46 @@ type Rescue struct {
 	// step serializes the transitions that call the helper or the reception
 	// (Show, the grant's issuance and hand-over) with the end, so the end
 	// withdraws only a shown prompt and revokes every issued grant before Done.
-	step            sync.Mutex
-	mu              sync.Mutex
-	state           rescueState
-	cfg             RescueConfig
-	runtime         agentexec.ProfiledRuntime
-	helper          RescueHelper
-	reception       RescueReception
-	clock           rescueClock
-	prompt          RescuePrompt
-	client          ssh.PublicKey
-	shownWall       time.Time
-	shownMono       time.Duration
-	approvedWall    time.Time
-	approvedMono    time.Duration
-	lastFrameWall   time.Time
-	lastFrameMono   time.Duration
-	graceWall       time.Time
-	graceMono       time.Duration
-	lastHostKey     []byte
-	resumeRunning   bool
-	resumeHandoff   bool
-	reopenRunning   bool
-	approved        *Approved
-	cleanupErr      error
-	cleanupObserved bool
-	life            context.Context
-	cancel          context.CancelFunc
-	done            chan struct{}
-	stop            chan struct{}
-	wake            chan struct{}
-	stopOnce        sync.Once
-	ticker          *time.Ticker
+	step             sync.Mutex
+	mu               sync.Mutex
+	state            rescueState
+	cfg              RescueConfig
+	runtime          agentexec.ProfiledRuntime
+	helper           RescueHelper
+	reception        RescueReception
+	clock            rescueClock
+	prompt           RescuePrompt
+	client           ssh.PublicKey
+	shownWall        time.Time
+	shownMono        time.Duration
+	approvedWall     time.Time
+	approvedMono     time.Duration
+	lastFrameWall    time.Time
+	lastFrameMono    time.Duration
+	graceWall        time.Time
+	graceMono        time.Duration
+	lastHostKey      []byte
+	resumeRunning    bool
+	resumeHandoff    bool
+	resumeReception  RescueReception
+	resumeApproved   *Approved
+	resumeGeneration uint64
+	serveGeneration  uint64
+	reopenRunning    bool
+	reopenCancel     context.CancelFunc
+	reopenSequence   uint64
+	reopenActive     uint64
+	stopRequested    bool
+	approved         *Approved
+	cleanupErr       error
+	cleanupObserved  bool
+	life             context.Context
+	cancel           context.CancelFunc
+	done             chan struct{}
+	stop             chan struct{}
+	wake             chan struct{}
+	stopOnce         sync.Once
+	ticker           *time.Ticker
 }
 
 // NewRescue validates the configuration and the local Mac runtime in 受付中.
@@ -244,7 +252,7 @@ func newRescue(cfg RescueConfig, runtime agentexec.ProfiledRuntime, clock rescue
 	}
 	life, cancel := context.WithCancel(context.Background())
 	r := &Rescue{cfg: cfg, runtime: runtime, helper: cfg.Helper, clock: clock, life: life, cancel: cancel, done: make(chan struct{}), stop: make(chan struct{}), wake: make(chan struct{}, 1), ticker: ticker}
-	reception, code, hostKey, err := r.openReception(nil)
+	reception, code, hostKey, err := r.openReception(life, nil)
 	if err != nil {
 		cancel()
 		if ticker != nil {
@@ -270,13 +278,20 @@ func validRescueCode(code string) bool {
 	return true
 }
 
-func (r *Rescue) openReception(previousKey []byte) (RescueReception, string, []byte, error) {
+func (r *Rescue) openReception(parent context.Context, previousKey []byte) (RescueReception, string, []byte, error) {
+	if parent == nil || parent.Err() != nil {
+		return nil, "", nil, context.Canceled
+	}
 	reception, err := r.cfg.ReceptionFactory()
 	if err != nil {
 		return nil, "", nil, err
 	}
 	if reception == nil {
 		return nil, "", nil, ErrConfig
+	}
+	if err := parent.Err(); err != nil {
+		_ = reception.Close()
+		return nil, "", nil, err
 	}
 	hostKey := reception.HostKey()
 	if hostKey == nil || hostKey.PublicKey() == nil {
@@ -290,7 +305,7 @@ func (r *Rescue) openReception(previousKey []byte) (RescueReception, string, []b
 		_ = reception.Close()
 		return nil, "", nil, ErrConfig
 	}
-	ctx, cancel := context.WithTimeout(r.life, agentchannel.MaxHandshake)
+	ctx, cancel := context.WithTimeout(parent, agentchannel.MaxHandshake)
 	defer cancel()
 	code, err := reception.Open(ctx)
 	if err != nil || !validRescueCode(code) {
@@ -298,6 +313,10 @@ func (r *Rescue) openReception(previousKey []byte) (RescueReception, string, []b
 		if err == nil {
 			err = ErrConfig
 		}
+		return nil, "", nil, err
+	}
+	if err := parent.Err(); err != nil {
+		_ = reception.Close()
 		return nil, "", nil, err
 	}
 	return reception, code, append([]byte(nil), public.Marshal()...), nil
@@ -441,10 +460,13 @@ func (r *Rescue) resumeChannel(reception RescueReception, approved *Approved) {
 	r.mu.Lock()
 	if r.state == rescueGrace && r.reception == reception {
 		r.resumeHandoff = true
+		r.resumeReception = reception
+		r.resumeApproved = approved
+		r.resumeGeneration = dispatch.Binding.ConnectionGeneration
 	}
 	r.mu.Unlock()
 	r.step.Unlock()
-	go r.serveApproved(approved, conn)
+	go r.serveApproved(approved, dispatch.Binding.ConnectionGeneration, conn)
 }
 
 // Answer accepts reply only from the helper this Rescue was built with, for the
@@ -482,8 +504,9 @@ func (r *Rescue) Answer(from RescueHelper, reply RescueReply) error {
 	r.mu.Lock()
 	r.state, r.approved = rescueSession, a
 	r.cleanupErr, r.cleanupObserved = nil, false
+	r.serveGeneration = 1
 	r.mu.Unlock()
-	go r.serveApproved(a, conn)
+	go r.serveApproved(a, 1, conn)
 	return nil
 }
 
@@ -504,16 +527,16 @@ func (r *Rescue) graceExpired(wall time.Time, mono time.Duration) bool {
 	return mono-r.graceMono >= RescueGracePeriod || !wall.Before(r.graceWall.Add(RescueGracePeriod)) || wall.Before(r.graceWall)
 }
 
-func (r *Rescue) serveApproved(a *Approved, conn net.Conn) {
+func (r *Rescue) serveApproved(a *Approved, generation uint64, conn net.Conn) {
 	_ = a.Serve(r.life, conn)
-	r.afterServe(a)
+	r.afterServe(a, generation)
 }
 
-func (r *Rescue) afterServe(a *Approved) {
+func (r *Rescue) afterServe(a *Approved, generation uint64) {
 	r.step.Lock()
 	defer r.step.Unlock()
 	r.mu.Lock()
-	if r.state == rescueEnded || r.state == rescueNeedsCleanup {
+	if r.state == rescueEnded || r.state == rescueNeedsCleanup || r.approved != a || r.serveGeneration != generation {
 		r.mu.Unlock()
 		return
 	}
@@ -534,24 +557,45 @@ func (r *Rescue) afterServe(a *Approved) {
 	r.end(false, false, false)
 }
 
-func (r *Rescue) markReconnected() {
+func (r *Rescue) markReconnected(generation uint64, openAdmission func() error) bool {
 	r.step.Lock()
 	defer r.step.Unlock()
 	r.mu.Lock()
-	if r.state != rescueGrace {
+	if r.state != rescueGrace || !r.resumeHandoff || r.approved == nil || r.approved != r.resumeApproved || r.reception == nil || r.reception != r.resumeReception || generation != r.resumeGeneration || r.stopRequested {
 		r.mu.Unlock()
-		return
+		return false
 	}
 	wall, mono := r.clock.wall(), r.clock.mono()
-	if r.expired(wall, mono) || r.graceExpired(wall, mono) {
+	if r.expired(wall, mono) {
 		r.mu.Unlock()
 		r.end(false, false, false)
-		return
+		return false
 	}
-	r.state, r.resumeHandoff = rescueSession, false
+	if r.graceExpired(wall, mono) {
+		r.mu.Unlock()
+		r.expireGrace()
+		return false
+	}
+	select {
+	case <-r.reception.Done():
+		r.mu.Unlock()
+		return false
+	default:
+	}
+	if openAdmission == nil {
+		r.mu.Unlock()
+		return false
+	}
+	if err := openAdmission(); err != nil {
+		r.mu.Unlock()
+		r.end(false, false, false)
+		return false
+	}
+	r.state, r.resumeHandoff, r.serveGeneration = rescueSession, false, generation
 	r.lastFrameWall, r.lastFrameMono = wall, mono
 	r.mu.Unlock()
 	r.emit(RescueEvent{Kind: RescueEventReconnected})
+	return true
 }
 
 func (r *Rescue) startResume() {
@@ -635,7 +679,13 @@ func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, n
 // Stop is a host-side end: the stop operation, 受付 OFF, app exit, logout or restart.
 // It does not wait.
 func (r *Rescue) Stop() {
+	r.mu.Lock()
+	r.stopRequested = true
 	r.stopOnce.Do(func() { close(r.stop) })
+	if r.reopenCancel != nil {
+		r.reopenCancel()
+	}
+	r.mu.Unlock()
 }
 
 // Done closes after the end: the grant revoked, its cleanup run within
@@ -739,8 +789,15 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	}
 	confirming, id, a := r.state == rescueConfirming, r.prompt.RequestID, r.approved
 	reception := r.reception
+	reopenCancel := r.reopenCancel
+	r.reopenCancel = nil
+	r.reopenRunning = false
+	r.reopenActive = 0
 	r.state = rescueEnded
 	r.mu.Unlock()
+	if reopenCancel != nil {
+		reopenCancel()
+	}
 	if r.ticker != nil {
 		r.ticker.Stop()
 	}
@@ -794,6 +851,8 @@ func (r *Rescue) expireGrace() {
 	r.reception = nil
 	r.state = rescueReopening
 	r.resumeRunning, r.resumeHandoff = false, false
+	r.resumeReception, r.resumeApproved = nil, nil
+	r.resumeGeneration = 0
 	r.mu.Unlock()
 	r.emit(RescueEvent{Kind: RescueEventNewReception})
 	if reception != nil {
@@ -835,41 +894,64 @@ func (r *Rescue) retryReceptionLocked() {
 		r.mu.Unlock()
 		return
 	}
+	wall, mono := r.clock.wall(), r.clock.mono()
+	if r.stopRequested || r.expired(wall, mono) {
+		r.mu.Unlock()
+		r.end(false, false, false)
+		return
+	}
 	previousKey := append([]byte(nil), r.lastHostKey...)
 	r.reopenRunning = true
+	ctx, cancel := context.WithCancel(r.life)
+	r.reopenSequence++
+	sequence := r.reopenSequence
+	r.reopenActive = sequence
+	r.reopenCancel = cancel
 	r.mu.Unlock()
-	r.openReceptionLocked(previousKey)
+	r.openReceptionLocked(previousKey, ctx, cancel, sequence)
 }
 
-func (r *Rescue) openReceptionLocked(previousKey []byte) {
+func (r *Rescue) openReceptionLocked(previousKey []byte, ctx context.Context, cancel context.CancelFunc, sequence uint64) {
 	go func() {
-		reception, code, hostKey, err := r.openReception(previousKey)
+		reception, code, hostKey, err := r.openReception(ctx, previousKey)
 		r.step.Lock()
 		defer r.step.Unlock()
 		r.mu.Lock()
-		if r.state != rescueReopening {
+		if r.state != rescueReopening || r.reopenActive != sequence {
 			r.mu.Unlock()
+			cancel()
 			if reception != nil {
 				_ = reception.Close()
 			}
 			return
 		}
-		if err != nil {
+		wall, mono := r.clock.wall(), r.clock.mono()
+		if r.stopRequested || r.expired(wall, mono) {
 			r.reopenRunning = false
+			r.reopenCancel = nil
+			r.reopenActive = 0
 			r.mu.Unlock()
+			cancel()
+			if reception != nil {
+				_ = reception.Close()
+			}
+			r.end(false, false, false)
 			return
 		}
-		wall, mono := r.clock.wall(), r.clock.mono()
-		if r.expired(wall, mono) {
+		if err != nil {
 			r.reopenRunning = false
+			r.reopenCancel = nil
+			r.reopenActive = 0
 			r.mu.Unlock()
-			_ = reception.Close()
-			r.end(false, false, false)
+			cancel()
 			return
 		}
 		r.reception, r.lastHostKey, r.state = reception, hostKey, rescueAccepting
 		r.reopenRunning = false
+		r.reopenCancel = nil
+		r.reopenActive = 0
 		r.mu.Unlock()
+		cancel()
 		r.signal()
 		r.emit(RescueEvent{Kind: RescueEventReceptionOpened, Code: code})
 	}()
