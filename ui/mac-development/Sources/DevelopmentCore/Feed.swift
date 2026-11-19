@@ -5,6 +5,8 @@ public struct Observation {
     public let sourceMS: UInt64
     public let standby, registration, work, cleanup: String
     public let canOn, canOff: Bool
+    public let standbyUntil: UInt64? // owner wall-clock end of standby, Unix epoch ms
+    public let standbyEndingSoon, standbyExpired: Bool
 }
 public struct Feed {
     public private(set) var observation: Observation?
@@ -21,7 +23,11 @@ public struct Feed {
     private var lastSource: UInt64 = 0
     private var nextID: UInt64 = 1
     private var awaitingReceipt: (id: UInt64, intent: String)?
-    public private(set) var runAllowedUntil: UInt64?
+    // The owner's status does not carry the allowance, so this view keeps it:
+    // opened by an accepted allow-run receipt, closed by deny-run or when
+    // standby is no longer ON. It has no clock of its own.
+    private var allowGranted = false
+    public static let standbyHours = [2, 4, 8, 12, 24]
     public init() {}
     // Admission never resumes. Collection has a separate, monotonic trust gate.
     public mutating func fail(_ code: String = "protocol-invalid") {
@@ -45,21 +51,25 @@ public struct Feed {
     }
     public func can(_ intent: String, at now: UInt64) -> Bool {
         guard fresh(at: now), !closing, pending == nil, awaitingReceipt == nil, let o = observation else { return false }
-        if intent == "allow" { return o.standby == "on" }
+        if intent == "allow" || intent == "extend" { return o.standby == "on" }
         if intent == "deny" { return o.standby == "on" } // offered even if this view shows none
         return intent == "on" ? o.canOn : intent == "off" && o.canOff
     }
-    public func runAllowed(at now: UInt64) -> Bool {
-        guard !fault, !closed, let o = observation, o.standby == "on", let until = runAllowedUntil else { return false }
-        return now < until
+    public var runAllowed: Bool {
+        guard !fault, !closed, let o = observation else { return false }
+        return o.standby == "on" && allowGranted
     }
-    public mutating func command(_ intent: String, at now: UInt64) -> String? {
+    // ON and extend always carry a listed length; allow has no length and
+    // lasts until standby ends.
+    public mutating func command(_ intent: String, at now: UInt64, hours: Int? = nil) -> String? {
+        let timed = intent == "on" || intent == "extend"
+        if timed, !Self.standbyHours.contains(hours ?? 0) { return nil }
         guard can(intent, at: now), let o = observation, nextID < 9_007_199_254_740_991 else { return nil }
         let id = nextID; nextID += 1
         let receiptIntent = intent == "allow" ? "allow-run" : intent == "deny" ? "deny-run" : intent
         if intent == "on" || intent == "off" { pending = (id, intent) }
         awaitingReceipt = (id, receiptIntent)
-        return "\(intent) \(id) \(o.revision)\n"
+        return "\(intent) \(id) \(o.revision)\(timed ? " \(hours!)" : "")\n"
     }
     public mutating func ingest(_ data: Data, at now: UInt64) {
         guard !cleanupInvalid else { return }
@@ -127,7 +137,7 @@ public struct Feed {
     private func isPendingOnSnapshot(_ value: Value) -> Bool {
         do {
             guard let p = pending, p.intent == "on", awaitingReceipt == nil else { return false }
-            let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition"])
+            let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"])
             guard try s.number("protocolVersion") == 1,
                   try s.text("source", ["resident-owner"]) == "resident-owner",
                   try s.text("state", ["source-observation"]) == "source-observation",
@@ -146,18 +156,20 @@ public struct Feed {
     private mutating func receiveReceipt(_ value: Value, at now: UInt64) throws {
         let r = try Object(value, ["protocolVersion", "requestId", "intent", "disposition"])
         guard try r.number("protocolVersion") == 1, let p = awaitingReceipt,
-              try r.number("requestId") == p.id, try r.text("intent", ["on", "off", "allow-run", "deny-run"]) == p.intent else { throw Invalid.input }
+              try r.number("requestId") == p.id, try r.text("intent", ["on", "off", "extend", "allow-run", "deny-run"]) == p.intent else { throw Invalid.input }
         let disposition = try r.text("disposition", ["accepted", "rejected", "stale", "unknown"])
         if disposition == "unknown" { invalidateCleanup("owner-result-unknown"); throw Invalid.input }
         awaitingReceipt = nil
-        if disposition == "accepted", p.intent == "allow-run" { runAllowedUntil = now + 900_000 }
-        if disposition == "accepted", p.intent == "deny-run" { runAllowedUntil = nil }
         // Receipts never confirm ON/OFF. Only a correlated owner transition does.
         // A rejected/stale receipt confirms no dispatch and allows an explicit retry.
         if disposition == "rejected" || disposition == "stale" { pending = nil }
+        else if disposition == "accepted" {
+            if p.intent == "allow-run" { allowGranted = true }
+            else if p.intent == "deny-run" { allowGranted = false }
+        }
     }
     private mutating func receiveStatus(_ value: Value, source: UInt64) throws {
-        let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition"])
+        let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"])
         guard try s.number("protocolVersion") == 1,
               try s.text("source", ["resident-owner"]) == "resident-owner",
               try s.text("state", ["source-observation"]) == "source-observation",
@@ -169,17 +181,20 @@ public struct Feed {
                   !caller.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw Invalid.input }
         } else if case .null? = s.fields["caller"] {} else { throw Invalid.input }
         let standby = try s.text("standby", ["off", "on", "stopping", "unknown"])
-        if standby != "on" { runAllowedUntil = nil }
         let registration = try s.text("registration", ["disconnected", "connecting", "authenticated", "unknown"])
         let work = try s.text("work", ["idle", "preparing", "running", "stopping", "unknown"])
         let cleanup = try s.text("cleanup", ["confirmed", "pending", "unknown"])
         let canOn = try s.bool("canRequestOn"), canOff = try s.bool("canRequestOff")
+        let standbyUntil: UInt64?
+        if case .null? = s.fields["standbyUntil"] { standbyUntil = nil } else { standbyUntil = try s.number("standbyUntil") }
+        let standbyEndingSoon = try s.bool("standbyEndingSoon"), standbyExpired = try s.bool("standbyExpired")
         if cleanup == "unknown" || (standby == "unknown" && !isPendingOnSnapshot(value)) || work == "unknown" {
             invalidateCleanup("owner-cleanup-unknown"); throw Invalid.input
         }
         guard
               !canOn || (standby == "off" && work == "idle" && cleanup == "confirmed"),
-              !canOff || standby == "on", !(canOn && canOff) else { throw Invalid.input }
+              !canOff || standby == "on", !(canOn && canOff),
+              !standbyEndingSoon || standbyUntil != nil else { throw Invalid.input }
         if case .null? = s.fields["transition"] {} else {
             let t = try Object(s.fields["transition"]!, ["requestId", "intent", "outcome"])
             let id = try t.number("requestId"), intent = try t.text("intent", ["on", "off"])
@@ -194,6 +209,7 @@ public struct Feed {
                 } else if outcome == "rejected" { pending = nil }
             } else if outcome == "pending" { throw Invalid.input }
         }
-        observation = Observation(revision: revision, sourceMS: source, standby: standby, registration: registration, work: work, cleanup: cleanup, canOn: canOn, canOff: canOff)
+        observation = Observation(revision: revision, sourceMS: source, standby: standby, registration: registration, work: work, cleanup: cleanup, canOn: canOn, canOff: canOff, standbyUntil: standbyUntil, standbyEndingSoon: standbyEndingSoon, standbyExpired: standbyExpired)
+        if standby != "on" { allowGranted = false }
     }
 }

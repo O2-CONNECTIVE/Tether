@@ -27,7 +27,7 @@ CLI は開発と CI の検証用です。人向け SSH 互換は現在の完成�
 
 | 機能 | 操作名 | 実装 | 検証範囲と残り |
 | --- | --- | --- | --- |
-| コマンド実行 | `tether_run_command` | 作業 root 配下で任意の shell コマンドを1件実行する。`cwd` と `timeout_ms` を指定できる。Mac 側で時間制限付きの許可（最大15分）が ON のときだけ動く | 実機: 実行・状態照会・取消・待機 OFF・許可 OFF・実行記録の6項目。CI: 実 producer の4 lane。残り: 作業 root を GUI で選ぶ（[#359](https://github.com/O2-CONNECTIVE/Tether/issues/359)） |
+| コマンド実行 | `tether_run_command` | 作業 root 配下で任意の shell コマンドを1件実行する。`cwd` と `timeout_ms` を指定できる。Mac 側でコマンド実行の許可が ON のときだけ動く（許可は待機が OFF になるまで。待機は選んだ2〜24時間で OFF になる） | 実機: 実行・状態照会・取消・待機 OFF・許可 OFF・実行記録の6項目。CI: 実 producer の4 lane。残り: 作業 root を GUI で選ぶ（[#359](https://github.com/O2-CONNECTIVE/Tether/issues/359)） |
 | 固定作業 | `tether_fixed_start` | 決まった検証コマンドを1件実行する | 実機: BEGIN → 5秒待機 → END を1回。CI |
 | 状態と結果 | `tether_fixed_status` | 同じ実行の状態・終了コード・出力・回収の状態を返す | 実機、CI |
 | 取消 | `tether_fixed_cancel` | 実行中の作業を止める。取消の受付は停止の完了ではない | 実機、CI |

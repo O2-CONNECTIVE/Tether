@@ -1,6 +1,9 @@
 package residentmac
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 var ErrStandbyUnavailable = errors.New("residentmac: standby unavailable or stale intent")
 var ErrStandbyUnknown = errors.New("residentmac: original shutdown unconfirmed")
@@ -30,4 +33,11 @@ type StandbyObservation struct {
 	CanRequestOn        bool
 	CanRequestOff       bool
 	Transition          *StandbyTransition
+	// StandbyUntil is when standby ends, on the wall clock and by the stricter
+	// of its two clocks, zero once admission is sealed. StandbyEndingSoon is true from StandbyEndingNotice before that
+	// end. StandbyExpired records that the current or last cycle ended because
+	// standby ran out; the next ON clears it.
+	StandbyUntil      time.Time
+	StandbyEndingSoon bool
+	StandbyExpired    bool
 }

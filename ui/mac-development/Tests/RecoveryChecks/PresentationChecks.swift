@@ -2,9 +2,9 @@ import Foundation
 import DevelopmentCore
 @testable import DevelopmentProcess
 
-func recoveryStatus(standby: String = "off", work: String = "idle", cleanup: String = "confirmed", canOn: Bool = true) -> Data {
+func recoveryStatus(standby: String = "off", work: String = "idle", cleanup: String = "confirmed", canOn: Bool = true, until: String = "null", ending: Bool = false, expired: Bool = false) -> Data {
     Data("""
-    {"protocolVersion":1,"type":"status","sourceContinuousMs":5000,"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":1,"validForMs":3000,"standby":"\(standby)","registration":"disconnected","caller":null,"work":"\(work)","cleanup":"\(cleanup)","canRequestOn":\(canOn),"canRequestOff":false,"transition":null}}
+    {"protocolVersion":1,"type":"status","sourceContinuousMs":5000,"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":1,"validForMs":3000,"standby":"\(standby)","registration":"disconnected","caller":null,"work":"\(work)","cleanup":"\(cleanup)","canRequestOn":\(canOn),"canRequestOff":false,"transition":null,"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired)}}
     """.utf8)
 }
 
@@ -76,48 +76,52 @@ func checkPresentation() {
     }
     check(awaiting.closes == 1, "UI close button while awaiting proof asks the original owner to close once")
 
-    // The helper's own 15-minute expiry closes the original owner without a GUI
-    // request or fault. With all four proofs, quit and fresh preparation use the
-    // existing paths; nothing here relaxes the proof itself. The screen says why
-    // the host stopped and what to do next, without a protocol change.
-    func expiredOwner(launchedAt: UInt64 = 4_000, closeAt: UInt64 = 905_000, requested: Bool = false) -> Owner {
-        let owner = Owner("expired original"); owner.launched = true; owner.launchedAt = launchedAt
+    // A close the helper makes without any GUI request or fault, once all four
+    // proofs are present, uses the existing quit and fresh-preparation paths;
+    // nothing here relaxes the proof itself.
+    func closedOwner(requested: Bool = false) -> Owner {
+        let owner = Owner("closed original"); owner.launched = true; owner.launchedAt = 4_000
         owner.feed.ingest(recoveryStatus(), at: 5000)
         if requested { owner.close() }
-        owner.feed.ingest(terminal("confirmed", at: closeAt), at: closeAt)
+        owner.feed.ingest(terminal("confirmed", at: 905_000), at: 905_000)
         owner.reaped = true; owner.eof = true; owner.exitOK = true
         return owner
     }
-    let expired = expiredOwner()
-    var expiryOwners = 0
-    let expiry = RecoveryController(owner: expired) { expiryOwners += 1; return Owner("after expiry") }
-    let afterExpiry = expiry.presentation(at: 905_000)
-    check(!expired.feed.fault && afterExpiry.canPrepare && afterExpiry.quitTitle == "終了", "UI confirmed expiry offers preparation and plain quit")
-    check(afterExpiry.status == "15分の期限で停止しました" && afterExpiry.detail.contains("起動から15分") && afterExpiry.detail.contains("停止・回収を確認しました") && afterExpiry.detail.contains("「もう一度準備」"), "UI confirmed expiry names the 15-minute limit, the proof and the next action")
-    // Only an unrequested close received at least 15 minutes after this GUI
-    // started the helper is called expiry; viewing it later never changes that.
-    let early = RecoveryController(owner: expiredOwner(closeAt: 5_000)) { Owner("forbidden") }
-    check(early.presentation(at: 905_000).status == "停止・回収を確認しました", "UI early unrequested close is not called expiry, even when viewed later")
-    let stopped = RecoveryController(owner: expiredOwner(requested: true)) { Owner("forbidden") }
-    check(stopped.presentation(at: 905_000).status == "停止・回収を確認しました", "UI a requested stop after 15 minutes is not called expiry")
-    let unknownStart = expiredOwner(); unknownStart.launchedAt = nil
-    check(RecoveryController(owner: unknownStart) { Owner("forbidden") }.presentation(at: 905_000).status == "停止・回収を確認しました", "UI without a launch time never infers expiry")
-    check(expiry.prepare() && expiryOwners == 1 && expiry.previousDiagnostic == "expired original", "UI confirmed expiry prepares one fresh owner")
-    let expiredQuit = expiredOwner()
-    let expiryQuit = RecoveryController(owner: expiredQuit) { Owner("forbidden") }
-    expiryQuit.requestQuit()
-    check(expiryQuit.shouldTerminate && expiredQuit.closes == 0, "UI quit after confirmed expiry ends without another close")
+    let closed = closedOwner()
+    var closedOwners = 0
+    let closedController = RecoveryController(owner: closed) { closedOwners += 1; return Owner("after close") }
+    let afterClose = closedController.presentation(at: 905_000)
+    check(!closed.feed.fault && afterClose.canPrepare && afterClose.quitTitle == "終了", "UI confirmed close offers preparation and plain quit")
+    check(afterClose.status == "停止・回収を確認しました" && afterClose.detail.contains("「もう一度準備」"), "UI confirmed close names the proof and the next action")
+    check(closedController.prepare() && closedOwners == 1 && closedController.previousDiagnostic == "closed original", "UI confirmed close prepares one fresh owner")
+    let closedQuit = closedOwner()
+    let quitController = RecoveryController(owner: closedQuit) { Owner("forbidden") }
+    quitController.requestQuit()
+    check(quitController.shouldTerminate && closedQuit.closes == 0, "UI quit after confirmed close ends without another close")
+    check(RecoveryController(owner: closedOwner(requested: true)) { Owner("forbidden") }.presentation(at: 905_000).status == "停止・回収を確認しました", "UI a requested stop reads the same")
+
+    // The owner stopped standby because its time ran out: said as such, and
+    // only with the full OFF proof. A flag alone never hides unfinished cleanup.
+    func observed(_ data: Data) -> RecoveryPresentation {
+        let owner = Owner("observed"); owner.launched = true
+        owner.feed.ingest(data, at: 5000)
+        return RecoveryController(owner: owner) { Owner("forbidden") }.presentation(at: 5000)
+    }
+    let expiredStop = observed(recoveryStatus(expired: true))
+    check(expiredStop.status == "期限で停止しました" && expiredStop.detail.contains("期限が来たため") && expiredStop.detail.contains("待機を ON にし"), "UI standby expiry says why standby is OFF and what to do")
+    check(observed(recoveryStatus()).status == "待機は OFF", "UI a plain OFF is not called expiry")
+    check(observed(recoveryStatus(work: "stopping", cleanup: "pending", canOn: false, expired: true)).status != "期限で停止しました", "UI expiry is not claimed before cleanup is confirmed")
 
     let transition = Owner("pending ON"); transition.launched = true
     transition.feed.ingest(recoveryStatus(), at: 5000)
     let transitionController = RecoveryController(owner: transition) { Owner("forbidden") }
-    transitionController.intent("on")
+    transitionController.intent("on", hours: 2)
     let pending = transitionController.presentation(at: 5000)
     check(pending.status == "待機を ON に変更中" && !pending.canOn && !pending.canOff, "UI pending ON never presents previous OFF as completed")
     check(!pending.detail.contains("受け付けました"), "UI pending before receipt does not invent acceptance")
     transition.feed.ingest(Data("{\"protocolVersion\":1,\"type\":\"receipt\",\"receipt\":{\"protocolVersion\":1,\"requestId\":1,\"intent\":\"on\",\"disposition\":\"accepted\"}}".utf8), at: 5000)
     transition.feed.ingest(Data("""
-    {"protocolVersion":1,"type":"status","sourceContinuousMs":5000,"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":2,"validForMs":3000,"standby":"unknown","registration":"connecting","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":false,"canRequestOff":false,"transition":{"requestId":1,"intent":"on","outcome":"pending"}}}
+    {"protocolVersion":1,"type":"status","sourceContinuousMs":5000,"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":2,"validForMs":3000,"standby":"unknown","registration":"connecting","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":false,"canRequestOff":false,"transition":{"requestId":1,"intent":"on","outcome":"pending"},"standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false}}
     """.utf8), at: 5000)
     let connecting = transitionController.presentation(at: 5000)
     check(!transition.feed.fault && connecting.status == "接続を確認中・待機 ON は未確認", "UI accepted pending unknown standby is connecting, not cleanup unknown")
@@ -170,8 +174,25 @@ func checkPresentation() {
     _ = permissionOwner.feed.command("allow", at: 5000)
     permissionOwner.feed.ingest(Data("{\"protocolVersion\":1,\"type\":\"receipt\",\"receipt\":{\"protocolVersion\":1,\"requestId\":1,\"intent\":\"allow-run\",\"disposition\":\"accepted\"}}".utf8), at: 5000)
     let permitted = permissionController.presentation(at: 5000)
-    check(permitted.run == "コマンド実行: 許可中（残り約15分）" && permitted.canDeny, "UI shows accepted permission lifetime and offers revoke")
+    check(permitted.run == "コマンド実行: 許可中（待機を OFF にするまで）" && permitted.canDeny, "UI an accepted allow shows permission with no end time and offers revoke")
+    // The end time belongs to standby, not to the permission.
+    let standbyOn = String(decoding: recoveryStatus(standby: "on", canOn: false, until: "1800000000000"), as: UTF8.self)
+        .replacingOccurrences(of: "\"canRequestOff\":false", with: "\"canRequestOff\":true")
+        .replacingOccurrences(of: "\"registration\":\"disconnected\"", with: "\"registration\":\"authenticated\"")
+        .replacingOccurrences(of: "\"revision\":1", with: "\"revision\":2")
+    permissionOwner.feed.ingest(Data(standbyOn.utf8), at: 5000)
+    let standing = permissionController.presentation(at: 5000)
+    check(standing.status.hasPrefix("待機中（") && standing.status.contains("/") && standing.status.hasSuffix("まで）") && standing.run == permitted.run && standing.canExtend, "UI shows standby's end time and offers extend")
+    let ending = Owner("ending"); ending.launched = true
+    ending.feed.ingest(Data(standbyOn.replacingOccurrences(of: "\"standbyEndingSoon\":false", with: "\"standbyEndingSoon\":true").replacingOccurrences(of: "\"revision\":2", with: "\"revision\":1").utf8), at: 5000)
+    let endingStatus = RecoveryController(owner: ending) { Owner("forbidden") }.presentation(at: 5000).status
+    check(endingStatus.hasPrefix("まもなく期限（") && endingStatus.contains("まで）。延長するか作業を終えてください"), "UI ending soon says how to continue")
+    check(!endingStatus.contains("15分"), "UI no fixed 15-minute wording remains")
+    permissionOwner.feed.ingest(Data(String(decoding: recoveryStatus(), as: UTF8.self).replacingOccurrences(of: "\"revision\":1", with: "\"revision\":3").utf8), at: 5000)
+    check(permissionController.presentation(at: 5000).run == "コマンド実行: 許可なし（待機 ON だけでは実行されません）", "UI standby no longer ON drops the permission")
+    permissionOwner.feed.ingest(Data(String(decoding: recoveryStatus(standby: "on", canOn: false, until: "1800000000000"), as: UTF8.self).replacingOccurrences(of: "\"canRequestOff\":false", with: "\"canRequestOff\":true").replacingOccurrences(of: "\"revision\":1", with: "\"revision\":4").utf8), at: 5000)
+    check(!permissionController.presentation(at: 5000).run.contains("許可中"), "UI a later standby ON does not restore the permission")
     permissionController.requestQuit()
     let quittingPermission = permissionController.presentation(at: 5000)
-    check(!quittingPermission.canAllow && !quittingPermission.canDeny, "UI quit request disables both permission controls")
+    check(!quittingPermission.canAllow && !quittingPermission.canDeny && !quittingPermission.canExtend, "UI quit request disables permission and extend controls")
 }

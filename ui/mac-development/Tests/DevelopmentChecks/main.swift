@@ -6,9 +6,9 @@ func check(_ value: @autoclosure () -> Bool, _ name: String) {
     checks += 1
     guard value() else { fatalError("FAILED: \(name)") }
 }
-func status(_ revision: Int = 1, time: Int = 1000, standby: String = "off", transition: String = "null") -> Data {
+func status(_ revision: Int = 1, time: Int = 1000, standby: String = "off", transition: String = "null", until: String = "null", ending: Bool = false, expired: Bool = false) -> Data {
     Data("""
-    {"protocolVersion":1,"type":"status","sourceContinuousMs":\(time),"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":\(revision),"validForMs":3000,"standby":"\(standby)","registration":"\(standby == "on" ? "authenticated" : "disconnected")","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":\(standby == "off"),"canRequestOff":\(standby == "on"),"transition":\(transition)}}
+    {"protocolVersion":1,"type":"status","sourceContinuousMs":\(time),"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":\(revision),"validForMs":3000,"standby":"\(standby)","registration":"\(standby == "on" ? "authenticated" : "disconnected")","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":\(standby == "off"),"canRequestOff":\(standby == "on"),"transition":\(transition),"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired)}}
     """.utf8)
 }
 func receipt(_ disposition: String) -> Data {
@@ -21,8 +21,9 @@ f.ingest(status(), at: 1000)
 check(!f.fault && f.can("on", at: 1000), "valid OFF enables ON")
 check(!f.can("off", at: 1000), "OFF unavailable when OFF")
 check(!f.can("on", at: 4000), "source expires at 3 seconds")
-check(f.command("on", at: 1000) == "on 1 1\n", "fixed command")
-check(f.command("on", at: 1000) == nil, "repeat click rejected")
+check(f.command("on", at: 1000) == nil && f.can("on", at: 1000), "ON without a length sends nothing")
+check(f.command("on", at: 1000, hours: 2) == "on 1 1 2\n", "fixed command carries the standby length")
+check(f.command("on", at: 1000, hours: 2) == nil, "repeat click rejected")
 f.ingest(receipt("accepted"), at: 1000)
 check(f.pending != nil && !f.can("off", at: 1000), "receipt is not application")
 f.ingest(status(2, standby: "on", transition: applied), at: 1000)
@@ -53,60 +54,108 @@ var rollback = Feed(); rollback.ingest(status(), at: 1000); rollback.ingest(stat
 check(rollback.fault, "receiver clock rollback rejected")
 var duplicate = Feed(); duplicate.ingest(status(), at: 1000); duplicate.ingest(status(), at: 1000)
 check(duplicate.fault, "revision replay rejected")
-var refused = Feed(); refused.ingest(status(), at: 1000); _ = refused.command("on", at: 1000)
+var refused = Feed(); refused.ingest(status(), at: 1000); _ = refused.command("on", at: 1000, hours: 2)
 refused.ingest(status(2, transition: applied.replacingOccurrences(of: "applied", with: "rejected")), at: 1000)
 check(!refused.can("on", at: 1000), "wait for prior receipt")
 refused.ingest(receipt("stale"), at: 1000)
 check(!refused.fault && refused.can("on", at: 1000), "refusal preceding receipt")
-check(refused.command("on", at: 1000) == "on 2 2\n", "explicit retry new ID")
+check(refused.command("on", at: 1000, hours: 2) == "on 2 2 2\n", "explicit retry new ID")
 var unknown = Feed(); unknown.ingest(Data("{\"protocolVersion\":1,\"type\":\"closed\",\"sourceContinuousMs\":1000,\"outcome\":\"unknown\"}".utf8), at: 1000)
 check(unknown.fault && !unknown.closeConfirmed, "unknown is not closed")
 
-// Command-run allowance. Standby ON alone never lets an agent run a command;
-// the person at the Mac opens a 15-minute allowance, and this screen must not
-// show it as open before the owner accepted it or after anything ended it.
+// Standby length and command-run allowance. Standby ON carries its own length
+// (2 to 24 hours) and ends at the owner's standbyUntil. The allowance has no
+// length: it lasts until standby is no longer ON. The owner's status does not
+// say whether it is open, so this view keeps it from receipts.
 func runReceipt(_ id: Int, _ intent: String, _ disposition: String) -> Data {
     Data("{\"protocolVersion\":1,\"type\":\"receipt\",\"receipt\":{\"protocolVersion\":1,\"requestId\":\(id),\"intent\":\"\(intent)\",\"disposition\":\"\(disposition)\"}}".utf8)
 }
 func standingBy() -> Feed {
     var feed = Feed(); feed.ingest(status(), at: 1000)
-    _ = feed.command("on", at: 1000); feed.ingest(receipt("accepted"), at: 1000)
-    feed.ingest(status(2, standby: "on", transition: applied), at: 1000)
+    _ = feed.command("on", at: 1000, hours: 2); feed.ingest(receipt("accepted"), at: 1000)
+    feed.ingest(status(2, standby: "on", transition: applied, until: until), at: 1000)
     return feed
 }
+let until = "1800000000000"
+check(Feed.standbyHours == [2, 4, 8, 12, 24], "only the five listed lengths exist")
 var idle = Feed(); idle.ingest(status(), at: 1000)
 check(!idle.can("allow", at: 1000) && idle.command("allow", at: 1000) == nil, "allowance needs standby ON")
+check(!idle.can("extend", at: 1000) && idle.command("extend", at: 1000, hours: 2) == nil, "extend needs standby ON")
+for hours in Feed.standbyHours {
+    var feed = Feed(); feed.ingest(status(), at: 1000)
+    check(feed.command("on", at: 1000, hours: hours) == "on 1 1 \(hours)\n", "ON with \(hours) hours")
+}
+for bad in [nil, 0, 1, 3, 25, -2] as [Int?] {
+    var feed = Feed(); feed.ingest(status(), at: 1000)
+    check(feed.command("on", at: 1000, hours: bad) == nil && feed.pending == nil && feed.can("on", at: 1000), "ON without a listed length sends nothing")
+}
 var run = standingBy()
-check(run.can("allow", at: 1000) && !run.runAllowed(at: 1000), "standby ON alone is not an allowance")
-// This screen's view of the allowance can lag the owner's. Withdrawing must
-// stay possible whenever standby is ON, even if the screen shows none.
+check(run.can("allow", at: 1000) && !run.runAllowed, "standby ON alone is not an allowance")
+// Withdrawing must stay possible whenever standby is ON, even if this view shows none.
 check(run.can("deny", at: 1000), "withdrawal is always offered while standby is ON")
-check(run.command("allow", at: 1000) == "allow 2 2\n", "allow command")
-check(run.pending == nil, "allowance is not a standby transition")
-check(!run.runAllowed(at: 1000) && !run.can("off", at: 1000) && !run.can("allow", at: 1000), "a request is not an allowance; wait for its receipt")
-run.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000)
-check(!run.fault && run.runAllowed(at: 1000) && run.runAllowed(at: 900_999), "owner accepted the allowance")
-check(!run.runAllowed(at: 901_000), "allowance ends after 15 minutes")
-check(run.can("off", at: 1000) && run.can("deny", at: 1000), "allowance does not block standby OFF")
-check(run.command("deny", at: 1000) == "deny 3 2\n", "deny command")
-check(run.runAllowed(at: 1000), "still open until the owner accepts the withdrawal")
-run.ingest(runReceipt(3, "deny-run", "accepted"), at: 1000)
-check(!run.fault && !run.runAllowed(at: 1000) && run.can("allow", at: 1000), "withdrawn")
+check(run.command("allow", at: 1000, hours: 2) == "allow 2 2\n", "allow carries no length even if one is given")
+run.ingest(runReceipt(2, "allow-run", "rejected"), at: 1000)
+check(run.command("deny", at: 1000, hours: 2) == "deny 3 2\n", "deny carries no length")
+run.ingest(runReceipt(3, "deny-run", "rejected"), at: 1000)
+for bad in [nil, 0, 1, 3, 25, -2] as [Int?] {
+    check(run.command("extend", at: 1000, hours: bad) == nil && run.can("extend", at: 1000), "extend without a listed length sends nothing")
+}
+check(run.command("on", at: 1000, hours: 2) == nil, "on is not offered while standby is ON")
+var ext = standingBy()
+check(ext.command("extend", at: 1000, hours: 12) == "extend 2 2 12\n", "extend carries the new length")
+check(ext.pending == nil, "extend is not a standby transition")
+check(!ext.can("off", at: 1000) && !ext.can("extend", at: 1000), "extend waits for its receipt")
+ext.ingest(runReceipt(2, "extend", "accepted"), at: 1000)
+check(!ext.fault && ext.pending == nil && ext.can("off", at: 1000) && ext.can("extend", at: 1000), "extend receipt completes with no transition")
+ext.ingest(status(3, standby: "on", until: "1800000100000", ending: true), at: 1000)
+check(!ext.fault && ext.observation?.standbyUntil == 1_800_000_100_000 && ext.observation?.standbyEndingSoon == true && ext.observation?.standbyExpired == false, "status carries standbyUntil and the two flags")
+var first = standingBy()
+check(first.command("allow", at: 1000) == "allow 2 2\n", "allow command")
+check(first.pending == nil, "allowance is not a standby transition")
+check(!first.runAllowed && !first.can("off", at: 1000), "a request is not an allowance; wait for its receipt")
+first.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000)
+check(!first.fault && first.runAllowed, "an accepted allow opens the allowance")
+check(first.can("off", at: 1000) && first.can("deny", at: 1000), "allowance does not block standby OFF")
+first.ingest(status(3, standby: "on", until: until, ending: true), at: 1000)
+check(first.runAllowed, "ending soon does not end the allowance; standby still ON")
+check(first.command("deny", at: 1000) == "deny 3 3\n", "deny command")
+check(first.runAllowed, "still open until the deny is accepted")
+first.ingest(runReceipt(3, "deny-run", "accepted"), at: 1000)
+check(!first.fault && !first.runAllowed && first.can("allow", at: 1000), "accepted deny withdraws")
 var refusedRun = standingBy(); _ = refusedRun.command("allow", at: 1000)
 refusedRun.ingest(runReceipt(2, "allow-run", "rejected"), at: 1000)
-check(!refusedRun.fault && !refusedRun.runAllowed(at: 1000) && refusedRun.can("allow", at: 1000), "refused allowance stays closed and may be retried")
+check(!refusedRun.fault && !refusedRun.runAllowed && refusedRun.can("allow", at: 1000), "refused allowance stays closed and may be retried")
 var crossed = standingBy(); _ = crossed.command("allow", at: 1000)
 crossed.ingest(runReceipt(2, "deny-run", "accepted"), at: 1000)
-check(crossed.fault && !crossed.runAllowed(at: 1000), "receipt for another intent is not an allowance")
+check(crossed.fault && !crossed.runAllowed, "receipt for another intent is not an allowance")
 var stopped = standingBy(); _ = stopped.command("allow", at: 1000)
 stopped.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000)
-stopped.ingest(status(3, standby: "off", transition: applied), at: 1000)
-check(!stopped.fault && !stopped.runAllowed(at: 1000), "standby OFF ends the allowance")
-stopped.ingest(status(4, standby: "on", transition: applied), at: 1000)
-check(!stopped.runAllowed(at: 1000), "a later standby ON does not bring an old allowance back")
+check(stopped.runAllowed, "allowance open before standby ends")
+stopped.ingest(status(3, standby: "off", transition: applied, expired: true), at: 1000)
+check(!stopped.fault && !stopped.runAllowed && stopped.observation?.standbyExpired == true, "standby no longer ON drops the allowance")
+stopped.ingest(status(4, standby: "on", transition: applied, until: until), at: 1000)
+check(!stopped.runAllowed, "a later standby ON does not bring an old allowance back")
 var faulted = standingBy(); _ = faulted.command("allow", at: 1000)
 faulted.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000); faulted.fail()
-check(!faulted.runAllowed(at: 1000), "a fault never shows an open allowance")
+check(!faulted.runAllowed, "a fault never shows an open allowance")
+// The three keys are always present and strictly typed.
+let plain = String(decoding: status(until: until), as: UTF8.self)
+for bad in [
+    plain.replacingOccurrences(of: ",\"standbyUntil\":\(until)", with: ""),
+    plain.replacingOccurrences(of: ",\"standbyEndingSoon\":false", with: ""),
+    plain.replacingOccurrences(of: ",\"standbyExpired\":false", with: ""),
+    plain.replacingOccurrences(of: "\"standbyExpired\":false", with: "\"standbyExpired\":false,\"extra\":1"),
+    plain.replacingOccurrences(of: "\"standbyUntil\":\(until)", with: "\"standbyUntil\":\"\(until)\""),
+    plain.replacingOccurrences(of: "\"standbyUntil\":\(until)", with: "\"standbyUntil\":1.5"),
+    plain.replacingOccurrences(of: "\"standbyEndingSoon\":false", with: "\"standbyEndingSoon\":null"),
+    plain.replacingOccurrences(of: "\"standbyExpired\":false", with: "\"standbyExpired\":0"),
+    String(decoding: status(ending: true), as: UTF8.self), // ending soon needs an end time
+] {
+    var badFeed = Feed(); badFeed.ingest(Data(bad.utf8), at: 1000)
+    check(badFeed.fault && badFeed.observation == nil, "malformed standby keys rejected")
+}
+var withKeys = Feed(); withKeys.ingest(status(until: until, ending: true, expired: true), at: 1000)
+check(!withKeys.fault && withKeys.observation?.standbyEndingSoon == true && withKeys.observation?.standbyExpired == true, "standby keys accepted")
 
 // The record of what ran. The gateway signs only a hash, so this list is how
 // the person at the Mac sees the command text. A damaged line is shown as
@@ -153,7 +202,7 @@ check(recoverable.fault && !recoverable.can("on", at: 5000), "stale observation 
 _ = recoverable.requestClose()
 recoverable.ingest(terminal(), at: 5000)
 check(recoverable.fault && recoverable.closeConfirmed, "fault retains strictly validated owner close")
-check(recoverable.command("on", at: 5000) == nil, "recovered collection never restores admission")
+check(recoverable.command("on", at: 5000, hours: 2) == nil, "recovered collection never restores admission")
 for badTerminal in [terminal("unknown"), terminal(time: 999), Data("{\"type\":\"closed\"}".utf8), Data("not-json".utf8)] {
     var blocked = Feed(); blocked.ingest(status(), at: 5000)
     blocked.ingest(badTerminal, at: 5000); blocked.ingest(terminal(), at: 5000)

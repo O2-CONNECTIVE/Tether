@@ -14,13 +14,16 @@ const help = `Usage: tether-dev-resident --help | foreground
 Development only: no Developer ID publisher validation. Not the production GUI.
 Requires dedicated stdin/stdout pipes and separately approved dev enrollment.
 No enrollment, key generation, login startup or daemon installation is provided.
-The original run requests shutdown after 15 minutes, including reconnections.
-This timer is not an absolute access cutoff; a bounded server pilot is required.
-Expiry requests original-owner cleanup; unknown cleanup is never success.
-Commands: status; on <request_id> <expected_revision>;
-off <request_id> <expected_revision>; close. Each ends in LF.
-allow <request_id> <expected_revision> lets signed command runs through
-for at most 15 minutes of the current standby; deny ... withdraws it.
+Standby ends after its chosen hours, counted by elapsed and wall-clock time;
+its end turns standby off and collects owned work like off.
+This local limit is not an absolute access cutoff; a bounded server pilot is required.
+Unknown cleanup is never success.
+Commands: status; on <request_id> <expected_revision> <hours>;
+extend <request_id> <expected_revision> <hours>; off <request_id> <expected_revision>;
+close. <hours> is 2, 4, 8, 12 or 24; extend moves the end to that many hours
+from now. Each ends in LF.
+allow <request_id> <expected_revision> lets signed command runs through until
+standby turns off; deny <request_id> <expected_revision> withdraws it.
 Use fresh status revisions and strictly increasing positive request IDs.
 ON alone permits only the fixed Tether BEGIN/sleep/END operation through MCP.
 Receipts are not authentication, readiness or cleanup confirmation.
@@ -40,7 +43,7 @@ func execute(args []string, output, diagnostic io.Writer, run func() int) int {
 		fmt.Fprintln(diagnostic, "Usage: tether-dev-resident --help | foreground")
 		return 2
 	}
-	if _, err := io.WriteString(diagnostic, "DEVELOPMENT ONLY: locally built, no Developer ID publisher validation; 15-minute shutdown-request timer; server-side expiry required.\n"); err != nil {
+	if _, err := io.WriteString(diagnostic, "DEVELOPMENT ONLY: locally built, no Developer ID publisher validation; standby ends after its chosen hours like off; server-side expiry required.\n"); err != nil {
 		return 1
 	}
 	return run()

@@ -39,8 +39,10 @@ type standbyCycle struct {
 	proved        chan struct{} // closed once the open source's cleanup proof was attempted
 	result        error
 	initialUntil  time.Time
-	runUntil      time.Time // guarded by Standby.mu; zero means run is not allowed
-	runUntilWall  time.Time // the same instant without the monotonic reading
+	until         time.Time // guarded by Standby.mu: the end of standby (#399)
+	untilWall     int64     // the same instant on the wall clock, Unix ns
+	ranOut        bool      // guarded by Standby.mu: standby was seen to have run out
+	runAllowed    bool      // guarded by Standby.mu: the local command-run allowance
 	authenticated bool
 }
 
@@ -50,6 +52,7 @@ type Standby struct {
 	mu            sync.Mutex
 	factory       *FixedFactory
 	makeConnector func(context.Context) (residentConnector, error)
+	clock         func() (mono, wall time.Time) // nil reads elapsedNow and time.Now; tests replace it
 	updates       chan struct{}
 	observation   StandbyObservation
 	lastRequest   uint64
@@ -132,6 +135,10 @@ func (s *Standby) changedLocked() {
 			s.cycle.cancel()
 		}
 	}
+	// A sealed standby admits nothing, so it publishes no end.
+	if s.observation.AdmissionSealed {
+		s.observation.StandbyUntil, s.observation.StandbyEndingSoon = time.Time{}, false
+	}
 	s.observation.CanRequestOn = !s.closed && s.observation.Standby == "off" && s.observation.Cleanup == "confirmed"
 	s.observation.CanRequestOff = !s.closed && s.observation.Standby == "on"
 	select {
@@ -139,11 +146,16 @@ func (s *Standby) changedLocked() {
 	default:
 	}
 }
-func (s *Standby) RequestOn(id, revision uint64) StandbyReceipt { return s.request(id, revision, "on") }
-func (s *Standby) RequestOff(id, revision uint64) StandbyReceipt {
-	return s.request(id, revision, "off")
+
+// RequestOn turns standby on for d, one of the listed lengths (#399). When d
+// has passed, standby turns off as if the person had turned it off.
+func (s *Standby) RequestOn(id, revision uint64, d time.Duration) StandbyReceipt {
+	return s.request(id, revision, "on", d)
 }
-func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
+func (s *Standby) RequestOff(id, revision uint64) StandbyReceipt {
+	return s.request(id, revision, "off", 0)
+}
+func (s *Standby) request(id, revision uint64, intent string, d time.Duration) StandbyReceipt {
 	if s == nil {
 		return StandbyReceipt{RequestID: id, Intent: intent, Disposition: "rejected"}
 	}
@@ -154,7 +166,7 @@ func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
 		return r
 	}
 	if intent == "on" {
-		if !s.observation.CanRequestOn || s.makeConnector == nil {
+		if !s.observation.CanRequestOn || s.makeConnector == nil || !listedStandbyFor(d) {
 			return r
 		}
 		life, cancel := context.WithCancel(context.Background())
@@ -163,6 +175,8 @@ func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
 		s.observation.Standby = "on"
 		s.observation.Registration = "connecting"
 		s.observation.AdmissionSealed = false
+		s.observation.StandbyExpired = false
+		s.endStandbyInLocked(d)
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
 		s.changedLocked()
 		go s.run(c)
@@ -170,18 +184,28 @@ func (s *Standby) request(id, revision uint64, intent string) StandbyReceipt {
 		if s.observation.Standby != "on" {
 			return r
 		}
-		s.observation.Standby = "stopping"
-		s.observation.AdmissionSealed = true
-		s.observation.Work = "stopping"
-		s.observation.Cleanup = "pending"
+		// An OFF that comes after the end but before the monitor saw it still
+		// stops a cycle that ran out.
+		s.observation.StandbyExpired = s.standbyLeftLocked() <= 0
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
-		s.changedLocked()
-		s.sealSourceLocked()
-		s.cycle.cancelAfterProof()
+		s.stopLocked()
 	}
 	r.Disposition = "accepted"
 	r.Revision = s.observation.Revision
 	return r
+}
+
+// stopLocked is standby OFF, whether the person asked for it or standby ran
+// out: admission sealed, the source closed so owned work stops,
+// and the cycle ended once the open source's cleanup proof was attempted.
+func (s *Standby) stopLocked() {
+	s.observation.Standby = "stopping"
+	s.observation.AdmissionSealed = true
+	s.observation.Work = "stopping"
+	s.observation.Cleanup = "pending"
+	s.changedLocked()
+	s.sealSourceLocked()
+	s.cycle.cancelAfterProof()
 }
 
 // admitLocked is the one replay and staleness check for every local request.
@@ -567,6 +591,10 @@ func (s *Standby) monitor(c *standbyCycle) {
 		if s.cycle != c {
 			s.mu.Unlock()
 			return
+		}
+		if s.expireStandbyLocked() {
+			s.mu.Unlock()
+			continue
 		}
 		if s.observation.Standby == "on" {
 			// Generation is retained by the real connector only AFTER full auth;

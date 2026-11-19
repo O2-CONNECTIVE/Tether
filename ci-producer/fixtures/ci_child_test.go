@@ -216,16 +216,30 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 	}
 	switch kind {
 	case "status":
+		// Only the foreground (development) dialect's status shows when standby
+		// ends; the JSON dialect's keeps its exact product keys.
 		var e statusEnvelope
-		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || ciStrictFrame(raw, &e) != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
+		var decoded error
+		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition"}
+		flags := []string{"canRequestOn", "canRequestOff"}
+		if p.foreground {
+			var f foregroundStatusEnvelope
+			decoded = ciStrictFrame(raw, &f)
+			e = statusEnvelope{f.ProtocolVersion, f.Type, f.SourceContinuousMS, f.Snapshot.Snapshot}
+			keys = append(keys, "standbyUntil", "standbyEndingSoon", "standbyExpired")
+			flags = append(flags, "standbyEndingSoon", "standbyExpired")
+		} else {
+			decoded = ciStrictFrame(raw, &e)
+		}
+		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || decoded != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
 			return ErrProtocol
 		}
 		var body map[string]json.RawMessage
 		_ = json.Unmarshal(root["snapshot"], &body)
-		if !exactKeys(body, "protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition") {
+		if !exactKeys(body, keys...) {
 			return ErrProtocol
 		}
-		for _, field := range []string{"canRequestOn", "canRequestOff"} {
+		for _, field := range flags {
 			v := bytes.TrimSpace(body[field])
 			if !bytes.Equal(v, []byte("true")) && !bytes.Equal(v, []byte("false")) {
 				return ErrProtocol
@@ -263,7 +277,7 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 		}
 		var body map[string]json.RawMessage
 		_ = json.Unmarshal(root["receipt"], &body)
-		if !exactKeys(body, "protocolVersion", "requestId", "intent", "disposition") || e.Receipt.RequestID == 0 || e.Receipt.RequestID > MaxInteger || !oneOf(e.Receipt.Intent, "on", "off", "allow-run") || !oneOf(e.Receipt.Disposition, "accepted", "rejected", "stale", "unknown") {
+		if !exactKeys(body, "protocolVersion", "requestId", "intent", "disposition") || e.Receipt.RequestID == 0 || e.Receipt.RequestID > MaxInteger || !oneOf(e.Receipt.Intent, "on", "off", "allow-run", "extend") || !oneOf(e.Receipt.Disposition, "accepted", "rejected", "stale", "unknown") {
 			return ErrProtocol
 		}
 		if _, ok := p.receipts[e.Receipt.RequestID]; ok {
@@ -329,7 +343,7 @@ func (p *ciChild) request(intent string) (uint64, error) {
 	}
 	p.nextID++
 	id := p.nextID
-	raw, e := Encode(intentEnvelope{1, "intent", Intent{1, id, s.Revision, intent}})
+	raw, e := Encode(intentEnvelope{1, "intent", Intent{1, id, s.Revision, intent, 0}})
 	if e != nil {
 		return id, e
 	}
@@ -338,7 +352,13 @@ func (p *ciChild) request(intent string) (uint64, error) {
 		if intent == "allow-run" {
 			verb = "allow" // The foreground dialect names the allowance by its verb.
 		}
-		raw = []byte(fmt.Sprintf("%s %d %d\n", verb, id, s.Revision))
+		line := fmt.Sprintf("%s %d %d", verb, id, s.Revision)
+		if intent == "on" || intent == "extend" {
+			// The foreground on and extend name how long standby stays on: the
+			// shortest listed length, the one the GUI offers by default (#399).
+			line += " 2"
+		}
+		raw = []byte(line + "\n")
 	}
 	if e = p.input.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
 		return id, e

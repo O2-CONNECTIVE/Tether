@@ -2,31 +2,78 @@ package residentmac
 
 import "time"
 
-// MaxRunAllowance bounds one local allowance. It equals the lifetime of the
-// limited development resident, so an allowance never outlives that process.
-const MaxRunAllowance = 15 * time.Minute
+// DefaultStandbyFor is the standby length for an ON that names none: the
+// product's JSON entry cannot name one until #410 (#399).
+const DefaultStandbyFor = 2 * time.Hour
 
-// AllowRun records a local decision to let command-run requests through for d.
+// StandbyEndingNotice is how long before its end standby warns the Mac's UI
+// through the status, so the person can extend it or wrap up (#399).
+const StandbyEndingNotice = 10 * time.Minute
+
+// listedStandbyFor reports whether d is one of the standby lengths the person
+// can pick (#399). There are no other lengths.
+func listedStandbyFor(d time.Duration) bool {
+	switch d {
+	case 2 * time.Hour, 4 * time.Hour, 8 * time.Hour, 12 * time.Hour, 24 * time.Hour:
+		return true
+	}
+	return false
+}
+
+// ExtendStandby moves the end of the current standby to d from now, d one of
+// the listed lengths. It is the only way to extend standby, and only the person
+// at the Mac reaches it (#399). Standby that is not on, or has already run out,
+// is not extended: from its end the cycle is ending.
+func (s *Standby) ExtendStandby(id, revision uint64, d time.Duration) StandbyReceipt {
+	if s == nil {
+		return StandbyReceipt{RequestID: id, Intent: "extend", Disposition: "rejected"}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.admitLocked(id, revision, "extend")
+	if !ok || s.observation.Standby != "on" || !s.admittingLocked() || !listedStandbyFor(d) {
+		return r
+	}
+	s.endStandbyInLocked(d)
+	s.changedLocked()
+	r.Disposition = "accepted"
+	r.Revision = s.observation.Revision
+	return r
+}
+
+// endStandbyInLocked sets the current cycle to end d from now.
+//
+// The end is kept twice. Elapsed time (elapsedNow) counts through sleep and
+// ignores wall-clock changes; the wall clock also counts through sleep but can
+// be set back. Standby has ended as soon as either says so. The wall-clock end
+// is an integer: a time.Time from time.Now carries a monotonic reading that Sub
+// would prefer, which would quietly turn the wall-clock check into a second
+// monotonic one.
+func (s *Standby) endStandbyInLocked(d time.Duration) {
+	mono, wall := s.now()
+	s.cycle.until = mono.Add(d)
+	s.cycle.untilWall = wall.UnixNano() + int64(d)
+	s.observation.StandbyUntil = time.Unix(0, s.cycle.untilWall)
+	s.observation.StandbyEndingSoon = false
+}
+
+// AllowRun records a local decision to let command-run requests through.
 // Standby ON alone never does. The allowance lives in the current standby
 // cycle only: it is not persisted, a control reconnect keeps it, and standby
-// OFF, expiry, DenyRun or process exit end it. A later AllowRun replaces it.
-// It is an input to admission, not an execution grant for any one command.
-//
-// The end is kept twice. The monotonic clock ignores wall-clock changes but may
-// stop while the Mac sleeps; the wall clock keeps counting through sleep but can
-// be set back. Run is allowed only while both say the allowance has not ended.
-func (s *Standby) AllowRun(id, revision uint64, d time.Duration) StandbyReceipt {
+// OFF (asked for, or at the end of standby), DenyRun or process exit end it, so
+// it never outlives standby. It is an input to admission, not an execution
+// grant for any one command.
+func (s *Standby) AllowRun(id, revision uint64) StandbyReceipt {
 	if s == nil {
 		return StandbyReceipt{RequestID: id, Intent: "allow-run", Disposition: "rejected"}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.admitLocked(id, revision, "allow-run")
-	if !ok || !s.admittingLocked() || d <= 0 || d > MaxRunAllowance {
+	if !ok || !s.admittingLocked() {
 		return r
 	}
-	s.cycle.runUntil = time.Now().Add(d)
-	s.cycle.runUntilWall = s.cycle.runUntil.Round(0)
+	s.cycle.runAllowed = true
 	r.Disposition = "accepted"
 	return r
 }
@@ -45,7 +92,7 @@ func (s *Standby) DenyRun(id, revision uint64) StandbyReceipt {
 		return r
 	}
 	if s.cycle != nil {
-		s.cycle.runUntil, s.cycle.runUntilWall = time.Time{}, time.Time{}
+		s.cycle.runAllowed = false
 	}
 	r.Disposition = "accepted"
 	return r
@@ -62,15 +109,61 @@ func (s *Standby) RunAllowed() bool {
 }
 
 func (s *Standby) runAllowedLocked() bool {
-	now := time.Now()
-	return s.admittingLocked() && now.Before(s.cycle.runUntil) && now.Round(0).Before(s.cycle.runUntilWall)
+	return s.admittingLocked() && s.cycle.runAllowed
+}
+
+// now reads the two clocks standby's end is kept on. Tests replace them.
+func (s *Standby) now() (mono, wall time.Time) {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return elapsedNow(), time.Now()
+}
+
+// standbyLeftLocked is how long the current cycle has left by the stricter of
+// its two clocks, and not positive without a cycle. A cycle seen to have run
+// out stays run out: a wall clock set back before the monitor's next look must
+// not reopen admission, extension or the allowance.
+func (s *Standby) standbyLeftLocked() time.Duration {
+	if s.cycle == nil || s.cycle.ranOut {
+		return 0
+	}
+	mono, wall := s.now()
+	left := min(s.cycle.until.Sub(mono), time.Duration(s.cycle.untilWall-wall.UnixNano()))
+	s.cycle.ranOut = left <= 0
+	return left
 }
 
 // admittingLocked reports whether the current cycle admits new work. Every state
-// other than standby "on" keeps admission sealed. Unlike admissionLocked, it
-// does not compare against one particular cycle.
+// other than standby "on" keeps admission sealed, and so does standby that has
+// run out: from its end, the cycle is ending. Unlike admissionLocked, it does
+// not compare against one particular cycle.
 func (s *Standby) admittingLocked() bool {
-	return s.cycle != nil && !s.observation.AdmissionSealed
+	return s.cycle != nil && !s.observation.AdmissionSealed && s.standbyLeftLocked() > 0
+}
+
+// expireStandbyLocked turns standby off once it has run out, and keeps the
+// ten-minute warning current otherwise. It reports whether it turned standby
+// off. The monitor calls it; admission does not wait for it. Sealed standby is
+// already stopping for another reason and publishes no end.
+func (s *Standby) expireStandbyLocked() bool {
+	if s.observation.Standby != "on" || s.observation.AdmissionSealed {
+		return false
+	}
+	left := s.standbyLeftLocked()
+	if left <= 0 {
+		s.observation.StandbyExpired = true
+		s.stopLocked()
+		return true
+	}
+	s.observation.StandbyEndingSoon = left <= StandbyEndingNotice
+	// The end the person reads is when standby will actually end. After the
+	// wall clock is set back, elapsed time ends it before the wall-clock end.
+	_, wall := s.now()
+	if end := wall.UnixNano() + int64(left); time.Duration(end-s.observation.StandbyUntil.UnixNano()).Abs() >= time.Second {
+		s.observation.StandbyUntil = time.Unix(0, end)
+	}
+	return false
 }
 
 // admission is what consume does with one received intent.
@@ -78,9 +171,9 @@ type admission int
 
 const (
 	admitNothing admission = iota // sealed or another cycle: refuse and stop serving
-	admitNoRun                    // a command run without a live allowance: refuse, keep serving
+	admitNoRun                    // a command run without the allowance: refuse, keep serving
 	admitFixed                    // fixed work: admit
-	admitRun                      // a command run under a live allowance: admit
+	admitRun                      // a command run under the allowance: admit
 )
 
 // admissionLocked decides, once per received intent, whether cycle c admits it.

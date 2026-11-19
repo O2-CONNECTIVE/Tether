@@ -243,6 +243,8 @@ def product_files_for(goos, cgo_enabled=True):
         'platform_darwin.go' if goos == 'darwin' else 'platform_other_browser.go'})
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac'].add(
         'enrollment_darwin.go' if goos == 'darwin' and cgo_enabled else 'enrollment_other.go')
+    expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac'].add(
+        'elapsed_darwin.go' if goos == 'darwin' else 'elapsed_other.go')
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys'].add(
         'native_other.go' if goos == 'darwin' and not cgo_enabled else
         {'linux': 'native_linux.go', 'darwin': 'native_darwin.go', 'windows': 'native_windows.go'}[goos])

@@ -27,6 +27,26 @@ type Snapshot struct {
 	CanRequestOff   bool        `json:"canRequestOff"`
 	Transition      *Transition `json:"transition"`
 }
+
+// standbyEnd is the foreground status's view of when standby ends (#399).
+// Only the foreground (development) dialect can pick or extend that end, so
+// only its status line carries these keys; the product's lines keep theirs
+// until #410.
+type standbyEnd struct {
+	StandbyUntil      *uint64 `json:"standbyUntil"`      // wall-clock Unix ms; null unless standby admits work
+	StandbyEndingSoon bool    `json:"standbyEndingSoon"` // from ten minutes before standbyUntil
+	StandbyExpired    bool    `json:"standbyExpired"`    // the last cycle ended because standby ran out
+}
+type foregroundSnapshot struct {
+	Snapshot
+	standbyEnd
+}
+type foregroundStatusEnvelope struct {
+	ProtocolVersion    uint64             `json:"protocolVersion"`
+	Type               string             `json:"type"`
+	SourceContinuousMS uint64             `json:"sourceContinuousMs"`
+	Snapshot           foregroundSnapshot `json:"snapshot"`
+}
 type statusEnvelope struct {
 	ProtocolVersion    uint64   `json:"protocolVersion"`
 	Type               string   `json:"type"`
@@ -46,6 +66,8 @@ type mapper struct {
 	refused                      *Transition
 	poisoned                     bool
 	cleanupUnknown               bool
+	foreground                   bool // fixed by the trusted dialect, never by input
+	end                          standbyEnd
 }
 
 func oneOf(s string, values ...string) bool {
@@ -75,7 +97,10 @@ func validRaw(o residentmac.StandbyObservation) bool {
 			return false
 		}
 	}
-	return true
+	if o.StandbyUntil.IsZero() {
+		return !o.StandbyEndingSoon
+	}
+	return o.StandbyUntil.UnixMilli() > 0 && uint64(o.StandbyUntil.UnixMilli()) <= MaxInteger
 }
 func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEnvelope, error) {
 	if !validRaw(o) || now > MaxInteger || m.revision == MaxInteger || (m.revision > 0 && (now < m.observedAt || o.Revision < m.raw.Revision || (o.Revision == m.raw.Revision && !reflect.DeepEqual(o, m.raw)))) {
@@ -146,6 +171,15 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 		}
 		m.refused = nil // one ordered publication, not retained owner evidence
 	}
+	// Unknown hides the end, a claim about admission. Why the cycle ended was
+	// settled before its cleanup went unknown, so it stays.
+	m.end = standbyEnd{StandbyExpired: o.StandbyExpired}
+	if !m.poisoned {
+		if !o.StandbyUntil.IsZero() {
+			end := uint64(o.StandbyUntil.UnixMilli())
+			m.end.StandbyUntil, m.end.StandbyEndingSoon = &end, o.StandbyEndingSoon
+		}
+	}
 	s.CanRequestOn = off && o.CanRequestOn && !m.poisoned && m.pending == nil
 	s.CanRequestOff = on && o.CanRequestOff && !m.poisoned && m.pending == nil
 	m.raw = o
@@ -153,9 +187,17 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 	m.observedAt = now
 	return statusEnvelope{1, "status", now, s}, nil
 }
+
+// frame is the status line for this mapper's dialect.
+func (m *mapper) frame(s statusEnvelope) any {
+	if !m.foreground {
+		return s
+	}
+	return foregroundStatusEnvelope{s.ProtocolVersion, s.Type, s.SourceContinuousMS, foregroundSnapshot{s.Snapshot, m.end}}
+}
 func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receipt {
 	out := Receipt{1, r.RequestID, r.Intent, "rejected"}
-	allowance := r.Intent == "allow-run" || r.Intent == "deny-run"
+	transition := r.Intent == "on" || r.Intent == "off"
 	if r.RequestID <= m.highID {
 		out.Disposition = "stale"
 		return out
@@ -170,7 +212,7 @@ func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receip
 	}
 	if m.revision == 0 || now < m.observedAt || now-m.observedAt >= m.view.ValidForMS || r.ExpectedRevision != m.revision || !reflect.DeepEqual(owner.Snapshot(), m.raw) {
 		out.Disposition = "stale"
-		if !allowance {
+		if transition {
 			m.refused = &Transition{r.RequestID, r.Intent, "rejected"}
 		}
 		return out
@@ -181,9 +223,11 @@ func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receip
 	var receipt residentmac.StandbyReceipt
 	switch r.Intent {
 	case "on":
-		receipt = owner.RequestOn(r.RequestID, m.raw.Revision)
+		receipt = owner.RequestOn(r.RequestID, m.raw.Revision, r.StandbyFor)
+	case "extend":
+		receipt = owner.ExtendStandby(r.RequestID, m.raw.Revision, r.StandbyFor)
 	case "allow-run":
-		receipt = owner.AllowRun(r.RequestID, m.raw.Revision, residentmac.MaxRunAllowance)
+		receipt = owner.AllowRun(r.RequestID, m.raw.Revision)
 	case "deny-run":
 		receipt = owner.DenyRun(r.RequestID, m.raw.Revision)
 	default:
@@ -195,8 +239,9 @@ func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receip
 		return out
 	}
 	out.Disposition = receipt.Disposition
-	// The allowance is not a standby transition: nothing to wait for.
-	if !allowance && (receipt.Disposition == "accepted" || receipt.Disposition == "unknown") {
+	// The allowance and the extension are not standby transitions: nothing to
+	// wait for.
+	if transition && (receipt.Disposition == "accepted" || receipt.Disposition == "unknown") {
 		copy := r
 		m.pending = &copy
 	}

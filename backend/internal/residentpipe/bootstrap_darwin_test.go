@@ -87,11 +87,7 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 		name    string
 		dialect inputDialect
 		cancel  bool
-		expire  bool
-	}{{"json-eof", jsonInput, false, false}, {"foreground-close", foregroundInput, false, false}, {"foreground-cancel", foregroundInput, true, false},
-		// The development lifetime's own expiry closes the original owner like
-		// a requested close; only then may the GUI's exit-0 proof be complete.
-		{"foreground-expiry", foregroundInput, false, true}} {
+	}{{"json-eof", jsonInput, false}, {"foreground-close", foregroundInput, false}, {"foreground-cancel", foregroundInput, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := idleProtectedOwner(t)
 			inR, inW, err := os.Pipe()
@@ -115,11 +111,6 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			if tc.expire {
-				var stop context.CancelFunc
-				ctx, stop = context.WithTimeout(ctx, 200*time.Millisecond)
-				defer stop()
-			}
 			done := make(chan error, 1)
 			go func() { done <- runOwnedInput(ctx, owner, pipes, tc.dialect) }()
 			joined := false
@@ -141,13 +132,11 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			}
 			if tc.cancel {
 				cancel()
-			} else if tc.expire {
-				// No input: the original lifetime ends the run by itself.
 			} else if tc.dialect == jsonInput {
 				if err := inW.Close(); err != nil {
 					t.Fatal(err)
 				}
-			} else if _, err := io.WriteString(inW, "close\non 1 1\n"); err != nil {
+			} else if _, err := io.WriteString(inW, "close\non 1 1 2\n"); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -193,29 +182,29 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 	}
 }
 
-// The GUI reads exit 0 as one of its four collection proofs. Only the original
-// lifetime's own expiry, after a confirmed close whose terminal was written,
-// may end that way. A signal, an unknown close, a lost terminal or any other
-// serve failure stays non-zero and so remains unconfirmed in the GUI.
-func TestOwnedResultExitsCleanlyOnlyAfterConfirmedExpiry(t *testing.T) {
-	expired, signalled := context.DeadlineExceeded, context.Canceled
-	var live error
+// The GUI reads exit 0 as one of its four collection proofs. Only a requested
+// close or input EOF, after a confirmed close whose terminal was written, may
+// end that way. No lifetime has a deadline any more (#399 replaced the
+// development host's own 15 minutes with the end of standby, which turns
+// standby off without ending the process), so a deadline is never success.
+// A signal, an unknown close, a lost terminal or any other serve failure stays
+// non-zero and so remains unconfirmed in the GUI.
+func TestOwnedResultExitsCleanlyOnlyAfterConfirmedClose(t *testing.T) {
 	for _, tc := range []struct {
 		name                          string
-		ended                         error
 		served, closeErr, terminalErr error
 		want                          int
 	}{
-		{"expiry with confirmed close", expired, context.DeadlineExceeded, nil, nil, 0},
-		{"expiry with unknown close", expired, context.DeadlineExceeded, residentmac.ErrStandbyUnknown, nil, 1},
-		{"expiry with lost terminal", expired, context.DeadlineExceeded, nil, unix.EPIPE, 1},
-		{"expiry then other serve failure", expired, ErrProtocol, nil, nil, 1},
-		{"wrapped deadline is not the lifetime result", expired, fmt.Errorf("read: %w", context.DeadlineExceeded), nil, nil, 1},
-		{"deadline without lifetime expiry", live, context.DeadlineExceeded, nil, nil, 1},
-		{"signal", signalled, context.Canceled, nil, nil, 1},
-		{"input EOF", live, os.ErrClosed, nil, nil, 0},
+		{"requested close", nil, nil, nil, 0},
+		{"input EOF", os.ErrClosed, nil, nil, 0},
+		{"input EOF with unknown close", os.ErrClosed, residentmac.ErrStandbyUnknown, nil, 1},
+		{"input EOF with lost terminal", os.ErrClosed, nil, unix.EPIPE, 1},
+		{"deadline", context.DeadlineExceeded, nil, nil, 1},
+		{"wrapped deadline", fmt.Errorf("read: %w", context.DeadlineExceeded), nil, nil, 1},
+		{"signal", context.Canceled, nil, nil, 1},
+		{"protocol", ErrProtocol, nil, nil, 1},
 	} {
-		if got := ExitCode(ownedResult(tc.ended, tc.served, tc.closeErr, tc.terminalErr)); got != tc.want {
+		if got := ExitCode(ownedResult(tc.served, tc.closeErr, tc.terminalErr)); got != tc.want {
 			t.Errorf("%s: exit %d, want %d", tc.name, got, tc.want)
 		}
 	}

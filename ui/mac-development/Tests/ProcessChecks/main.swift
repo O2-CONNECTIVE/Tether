@@ -45,8 +45,8 @@ for mode in ["recovery", "missing", "malformed", "unknown", "trailing", "partial
     precondition(recovering.reaped)
     precondition(recovering.diagnostic.contains("helper PID=") && recovering.diagnostic.contains("reason="))
 }
-// Helper-initiated expiry over the real pipe. Exit 0 completes the unchanged
-// four proofs; the former exit 1 reproduces the reported unconfirmed state.
+// Helper-initiated close (no GUI request) over the real pipe. Exit 0 completes
+// the unchanged four proofs; a failing exit leaves collection unconfirmed.
 for (mode, collected) in [("expiry", true), ("expiry-nonzero", false)] {
     try mode.write(to: macos.appendingPathComponent("fixture-mode"), atomically: true, encoding: .ascii)
     let expired = ResidentProcess(fixtureBundle: root)
@@ -73,4 +73,4 @@ while (!empty.reaped || !empty.eof) && Date() < emptyDeadline { empty.poll(); Th
 precondition(empty.reaped && empty.eof && empty.feed.fault && !empty.mayQuit)
 // Test-owned directory only, after confirmed child collection.
 try manager.removeItem(at: root)
-print("ProcessChecks: real synthetic child/pipe close+EOF+reap, duplicate start/close, fault recovery, helper expiry, terminal rejection and hash rejection passed; no resident host executed")
+print("ProcessChecks: real synthetic child/pipe close+EOF+reap, duplicate start/close, fault recovery, helper-initiated close, terminal rejection and hash rejection passed; no resident host executed")

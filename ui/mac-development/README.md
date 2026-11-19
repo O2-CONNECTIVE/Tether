@@ -13,9 +13,16 @@ Developer ID の結果をモックに置換しません。別 bundle ID、常時
   改変への防御、コード署名・notarization の代替ではありません。
 - 新鮮な owner 状態に対する ON/OFF だけ。固定検証操作以外の command/path/env
   入力はありません。重複クリックと pending 中の操作を拒否します。
-- コマンド実行の許可（15分）と取り消し、実行したコマンドの本文（直近5件）の表示。
-  許可は receipt だけで確認し、待機が ON でなくなれば画面上も閉じます。記録の
-  制約は [development-resident](../../docs/development-resident.md) を参照。
+- 待機 ON は 2・4・8・12・24時間から選んだ時間（既定は2時間）を必ず付けて送ります
+  （`on <id> <rev> <hours>`）。待機中は「延長」で、選んだ時間を今から数えて置き換えます
+  （`extend`。短くもできます。pending にはしません）。待機の期限の壁時計は owner の
+  status の `standbyUntil` で表示し、期限の10分前から（`standbyEndingSoon`）
+  「まもなく期限」と出します。
+- コマンド実行の許可（`allow`）と取り消し、実行したコマンドの本文（直近5件）の表示。
+  許可に時間は付けず、待機が OFF になる（人が OFF にする・期限が来る）まで有効です。
+  許可の有無は status に出ないため、GUI が手元で持ちます。許可の accepted receipt で
+  許可中、取り消しの accepted receipt で許可なしとし、待機が ON でなくなれば消えます。
+  記録の制約は [development-resident](../../docs/development-resident.md) を参照。
 - 受領 receipt と状態変更、認証済み接続、停止回収を区別します。未知の状態、
   JSON 異常、時刻逆行、source age 3秒以上では操作を止めます。
 - 「ホストを停止」は元 owner に close を要求し、画面を残します。完全な回収証拠が
@@ -29,16 +36,13 @@ Developer ID の結果をモックに置換しません。別 bundle ID、常時
   未確認の状態は残ります。Dock から開き直すと同じ画面を表示します。未確認の状態を
   覚えているのはこのプロセスだけなので、アプリは終了しません。強制終了すると記録は
   残りません。「ホストを停止」とアプリの終了は別の操作です。
-- **起動から15分で終了を要求する限定CLIです。永続運転ではありません。**
-  LaunchAgent、ログイン起動、自動再起動はありません。期限で元 owner の close が
-  confirmed になり、終了frameも書けた場合だけ、helper は明示 close と同じ exit 0 で
-  終わります。GUI はそのうえで従来の4点の証拠が揃った場合だけ回収を確認します。
+- **限定CLIです。永続運転ではありません。** helper は自分の寿命では終了しません。
+  LaunchAgent、ログイン起動、自動再起動はありません。待機の期限が来ると、
+  owner が待機を OFF にして停止・回収し、GUI は回収の確認後に「期限で停止しました」と
+  出します（status の `standbyExpired`。次の ON で消えます）。helper が GUI の要求なしに
+  close した場合も、従来の4点の証拠が揃ったときだけ回収を確認します。
   close が unknown なら helper は終了せず元 owner を保持します。終了frameの書込み失敗、
-  期限以外の serve 失敗、signal による終了は非0のままです。いずれも回収未確認として残します。
-  GUI は、自分が頼んでいない confirmed の終了通知が helper の起動から15分以上後に届き、
-  4点の証拠が揃った場合に「15分の期限で停止しました」と「もう一度準備」の案内を出します。
-  理由は GUI が helper を起動した時刻と終了通知を受けた時刻から判断し、
-  終了通知の形式は変えていません。
+  serve 失敗、signal による終了は非0のままです。いずれも回収未確認として残します。
   server-side bounded pilot は別途必要です。
 - 起動失敗の診断や caller、credential、endpoint、生JSONを表示・保存しません。
   実ユーザーでの実行は現在ユーザー権限です。専用OSユーザーは自動作成しません。
