@@ -354,8 +354,9 @@ channel の心拍は両端が 10 秒ごとに送り、相手のものに答え�
 Cloudflare 側の都合で、寿命より前に切れることがあります。
 runtime の更新では、旧い process の接続は最大 20 分の猶予の後に切れます（[runtime updates](https://developers.cloudflare.com/workers/platform/limits/#runtime-updates)）。
 障害や資源の逼迫では、もっと早く切れることがあります。
-どの場合も channel の切断なので、猶予の間に再接続します。
+channel が開いた後に切れたら、channel の切断なので、猶予の間に再接続します。
 再接続は新しい WSS であり、新しい中継の寿命で始まりますが、期限は延びません。
+受付中や確認中に切れたら猶予はなく、受付の接続の切断として扱います（[受付 OFF のホストへの要求](#受付-off-のホストへの要求)）。
 
 期限の上限、コードの有効時間、要求の失効のどれかを変えるときは、この寿命も見直します。
 値は `deploy/cloudflare/native/worker.mjs` の `RESCUE_LIMITS` にあります。
