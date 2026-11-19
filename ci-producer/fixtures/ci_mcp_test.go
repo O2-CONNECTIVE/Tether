@@ -199,16 +199,37 @@ func (g *ciGateway) runCommand(child *ciChild, root string) {
 		diag.fail(t, "run-refusal")
 	}
 	diag.at("run-allow")
+	stateWaitStarted := time.Now()
 	if err := child.await(func(s Snapshot) bool { return s.Standby == "on" && s.Work == "idle" && s.Cleanup == "confirmed" }, 10*time.Second); err != nil {
-		diag.fail(t, "run-allow")
+		diag.failWait(t, "run-allow", "producer-state-wait", stateWaitStarted, 10*time.Second)
 	}
-	if allow, err := child.request("allow-run"); err != nil || child.accepted(allow, "allow-run") != nil {
-		diag.fail(t, "run-allow")
+	allow, elapsedMS, err := child.requestWithDiagnostics("allow-run")
+	if err != nil {
+		var deadlineMS *int64
+		if elapsedMS != nil {
+			deadline := ciRequestWriteDeadline.Milliseconds()
+			deadlineMS = &deadline
+		}
+		diag.failAt(t, "run-allow", "allow-request", elapsedMS, deadlineMS, nil)
+	}
+	allowWaitStarted := time.Now()
+	if err := child.accepted(allow, "allow-run"); err != nil {
+		diag.failWait(t, "run-allow", "allow-receipt-wait", allowWaitStarted, ciAllowReceiptWait)
 	}
 	// Extending standby is the person's other local action on the same pipe:
 	// the real owner accepts it while standby is on, and it keeps the allowance.
-	if extend, err := child.request("extend"); err != nil || child.accepted(extend, "extend") != nil {
-		diag.fail(t, "run-allow")
+	extend, elapsedMS, err := child.requestWithDiagnostics("extend")
+	if err != nil {
+		var deadlineMS *int64
+		if elapsedMS != nil {
+			deadline := ciRequestWriteDeadline.Milliseconds()
+			deadlineMS = &deadline
+		}
+		diag.failAt(t, "run-allow", "extend-request", elapsedMS, deadlineMS, nil)
+	}
+	extendedWaitStarted := time.Now()
+	if err := child.accepted(extend, "extend"); err != nil {
+		diag.failWait(t, "run-allow", "extend-receipt-wait", extendedWaitStarted, ciAllowReceiptWait)
 	}
 	diag.at("run-command")
 	id := fmt.Sprintf("%032x", 4)

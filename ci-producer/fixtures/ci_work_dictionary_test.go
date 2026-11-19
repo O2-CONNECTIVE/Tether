@@ -19,12 +19,18 @@ func (p *ciWorkChild) dictionary(g *ciGateway, op, id, suffix string) map[string
 	if id != "" { line += " " + id }
 	line += suffix + "\n"
 	if p.send(line) != nil { g.diagnostic.fail(g.t, "work-cli-write") }
-	frame, err := p.read()
+	var iteration *int
+	if op == "list" {
+		p.listIteration++
+		iteration = &p.listIteration
+	}
+	frame, substep, elapsed := p.read()
+	if substep != "" { g.diagnostic.failWorkResponse(g.t, substep, elapsed, iteration) }
 	value, ok := frame["value"].(map[string]any)
 	fields := 4
 	if op == "list" { fields = 3 }
-	if err != nil || len(frame) != fields || frame["type"] != "result" || frame["operation"] != op || !ok || (op != "list" && frame["request_id"] != id) {
-		g.diagnostic.fail(g.t, "work-cli-response")
+	if len(frame) != fields || frame["type"] != "result" || frame["operation"] != op || !ok || (op != "list" && frame["request_id"] != id) {
+		g.diagnostic.failWorkResponse(g.t, "shape-mismatch", elapsed, iteration)
 	}
 	// Work metadata has work_error; it is not a read error or cleanup proof.
 	g.diagnostic.observeTool(map[string]any{"structuredContent": value})

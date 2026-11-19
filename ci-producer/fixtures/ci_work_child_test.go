@@ -20,6 +20,7 @@ import (
 )
 
 var errCIWork = errors.New("work child unconfirmed")
+const ciWorkResponseDeadline = 40 * time.Second
 
 // The connection test retains this original owner on every uncertain path.
 // No deferred kill, alternate waiter or new client adopts its HTTP session.
@@ -31,6 +32,7 @@ type ciWorkChild struct {
 	waitDone chan struct{}
 	mu sync.Mutex
 	waitErr error
+	listIteration int
 }
 
 func startCIWork(g *ciGateway,root string) (*ciWorkChild,error) {
@@ -62,8 +64,8 @@ func startCIWork(g *ciGateway,root string) (*ciWorkChild,error) {
 	if send.SetWriteDeadline(time.Now().Add(5*time.Second))!=nil{return p,errCIWork}
 	n,e:=send.Write(raw);if e!=nil || n!=len(raw) || send.Close()!=nil{return p,errCIWork}
 	p.launch=nil;p.reader=bufio.NewReaderSize(output,mcpadapter.MaxLine+1)
-	message,e:=p.read()
-	if e!=nil || len(message)!=2 || message["type"]!="ready" || message["protocolVersion"]!=mcpadapter.ProtocolVersion{return p,errCIWork}
+	message,substep,_:=p.read()
+	if substep!="" || len(message)!=2 || message["type"]!="ready" || message["protocolVersion"]!=mcpadapter.ProtocolVersion{return p,errCIWork}
 	return p,nil
 }
 
@@ -73,22 +75,53 @@ func (p *ciWorkChild) send(line string) error {
 	if e!=nil || n!=len(line){return errCIWork};return nil
 }
 
-func (p *ciWorkChild) read() (map[string]any,error) {
-	if p.output.SetReadDeadline(time.Now().Add(40*time.Second))!=nil{return nil,errCIWork}
-	line,e:=p.reader.ReadSlice('\n')
-	if e!=nil || len(line)>mcpadapter.MaxLine+1 || agentwire.CheckJSON(line,false)!=nil{return nil,errCIWork}
-	var value map[string]any
-	if json.Unmarshal(line,&value)!=nil || value==nil{return nil,errCIWork}
-	return value,nil
+func (p *ciWorkChild) read() (map[string]any, string, int64) {
+	started := time.Now()
+	if p.output.SetReadDeadline(time.Now().Add(ciWorkResponseDeadline)) != nil {
+		return nil, "unavailable", 0
+	}
+	line, e := p.reader.ReadSlice('\n')
+	elapsed := time.Since(started).Milliseconds()
+	if e != nil {
+		switch {
+		case errors.Is(e, os.ErrDeadlineExceeded):
+			return nil, "timeout", elapsed
+		case errors.Is(e, io.EOF), errors.Is(e, io.ErrUnexpectedEOF):
+			return nil, "eof", elapsed
+		case errors.Is(e, bufio.ErrBufferFull):
+			return nil, "invalid-json", elapsed
+		default:
+			return nil, "unavailable", 0
+		}
+	}
+	if len(line) > mcpadapter.MaxLine+1 {
+		return nil, "invalid-json", elapsed
+	}
+	if agentwire.CheckJSON(line, false) != nil {
+		if agentwire.CheckJSON(line, true) == nil {
+			return nil, "shape-mismatch", elapsed
+		}
+		return nil, "invalid-json", elapsed
+	}
+	var decoded any
+	if json.Unmarshal(line, &decoded) != nil {
+		return nil, "invalid-json", elapsed
+	}
+	value, ok := decoded.(map[string]any)
+	if !ok || value == nil {
+		return nil, "shape-mismatch", elapsed
+	}
+	return value, "", elapsed
 }
 
 func (p *ciWorkChild) tool(g *ciGateway,name,id string) map[string]any {
 	g.t.Helper();g.diagnostic.beginTool(name)
 	op:=map[string]string{"tether_fixed_start":"start","tether_fixed_status":"result","tether_fixed_cancel":"cancel","tether_fixed_release":"release"}[name]
 	if op=="" || !agentwire.ValidCommandID(id) || p.send(op+" "+id+"\n")!=nil{g.diagnostic.fail(g.t,"work-cli-write")}
-	v,e:=p.read()
+	v,substep,elapsed:=p.read()
 	value,ok:=v["value"].(map[string]any)
-	if e!=nil || len(v)!=4 || v["type"]!="result" || v["operation"]!=op || v["request_id"]!=id || !ok {g.diagnostic.fail(g.t,"work-cli-response")}
+	if substep!="" {g.diagnostic.failWorkResponse(g.t,substep,elapsed,nil)}
+	if len(v)!=4 || v["type"]!="result" || v["operation"]!=op || v["request_id"]!=id || !ok {g.diagnostic.failWorkResponse(g.t,"shape-mismatch",elapsed,nil)}
 	result:=map[string]any{"structuredContent":value,"isError":value["error"]!=""}
 	g.diagnostic.observeTool(result)
 	if code:=ciToolResultFailure(result);code!=""{g.diagnostic.fail(g.t,code)}
@@ -98,8 +131,8 @@ func (p *ciWorkChild) tool(g *ciGateway,name,id string) map[string]any {
 func (p *ciWorkChild) finish() error {
 	// Later bytes in the same actual pipe write must not run after close.
 	if p.send("close\nstart ffffffffffffffffffffffffffffffff\nlist - 1\nget_execution ffffffffffffffffffffffffffffffff\nread_output ffffffffffffffffffffffffffffffff 0 7\n")!=nil{return errCIWork}
-	v,e:=p.read()
-	if e!=nil || len(v)!=3 || v["type"]!="closed" || v["session"]!="confirmed" || v["work_cleanup"]!="not_observed" {return errCIWork}
+	v,substep,_:=p.read()
+	if substep!="" || len(v)!=3 || v["type"]!="closed" || v["session"]!="confirmed" || v["work_cleanup"]!="not_observed" {return errCIWork}
 	if p.input.Close()!=nil || p.output.SetReadDeadline(time.Now().Add(10*time.Second))!=nil{return errCIWork}
 	line,e:=p.reader.ReadSlice('\n')
 	if !errors.Is(e,io.EOF) || len(line)!=0{return errCIWork}

@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+const ciAllowReceiptWait = 10 * time.Second
+const ciRequestWriteDeadline = 5 * time.Second
+
 type ciChild struct {
 	foreground                     bool
 	nativeEvidence                 *os.File
@@ -337,15 +340,20 @@ func (p *ciChild) await(match func(Snapshot) bool, budget time.Duration) error {
 	return errors.New("producer observation deadline; original owner retained")
 }
 func (p *ciChild) request(intent string) (uint64, error) {
+	id, _, err := p.requestWithDiagnostics(intent)
+	return id, err
+}
+
+func (p *ciChild) requestWithDiagnostics(intent string) (uint64, *int64, error) {
 	s, e := p.state()
 	if e != nil {
-		return 0, e
+		return 0, nil, e
 	}
 	p.nextID++
 	id := p.nextID
 	raw, e := Encode(intentEnvelope{1, "intent", Intent{1, id, s.Revision, intent, 0}})
 	if e != nil {
-		return id, e
+		return id, nil, e
 	}
 	if p.foreground {
 		verb := intent
@@ -360,14 +368,16 @@ func (p *ciChild) request(intent string) (uint64, error) {
 		}
 		raw = []byte(line + "\n")
 	}
-	if e = p.input.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
-		return id, e
+	if e = p.input.SetWriteDeadline(time.Now().Add(ciRequestWriteDeadline)); e != nil {
+		return id, nil, e
 	}
+	started := time.Now()
 	n, e := p.input.Write(raw)
+	elapsedMS := time.Since(started).Milliseconds()
 	if e != nil || n != len(raw) {
-		return id, fmt.Errorf("intent write unknown: %w", e)
+		return id, &elapsedMS, fmt.Errorf("intent write unknown: %w", e)
 	}
-	return id, nil
+	return id, nil, nil
 }
 func (p *ciChild) applied(id uint64, intent string) error {
 	if err := p.await(func(s Snapshot) bool {
@@ -387,7 +397,7 @@ func (p *ciChild) applied(id uint64, intent string) error {
 // accepted waits for the same-ID receipt of the run allowance. The allowance
 // is not a standby transition, so no snapshot transition follows it.
 func (p *ciChild) accepted(id uint64, intent string) error {
-	until := time.Now().Add(10 * time.Second)
+	until := time.Now().Add(ciAllowReceiptWait)
 	for time.Now().Before(until) {
 		p.mu.Lock()
 		r, ok := p.receipts[id]

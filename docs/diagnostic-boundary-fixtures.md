@@ -9,8 +9,10 @@ producer runtime、既存workflow、keeper/observer、実Mac診断には接続�
 
 enum値は既存の [DIAGNOSTIC_ENUMS.json](../ci-producer/DIAGNOSTIC_ENUMS.json)
 を読み、別のenum定義は作りません。入力はUTF-8 JSON objectのbytesのみです。
-必須の `stage` と `failure_code`、任意の `result_fields` 群と `native_fields` 群
-だけを許可します。任意群を含める場合は、その群の全フィールドが必要です。
+必須の `stage` と `failure_code`、任意の `result_fields`、`native_fields`、
+`producer_fields` と `failure_fields` の各群だけを許可します。任意群を含める場合は、
+その群の全フィールドが必要です。`failure_substep` は固定enum、経過・期限・list回数は
+`unavailable` または整数です。経過は0以上、期限とlist回数は1以上に限ります。
 群が無いことは未観測のまま維持し、前回の値から補いません。
 これは完全なproducer markerや既存workflow出力を受け付ける契約ではありません。
 

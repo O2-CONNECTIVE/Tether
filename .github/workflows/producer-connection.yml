@@ -305,7 +305,14 @@ jobs:
                       raw = source.read(16385)
                   if len(raw) > 16384:
                       return {}
-                  value = json.loads(raw)
+                  def unique_object(pairs):
+                      value = {}
+                      for key, item in pairs:
+                          if key in value:
+                              raise ValueError('duplicate-field')
+                          value[key] = item
+                      return value
+                  value = json.loads(raw, object_pairs_hook=unique_object)
                   if (not isinstance(value, dict) or value.get('invocation') != invocation
                           or value.get('test') != name):
                       return {}
@@ -524,6 +531,46 @@ jobs:
               'native_final_diag_available': {'yes', 'no', 'unavailable'},
           }
           public.update({field: 'unavailable' for field in native_fields})
+          failure_substeps = {
+              'run-allow': {
+                  'unavailable', 'producer-state-wait', 'allow-request',
+                  'allow-receipt-wait', 'extend-request', 'extend-receipt-wait',
+              },
+              'gateway-setup': {
+                  'unavailable', 'root-stat', 'ca-key-generate', 'ca-certificate-create',
+                  'ca-certificate-parse', 'server-key-generate', 'server-certificate-create',
+                  'host-key-generate', 'host-signer-create', 'principal-key-generate',
+                  'principal-signer-create', 'other-principal-key-generate',
+                  'other-principal-signer-create', 'jwt-key-generate', 'listener-bind',
+                  'jwks-encode', 'verifier-create', 'gateway-create', 'handler-create',
+                  'hosts-configure', 'resident-configure', 'host-key-encode',
+                  'host-key-file-write', 'policy-encode', 'policy-file-write',
+              },
+              'work-cli-response': {
+                  'unavailable', 'timeout', 'eof', 'invalid-json', 'shape-mismatch',
+              },
+          }
+          failure_substep_values = set().union(*failure_substeps.values())
+          failure_job_timeout_ms = 30 * 60 * 1000
+          failure_integer_bounds = {
+              'failure_elapsed_ms': (0, failure_job_timeout_ms),
+              'failure_deadline_ms': (1, failure_job_timeout_ms),
+              'failure_iteration': (1, 11),
+          }
+          failure_request_write_deadline_ms = 5 * 1000
+          failure_wait_deadlines = {
+              'producer-state-wait': 10000,
+              'allow-request': failure_request_write_deadline_ms,
+              'allow-receipt-wait': 10000,
+              'extend-request': failure_request_write_deadline_ms,
+              'extend-receipt-wait': 10000,
+              'timeout': 40000,
+              'eof': 40000,
+              'invalid-json': 40000,
+              'shape-mismatch': 40000,
+          }
+          failure_diagnostic_fields = {'failure_substep', *failure_integer_bounds}
+          public.update({field: 'unavailable' for field in failure_diagnostic_fields})
           outcome_path = pathlib.Path(os.environ['CI_PRODUCER_RESULT'])
           result = read_marker(outcome_path)
           stage, code = result.get('stage'), result.get('failure_code')
@@ -536,6 +583,38 @@ jobs:
                   candidate = result.get(field)
                   if isinstance(candidate, str) and candidate in allowed:
                       public[field] = candidate
+              failure_substep = result.get('failure_substep')
+              failure_elapsed = result.get('failure_elapsed_ms')
+              failure_deadline = result.get('failure_deadline_ms')
+              failure_iteration = result.get('failure_iteration')
+              valid_failure_group = (
+                  failure_diagnostic_fields <= result.keys()
+                  and isinstance(failure_substep, str)
+                  and failure_substep in failure_substep_values
+                  and failure_substep in failure_substeps.get(code, {'unavailable'})
+                  and all(value == 'unavailable' or
+                          (type(value) is int
+                           and failure_integer_bounds[field][0] <= value <= failure_integer_bounds[field][1])
+                          for field, value in (
+                              ('failure_elapsed_ms', failure_elapsed),
+                              ('failure_deadline_ms', failure_deadline),
+                              ('failure_iteration', failure_iteration)))
+              )
+              if valid_failure_group:
+                  wait_deadline = failure_wait_deadlines.get(failure_substep)
+                  if wait_deadline is None:
+                      valid_failure_group = (failure_elapsed == 'unavailable'
+                                             and failure_deadline == 'unavailable')
+                  else:
+                      valid_failure_group = (type(failure_elapsed) is int
+                                             and type(failure_deadline) is int
+                                             and failure_deadline == wait_deadline)
+                  if code == 'work-cli-response' and result.get('tool_operation') == 'list':
+                      valid_failure_group = valid_failure_group and type(failure_iteration) is int
+                  else:
+                      valid_failure_group = valid_failure_group and failure_iteration == 'unavailable'
+              if valid_failure_group:
+                  public.update({field: result[field] for field in failure_diagnostic_fields})
               # A partial, malformed or older group supplies no correlated evidence.
               if all(isinstance(result.get(field), str) and result[field] in allowed
                      for field, allowed in producer_fields.items()):

@@ -4,8 +4,17 @@ from pathlib import Path
 
 MAX_BYTES = 16384
 _ENUMS = json.loads((Path(__file__).resolve().parents[1] / 'ci-producer/DIAGNOSTIC_ENUMS.json').read_text())
-GROUPS = (_ENUMS['result_fields'], _ENUMS['native_fields'], _ENUMS['producer_fields'])
-ALLOWED = {'stage': _ENUMS['stages'], 'failure_code': _ENUMS['failure_codes'], **GROUPS[0], **GROUPS[1], **GROUPS[2]}
+GROUPS = (_ENUMS['result_fields'], _ENUMS['native_fields'], _ENUMS['producer_fields'],
+          _ENUMS['failure_fields'])
+INTEGER_FIELDS = _ENUMS['integer_fields']
+JOB_TIMEOUT_MS = 30 * 60 * 1000
+INTEGER_MAXIMUMS = {
+    'failure_elapsed_ms': JOB_TIMEOUT_MS,
+    'failure_deadline_ms': JOB_TIMEOUT_MS,
+    'failure_iteration': 11,
+}
+ALLOWED = {'stage': _ENUMS['stages'], 'failure_code': _ENUMS['failure_codes'],
+           **GROUPS[0], **GROUPS[1], **GROUPS[2], **GROUPS[3]}
 
 
 def _reject(reason):
@@ -50,11 +59,20 @@ def validate_record(raw):
         if record.keys() & group.keys() and not group.keys() <= record.keys():
             return _reject('incomplete-record')
     for field, value in record.items():
-        if type(value) is not str or value not in ALLOWED[field]:
+        if field in INTEGER_FIELDS:
+            if value == 'unavailable':
+                continue
+            if (type(value) is not int or value < INTEGER_FIELDS[field]['minimum']
+                    or (field in INTEGER_MAXIMUMS and value > INTEGER_MAXIMUMS[field])):
+                return _reject('invalid-enum')
+        elif type(value) is not str or value not in ALLOWED[field]:
             return _reject('invalid-enum')
-    # Copy canonical strings rather than any observed source bytes.
-    fields = {field: next(item for item in ALLOWED[field] if item == value)
-              for field, value in record.items()}
+    # Copy canonical strings and exact integers rather than source bytes.
+    fields = {
+        field: value if field in INTEGER_FIELDS and type(value) is int
+        else next(item for item in ALLOWED[field] if item == value)
+        for field, value in record.items()
+    }
     for field in _ENUMS['native_fields']:
         if field not in fields or field == 'native_capture':
             continue
