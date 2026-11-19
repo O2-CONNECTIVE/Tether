@@ -17,9 +17,12 @@ import (
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -66,19 +69,60 @@ func (h *rescueHelper) withdrawn() []string {
 // hands the host one end of an in-memory stream and keeps the other for the
 // 担当者's channel client.
 type rescueReception struct {
-	mu      sync.Mutex
-	done    chan struct{}
-	refuses []bool
-	allows  []Dispatch
-	client  net.Conn
-	closes  int
-	onClose func()
+	mu       sync.Mutex
+	done     chan struct{}
+	requests chan agenttransport.VerifiedRescueIdentity
+	refuses  []bool
+	allows   []Dispatch
+	client   net.Conn
+	closes   int
+	resumes  int
+	opens    int
+	code     string
+	key      ssh.Signer
+	onClose  func()
+	onResume func()
+	onAllow  func(Dispatch, net.Conn)
 	// entered and gate, when set before the answer, hold Allow open as a slow
 	// write to the gateway would.
 	entered, gate chan struct{}
 }
 
-func newRescueReception() *rescueReception { return &rescueReception{done: make(chan struct{})} }
+func newRescueReception() *rescueReception {
+	return &rescueReception{done: make(chan struct{}), requests: make(chan agenttransport.VerifiedRescueIdentity, 1), code: "123456789012", key: rescueK}
+}
+
+func freshRescueReception(seed byte, code string) *rescueReception {
+	r := newRescueReception()
+	r.code, r.key = code, rescueSigner(seed)
+	return r
+}
+
+func (r *rescueReception) Open(context.Context) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.opens++
+	return r.code, nil
+}
+func (r *rescueReception) Resume(context.Context) error {
+	r.mu.Lock()
+	r.resumes++
+	onResume := r.onResume
+	r.mu.Unlock()
+	if onResume != nil {
+		onResume()
+	}
+	return nil
+}
+func (r *rescueReception) Request() <-chan agenttransport.VerifiedRescueIdentity { return r.requests }
+func (r *rescueReception) HostKey() ssh.Signer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.key == nil {
+		return rescueK
+	}
+	return r.key
+}
 
 func (r *rescueReception) Done() <-chan struct{} { return r.done }
 
@@ -95,10 +139,14 @@ func (r *rescueReception) Allow(d Dispatch) (net.Conn, error) {
 		<-r.gate
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	host, client := memPair()
 	r.allows = append(r.allows, d)
 	r.client = client
+	onAllow := r.onAllow
+	r.mu.Unlock()
+	if onAllow != nil {
+		onAllow(d, client)
+	}
 	return host, nil
 }
 
@@ -209,12 +257,130 @@ func rescueRequestFor(c ssh.PublicKey) RescueRequest {
 	return RescueRequest{client: c, displayName: "山田（サポート）", organization: "O2 CONNECTIVE", profile: "mac_current_user"}
 }
 
+type rescueUncleanRuntime struct{ started chan struct{} }
+
+func (*rescueUncleanRuntime) AgentProfile() agentexec.Profile { return agentexec.ProfileMacCurrentUser }
+func (r *rescueUncleanRuntime) StartShell(context.Context, supervisor.Binding, []byte) (agentexec.GuestProcess, error) {
+	close(r.started)
+	return rescueUncleanProcess{}, nil
+}
+
+type rescueUncleanProcess struct{}
+
+func (rescueUncleanProcess) Next(ctx context.Context) (agentexec.Stream, []byte, error) {
+	<-ctx.Done()
+	return 0, nil, ctx.Err()
+}
+func (rescueUncleanProcess) Wait(ctx context.Context) (agentexec.ExitStatus, error) {
+	<-ctx.Done()
+	return agentexec.ExitStatus{}, ctx.Err()
+}
+func (rescueUncleanProcess) Terminate(context.Context) error {
+	return errors.New("terminate unconfirmed")
+}
+func (rescueUncleanProcess) Release(context.Context) error { return errors.New("release unconfirmed") }
+
+type rescueWorkRuntime struct{ started chan struct{} }
+
+func (*rescueWorkRuntime) AgentProfile() agentexec.Profile { return agentexec.ProfileMacCurrentUser }
+func (r *rescueWorkRuntime) StartShell(context.Context, supervisor.Binding, []byte) (agentexec.GuestProcess, error) {
+	close(r.started)
+	return rescueWorkProcess{}, nil
+}
+
+type rescueWorkProcess struct{}
+
+func (rescueWorkProcess) Next(ctx context.Context) (agentexec.Stream, []byte, error) {
+	<-ctx.Done()
+	return 0, nil, ctx.Err()
+}
+func (rescueWorkProcess) Wait(ctx context.Context) (agentexec.ExitStatus, error) {
+	<-ctx.Done()
+	return agentexec.ExitStatus{}, ctx.Err()
+}
+func (rescueWorkProcess) Terminate(context.Context) error { return nil }
+func (rescueWorkProcess) Release(context.Context) error   { return nil }
+
 type rescueFixture struct {
-	r      *Rescue
-	helper *rescueHelper
-	rec    *rescueReception
-	clocks *rescueClocks
-	cfg    RescueConfig
+	r            *Rescue
+	helper       *rescueHelper
+	rec          *rescueReception
+	clocks       *rescueClocks
+	cfg          RescueConfig
+	factoryMu    sync.Mutex
+	factoryCalls int
+	factoryQueue []rescueReceptionResult
+	events       chan RescueEvent
+}
+
+type rescueReceptionResult struct {
+	rec RescueReception
+	err error
+}
+
+func (f *rescueFixture) makeReception() (RescueReception, error) {
+	f.factoryMu.Lock()
+	defer f.factoryMu.Unlock()
+	f.factoryCalls++
+	if len(f.factoryQueue) != 0 {
+		result := f.factoryQueue[0]
+		f.factoryQueue = f.factoryQueue[1:]
+		return result.rec, result.err
+	}
+	return f.rec, nil
+}
+
+func (f *rescueFixture) queueReception(rec RescueReception, err error) {
+	f.factoryMu.Lock()
+	defer f.factoryMu.Unlock()
+	f.factoryQueue = append(f.factoryQueue, rescueReceptionResult{rec: rec, err: err})
+}
+
+func (f *rescueFixture) factoryCallCount() int {
+	f.factoryMu.Lock()
+	defer f.factoryMu.Unlock()
+	return f.factoryCalls
+}
+
+func waitRescueEvent(t *testing.T, events <-chan RescueEvent, want RescueEventKind) RescueEvent {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case event := <-events:
+			if event.Kind == want {
+				return event
+			}
+		case <-timer.C:
+			t.Fatalf("Rescue event %d did not arrive", want)
+			return RescueEvent{}
+		}
+	}
+}
+
+func waitFactoryCalls(t *testing.T, f *rescueFixture, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.factoryCallCount() >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("factory calls = %d, want at least %d", f.factoryCallCount(), want)
+}
+
+func waitShownCount(t *testing.T, helper *rescueHelper, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(helper.shown()) >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("shown prompts = %d, want at least %d", len(helper.shown()), want)
 }
 
 func newRescueFixture(t *testing.T, d time.Duration) *rescueFixture {
@@ -222,8 +388,9 @@ func newRescueFixture(t *testing.T, d time.Duration) *rescueFixture {
 	base := config(t)
 	budgets := base.Budgets
 	budgets.Handshake = 10 * time.Second // the tests open the channel themselves after the answer
-	f := &rescueFixture{helper: &rescueHelper{}, rec: newRescueReception(), clocks: newRescueClocks()}
-	f.cfg = RescueConfig{HostKey: rescueK, Runtime: base.Runtime, Duration: d, CleanupTimeout: base.CleanupTimeout, Budgets: budgets, Helper: f.helper, Reception: f.rec}
+	f := &rescueFixture{helper: &rescueHelper{}, rec: newRescueReception(), clocks: newRescueClocks(), events: make(chan RescueEvent, 16)}
+	f.factoryQueue = []rescueReceptionResult{{rec: f.rec}}
+	f.cfg = RescueConfig{Runtime: base.Runtime, Duration: d, CleanupTimeout: base.CleanupTimeout, Budgets: budgets, Helper: f.helper, ReceptionFactory: f.makeReception, OnStateChange: func(event RescueEvent) { f.events <- event }}
 	r, err := newRescue(f.cfg, &neverRuntime{}, f.clocks.clock())
 	if err != nil {
 		t.Fatalf("newRescue = %v", err)
@@ -733,10 +900,366 @@ func TestRescueGrantAllowsOnlyCUntilChosenLifetime(t *testing.T) {
 	}
 	f.requireLive(t)
 	_ = ch.Close()
-	// No grace in this slice: the channel's end is the end, and K is discarded.
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	f.clocks.advance(4*time.Minute+59*time.Second, 4*time.Minute+59*time.Second)
+	f.r.recheck()
+	f.requireLive(t)
+	f.r.Stop()
 	f.waitDone(t)
 	if _, _, closes := f.rec.state(); closes != 1 {
 		t.Fatalf("the reception was closed %d times, want 1", closes)
+	}
+}
+
+func TestRescueGraceExpiresUsingBothClocksAndWallRollback(t *testing.T) {
+	cases := []struct {
+		name   string
+		before func(*rescueClocks)
+		after  func(*rescueClocks)
+	}{
+		{"monotonic only", func(c *rescueClocks) { c.advance(4*time.Minute+59*time.Second, 0) }, func(c *rescueClocks) { c.advance(2*time.Second, 0) }},
+		{"wall only", func(c *rescueClocks) { c.advance(0, 4*time.Minute+59*time.Second) }, func(c *rescueClocks) { c.advance(0, 2*time.Second) }},
+		{"wall rollback", func(c *rescueClocks) { c.advance(0, 4*time.Minute+59*time.Second) }, func(c *rescueClocks) { c.advance(0, -5*time.Hour) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRescueFixture(t, 4*time.Hour)
+			next := freshRescueReception(0x4e, "987654321098")
+			f.queueReception(next, nil)
+			p := f.prompt(t)
+			d := f.allow(t, p)
+			approved := f.r.approved
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			ch, err := openChannel(ctx, t, f, d, rescueC)
+			if err != nil {
+				t.Fatalf("channel: %v", err)
+			}
+			if err := ch.Close(); err != nil {
+				t.Fatalf("close channel: %v", err)
+			}
+			_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+			select {
+			case <-f.r.Done():
+				t.Fatal("Rescue ended at transport loss before the grace elapsed")
+			default:
+			}
+			tc.before(f.clocks)
+			f.clocks.recheck(t)
+			if !approved.issuer.Snapshot().HasAuthority {
+				t.Fatal("grant ended before five minutes")
+			}
+			tc.after(f.clocks)
+			f.r.recheck()
+			opened := waitRescueEvent(t, f.events, RescueEventReceptionOpened)
+			if opened.Code != next.code {
+				t.Fatalf("new code = %q, want %q", opened.Code, next.code)
+			}
+			if approved.issuer.Snapshot().HasAuthority {
+				t.Fatal("old grant remained live after grace expiry")
+			}
+			f.r.mu.Lock()
+			state := f.r.state
+			f.r.mu.Unlock()
+			if state != rescueAccepting {
+				t.Fatalf("state after grace expiry = %v, want accepting", state)
+			}
+		})
+	}
+}
+
+func TestRescueGraceUsesLastValidFrameRatherThanDetectionTime(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	prompt := f.prompt(t)
+	d := f.allow(t, prompt)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, err := openChannel(ctx, t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	f.r.noteActivity() // the last valid application or heartbeat frame
+	f.clocks.advance(30*time.Second, 30*time.Second)
+	if err := ch.Close(); err != nil {
+		t.Fatalf("close channel: %v", err)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	select {
+	case <-f.r.Done():
+		t.Fatal("Rescue ended at the transport-loss detection point")
+	default:
+	}
+	approved := f.r.approved
+	next := freshRescueReception(0x4e, "987654321098")
+	f.queueReception(next, nil)
+	f.clocks.advance(4*time.Minute+31*time.Second, 4*time.Minute+31*time.Second)
+	f.r.recheck()
+	opened := waitRescueEvent(t, f.events, RescueEventReceptionOpened)
+	if opened.Code != next.code || approved.issuer.Snapshot().HasAuthority {
+		t.Fatalf("last-frame grace result code=%q old-grant-live=%v", opened.Code, approved.issuer.Snapshot().HasAuthority)
+	}
+}
+
+func TestRescueGraceRechecksWallClockAfterSleepWithinOneSecond(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	prompt := f.prompt(t)
+	d := f.allow(t, prompt)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, err := openChannel(ctx, t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	f.r.noteActivity()
+	if err := ch.Close(); err != nil {
+		t.Fatalf("close channel: %v", err)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	select {
+	case <-f.r.Done():
+		t.Fatal("Rescue ended before the wall clock advanced")
+	default:
+	}
+	approved := f.r.approved
+	next := freshRescueReception(0x4e, "987654321098")
+	f.queueReception(next, nil)
+	f.clocks.advance(0, 6*time.Minute)
+	started := time.Now()
+	f.r.recheck()
+	opened := waitRescueEvent(t, f.events, RescueEventReceptionOpened)
+	if time.Since(started) > time.Second {
+		t.Fatalf("wall-clock expiry took %v after recheck", time.Since(started))
+	}
+	if opened.Code != next.code || approved.issuer.Snapshot().HasAuthority {
+		t.Fatalf("wall-clock expiry code=%q old-grant-live=%v", opened.Code, approved.issuer.Snapshot().HasAuthority)
+	}
+}
+
+func TestRescueGraceExpiryOpensNewReceptionAndShowsOnlyOnItsRequest(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	first := f.prompt(t)
+	d := f.allow(t, first)
+	oldApproved := f.r.approved
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, err := openChannel(ctx, t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("generation 1 channel: %v", err)
+	}
+	if err := ch.Close(); err != nil {
+		t.Fatalf("close generation 1: %v", err)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	second := freshRescueReception(0x4e, "987654321098")
+	f.queueReception(second, nil)
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	f.r.recheck()
+	opened := waitRescueEvent(t, f.events, RescueEventReceptionOpened)
+	if opened.Code != second.code {
+		t.Fatalf("new reception code = %q, want %q", opened.Code, second.code)
+	}
+	if f.factoryCallCount() != 2 || second.opens != 1 {
+		t.Fatalf("factory calls = %d, new reception opens = %d", f.factoryCallCount(), second.opens)
+	}
+	if bytes.Equal(rescueK.PublicKey().Marshal(), second.HostKey().PublicKey().Marshal()) {
+		t.Fatal("new reception reused the old K")
+	}
+	if len(f.helper.shown()) != 1 {
+		t.Fatal("opening the replacement reception showed a prompt")
+	}
+	second.requests <- verifiedFor(t, rescueC.PublicKey(), second.key)
+	waitShownCount(t, f.helper, 2)
+	newPrompt := f.helper.shown()[1]
+	if err := f.r.Answer(f.helper, RescueReply{RequestID: newPrompt.RequestID, Digest: newPrompt.Digest(), Allow: true}); err != nil {
+		t.Fatalf("new reception approval: %v", err)
+	}
+	second.mu.Lock()
+	newAllows := append([]Dispatch(nil), second.allows...)
+	second.mu.Unlock()
+	f.r.mu.Lock()
+	newApproved := f.r.approved
+	f.r.mu.Unlock()
+	if len(newAllows) != 1 || newApproved == nil || newApproved == oldApproved || newApproved.session == oldApproved.session {
+		t.Fatalf("new permit did not create a fresh Session: allows=%d approved=%p old=%p", len(newAllows), newApproved, oldApproved)
+	}
+	if newAllows[0].Binding.ConnectionGeneration != 1 || newAllows[0].Binding.Grant.Identity.LaunchID == oldApproved.session.Grant().Binding.Identity.LaunchID {
+		t.Fatal("new permit reused the expired grant instead of creating a new guest Session")
+	}
+	if conn := second.clientConn(); conn != nil {
+		_ = conn.Close()
+	}
+	f.r.Stop()
+	f.waitDone(t)
+}
+
+func TestRescueResumeNotifiesWithoutShowingNativePrompt(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	runtime := &rescueWorkRuntime{started: make(chan struct{})}
+	f.r.runtime = runtime
+	prompt := f.prompt(t)
+	d := f.allow(t, prompt)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, err := openChannel(ctx, t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("generation 1 channel: %v", err)
+	}
+	type openResult struct {
+		channel *agentchannel.Channel
+		err     error
+	}
+	opened := make(chan openResult, 1)
+	releaseResume := make(chan struct{})
+	var releaseResumeOnce sync.Once
+	defer releaseResumeOnce.Do(func() { close(releaseResume) })
+	f.rec.onResume = func() {
+		<-releaseResume
+		f.rec.requests <- verifiedFor(t, rescueC.PublicKey(), rescueK)
+	}
+	f.rec.onAllow = func(dispatch Dispatch, conn net.Conn) {
+		if dispatch.Binding.ConnectionGeneration == 1 {
+			return
+		}
+		go func() {
+			hostKey, parseErr := ssh.ParsePublicKey(dispatch.HostKey)
+			if parseErr != nil {
+				opened <- openResult{err: parseErr}
+				return
+			}
+			channel, openErr := agentchannel.Open(context.Background(), agentchannel.ClientConfig{
+				Binding: dispatch.Binding, HostKey: hostKey, Signer: rescueC, Deadline: dispatch.Deadline, Budgets: f.cfg.Budgets,
+			}, conn)
+			opened <- openResult{channel: channel, err: openErr}
+		}()
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close generation 1: %v", err)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	f.clocks.advance(4*time.Minute+59*time.Second, 4*time.Minute+59*time.Second)
+	f.clocks.recheck(t)
+	f.requireLive(t)
+	releaseResumeOnce.Do(func() { close(releaseResume) })
+	var resumed openResult
+	select {
+	case resumed = <-opened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("generation 2 channel did not open")
+	}
+	if resumed.err != nil || resumed.channel == nil {
+		t.Fatalf("generation 2 channel = %v", resumed.err)
+	}
+	defer resumed.channel.Close()
+	_ = waitRescueEvent(t, f.events, RescueEventReconnected)
+	if len(f.helper.shown()) != 1 {
+		t.Fatalf("reconnect showed %d native prompts, want only the original prompt", len(f.helper.shown()))
+	}
+	client, err := agentwire.NewClient(resumed.channel)
+	if err != nil {
+		t.Fatalf("generation 2 wire client: %v", err)
+	}
+	status, err := client.Start(ctx, "resume-work", []byte("whoami\n"), 60_000)
+	if err != nil {
+		t.Fatalf("generation 2 work start = (%+v, %v)", status, err)
+	}
+	select {
+	case <-runtime.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("generation 2 work did not reach the guest")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for status.Phase != agentexec.PhaseRunning && time.Now().Before(deadline) {
+		status, err = client.Status(ctx, status.CommandID)
+		if err != nil {
+			t.Fatalf("generation 2 work status = %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if status.Phase != agentexec.PhaseRunning {
+		t.Fatalf("generation 2 work phase = %v, want running", status.Phase)
+	}
+	f.r.Stop()
+	f.waitDone(t)
+}
+
+func TestRescueUnknownCleanupRequiresCleanupAndDoesNotReopen(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	runtime := &rescueUncleanRuntime{started: make(chan struct{})}
+	f.r.runtime = runtime
+	prompt := f.prompt(t)
+	d := f.allow(t, prompt)
+	f.r.mu.Lock()
+	approved := f.r.approved
+	f.r.mu.Unlock()
+	status, err := approved.session.Start(agentexec.StartRequest{
+		Version: agentexec.Version, Binding: approved.session.Binding(), RequestID: "rescue-cleanup-unknown",
+		Mode: approved.session.Mode(), Command: []byte("whoami\n"), TimeoutMillis: 60_000,
+	})
+	if err != nil {
+		t.Fatalf("start fake guest work: %v", err)
+	}
+	select {
+	case <-runtime.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake guest did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, err := openChannel(ctx, t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("channel: %v", err)
+	}
+	if err := ch.Close(); err != nil {
+		t.Fatalf("close channel: %v", err)
+	}
+	f.waitDone(t)
+	cleanupErr, observed := f.r.CleanupResult()
+	if !observed || !errors.Is(cleanupErr, agentexec.ErrCleanupUnknown) {
+		t.Fatalf("cleanup result = %v observed=%v after command %s", cleanupErr, observed, status.CommandID)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventCleanupRequired)
+	if f.factoryCallCount() != 1 || f.rec.resumes != 0 {
+		t.Fatalf("factory calls = %d, resumes = %d after unknown cleanup", f.factoryCallCount(), f.rec.resumes)
+	}
+}
+
+func TestRescueDeadlineCancelsOfflineReceptionReopen(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	prompt := f.prompt(t)
+	d := f.allow(t, prompt)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, err := openChannel(ctx, t, f, d, rescueC)
+	if err != nil {
+		t.Fatalf("generation 1 channel: %v", err)
+	}
+	if err := ch.Close(); err != nil {
+		t.Fatalf("close generation 1: %v", err)
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
+	f.queueReception(nil, errors.New("gateway offline"))
+	f.queueReception(newRescueReception(), nil)
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	f.r.recheck()
+	_ = waitRescueEvent(t, f.events, RescueEventNewReception)
+	waitFactoryCalls(t, f, 2)
+	if f.factoryCallCount() != 2 {
+		t.Fatalf("factory calls after offline reopen = %d, want initial and one retry", f.factoryCallCount())
+	}
+	select {
+	case <-f.r.Done():
+		t.Fatal("offline new-reception attempt ended the Rescue before the grant deadline")
+	default:
+	}
+	f.clocks.advance(4*time.Hour, 4*time.Hour)
+	f.r.recheck()
+	select {
+	case <-f.r.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("grant deadline did not end Rescue")
+	}
+	if f.factoryCallCount() != 2 {
+		t.Fatalf("expired grant retried reception factory %d times", f.factoryCallCount())
 	}
 }
 
@@ -879,9 +1402,8 @@ func TestNewRescueAcceptsOnlyChosenLifetimes(t *testing.T) {
 		}
 	}
 	for name, change := range map[string]func(*RescueConfig){
-		"HostKey なし":   func(c *RescueConfig) { c.HostKey = nil },
-		"Helper なし":    func(c *RescueConfig) { c.Helper = nil },
-		"Reception なし": func(c *RescueConfig) { c.Reception = nil },
+		"Helper なし":            func(c *RescueConfig) { c.Helper = nil },
+		"Reception factory なし": func(c *RescueConfig) { c.ReceptionFactory = nil },
 	} {
 		cfg := base
 		change(&cfg)

@@ -69,9 +69,9 @@ type Config struct {
 	CleanupTimeout  time.Duration // bounds each Terminate/Release attempt after the grant ends
 }
 
-// Session serves one grant and at most one non-terminal command at a time. It
-// is never reset or resumed: after revoke, expiry or transport loss a new
-// approval must create a new Issuer authority and Session.
+// Session serves one grant and at most one non-terminal command at a time.
+// Sequential transport generations may reuse it only after an eligible loss
+// pauses admission and cleanup is confirmed. Revoke and expiry are terminal.
 type Session struct {
 	issuer         *ephemeral.Issuer
 	authority      *supervisor.Authority
@@ -97,20 +97,22 @@ type Session struct {
 	elapsed func() time.Duration
 	recheck time.Duration
 
-	mu           sync.Mutex
-	base         context.Context
-	cancelBase   context.CancelFunc
-	revoked      bool
-	reason       StopReason
-	byRequest    map[string]*command // per grant; never carried into another Session
-	byID         map[string]*command
-	order        []*command
-	deadlineStop func() bool
-	// adapterClaimed and transportClaimed are set once by Claim and
-	// ClaimTransport and never cleared.
-	adapterClaimed   bool
-	transportClaimed bool
-	adapterPrefix    string // fixed by the one trusted wire adapter's claim
+	mu                  sync.Mutex
+	base                context.Context
+	cancelBase          context.CancelFunc
+	revoked             bool
+	reason              StopReason
+	byRequest           map[string]*command // per grant; never carried into another Session
+	byID                map[string]*command
+	order               []*command
+	deadlineStop        func() bool
+	adapterClaimed      bool
+	adapterGeneration   uint64
+	transportClaimed    bool
+	transportGeneration uint64
+	transportPaused     bool
+	transportClean      bool
+	adapterPrefix       string // fixed by the current trusted wire adapter's claim
 }
 
 // runtimeCommandContext exposes the existing finite command/Session budget.
@@ -386,10 +388,68 @@ func (s *Session) ClaimWithRequestPrefix(prefix string) error {
 	return nil
 }
 
+// ClaimWithRequestPrefixGeneration reserves the wire adapter for the
+// authenticated transport generation. The random prefix keeps request IDs
+// from one wire connection from adopting another connection's commands.
+func (s *Session) ClaimWithRequestPrefixGeneration(generation uint64, prefix string) error {
+	if s == nil || s.issuer == nil || generation == 0 || !validRequestID(prefix) {
+		return ErrUnconfigured
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.adapterClaimed && s.adapterGeneration == 0 {
+		return ErrSessionClaimed
+	}
+	if generation <= s.adapterGeneration {
+		return ErrSessionClaimed
+	}
+	if s.revoked {
+		return ErrDenied
+	}
+	// Standalone wire tests and trusted non-channel adapters still use the
+	// generation-one Session boundary.
+	if s.transportGeneration == 0 && generation == 1 {
+		s.transportGeneration, s.transportClaimed = 1, true
+	}
+	if generation != s.transportGeneration || s.transportPaused || generation != s.adapterGeneration+1 {
+		return ErrSessionClaimed
+	}
+	if s.fixedStart != nil && !validRequestID(prefix+s.fixedStart.RequestID) {
+		return ErrUnconfigured
+	}
+	s.adapterClaimed, s.adapterGeneration, s.adapterPrefix = true, generation, prefix
+	return nil
+}
+
 // ClaimTransport reserves this Session for exactly one authenticated channel
-// server. Like Claim it is single-use and never released: there is no second
-// channel, reconnect or reset for the same grant.
-func (s *Session) ClaimTransport() error { return s.claim(&s.transportClaimed) }
+// generation. Generation one is the initial channel; later generations require
+// an interrupted transport whose workload cleanup was confirmed.
+func (s *Session) ClaimTransport() error { return s.ClaimTransportGeneration(1) }
+
+func (s *Session) ClaimTransportGeneration(generation uint64) error {
+	if s == nil || s.issuer == nil || generation == 0 {
+		return ErrUnconfigured
+	}
+	s.ObserveDeadline()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revoked {
+		return ErrDenied
+	}
+	if generation != s.transportGeneration+1 {
+		return ErrSessionClaimed
+	}
+	if generation > 1 {
+		if !s.transportPaused {
+			return ErrSessionClaimed
+		}
+		if !s.transportClean {
+			return ErrCleanupUnknown
+		}
+	}
+	s.transportGeneration, s.transportClaimed = generation, true
+	return nil
+}
 
 func (s *Session) claim(flag *bool) error {
 	if s == nil || s.issuer == nil {
@@ -495,6 +555,10 @@ func (s *Session) Start(r StartRequest) (Status, error) {
 	digest := r.digest()
 	s.observe()
 	s.mu.Lock()
+	if s.transportPaused {
+		s.mu.Unlock()
+		return Status{}, ErrDenied
+	}
 	if c := s.byRequest[r.RequestID]; c != nil {
 		defer s.mu.Unlock()
 		if c.digest != digest {
@@ -709,6 +773,99 @@ func (s *Session) Revoke() { s.revoke(StopRevoked) }
 // TransportLost is not a reconnectable pause: the grant is revoked first and a
 // fresh approval is required for any later command.
 func (s *Session) TransportLost() { s.revoke(StopTransportLost) }
+
+// InterruptTransport pauses new command admission and cancels current work,
+// while retaining the grant and the session's owned workload record.
+func (s *Session) InterruptTransport() {
+	if s == nil || s.issuer == nil {
+		return
+	}
+	s.ObserveDeadline()
+	s.mu.Lock()
+	if s.revoked {
+		s.mu.Unlock()
+		return
+	}
+	s.transportPaused, s.transportClean = true, false
+	var victims []*command
+	for _, c := range s.order {
+		if !c.terminal {
+			if c.stop == StopNone && !c.exited {
+				c.stop = StopTransportLost
+			}
+			victims = append(victims, c)
+		}
+	}
+	s.mu.Unlock()
+	for _, c := range victims {
+		s.stopCommand(c, StopTransportLost)
+	}
+}
+
+// AwaitCleanup waits for all work stopped by InterruptTransport and only marks
+// the transport reusable when every retained process was released.
+func (s *Session) AwaitCleanup(ctx context.Context) error {
+	if s == nil || s.issuer == nil || ctx == nil {
+		return ErrCleanupUnknown
+	}
+	s.mu.Lock()
+	if !s.transportPaused {
+		s.mu.Unlock()
+		return nil
+	}
+	order := append([]*command(nil), s.order...)
+	s.mu.Unlock()
+	for _, c := range order {
+		select {
+		case <-c.done:
+		case <-ctx.Done():
+			return ErrCleanupUnknown
+		}
+		s.mu.Lock()
+		unknown := c.cleanup == CleanupUnknown || !c.terminal
+		s.mu.Unlock()
+		if unknown {
+			return ErrCleanupUnknown
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revoked {
+		return ErrDenied
+	}
+	if s.transportPaused {
+		s.transportClean = true
+	}
+	return nil
+}
+
+// ResumeTransport reopens admission for the just-claimed generation after a
+// completed interruption and without changing the grant's deadline or keys.
+func (s *Session) ResumeTransport(generation uint64) error {
+	if s == nil || s.issuer == nil || generation == 0 {
+		return ErrUnconfigured
+	}
+	s.ObserveDeadline()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revoked {
+		return ErrDenied
+	}
+	if generation != s.transportGeneration {
+		return ErrSessionClaimed
+	}
+	if generation == 1 && !s.transportPaused {
+		return nil
+	}
+	if !s.transportPaused {
+		return ErrSessionClaimed
+	}
+	if !s.transportClean {
+		return ErrCleanupUnknown
+	}
+	s.transportPaused, s.transportClean = false, false
+	return nil
+}
 
 func (s *Session) revoke(reason StopReason) {
 	if s == nil || s.issuer == nil {

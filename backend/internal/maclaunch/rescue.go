@@ -36,6 +36,7 @@ const (
 	// RescuePromptTimeout is the automatic refusal, counted from Show on both
 	// the monotonic and the wall clock.
 	RescuePromptTimeout = 60 * time.Second
+	RescueGracePeriod   = 5 * time.Minute
 	// RescueWarning is shown verbatim in every prompt; the digest covers it.
 	RescueWarning = "隔離なし: 許可すると、担当者がこの Mac の現在のユーザーとして任意のコマンドを実行でき、ファイル・鍵・ネットワークにアクセスできます。"
 )
@@ -95,6 +96,10 @@ type RescueReply struct {
 
 // RescueReception is the host end of the reception connection, owner of K.
 type RescueReception interface {
+	Open(context.Context) (string, error)
+	Resume(context.Context) error
+	Request() <-chan agenttransport.VerifiedRescueIdentity
+	HostKey() ssh.Signer
 	// Done closes when the reception connection ends, including code expiry.
 	Done() <-chan struct{}
 	// Refuse returns a K-signed deny, or timeout when timedOut.
@@ -107,20 +112,33 @@ type RescueReception interface {
 	Close() error
 }
 
-// The reception the product uses is the one-reception client.
+type RescueEventKind uint8
+
+const (
+	RescueEventReceptionOpened RescueEventKind = iota + 1
+	RescueEventReconnecting
+	RescueEventReconnected
+	RescueEventNewReception
+	RescueEventCleanupRequired
+)
+
+type RescueEvent struct {
+	Kind RescueEventKind
+	Code string
+}
+
+// The reception the product uses owns one K and its matching Resume attempts.
 var _ RescueReception = (*agenttransport.RescueClient)(nil)
 
 // RescueConfig is supplied at 受付 ON.
 type RescueConfig struct {
-	// HostKey is K, the channel host key. It must sign with the reception's own
-	// K, so that Reception.Close discarding K also disables it.
-	HostKey        ssh.Signer
-	Runtime        macagent.Config
-	Duration       time.Duration
-	CleanupTimeout time.Duration
-	Budgets        agentchannel.Budgets
-	Helper         RescueHelper
-	Reception      RescueReception
+	Runtime          macagent.Config
+	Duration         time.Duration
+	CleanupTimeout   time.Duration
+	Budgets          agentchannel.Budgets
+	Helper           RescueHelper
+	ReceptionFactory func() (RescueReception, error)
+	OnStateChange    func(RescueEvent)
 }
 
 type rescueClock struct {
@@ -136,10 +154,14 @@ const (
 	rescueConfirming
 	rescueIssuing
 	rescueSession
+	rescueGrace
+	rescueReopening
+	rescueNeedsCleanup
 	rescueEnded
 )
 
-// Rescue owns one reception from 受付中 to 終了. It never restarts the reception.
+// Rescue owns the reception factory, current K, approval, and every connection
+// generation from 受付中 through expiry or a host-side end.
 type Rescue struct {
 	// step serializes the transitions that call the helper or the reception
 	// (Show, the grant's issuance and hand-over) with the end, so the end
@@ -158,6 +180,14 @@ type Rescue struct {
 	shownMono       time.Duration
 	approvedWall    time.Time
 	approvedMono    time.Duration
+	lastFrameWall   time.Time
+	lastFrameMono   time.Duration
+	graceWall       time.Time
+	graceMono       time.Duration
+	lastHostKey     []byte
+	resumeRunning   bool
+	resumeHandoff   bool
+	reopenRunning   bool
 	approved        *Approved
 	cleanupErr      error
 	cleanupObserved bool
@@ -165,6 +195,7 @@ type Rescue struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	stop            chan struct{}
+	wake            chan struct{}
 	stopOnce        sync.Once
 	ticker          *time.Ticker
 }
@@ -181,10 +212,7 @@ func NewRescue(cfg RescueConfig) (*Rescue, error) {
 	return newRescue(cfg, runtime, rescueClock{})
 }
 func newRescue(cfg RescueConfig, runtime agentexec.ProfiledRuntime, clock rescueClock) (*Rescue, error) {
-	if cfg.HostKey == nil || cfg.Helper == nil || cfg.Reception == nil || runtime == nil || runtime.AgentProfile() != agentexec.ProfileMacCurrentUser || cfg.CleanupTimeout <= 0 || cfg.CleanupTimeout > time.Minute {
-		return nil, ErrConfig
-	}
-	if _, err := agentchannel.CanonicalKeys([]ssh.PublicKey{cfg.HostKey.PublicKey()}); err != nil {
+	if cfg.Helper == nil || cfg.ReceptionFactory == nil || runtime == nil || runtime.AgentProfile() != agentexec.ProfileMacCurrentUser || cfg.CleanupTimeout <= 0 || cfg.CleanupTimeout > time.Minute {
 		return nil, ErrConfig
 	}
 	if cfg.Duration == 0 {
@@ -215,9 +243,77 @@ func newRescue(cfg RescueConfig, runtime agentexec.ProfiledRuntime, clock rescue
 		clock.tick = ticker.C
 	}
 	life, cancel := context.WithCancel(context.Background())
-	r := &Rescue{cfg: cfg, runtime: runtime, helper: cfg.Helper, reception: cfg.Reception, clock: clock, life: life, cancel: cancel, done: make(chan struct{}), stop: make(chan struct{}), ticker: ticker}
+	r := &Rescue{cfg: cfg, runtime: runtime, helper: cfg.Helper, clock: clock, life: life, cancel: cancel, done: make(chan struct{}), stop: make(chan struct{}), wake: make(chan struct{}, 1), ticker: ticker}
+	reception, code, hostKey, err := r.openReception(nil)
+	if err != nil {
+		cancel()
+		if ticker != nil {
+			ticker.Stop()
+		}
+		return nil, errors.Join(ErrConfig, err)
+	}
+	r.reception, r.lastHostKey = reception, hostKey
+	r.emit(RescueEvent{Kind: RescueEventReceptionOpened, Code: code})
 	go r.loop()
 	return r, nil
+}
+
+func validRescueCode(code string) bool {
+	if len(code) != 12 {
+		return false
+	}
+	for _, digit := range code {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Rescue) openReception(previousKey []byte) (RescueReception, string, []byte, error) {
+	reception, err := r.cfg.ReceptionFactory()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if reception == nil {
+		return nil, "", nil, ErrConfig
+	}
+	hostKey := reception.HostKey()
+	if hostKey == nil || hostKey.PublicKey() == nil {
+		if reception != nil {
+			_ = reception.Close()
+		}
+		return nil, "", nil, ErrConfig
+	}
+	public := hostKey.PublicKey()
+	if _, err := agentchannel.CanonicalKeys([]ssh.PublicKey{public}); err != nil || (previousKey != nil && bytes.Equal(public.Marshal(), previousKey)) {
+		_ = reception.Close()
+		return nil, "", nil, ErrConfig
+	}
+	ctx, cancel := context.WithTimeout(r.life, agentchannel.MaxHandshake)
+	defer cancel()
+	code, err := reception.Open(ctx)
+	if err != nil || !validRescueCode(code) {
+		_ = reception.Close()
+		if err == nil {
+			err = ErrConfig
+		}
+		return nil, "", nil, err
+	}
+	return reception, code, append([]byte(nil), public.Marshal()...), nil
+}
+
+func (r *Rescue) emit(event RescueEvent) {
+	if r != nil && r.cfg.OnStateChange != nil {
+		r.cfg.OnStateChange(event)
+	}
+}
+
+func (r *Rescue) signal() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Receive moves 受付中 to 確認中 and returns after Show. Any other state, or a
@@ -227,6 +323,10 @@ func (r *Rescue) Receive(req RescueRequest) error {
 	if req.client == nil {
 		return ErrDenied
 	}
+	return r.showPrompt(req)
+}
+
+func (r *Rescue) showPrompt(req RescueRequest) error {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return errors.Join(ErrDenied, err)
@@ -259,13 +359,92 @@ func (r *Rescue) Receive(req RescueRequest) error {
 func (r *Rescue) ReceiveFrom(requests <-chan agenttransport.VerifiedRescueIdentity) error {
 	select {
 	case v := <-requests:
-		if !bytes.Equal(v.HostKey(), r.cfg.HostKey.PublicKey().Marshal()) {
+		r.mu.Lock()
+		reception := r.reception
+		r.mu.Unlock()
+		hostKey := ssh.Signer(nil)
+		if reception != nil {
+			hostKey = reception.HostKey()
+		}
+		if hostKey == nil || !bytes.Equal(v.HostKey(), hostKey.PublicKey().Marshal()) {
 			return ErrDenied
 		}
 		return r.Receive(RescueRequest{client: v.Client(), displayName: v.DisplayName(), organization: v.Organization(), profile: v.Profile()})
 	case <-r.done:
 		return ErrDenied
 	}
+}
+
+func (r *Rescue) handleVerified(v agenttransport.VerifiedRescueIdentity) {
+	r.mu.Lock()
+	reception, state, client, approved := r.reception, r.state, r.client, r.approved
+	r.mu.Unlock()
+	var hostKey ssh.Signer
+	if reception != nil {
+		hostKey = reception.HostKey()
+	}
+	if hostKey == nil || !bytes.Equal(v.HostKey(), hostKey.PublicKey().Marshal()) {
+		return
+	}
+	switch state {
+	case rescueAccepting:
+		_ = r.showPrompt(RescueRequest{client: v.Client(), displayName: v.DisplayName(), organization: v.Organization(), profile: v.Profile()})
+	case rescueGrace:
+		if client == nil || v.Client() == nil || !bytes.Equal(client.Marshal(), v.Client().Marshal()) || approved == nil {
+			_ = reception.Refuse(false)
+			return
+		}
+		r.resumeChannel(reception, approved)
+	default:
+		_ = reception.Refuse(false)
+	}
+}
+
+func (r *Rescue) resumeChannel(reception RescueReception, approved *Approved) {
+	r.step.Lock()
+	if r.cutOff() {
+		r.step.Unlock()
+		return
+	}
+	r.mu.Lock()
+	if r.state != rescueGrace || r.reception != reception || r.approved != approved {
+		r.mu.Unlock()
+		r.step.Unlock()
+		_ = reception.Refuse(false)
+		return
+	}
+	wall, mono := r.clock.wall(), r.clock.mono()
+	deadline := r.expired(wall, mono)
+	graceExpired := r.graceExpired(wall, mono)
+	r.mu.Unlock()
+	if deadline {
+		r.end(false, false, false)
+		r.step.Unlock()
+		return
+	}
+	if graceExpired {
+		r.expireGrace()
+		r.step.Unlock()
+		return
+	}
+	dispatch, err := approved.NextGeneration()
+	if err != nil {
+		r.step.Unlock()
+		_ = reception.Refuse(false)
+		return
+	}
+	conn, err := reception.Allow(dispatch)
+	if err != nil {
+		r.step.Unlock()
+		return
+	}
+	r.mu.Lock()
+	if r.state == rescueGrace && r.reception == reception {
+		r.resumeHandoff = true
+	}
+	r.mu.Unlock()
+	r.step.Unlock()
+	go r.serveApproved(approved, conn)
 }
 
 // Answer accepts reply only from the helper this Rescue was built with, for the
@@ -302,8 +481,9 @@ func (r *Rescue) Answer(from RescueHelper, reply RescueReply) error {
 	}
 	r.mu.Lock()
 	r.state, r.approved = rescueSession, a
+	r.cleanupErr, r.cleanupObserved = nil, false
 	r.mu.Unlock()
-	go func() { _ = a.Serve(r.life, conn); r.finish(false, false, false) }()
+	go r.serveApproved(a, conn)
 	return nil
 }
 
@@ -319,13 +499,98 @@ func (r *Rescue) expired(wall time.Time, mono time.Duration) bool {
 	return mono-r.approvedMono >= r.cfg.Duration || !wall.Before(r.approvedWall.Add(r.cfg.Duration))
 }
 
+// graceExpired is measured from the last valid channel frame on both clocks.
+func (r *Rescue) graceExpired(wall time.Time, mono time.Duration) bool {
+	return mono-r.graceMono >= RescueGracePeriod || !wall.Before(r.graceWall.Add(RescueGracePeriod)) || wall.Before(r.graceWall)
+}
+
+func (r *Rescue) serveApproved(a *Approved, conn net.Conn) {
+	_ = a.Serve(r.life, conn)
+	r.afterServe(a)
+}
+
+func (r *Rescue) afterServe(a *Approved) {
+	r.step.Lock()
+	defer r.step.Unlock()
+	r.mu.Lock()
+	if r.state == rescueEnded || r.state == rescueNeedsCleanup {
+		r.mu.Unlock()
+		return
+	}
+	r.resumeHandoff, r.resumeRunning = false, false
+	if a.CanResume() {
+		wall, mono := r.lastFrameWall, r.lastFrameMono
+		if wall.IsZero() {
+			wall, mono = r.clock.wall(), r.clock.mono()
+		}
+		r.graceWall, r.graceMono = wall, mono
+		r.state = rescueGrace
+		r.mu.Unlock()
+		r.emit(RescueEvent{Kind: RescueEventReconnecting})
+		r.startResume()
+		return
+	}
+	r.mu.Unlock()
+	r.end(false, false, false)
+}
+
+func (r *Rescue) markReconnected() {
+	r.step.Lock()
+	defer r.step.Unlock()
+	r.mu.Lock()
+	if r.state != rescueGrace {
+		r.mu.Unlock()
+		return
+	}
+	wall, mono := r.clock.wall(), r.clock.mono()
+	if r.expired(wall, mono) || r.graceExpired(wall, mono) {
+		r.mu.Unlock()
+		r.end(false, false, false)
+		return
+	}
+	r.state, r.resumeHandoff = rescueSession, false
+	r.lastFrameWall, r.lastFrameMono = wall, mono
+	r.mu.Unlock()
+	r.emit(RescueEvent{Kind: RescueEventReconnected})
+}
+
+func (r *Rescue) startResume() {
+	r.mu.Lock()
+	if r.state != rescueGrace || r.resumeRunning || r.resumeHandoff || r.reception == nil {
+		r.mu.Unlock()
+		return
+	}
+	reception := r.reception
+	r.resumeRunning = true
+	r.mu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(r.life, r.cfg.Budgets.Handshake)
+		_ = reception.Resume(ctx)
+		cancel()
+		r.mu.Lock()
+		if r.state == rescueGrace && r.reception == reception {
+			r.resumeRunning = false
+		}
+		r.mu.Unlock()
+	}()
+}
+
 // cutOff reports a host-side end or a lost reception, even before the loop
 // handles it.
 func (r *Rescue) cutOff() bool {
 	select {
 	case <-r.stop:
 		return true
-	case <-r.reception.Done():
+	default:
+	}
+	r.mu.Lock()
+	reception := r.reception
+	r.mu.Unlock()
+	if reception == nil {
+		return false
+	}
+	select {
+	case <-reception.Done():
 		return true
 	default:
 		return false
@@ -336,14 +601,25 @@ func (r *Rescue) cutOff() bool {
 // plus the chosen lifetime, through the same issuance as the terminal path,
 // and hands its dispatch to the reception.
 func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, net.Conn, error) {
-	p, err := prepare(Config{HostKey: r.cfg.HostKey, AllowedKeys: []ssh.PublicKey{client}, Runtime: r.cfg.Runtime, Deadline: approvedAt.Add(r.cfg.Duration), CleanupTimeout: r.cfg.CleanupTimeout, Budgets: r.cfg.Budgets}, r.runtime)
+	r.mu.Lock()
+	reception := r.reception
+	r.mu.Unlock()
+	if reception == nil {
+		return nil, nil, ErrConfig
+	}
+	hostKey := reception.HostKey()
+	if hostKey == nil {
+		return nil, nil, ErrConfig
+	}
+	p, err := prepare(Config{HostKey: hostKey, AllowedKeys: []ssh.PublicKey{client}, Runtime: r.cfg.Runtime, Deadline: approvedAt.Add(r.cfg.Duration), CleanupTimeout: r.cfg.CleanupTimeout, Budgets: r.cfg.Budgets}, r.runtime)
 	if err != nil {
 		return nil, nil, err
 	}
+	p.onActivity, p.onConnected, p.allowReconnect = r.noteActivity, r.markReconnected, true
 	a, err := p.completeApproved(r.life)
 	if err == nil {
 		var conn net.Conn
-		if conn, err = r.reception.Allow(a.Dispatch()); err == nil {
+		if conn, err = reception.Allow(a.Dispatch()); err == nil {
 			return a, conn, nil
 		}
 	}
@@ -358,11 +634,22 @@ func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, n
 
 // Stop is a host-side end: the stop operation, 受付 OFF, app exit, logout or restart.
 // It does not wait.
-func (r *Rescue) Stop() { r.stopOnce.Do(func() { close(r.stop) }) }
+func (r *Rescue) Stop() {
+	r.stopOnce.Do(func() { close(r.stop) })
+}
 
 // Done closes after the end: the grant revoked, its cleanup run within
 // CleanupTimeout, K discarded.
 func (r *Rescue) Done() <-chan struct{} { return r.done }
+
+func (r *Rescue) noteActivity() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.lastFrameWall, r.lastFrameMono = r.clock.wall(), r.clock.mono()
+	r.mu.Unlock()
+}
 
 // CleanupResult observes the approved session's last explicit cleanup.
 // observed=false means no approved session cleanup result is available.
@@ -377,37 +664,61 @@ func (r *Rescue) CleanupResult() (err error, observed bool) {
 
 func (r *Rescue) loop() {
 	for {
+		r.mu.Lock()
+		reception := r.reception
+		r.mu.Unlock()
+		var receptionDone <-chan struct{}
+		var requests <-chan agenttransport.VerifiedRescueIdentity
+		if reception != nil {
+			receptionDone, requests = reception.Done(), reception.Request()
+		}
 		select {
 		case <-r.stop:
 			r.finish(false, false, true)
 			return
-		case <-r.reception.Done():
+		case <-receptionDone:
 			r.finish(false, false, true)
 			return
+		case v := <-requests:
+			r.handleVerified(v)
+		case <-r.wake:
+			continue
 		case <-r.clock.tick:
 			if r.recheck() {
 				return
 			}
+			r.startResume()
 		case <-r.life.Done():
+			r.finish(false, false, true)
 			return
 		}
 	}
 }
 
-// recheck ends a prompt past 60 seconds or a session past its lifetime. It
-// decides under step, so no answer or issuance interleaves with the decision.
+// recheck evaluates all deadlines under step. The grant deadline takes
+// priority over the grace deadline, so it cancels a pending reopen.
 func (r *Rescue) recheck() bool {
 	r.step.Lock()
 	defer r.step.Unlock()
 	r.mu.Lock()
 	wall, mono := r.clock.wall(), r.clock.mono()
 	timedOut := r.state == rescueConfirming && r.late(wall, mono)
-	expired := r.state == rescueSession && r.expired(wall, mono)
+	grantExpired := (r.state == rescueSession || r.state == rescueGrace || r.state == rescueReopening) && r.expired(wall, mono)
+	graceExpired := r.state == rescueGrace && r.graceExpired(wall, mono)
+	reopening := r.state == rescueReopening
 	r.mu.Unlock()
-	if timedOut || expired {
+	if timedOut || grantExpired {
 		r.end(timedOut, timedOut, timedOut)
+		return true
 	}
-	return timedOut || expired
+	if graceExpired {
+		r.expireGrace()
+		return r.isDone()
+	}
+	if reopening {
+		r.retryReceptionLocked()
+	}
+	return false
 }
 
 // finish takes step and ends, waiting for a transition in progress.
@@ -422,11 +733,12 @@ func (r *Rescue) finish(timedOut, refuse, withdraw bool) {
 // revokes the grant and runs its cleanup, discards K and closes Done.
 func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	r.mu.Lock()
-	if r.state == rescueEnded {
+	if r.state == rescueEnded || r.state == rescueNeedsCleanup {
 		r.mu.Unlock()
 		return
 	}
 	confirming, id, a := r.state == rescueConfirming, r.prompt.RequestID, r.approved
+	reception := r.reception
 	r.state = rescueEnded
 	r.mu.Unlock()
 	if r.ticker != nil {
@@ -435,19 +747,130 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	if confirming && withdraw {
 		r.helper.Withdraw(id)
 	}
-	if refuse {
-		_ = r.reception.Refuse(timedOut)
+	if refuse && reception != nil {
+		_ = reception.Refuse(timedOut)
 	}
-	_ = r.reception.Close()
+	if reception != nil {
+		_ = reception.Close()
+	}
+	var cleanupErr error
 	if a != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
-		cleanupErr := a.Close(ctx)
+		cleanupErr = a.Close(ctx)
 		cancel()
 		_, observed := a.CleanupResult()
 		r.mu.Lock()
 		r.cleanupErr, r.cleanupObserved = cleanupErr, observed
+		if cleanupErr != nil {
+			r.state = rescueNeedsCleanup
+		}
 		r.mu.Unlock()
+	}
+	if cleanupErr != nil {
+		r.emit(RescueEvent{Kind: RescueEventCleanupRequired})
 	}
 	r.cancel()
 	close(r.done)
+}
+
+func (r *Rescue) isDone() bool {
+	select {
+	case <-r.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// expireGrace runs only with step held. It closes the old reception first,
+// then revokes and cleans the Session before trying to register a fresh K.
+func (r *Rescue) expireGrace() {
+	r.mu.Lock()
+	if r.state != rescueGrace {
+		r.mu.Unlock()
+		return
+	}
+	reception, approved := r.reception, r.approved
+	r.reception = nil
+	r.state = rescueReopening
+	r.resumeRunning, r.resumeHandoff = false, false
+	r.mu.Unlock()
+	r.emit(RescueEvent{Kind: RescueEventNewReception})
+	if reception != nil {
+		_ = reception.Close()
+	}
+	var cleanupErr error
+	if approved != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
+		cleanupErr = approved.Close(ctx)
+		cancel()
+		_, observed := approved.CleanupResult()
+		r.mu.Lock()
+		r.cleanupErr, r.cleanupObserved = cleanupErr, observed
+		r.mu.Unlock()
+	}
+	if cleanupErr != nil {
+		r.mu.Lock()
+		r.state = rescueNeedsCleanup
+		r.mu.Unlock()
+		if r.ticker != nil {
+			r.ticker.Stop()
+		}
+		r.emit(RescueEvent{Kind: RescueEventCleanupRequired})
+		r.cancel()
+		close(r.done)
+		return
+	}
+	r.mu.Lock()
+	r.approved = nil
+	r.client = nil
+	r.prompt = RescuePrompt{}
+	r.mu.Unlock()
+	r.retryReceptionLocked()
+}
+
+func (r *Rescue) retryReceptionLocked() {
+	r.mu.Lock()
+	if r.state != rescueReopening || r.reopenRunning {
+		r.mu.Unlock()
+		return
+	}
+	previousKey := append([]byte(nil), r.lastHostKey...)
+	r.reopenRunning = true
+	r.mu.Unlock()
+	r.openReceptionLocked(previousKey)
+}
+
+func (r *Rescue) openReceptionLocked(previousKey []byte) {
+	go func() {
+		reception, code, hostKey, err := r.openReception(previousKey)
+		r.step.Lock()
+		defer r.step.Unlock()
+		r.mu.Lock()
+		if r.state != rescueReopening {
+			r.mu.Unlock()
+			if reception != nil {
+				_ = reception.Close()
+			}
+			return
+		}
+		if err != nil {
+			r.reopenRunning = false
+			r.mu.Unlock()
+			return
+		}
+		wall, mono := r.clock.wall(), r.clock.mono()
+		if r.expired(wall, mono) {
+			r.reopenRunning = false
+			r.mu.Unlock()
+			_ = reception.Close()
+			r.end(false, false, false)
+			return
+		}
+		r.reception, r.lastHostKey, r.state = reception, hostKey, rescueAccepting
+		r.reopenRunning = false
+		r.mu.Unlock()
+		r.signal()
+		r.emit(RescueEvent{Kind: RescueEventReceptionOpened, Code: code})
+	}()
 }

@@ -577,6 +577,28 @@ func TestRescueClientKeepsTheReceptionKeyAfterChannelTransportLoss(t *testing.T)
 	_ = secondConn.Close()
 }
 
+func TestRescueClientRefusesResumeAfterReceptionClose(t *testing.T) {
+	reg := newAnswerRegistry()
+	c, kWire, _ := openAnswer(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := c.Resume(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Resume after close = %v, want ErrClosed", err)
+	}
+	if _, err := c.HostKey().Sign(rand.Reader, []byte("resume")); err == nil {
+		t.Fatal("the reception key signed after Close")
+	}
+}
+
 func TestRescueClientCloseBoundsWaitForWriteLock(t *testing.T) {
 	reg := newAnswerRegistry()
 	c, kWire, _ := openAnswer(t, reg)

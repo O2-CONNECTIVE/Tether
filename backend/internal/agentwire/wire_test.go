@@ -220,7 +220,7 @@ func TestMalformedFramesEndTheStreamAndRevokeTheGrant(t *testing.T) {
 	}
 }
 
-func TestTransportLossRevokesBeforeTerminateWithoutResume(t *testing.T) {
+func TestTransportLossPausesBeforeTerminateForResume(t *testing.T) {
 	r := newRig(t, agentexec.ProfileWindowsGuest)
 	ctx := finite(t)
 	st, err := r.client.Start(ctx, "req-1", []byte("whoami\n"), 60_000)
@@ -249,7 +249,7 @@ func TestTransportLossRevokesBeforeTerminateWithoutResume(t *testing.T) {
 	mu.Lock()
 	state := atTerminate
 	mu.Unlock()
-	if state != supervisor.Revoked {
+	if state != supervisor.Granted {
 		t.Fatalf("authority at Terminate = %q", state)
 	}
 	if err := r.session.Close(ctx); err != nil {
@@ -283,10 +283,11 @@ func TestEndOfStreamAndOwnerCancelRevokeTheGrant(t *testing.T) {
 	if err := cancelled.waitServed(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Serve after owner cancel = %v", err)
 	}
-	for _, r := range []*rig{closed, cancelled} {
-		if r.issuer.Snapshot().HasAuthority {
-			t.Fatal("the stream ended but the grant stayed live")
-		}
+	if !closed.issuer.Snapshot().HasAuthority {
+		t.Fatal("transport EOF revoked the grant instead of pausing it")
+	}
+	if cancelled.issuer.Snapshot().HasAuthority {
+		t.Fatal("owner cancellation left the grant live")
 	}
 }
 
@@ -454,10 +455,9 @@ func TestServerRequiresAnApprovedPeerAndTakesTheOnlyClaim(t *testing.T) {
 	}
 }
 
-// Liveness loss of a stalled stream revokes the grant before the stream is
-// closed, and only that close unblocks the stalled Write. Serve has no idle
-// timer: the signal is the owner's.
-func TestLivenessLossRevokesBeforeClosingAStalledStream(t *testing.T) {
+// Liveness loss of a stalled stream pauses admission before it is closed, and
+// that close unblocks the stalled Write. Serve has no idle timer: the signal is the owner's.
+func TestLivenessLossPausesBeforeClosingAStalledStream(t *testing.T) {
 	r := newRig(t, agentexec.ProfileWindowsGuest)
 	ctx := finite(t)
 	st, err := r.client.Start(ctx, "req-1", []byte("sleep 60\n"), 60_000)
@@ -482,8 +482,11 @@ func TestLivenessLossRevokesBeforeClosingAStalledStream(t *testing.T) {
 	if err := r.waitServed(); !errors.Is(err, agentwire.ErrPeerLost) {
 		t.Fatalf("Serve = %v", err)
 	}
-	if got := state.Load(); got != supervisor.Revoked {
+	if got := state.Load(); got != supervisor.Granted {
 		t.Fatalf("authority when the stream closed = %v", got)
+	}
+	if !r.issuer.Snapshot().HasAuthority {
+		t.Fatal("liveness loss revoked the grant instead of pausing it")
 	}
 	if final := r.awaitTerminal(st.CommandID); final.Stop != agentexec.StopTransportLost {
 		t.Fatalf("final = %+v", final)

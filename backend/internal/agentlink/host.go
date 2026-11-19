@@ -25,13 +25,17 @@ var ErrConfig = errors.New("agentlink: untrusted or incomplete composition")
 // the only grant inputs. AllowedKeys are the approved raw Ed25519 public keys,
 // HostKey the existing host signer.
 type HostConfig struct {
-	Session     *agentexec.Session
-	AllowedKeys []ssh.PublicKey
-	HostKey     ssh.Signer
-	Budgets     agentchannel.Budgets
+	Session              *agentexec.Session
+	AllowedKeys          []ssh.PublicKey
+	HostKey              ssh.Signer
+	Budgets              agentchannel.Budgets
+	ConnectionGeneration uint64
+	AllowReconnect       bool
+	OnActivity           func()
+	OnConnected          func()
 }
 
-// Host serves one granted Session over exactly one supplied connection.
+// Host serves one granted Session over one supplied connection generation.
 type Host struct {
 	mu                   sync.Mutex
 	held                 *agentchannel.Channel
@@ -39,12 +43,17 @@ type Host struct {
 	authenticated        bool
 	statusClosing        bool
 	started              bool
+	reconnectable        bool
 	finished             chan struct{}
 	serveCleanupErr      error
 	serveCleanupObserved bool
 	session              *agentexec.Session
 	channel              *agentchannel.Server
 	budget               agentchannel.Budgets
+	generation           uint64
+	allowReconnect       bool
+	onActivity           func()
+	onConnected          func()
 }
 
 // NewHost takes the Session's single transport claim through
@@ -54,13 +63,18 @@ func NewHost(cfg HostConfig) (*Host, error) {
 	if cfg.Session == nil {
 		return nil, ErrConfig
 	}
+	generation := cfg.ConnectionGeneration
+	if generation == 0 {
+		generation = 1
+	}
 	server, err := agentchannel.NewServer(agentchannel.ServerConfig{
 		Session: cfg.Session, AllowedKeys: cfg.AllowedKeys, HostKey: cfg.HostKey, Budgets: cfg.Budgets,
+		ConnectionGeneration: generation, OnActivity: cfg.OnActivity,
 	})
 	if err != nil {
 		return nil, errors.Join(ErrConfig, err)
 	}
-	return &Host{session: cfg.Session, channel: server, budget: cfg.Budgets, finished: make(chan struct{})}, nil
+	return &Host{session: cfg.Session, channel: server, budget: cfg.Budgets, generation: generation, allowReconnect: cfg.AllowReconnect, onActivity: cfg.OnActivity, onConnected: cfg.OnConnected, finished: make(chan struct{})}, nil
 }
 
 // ChannelDispatch exposes only the held canonical channel's immutable public metadata.
@@ -74,15 +88,12 @@ func (h *Host) ChannelDispatch() agentchannel.Dispatch {
 	return h.channel.Dispatch()
 }
 
-// Serve takes ownership of conn and runs the whole host path to its end:
+// Serve takes ownership of conn and runs one host path to its end:
 // authenticated handshake, agentwire server bound to the proven peer key, the
 // canonical approved keys and the channel's heartbeat loss, then teardown.
-// On every return the grant has been revoked (by the channel or the wire
-// server, always before the conn is closed), the channel Close was joined and
-// Session.Close waited for guest cleanup within the cleanup budget. A
-// non-nil error reports the end and any unconfirmed cleanup, errors.Is with
-// agentchannel.ErrCleanupUnknown or agentexec.ErrCleanupUnknown. There is no
-// second Serve, reconnect or resume for the Session.
+// An admitted transport loss preserves the grant only after guest cleanup is
+// confirmed; every other end revokes it. A reconnectable Host can be followed
+// by a new Host for the next generation on the same Session.
 func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 	if h == nil || h.channel == nil {
 		if conn != nil {
@@ -108,12 +119,19 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 	if err != nil {
 		return h.finish(ch, err)
 	}
+	if h.onActivity != nil {
+		h.onActivity()
+	}
 	peer, err := ch.Peer().Key()
 	if err != nil {
 		return h.finish(ch, errors.Join(ErrConfig, err))
 	}
+	if err := h.session.ResumeTransport(h.generation); err != nil {
+		return h.finish(ch, err)
+	}
 	wire, err := agentwire.NewServer(agentwire.ServerConfig{
 		Session: h.session, Peer: peer, ApprovedKeys: h.channel.ApprovedKeys(), Liveness: ch.Done(),
+		ConnectionGeneration: h.generation, OnActivity: h.onActivity,
 	})
 	if err != nil {
 		return h.finish(ch, errors.Join(ErrConfig, err))
@@ -121,7 +139,10 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 	h.mu.Lock()
 	h.authenticated = !h.statusClosing
 	h.mu.Unlock()
-	// Serve revokes before it closes ch; finish then joins the same channel.
+	if h.generation > 1 && h.onConnected != nil {
+		h.onConnected()
+	}
+	// Serve ends ch; finish then confirms the same channel and Session cleanup.
 	return h.finish(ch, errors.Join(agentwire.ErrPeerLost, wire.Serve(ctx, ch)))
 }
 
@@ -130,11 +151,45 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 func (h *Host) finish(ch *agentchannel.Channel, served error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), h.budget.Cleanup)
 	defer cancel()
-	cleanupErr := h.Close(ctx)
+	reconnectable := h.allowReconnect && ch != nil && ch.Reconnectable()
+	var cleanupErr error
+	if reconnectable {
+		cleanupErr = ch.Close()
+		cleanupErr = errors.Join(cleanupErr, h.session.AwaitCleanup(ctx))
+		if cleanupErr == nil {
+			h.mu.Lock()
+			h.reconnectable = true
+			h.mu.Unlock()
+		} else {
+			h.session.TransportLost()
+			cleanupErr = errors.Join(cleanupErr, h.session.Close(ctx))
+		}
+	} else {
+		cleanupErr = h.Close(ctx)
+	}
 	h.mu.Lock()
 	h.serveCleanupErr, h.serveCleanupObserved = cleanupErr, true
 	h.mu.Unlock()
 	return errors.Join(served, cleanupErr)
+}
+
+func (h *Host) Reconnectable() bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.reconnectable
+}
+
+// Unused reports that Serve has not claimed this Host yet.
+func (h *Host) Unused() bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return !h.started
 }
 
 // Close retains and retries only this Host's channel and Session. A Close while

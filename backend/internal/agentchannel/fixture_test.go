@@ -295,8 +295,9 @@ func endsWith(t *testing.T, env *grantEnv, p rawPair, want Reason) {
 	if err := p.server.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if !env.revoked() || p.early.Load() || !p.sConn.isClosed() {
-		t.Fatal("grant not revoked before the owned conn closed")
+	grace := want == ReasonTransport || want == ReasonHeartbeat || want == ReasonReadStall || want == ReasonWriteStall
+	if env.revoked() == grace || p.early.Load() != grace || !p.sConn.isClosed() {
+		t.Fatalf("reason %v: revoked=%v early=%v", want, env.revoked(), p.early.Load())
 	}
 }
 

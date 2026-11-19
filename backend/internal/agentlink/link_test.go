@@ -182,13 +182,17 @@ func grant(t *testing.T, lifetime time.Duration, keys []ssh.PublicKey, runtime *
 
 // newPath composes both ends with the production composition package. mutate
 // alters only the client's dispatch to exercise rejections.
-func newPath(t *testing.T, lifetime time.Duration, mutate func(*agentchannel.ClientConfig)) *path {
+func newPath(t *testing.T, lifetime time.Duration, mutate func(*agentchannel.ClientConfig), allowReconnect ...bool) *path {
 	t.Helper()
 	host, client := fixtureSigner(t, 0x11), fixtureSigner(t, 0x22)
 	keys := []ssh.PublicKey{client.PublicKey()}
 	p := &path{t: t, runtime: &macRuntime{procs: make(chan *fakeProc, 4)}, hostDone: make(chan error, 1), lines: make(chan []byte, 64), mcpDone: make(chan error, 1)}
 	p.issuer, p.authority, p.session = grant(t, lifetime, keys, p.runtime)
-	h, err := agentlink.NewHost(agentlink.HostConfig{Session: p.session, AllowedKeys: keys, HostKey: host, Budgets: budgets()})
+	var reconnect bool
+	if len(allowReconnect) != 0 {
+		reconnect = allowReconnect[0]
+	}
+	h, err := agentlink.NewHost(agentlink.HostConfig{Session: p.session, AllowedKeys: keys, HostKey: host, Budgets: budgets(), AllowReconnect: reconnect})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,10 +446,10 @@ func TestExplicitCancelOverTheChannel(t *testing.T) {
 }
 
 // Scenario 3: the owned channel is lost (a half-open relay). Heartbeats end
-// both ends; the grant is revoked before the shell is stopped, the host joins
-// and confirms cleanup, MCP stops, and nothing reconnects or restarts.
-func TestOwnedChannelLossRevokesThenCleansUp(t *testing.T) {
-	p := newPath(t, 30*time.Second, nil)
+// both ends; the command is stopped and cleaned while the grant remains live
+// for the reconnect grace, and the old MCP stream ends without restarting work.
+func TestOwnedChannelLossPreservesGrantAndCleansUpForReconnect(t *testing.T) {
+	p := newPath(t, 30*time.Second, nil, true)
 	st, _ := p.start("req-1", "sleep 60\n")
 	id := commandID(t, st)
 	proc := p.proc()
@@ -454,7 +458,7 @@ func TestOwnedChannelLossRevokesThenCleansUp(t *testing.T) {
 	if err := p.waitHost(); errors.Is(err, agentchannel.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown) || err == nil {
 		t.Fatalf("host Serve after channel loss = %v", err)
 	}
-	if state := <-observed; state != supervisor.Revoked {
+	if state := <-observed; state != supervisor.Granted {
 		t.Fatalf("shell stopped while the grant was %s", state)
 	}
 	final := p.ownerStatus(id)
@@ -470,8 +474,8 @@ func TestOwnedChannelLossRevokesThenCleansUp(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("MCP kept serving a lost channel")
 	}
-	if p.issuer.Snapshot().HasAuthority || p.runtime.startCount() != 1 || !p.hostConn.isClosed() {
-		t.Fatal("lost channel left the grant live, restarted the shell or kept the conn")
+	if !p.issuer.Snapshot().HasAuthority || p.runtime.startCount() != 1 || !p.hostConn.isClosed() {
+		t.Fatal("grace did not preserve the grant, or the old channel restarted work or kept the conn")
 	}
 }
 

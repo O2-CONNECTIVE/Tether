@@ -48,17 +48,17 @@ func TestPinnedHostAndEnrolledClientCarryAgentBytes(t *testing.T) {
 	if p.client.Reason() != ReasonClosed {
 		t.Fatalf("local close reason %v", p.client.Reason())
 	}
-	// The server learns of it through its transport: the reason is recorded
-	// before its own revoke, and Done closes only after that revoke.
+	// The server learns of it through its transport. An admitted transport loss
+	// pauses admission and preserves the grant for the next generation.
 	waitDone(t, p.server.Done(), 3*time.Second, "server teardown after the client left")
-	if p.server.Reason() != ReasonTransport || !env.revoked() {
+	if p.server.Reason() != ReasonTransport || env.revoked() {
 		t.Fatalf("reason %v revoked %v", p.server.Reason(), env.revoked())
 	}
 	if err := p.server.Close(); err != nil {
 		t.Fatalf("server close: %v", err)
 	}
-	if early.Load() || !p.sConn.isClosed() {
-		t.Fatal("transport closed before the grant was revoked, or not at all")
+	if !early.Load() || !p.sConn.isClosed() {
+		t.Fatal("grace transport was not closed while preserving the grant")
 	}
 }
 

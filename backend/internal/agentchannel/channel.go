@@ -241,10 +241,10 @@ func (c *Channel) revoked() <-chan struct{} {
 
 // beforeClose runs whenever something other than teardown closes the owned
 // conn, normally the SSH library after its transport failed. After admission
-// that is a transport end: the reason is recorded before the revoke, so a
-// watcher can never see our own revoke first and mislabel it. During the
-// handshake Accept or Open itself records the classified reason, so only the
-// revoke happens here. Either way the Session is revoked before the close.
+// that is a transport end: the reason is recorded before the Session is
+// paused or revoked, so a watcher cannot mislabel our own authority change.
+// During the handshake Accept or Open records the reason, so the Session is
+// revoked here before close.
 func (c *Channel) beforeClose(admitted bool) {
 	if admitted {
 		c.teardown(ReasonTransport)
@@ -300,18 +300,39 @@ func (c *Channel) teardown(r Reason) {
 	}()
 }
 
-// revokeFirst revokes the bound grant through the canonical Session before
-// any close of the owned conn, including a close made by the SSH library.
+// revokeFirst applies the bound Session's interruption before any close of the
+// owned conn, including a close made by the SSH library.
 func (c *Channel) revokeFirst() {
 	if c.session != nil {
 		c.revokeOnce.Do(func() {
 			c.ownRevoke.Store(true)
-			// At or past the hard deadline the Session records the deadline
-			// as its stop reason first; otherwise this is a transport loss.
 			c.session.ObserveDeadline()
-			c.session.TransportLost()
+			if c.Reconnectable() {
+				c.session.InterruptTransport()
+			} else {
+				c.session.TransportLost()
+			}
 		})
 	}
+}
+
+// Reconnectable reports only an admitted channel ending for a transport
+// liveness reason while its canonical Session is still live.
+func (c *Channel) Reconnectable() bool {
+	if c == nil || c.session == nil || !c.raw.isAdmitted() {
+		return false
+	}
+	switch c.Reason() {
+	case ReasonTransport, ReasonHeartbeat, ReasonReadStall, ReasonWriteStall:
+	default:
+		return false
+	}
+	select {
+	case <-c.session.Done():
+		return false
+	default:
+	}
+	return c.session.StopReason() == agentexec.StopNone
 }
 
 // live is false once torn down, past the hard deadline or after revocation.
@@ -398,8 +419,8 @@ func (c *Channel) Close() error {
 }
 
 // Done is closed after teardown started and, on the server, after the bound
-// Session was revoked. It does not wait for the conn close or the workers;
-// Close confirms those.
+// Session was paused or revoked. It does not wait for the conn close or the
+// workers; Close confirms those.
 func (c *Channel) Done() <-chan struct{} { return c.revokeDone }
 
 // Reason is the first teardown reason, or ReasonNone while live.
