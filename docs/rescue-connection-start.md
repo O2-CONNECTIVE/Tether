@@ -209,6 +209,7 @@ WebView から来た許可は受けません。
 ホストは回答を K で署名して返します。
 署名対象は、`rescue-host.agentgateway.rescue-answer\u0000v1\u0000`、受付 id、要求の nonce、身元の証明の digest、回答（`allow`・`deny`・`timeout`）です。
 `allow` のときは、grant の dispatch（Binding と期限）も署名対象に入れます。gateway はこれを検証して、C を signer にして `Connect` します。
+host 鍵は、設定の host の鍵（今の `Connect` の照合）ではなく、受付記録の K に pin します。
 dispatch を真正に届ける責任は登録 adapter にあり（[信頼の前提](agent-gateway.md#信頼の前提)）、この回答の署名がそれを担います。
 
 担当者には、`allow`・`deny`（拒否）・`timeout`（時間切れ）を区別して返します。コードが正しかった場合だけなので、区別しても推測の手がかりになりません。
@@ -273,10 +274,12 @@ K を盗んだ者は、C を持たないので担当者として接続できま�
 ### 接続世代
 
 猶予の間は grant を失効させず、新しい作業の受け付け（admission）だけを止めます。
+猶予に入るのは、確立した channel の通信の切断（transport の終了、心拍の失敗、読み書きの停滞）だけです。取消、書込み失敗、正規 stop、期限、相手の違反、Accept 前の認証失敗は、今のとおりすぐ失効させます。
 再接続は、同じ grant の新しい接続世代（1 から増やす）として開きます。
 
 - channel の commitment に世代を入れます。gateway は (LaunchID, 世代) の組を 1 回だけ使います。ホストの Session は、世代ごとに transport を 1 回だけ受け取ります。
 - 期限、許可鍵集合、操作範囲、境界は、世代が変わっても変えません。期限は延びません。
+- 接続世代は、今の `Binding.Generation` や常駐の世代とは別の値です。名前と wire で区別します。
 - 今の「1 grant に接続 1 回」（[agent channel](agent-channel.md)）を、「1 grant に、世代ごとに接続 1 回」に改めます。実装は [#425](https://github.com/O2-CONNECTIVE/Tether/issues/425) です。
 
 ### 猶予の間の作業
