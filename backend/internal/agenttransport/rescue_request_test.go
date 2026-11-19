@@ -54,7 +54,7 @@ func newRequestRescueRegistry() *requestRescueRegistry {
 func (*requestRescueRegistry) AdmitRescue() error { return nil }
 func (r *requestRescueRegistry) OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error) {
 	return agentgateway.RescueReception{
-		ID: bytes.Repeat([]byte{0x71}, agentgateway.RescueReceptionSize), Code: "123456789012",
+		ID: bytes.Repeat([]byte{0x71}, agentgateway.RescueReceptionSize), AttemptID: 1, Code: "123456789012",
 		Request: r.request, Done: r.done,
 	}, nil
 }
@@ -62,13 +62,14 @@ func (r *requestRescueRegistry) EndRescue(id []byte) {
 	r.ended <- append([]byte(nil), id...)
 	r.endReception()
 }
-func (r *requestRescueRegistry) DisconnectRescue(id []byte) { r.EndRescue(id) }
-func (*requestRescueRegistry) TouchRescue([]byte)           {}
+func (r *requestRescueRegistry) EndRescueAttempt(id []byte, _ uint64) { r.EndRescue(id) }
+func (r *requestRescueRegistry) DisconnectRescue(id []byte, _ uint64) { r.EndRescue(id) }
+func (*requestRescueRegistry) TouchRescue([]byte, uint64)             {}
 
 func (r *requestRescueRegistry) endReception() {
 	r.once.Do(func() { close(r.done) })
 }
-func (r *requestRescueRegistry) AnswerRescue(id []byte, a agentgateway.RescueAnswer, conn net.Conn) error {
+func (r *requestRescueRegistry) AnswerRescue(id []byte, _ uint64, a agentgateway.RescueAnswer, conn net.Conn, _ func()) error {
 	r.answered <- rescueAnswerCall{id: append([]byte(nil), id...), a: a, conn: conn}
 	return conn.Close()
 }

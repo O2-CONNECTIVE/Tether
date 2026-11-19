@@ -74,7 +74,7 @@ func RescueAnswerTranscript(reception, nonce, digest []byte, answer string, d Di
 
 // AnswerRescue verifies a host answer and opens its approved channel; see
 // docs/rescue-connection-start.md, 3. 許可と拒否.
-func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
+func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn net.Conn, onActivity func()) error {
 	if conn == nil {
 		return ErrRefused
 	}
@@ -89,7 +89,12 @@ func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
 	}
 	g.rescue.mu.Lock()
 	record := g.rescue.records[string(id)]
-	if record == nil || record.principal == nil || !record.awaitingAnswer {
+	if record == nil || record.attemptID != attemptID || record.principal == nil || !record.awaitingAnswer {
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	if record.resuming && (record.lastFrame.IsZero() || g.clock().Sub(record.lastFrame) >= RescueReconnectGrace) {
+		g.endRescueLocked(id, record)
 		g.rescue.mu.Unlock()
 		return ErrRefused
 	}
@@ -164,7 +169,8 @@ func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
 	principal := record.principal
 	g.rescue.mu.Unlock()
 	taken = true
-	newRoute, err := g.connectWithSigner(principal.label, a.Dispatch, conn, true, clientSigner, true)
+	newRoute, err := g.connectWithSignerForRescue(principal.label, a.Dispatch, conn, true, clientSigner, true,
+		&rescueRoutePublication{id: string(id), attemptID: attemptID, record: record}, onActivity)
 	g.rescue.mu.Lock()
 	if g.rescue.records[string(id)] == record {
 		if err != nil {

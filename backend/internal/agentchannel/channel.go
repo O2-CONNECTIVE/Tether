@@ -212,6 +212,7 @@ type Channel struct {
 	answered   int
 	beatWindow time.Time
 	peerBeats  int
+	onActivity func()
 }
 
 func newChannel(conn net.Conn, b Budgets, deadline time.Time, binding Binding, session *agentexec.Session) *Channel {
@@ -419,6 +420,9 @@ func (c *Channel) Read(p []byte) (int, error) {
 		return 0, c.closedError(ErrClosed)
 	}
 	n, err := c.ch.Read(p)
+	if n > 0 && c.onActivity != nil {
+		c.onActivity()
+	}
 	if err != nil {
 		c.teardown(ReasonTransport)
 		return n, c.closedError(err)

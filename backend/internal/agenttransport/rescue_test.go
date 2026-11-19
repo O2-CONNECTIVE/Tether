@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"golang.org/x/crypto/ssh"
 )
@@ -50,6 +51,10 @@ var (
 )
 
 func newRescueGateway(t *testing.T, now *time.Time) *agentgateway.Gateway {
+	return newRescueGatewayWithBudgets(t, now, chanBudgets())
+}
+
+func newRescueGatewayWithBudgets(t *testing.T, now *time.Time, budgets agentchannel.Budgets) *agentgateway.Gateway {
 	t.Helper()
 	pub := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	set, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{
@@ -63,8 +68,9 @@ func newRescueGateway(t *testing.T, now *time.Time) *agentgateway.Gateway {
 		t.Fatal(err)
 	}
 	g, err := agentgateway.New(agentgateway.Config{
-		Verifier: v, Budgets: chanBudgets(), Clock: func() time.Time { return *now }, RescueSigner: rescueIdentity,
-		Principals: []agentgateway.Principal{{Label: member1, Subject: "synthetic-subject-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator}}},
+		Verifier: v, Budgets: budgets, Clock: func() time.Time { return *now }, RescueSigner: rescueIdentity, Organization: "O2 CONNECTIVE",
+		Principals: []agentgateway.Principal{{Label: member1, Subject: "synthetic-subject-1", DisplayName: "Operator",
+			Roles: []agentgateway.Role{agentgateway.RoleRescueOperator}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,13 +86,20 @@ func newRescueGateway(t *testing.T, now *time.Time) *agentgateway.Gateway {
 // before the route sends it, as a relay or a wrong gateway would.
 type rescueRecorder struct {
 	RescueRegistry
-	tamper func(agentgateway.RescueRequest, agentgateway.RescueReception) agentgateway.RescueReception
-	opened chan agentgateway.RescueReception
-	ended  chan []byte
+	tamper  func(agentgateway.RescueRequest, agentgateway.RescueReception) agentgateway.RescueReception
+	opened  chan agentgateway.RescueReception
+	ended   chan []byte
+	touched chan rescueTouchCall
+}
+
+type rescueTouchCall struct {
+	id        []byte
+	attemptID uint64
 }
 
 func newRescueRecorder(reg RescueRegistry) *rescueRecorder {
-	return &rescueRecorder{RescueRegistry: reg, opened: make(chan agentgateway.RescueReception, 8), ended: make(chan []byte, 8)}
+	return &rescueRecorder{RescueRegistry: reg, opened: make(chan agentgateway.RescueReception, 8), ended: make(chan []byte, 8),
+		touched: make(chan rescueTouchCall, 64)}
 }
 
 func (r *rescueRecorder) OpenRescue(req agentgateway.RescueRequest) (agentgateway.RescueReception, error) {
@@ -105,18 +118,21 @@ func (r *rescueRecorder) EndRescue(id []byte) {
 	r.ended <- append([]byte(nil), id...)
 }
 
-func (r *rescueRecorder) DisconnectRescue(id []byte) {
-	if registry, ok := r.RescueRegistry.(interface{ DisconnectRescue([]byte) }); ok {
-		registry.DisconnectRescue(id)
-	} else {
-		r.RescueRegistry.EndRescue(id)
-	}
+func (r *rescueRecorder) EndRescueAttempt(id []byte, attemptID uint64) {
+	r.RescueRegistry.EndRescueAttempt(id, attemptID)
 	r.ended <- append([]byte(nil), id...)
 }
 
-func (r *rescueRecorder) TouchRescue(id []byte) {
-	if registry, ok := r.RescueRegistry.(interface{ TouchRescue([]byte) }); ok {
-		registry.TouchRescue(id)
+func (r *rescueRecorder) DisconnectRescue(id []byte, attemptID uint64) {
+	r.RescueRegistry.DisconnectRescue(id, attemptID)
+	r.ended <- append([]byte(nil), id...)
+}
+
+func (r *rescueRecorder) TouchRescue(id []byte, attemptID uint64) {
+	r.RescueRegistry.TouchRescue(id, attemptID)
+	select {
+	case r.touched <- rescueTouchCall{id: append([]byte(nil), id...), attemptID: attemptID}:
+	default:
 	}
 }
 

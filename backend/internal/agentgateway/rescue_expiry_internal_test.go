@@ -143,7 +143,7 @@ func TestRescueExpiryDoesNotEndRequestMatchedImmediatelyBeforeExpiry(t *testing.
 	}
 	conn, peer := net.Pipe()
 	defer peer.Close()
-	_ = g.AnswerRescue(res.ID, RescueAnswer{Answer: RescueDeny, Signature: signature.Blob}, conn) // nil only when a channel opens
+	_ = g.AnswerRescue(res.ID, res.AttemptID, RescueAnswer{Answer: RescueDeny, Signature: signature.Blob}, conn, nil) // nil only when a channel opens
 	status = internalTool(t, g, bearer, sid, "rescue_request_status", map[string]any{})
 	if got := internalState(t, status); got != RescueDeny {
 		t.Fatalf("request status after deny = %q; want deny", got)

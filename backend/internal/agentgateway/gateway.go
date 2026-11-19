@@ -328,6 +328,11 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 }
 
 func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool) (*route, error) {
+	return g.connectWithSignerForRescue(label, d, conn, rescue, signer, pinned, nil, nil)
+}
+
+func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool,
+	publication *rescueRoutePublication, onActivity func()) (*route, error) {
 	if g == nil || conn == nil {
 		if conn != nil {
 			_ = conn.Close()
@@ -367,27 +372,52 @@ func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, res
 		return nil, refusal
 	}
 	defer g.watchers.Done() // includes failed/late acquisition and retire
-	r, err := g.openWithSigner(p, d, conn, signer)
+	r, err := g.openWithSigner(p, d, conn, signer, onActivity)
+	if publication != nil {
+		g.rescue.mu.Lock()
+	}
 	g.mu.Lock()
 	p.connecting = false
 	if err != nil {
 		g.mu.Unlock()
+		if publication != nil {
+			g.rescue.mu.Unlock()
+		}
 		return nil, err
 	}
 	if g.closed {
 		g.mu.Unlock()
+		if publication != nil {
+			g.rescue.mu.Unlock()
+		}
 		g.retire(r)
 		return r, ErrClosed
 	}
 	if !pinned && !g.dispatchHostAllowedLocked(p, d.HostKey, rescue) {
 		g.mu.Unlock()
+		if publication != nil {
+			g.rescue.mu.Unlock()
+		}
 		g.retire(r)
 		return nil, ErrRefused
+	}
+	if publication != nil {
+		record := publication.record
+		if g.rescue.records[publication.id] != record || record.attemptID != publication.attemptID || !record.opening ||
+			(record.resuming && (record.lastFrame.IsZero() || g.clock().Sub(record.lastFrame) >= RescueReconnectGrace)) {
+			g.mu.Unlock()
+			g.rescue.mu.Unlock()
+			g.retire(r)
+			return nil, ErrRefused
+		}
 	}
 	r.rescue = rescue
 	p.route = r
 	g.watchers.Add(1)
 	g.mu.Unlock()
+	if publication != nil {
+		g.rescue.mu.Unlock()
+	}
 	go g.watch(r)
 	return r, nil
 }
@@ -424,10 +454,10 @@ func (g *Gateway) residentHostLocked(name string, slot *hostSlot) bool {
 }
 
 func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) {
-	return g.openWithSigner(p, d, conn, p.signer)
+	return g.openWithSigner(p, d, conn, p.signer, nil)
 }
 
-func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer) (*route, error) {
+func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func()) (*route, error) {
 	host, err := ssh.ParsePublicKey(d.HostKey)
 	if err != nil {
 		_ = conn.Close()
@@ -436,7 +466,7 @@ func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer
 	// The channel lives until the gateway closes or the channel ends; its own
 	// deadline is the dispatched grant deadline.
 	ch, err := agentchannel.Open(g.ctx, agentchannel.ClientConfig{
-		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline, Budgets: g.budgets,
+		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline, Budgets: g.budgets, OnActivity: onActivity,
 	}, conn)
 	if err != nil {
 		if ch != nil {

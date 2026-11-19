@@ -168,7 +168,7 @@ func checkDispatch(d agentgateway.Dispatch, now time.Time) error {
 
 // transcript is the exact byte string the host signs: domain, the gateway
 // resource identity (the configured endpoint), host and principal labels, the
-// complete dispatch and this connection's nonce, each length-prefixed.
+// v1 registration fields and this connection's nonce, each length-prefixed.
 func transcript(resource, host, principal string, d agentgateway.Dispatch, nonce []byte) []byte {
 	var out []byte
 	field := func(v []byte) {
@@ -181,7 +181,6 @@ func transcript(resource, host, principal string, d agentgateway.Dispatch, nonce
 	field([]byte(host))
 	field([]byte(principal))
 	field(binary.BigEndian.AppendUint64(nil, b.Grant.Generation))
-	field(binary.BigEndian.AppendUint64(nil, b.ConnectionGeneration))
 	field([]byte(b.Grant.Identity.LaunchID))
 	field([]byte(b.Grant.Identity.Epoch))
 	field([]byte(b.Grant.Identity.PolicyDigest))
@@ -278,7 +277,7 @@ func isAccepted(msg []byte) bool {
 	return ok && m["type"] == typeAccepted
 }
 
-var registerFields = []string{"type", "host", "principal", "generation", "connection_generation", "launch_id", "epoch", "policy_digest",
+var registerFields = []string{"type", "host", "principal", "generation", "launch_id", "epoch", "policy_digest",
 	"key_set_digest", "profile", "deadline_unix_nano", "host_key", "signature"}
 
 type registration struct {
@@ -289,10 +288,16 @@ type registration struct {
 }
 
 func encodeRegister(host, principal string, d agentgateway.Dispatch, sig []byte) []byte {
-	m := dispatchFields(d)
+	m := registerDispatchFields(d)
 	m["type"], m["host"], m["principal"], m["signature"] = typeRegister, host, principal, b64.EncodeToString(sig)
 	out, _ := json.Marshal(m)
 	return out
+}
+
+func registerDispatchFields(d agentgateway.Dispatch) map[string]string {
+	m := dispatchFields(d)
+	delete(m, "connection_generation")
+	return m
 }
 
 func dispatchFields(d agentgateway.Dispatch) map[string]string {
@@ -319,10 +324,6 @@ func decodeRegister(msg []byte) (registration, error) {
 	if err != nil || strconv.FormatUint(gen, 10) != m["generation"] {
 		return registration{}, ErrRefused
 	}
-	connectionGeneration, err := strconv.ParseUint(m["connection_generation"], 10, 64)
-	if err != nil || connectionGeneration == 0 || strconv.FormatUint(connectionGeneration, 10) != m["connection_generation"] {
-		return registration{}, ErrRefused
-	}
 	deadline, err := strconv.ParseInt(m["deadline_unix_nano"], 10, 64)
 	if err != nil || deadline <= 0 || strconv.FormatInt(deadline, 10) != m["deadline_unix_nano"] {
 		return registration{}, ErrRefused
@@ -338,7 +339,7 @@ func decodeRegister(msg []byte) (registration, error) {
 	}
 	b := &r.dispatch.Binding
 	b.Grant.Generation = gen
-	b.ConnectionGeneration = connectionGeneration
+	b.ConnectionGeneration = 1
 	b.Grant.Identity.LaunchID, b.Grant.Identity.Epoch, b.Grant.Identity.PolicyDigest = m["launch_id"], m["epoch"], m["policy_digest"]
 	copy(b.KeySetDigest[:], digest)
 	b.Profile = agentexec.ProfileMacCurrentUser

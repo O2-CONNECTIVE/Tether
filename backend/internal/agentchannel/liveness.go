@@ -94,6 +94,9 @@ func (c *Channel) heartbeat() Reason {
 	case !ok || len(payload) != 0:
 		return ReasonHeartbeat
 	}
+	if c.onActivity != nil {
+		c.onActivity()
+	}
 	return ReasonNone
 }
 

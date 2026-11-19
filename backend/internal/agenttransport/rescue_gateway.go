@@ -25,7 +25,15 @@ type RescueRegistry interface {
 	AdmitRescue() error
 	OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error)
 	EndRescue([]byte)
-	AnswerRescue([]byte, agentgateway.RescueAnswer, net.Conn) error
+	EndRescueAttempt([]byte, uint64)
+	DisconnectRescue([]byte, uint64)
+	TouchRescue([]byte, uint64)
+	AnswerRescue([]byte, uint64, agentgateway.RescueAnswer, net.Conn, func()) error
+}
+
+type rescueActiveAttempt struct {
+	id        []byte
+	attemptID uint64
 }
 
 // RescueHandler serves the gateway end of the rescue reception route.
@@ -37,8 +45,8 @@ type RescueHandler struct {
 	reg        RescueRegistry
 	mu         sync.Mutex
 	closed     bool
-	serving    int                // ServeHTTP calls past admission
-	active     map[*closer][]byte // serving or unconfirmed; the id while the reception is open
+	serving    int                             // ServeHTTP calls past admission
+	active     map[*closer]rescueActiveAttempt // serving or unconfirmed; the current WSS attempt
 	idle       chan struct{}
 	idleClosed bool
 	ctx        context.Context
@@ -52,7 +60,7 @@ func NewRescueHandler(reg RescueRegistry) (*RescueHandler, error) {
 		return nil, ErrConfig
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &RescueHandler{reg: reg, active: map[*closer][]byte{}, idle: make(chan struct{}), ctx: ctx, cancel: cancel}, nil
+	return &RescueHandler{reg: reg, active: map[*closer]rescueActiveAttempt{}, idle: make(chan struct{}), ctx: ctx, cancel: cancel}, nil
 }
 
 // ServeHTTP accepts and serves one host reception.
@@ -112,16 +120,16 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.prune()
 	h.serving++
-	h.active[c] = nil
+	h.active[c] = rescueActiveAttempt{}
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
-		id := h.active[c]
-		h.active[c] = nil
+		attempt := h.active[c]
+		h.active[c] = rescueActiveAttempt{}
 		h.mu.Unlock()
 		// End the registry entry before waiting for transport close confirmation.
-		if id != nil {
-			h.disconnectRescue(id)
+		if attempt.id != nil {
+			h.disconnectRescue(attempt.id, attempt.attemptID)
 		}
 		c.start()
 		cleanup, stop := context.WithTimeout(context.Background(), DefaultBudgets().Cleanup)
@@ -214,7 +222,7 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mu.Lock()
-	h.active[c] = append([]byte(nil), res.ID...)
+	h.active[c] = rescueActiveAttempt{id: append([]byte(nil), res.ID...), attemptID: res.AttemptID}
 	h.mu.Unlock()
 	if write(map[string]string{"type": "reception", "reception": b64.EncodeToString(res.ID), "code": res.Code, "signature": b64.EncodeToString(res.Signature)}) != nil {
 		rescueClose(ws)
@@ -243,7 +251,7 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case rr := <-read:
 			// Until the identity is delivered, any host frame ends this reception.
 			if rr.err == nil && rr.typ == websocket.MessageText && isRescueEndFrame(rr.msg) {
-				h.reg.EndRescue(res.ID)
+				h.reg.EndRescueAttempt(res.ID, res.AttemptID)
 			} else if rr.err == nil || rr.typ == websocket.MessageText || len(rr.msg) > MaxRegistrationMessage {
 				rescueClose(ws)
 			}
@@ -272,7 +280,7 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if rr.typ == websocket.MessageText && isRescueEndFrame(rr.msg) {
-				h.reg.EndRescue(res.ID)
+				h.reg.EndRescueAttempt(res.ID, res.AttemptID)
 				rescueClose(ws)
 				return
 			}
@@ -283,12 +291,10 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				// the empty answer never verifies, so the gateway records failed
 				// (timeout after RescueRequestLifetime) instead of ended.
 				answer = agentgateway.RescueAnswer{}
-			} else {
-				h.touchRescue(res.ID)
 			}
 			stream := newStreamObserved(life, ws, c, DefaultBudgets().Cleanup,
-				func() { h.touchRescue(res.ID) }, func() { h.reg.EndRescue(res.ID) }, nil)
-			_ = h.reg.AnswerRescue(res.ID, answer, stream)
+				nil, func() { h.reg.EndRescueAttempt(res.ID, res.AttemptID) }, nil)
+			_ = h.reg.AnswerRescue(res.ID, res.AttemptID, answer, stream, func() { h.touchRescue(res.ID, res.AttemptID) })
 			select {
 			case <-res.Done:
 				c.start()
@@ -302,18 +308,12 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *RescueHandler) disconnectRescue(id []byte) {
-	if registry, ok := h.reg.(interface{ DisconnectRescue([]byte) }); ok {
-		registry.DisconnectRescue(id)
-		return
-	}
-	h.reg.EndRescue(id)
+func (h *RescueHandler) disconnectRescue(id []byte, attemptID uint64) {
+	h.reg.DisconnectRescue(id, attemptID)
 }
 
-func (h *RescueHandler) touchRescue(id []byte) {
-	if registry, ok := h.reg.(interface{ TouchRescue([]byte) }); ok {
-		registry.TouchRescue(id)
-	}
+func (h *RescueHandler) touchRescue(id []byte, attemptID uint64) {
+	h.reg.TouchRescue(id, attemptID)
 }
 
 // Close turns the reception route OFF and ends every active reception.
@@ -329,10 +329,10 @@ func (h *RescueHandler) Close(ctx context.Context) error {
 	}
 	var ids [][]byte
 	var active []*closer
-	for c, id := range h.active {
-		if id != nil {
-			ids = append(ids, id)
-			h.active[c] = nil
+	for c, attempt := range h.active {
+		if attempt.id != nil {
+			ids = append(ids, attempt.id)
+			h.active[c] = rescueActiveAttempt{}
 		}
 		active = append(active, c)
 	}
@@ -382,8 +382,8 @@ func (h *RescueHandler) markIdle() {
 // prune drops connections whose close is confirmed and that no ServeHTTP
 // still serves. Caller holds h.mu.
 func (h *RescueHandler) prune() {
-	for c, id := range h.active {
-		if id == nil && c.confirmed() {
+	for c, attempt := range h.active {
+		if attempt.id == nil && c.confirmed() {
 			delete(h.active, c)
 		}
 	}

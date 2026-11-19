@@ -229,8 +229,11 @@ func (rescueRegistryStub) AdmitRescue() error { return nil }
 func (rescueRegistryStub) OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error) {
 	return agentgateway.RescueReception{}, nil
 }
-func (rescueRegistryStub) EndRescue([]byte) {}
-func (rescueRegistryStub) AnswerRescue(_ []byte, _ agentgateway.RescueAnswer, conn net.Conn) error {
+func (rescueRegistryStub) EndRescue([]byte)                {}
+func (rescueRegistryStub) EndRescueAttempt([]byte, uint64) {}
+func (rescueRegistryStub) DisconnectRescue([]byte, uint64) {}
+func (rescueRegistryStub) TouchRescue([]byte, uint64)      {}
+func (rescueRegistryStub) AnswerRescue(_ []byte, _ uint64, _ agentgateway.RescueAnswer, conn net.Conn, _ func()) error {
 	if conn != nil {
 		return conn.Close()
 	}
