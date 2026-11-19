@@ -27,6 +27,25 @@ type Snapshot struct {
 	CanRequestOff   bool        `json:"canRequestOff"`
 	Transition      *Transition `json:"transition"`
 }
+
+// Allowance is the foreground status's view of the local command-run
+// allowance (#399). Only the foreground (development) dialect has an allow
+// entry, so only its status line carries these keys.
+type Allowance struct {
+	RunUntil      *uint64 `json:"runUntil"`      // wall-clock Unix ms; null without an allowance
+	RunEndingSoon bool    `json:"runEndingSoon"` // from ten minutes before runUntil
+	RunExpired    bool    `json:"runExpired"`    // the last cycle ended because it ran out
+}
+type foregroundSnapshot struct {
+	Snapshot
+	Allowance
+}
+type foregroundStatusEnvelope struct {
+	ProtocolVersion    uint64             `json:"protocolVersion"`
+	Type               string             `json:"type"`
+	SourceContinuousMS uint64             `json:"sourceContinuousMs"`
+	Snapshot           foregroundSnapshot `json:"snapshot"`
+}
 type statusEnvelope struct {
 	ProtocolVersion    uint64   `json:"protocolVersion"`
 	Type               string   `json:"type"`
@@ -46,6 +65,8 @@ type mapper struct {
 	refused                      *Transition
 	poisoned                     bool
 	cleanupUnknown               bool
+	foreground                   bool // fixed by the trusted dialect, never by input
+	run                          Allowance
 }
 
 func oneOf(s string, values ...string) bool {
@@ -75,7 +96,10 @@ func validRaw(o residentmac.StandbyObservation) bool {
 			return false
 		}
 	}
-	return true
+	if o.RunUntil.IsZero() {
+		return !o.RunEndingSoon
+	}
+	return o.RunUntil.UnixMilli() > 0 && uint64(o.RunUntil.UnixMilli()) <= MaxInteger
 }
 func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEnvelope, error) {
 	if !validRaw(o) || now > MaxInteger || m.revision == MaxInteger || (m.revision > 0 && (now < m.observedAt || o.Revision < m.raw.Revision || (o.Revision == m.raw.Revision && !reflect.DeepEqual(o, m.raw)))) {
@@ -146,12 +170,25 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 		}
 		m.refused = nil // one ordered publication, not retained owner evidence
 	}
+	m.run = Allowance{RunExpired: o.RunExpired}
+	if !o.RunUntil.IsZero() && !m.poisoned {
+		end := uint64(o.RunUntil.UnixMilli())
+		m.run.RunUntil, m.run.RunEndingSoon = &end, o.RunEndingSoon
+	}
 	s.CanRequestOn = off && o.CanRequestOn && !m.poisoned && m.pending == nil
 	s.CanRequestOff = on && o.CanRequestOff && !m.poisoned && m.pending == nil
 	m.raw = o
 	m.view = s
 	m.observedAt = now
 	return statusEnvelope{1, "status", now, s}, nil
+}
+
+// frame is the status line for this mapper's dialect.
+func (m *mapper) frame(s statusEnvelope) any {
+	if !m.foreground {
+		return s
+	}
+	return foregroundStatusEnvelope{s.ProtocolVersion, s.Type, s.SourceContinuousMS, foregroundSnapshot{s.Snapshot, m.run}}
 }
 func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receipt {
 	out := Receipt{1, r.RequestID, r.Intent, "rejected"}

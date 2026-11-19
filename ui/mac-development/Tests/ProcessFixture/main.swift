@@ -6,12 +6,13 @@ var revision = 0
 var on = false
 func status() {
     revision += 1
-    print("{\"protocolVersion\":1,\"type\":\"status\",\"sourceContinuousMs\":\(mode == "normal" || mode.hasPrefix("expiry") ? ResidentProcess.now() : ResidentProcess.now()-4000),\"snapshot\":{\"protocolVersion\":1,\"source\":\"resident-owner\",\"state\":\"source-observation\",\"revision\":\(revision),\"validForMs\":3000,\"standby\":\"off\",\"registration\":\"disconnected\",\"caller\":null,\"work\":\"idle\",\"cleanup\":\"confirmed\",\"canRequestOn\":true,\"canRequestOff\":false,\"transition\":null}}")
+    print("{\"protocolVersion\":1,\"type\":\"status\",\"sourceContinuousMs\":\(mode == "normal" || mode.hasPrefix("expiry") ? ResidentProcess.now() : ResidentProcess.now()-4000),\"snapshot\":{\"protocolVersion\":1,\"source\":\"resident-owner\",\"state\":\"source-observation\",\"revision\":\(revision),\"validForMs\":3000,\"standby\":\"off\",\"registration\":\"disconnected\",\"caller\":null,\"work\":\"idle\",\"cleanup\":\"confirmed\",\"canRequestOn\":true,\"canRequestOff\":false,\"transition\":null,\"runUntil\":null,\"runEndingSoon\":false,\"runExpired\":false}}")
     fflush(stdout)
 }
 status()
-// The development helper's own lifetime expiry: a confirmed close with no GUI
-// request. "expiry" is the fixed exit 0; "expiry-nonzero" is the former exit 1.
+// A confirmed close the helper makes with no GUI request (the helper no longer
+// ends itself on a timer; this keeps that path tested). "expiry" is exit 0;
+// "expiry-nonzero" is a close followed by a failing exit.
 if mode.hasPrefix("expiry") {
     print("{\"protocolVersion\":1,\"type\":\"closed\",\"sourceContinuousMs\":\(ResidentProcess.now()),\"outcome\":\"confirmed\"}")
     fflush(stdout)

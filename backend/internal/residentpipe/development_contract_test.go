@@ -12,7 +12,7 @@ import (
 // produced by the real mapper and Encode, not a handwritten consumer snapshot.
 // No transport, credentials, host, or command execution is involved.
 func TestDevelopmentPendingContractGolden(t *testing.T) {
-	var m mapper
+	m := mapper{foreground: true} // the development GUI reads the foreground dialect
 	var lines []byte
 	appendFrame := func(v any) {
 		b, err := Encode(v)
@@ -26,7 +26,7 @@ func TestDevelopmentPendingContractGolden(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		appendFrame(s)
+		appendFrame(m.frame(s))
 	}
 	o := fixtureOff()
 	observe(o)

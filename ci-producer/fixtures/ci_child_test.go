@@ -216,16 +216,30 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 	}
 	switch kind {
 	case "status":
+		// Only the foreground (development) dialect's status shows the run
+		// allowance; the JSON dialect's keeps its exact product keys.
 		var e statusEnvelope
-		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || ciStrictFrame(raw, &e) != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
+		var decoded error
+		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition"}
+		flags := []string{"canRequestOn", "canRequestOff"}
+		if p.foreground {
+			var f foregroundStatusEnvelope
+			decoded = ciStrictFrame(raw, &f)
+			e = statusEnvelope{f.ProtocolVersion, f.Type, f.SourceContinuousMS, f.Snapshot.Snapshot}
+			keys = append(keys, "runUntil", "runEndingSoon", "runExpired")
+			flags = append(flags, "runEndingSoon", "runExpired")
+		} else {
+			decoded = ciStrictFrame(raw, &e)
+		}
+		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || decoded != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
 			return ErrProtocol
 		}
 		var body map[string]json.RawMessage
 		_ = json.Unmarshal(root["snapshot"], &body)
-		if !exactKeys(body, "protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition") {
+		if !exactKeys(body, keys...) {
 			return ErrProtocol
 		}
-		for _, field := range []string{"canRequestOn", "canRequestOff"} {
+		for _, field := range flags {
 			v := bytes.TrimSpace(body[field])
 			if !bytes.Equal(v, []byte("true")) && !bytes.Equal(v, []byte("false")) {
 				return ErrProtocol

@@ -9,7 +9,7 @@ protocol RecoveryOwner: AnyObject {
     var mayQuit: Bool { get }
     var diagnostic: String { get }
     func start()
-    func intent(_ intent: String)
+    func intent(_ intent: String, hours: Int?)
     func close()
     func poll()
 }
@@ -67,9 +67,9 @@ public final class RecoveryController {
         owner.start()
         return owner.launched
     }
-    public func intent(_ intent: String) {
+    public func intent(_ intent: String, hours: Int? = nil) {
         guard !quitRequested else { return }
-        owner.intent(intent)
+        owner.intent(intent, hours: hours)
     }
     public func close() { owner.close() }
     public var shouldTerminate: Bool { quitRequested && mayQuit }

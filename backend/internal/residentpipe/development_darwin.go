@@ -13,10 +13,12 @@ import (
 
 // Explicit development CLI only. No Swift launch gate, sealed producer or
 // production enrollment is changed or presented as trusted by this composition.
+// It has no lifetime of its own: the run allowance's end (#399), kept by the
+// owner, is the time limit, and close, input EOF or a signal end the process.
 func RunDevelopmentForeground() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop() // unknown cleanup retains this original signal owner
-	return runDevelopmentLifetime(ctx, runDevelopmentInput)
+	return runDevelopmentInput(ctx)
 }
 
 func runDevelopmentInput(lifetime context.Context) error {

@@ -51,7 +51,7 @@ public final class ResidentProcess {
             p.currentDirectoryURL = root
             p.standardInput = toChild; p.standardOutput = fromChild
             p.standardError = FileHandle.nullDevice
-            launchedAt = Self.now() // before the helper starts its own lifetime timer
+            launchedAt = Self.now()
             try p.run()
             process = p; input = toChild; output = fromChild; launched = true
             try? toChild.fileHandleForReading.close(); try? fromChild.fileHandleForWriting.close()
@@ -63,7 +63,7 @@ public final class ResidentProcess {
         let count = bytes.withUnsafeBytes { Darwin.write(input.fileHandleForWriting.fileDescriptor, $0.baseAddress, $0.count) }
         if count != bytes.count { feed.fail("input-write-failed"); try? input.fileHandleForWriting.close() }
     }
-    public func intent(_ intent: String) { send(feed.command(intent, at: Self.now())) }
+    public func intent(_ intent: String, hours: Int? = nil) { send(feed.command(intent, at: Self.now(), hours: hours)) }
     public func close() { send(feed.requestClose()) }
     // Fixed reason codes and process/build identities only, never policy,
     // credentials, endpoint, caller, raw frames or stderr.

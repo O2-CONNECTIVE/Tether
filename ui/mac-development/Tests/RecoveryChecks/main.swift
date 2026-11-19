@@ -23,7 +23,7 @@ final class Owner: RecoveryOwner {
         !launched || (feed.closeConfirmed && !feed.cleanupInvalid && reaped && eof && exitOK)
     }
     func start() { starts += 1; if !launchFailed { launched = true } }
-    func intent(_ intent: String) { _ = feed.command(intent, at: 5000) }
+    func intent(_ intent: String, hours: Int?) { _ = feed.command(intent, at: 5000, hours: hours) }
     func close() { if feed.requestClose() != nil { closes += 1 } }
     func poll() { polls += 1 }
 }

@@ -13,6 +13,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let detail = NSTextField(wrappingLabelWithString: "専用の開発用設定を用意した後に開始してください。")
     private let diagnostic = NSTextField(wrappingLabelWithString: "")
     private let runState = NSTextField(wrappingLabelWithString: "コマンド実行: 許可なし（待機 ON だけでは実行されません）")
+    private let allowLength = NSPopUpButton(frame: .zero, pullsDown: false)
+    private static let allowHours = [2, 4, 8, 12, 24]
     private let history = NSTextView()
     private var start: NSButton!, on: NSButton!, off: NSButton!, allow: NSButton!, deny: NSButton!, stop: NSButton!, quit: NSButton!
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -38,15 +40,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let warning = NSTextField(wrappingLabelWithString: "通常製品とは別のローカル開発アプリです。待機 ON だけでは固定の検証操作だけを受け付けます。コマンド実行は、下のボタンで許可している間だけ通ります。署名・公開・認証の保証を追加しません。")
         detail.font = TetherPalette.font(13); detail.textColor = TetherPalette.ink
         warning.font = TetherPalette.font(13); warning.textColor = TetherPalette.ink
-        let limit = NSTextField(wrappingLabelWithString: "起動から15分で終了を要求します。再接続でも延長しません。永続運転・ログイン起動ではありません。サーバー側の期限設定が別途必要です。")
+        let limit = NSTextField(wrappingLabelWithString: "コマンド実行の許可は選んだ時間（2〜24時間）で切れ、期限が来ると待機を OFF にして停止・回収します。ローカルの期限はサーバー側の期限の代わりにはなりません。永続運転・ログイン起動ではありません。")
         limit.font = TetherPalette.font(13); limit.textColor = TetherPalette.muted
         start = button("開発ホストを準備", #selector(prepare))
         on = button("待機を ON", #selector(enable)); off = button("待機を OFF", #selector(disable))
-        allow = button("コマンド実行を15分許可", #selector(allowRun)); deny = button("許可を取り消す", #selector(denyRun))
+        allow = button("コマンド実行を許可", #selector(allowRun)); deny = button("許可を取り消す", #selector(denyRun))
         stop = button("ホストを停止", #selector(stopHost))
         quit = button("終了", #selector(stopAndQuit))
         let row = NSStackView(views: [start, on, off]); row.spacing = 10
-        let runRow = NSStackView(views: [allow!, deny!]); runRow.spacing = 10
+        for hours in Self.allowHours { allowLength.addItem(withTitle: "\(hours)時間") }
+        allowLength.font = TetherPalette.font(13)
+        let runRow = NSStackView(views: [allow!, allowLength, deny!]); runRow.spacing = 10
         let endRow = NSStackView(views: [stop!, quit!]); endRow.spacing = 10
         diagnostic.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         diagnostic.textColor = TetherPalette.muted; diagnostic.isSelectable = true
@@ -77,7 +81,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func prepare() { resident.prepare(); update() }
     @objc private func enable() { resident.intent("on"); update() }
     @objc private func disable() { resident.intent("off"); update() }
-    @objc private func allowRun() { resident.intent("allow"); update() }
+    @objc private func allowRun() { resident.intent("allow", hours: Self.allowHours[allowLength.indexOfSelectedItem]); update() }
     @objc private func denyRun() { resident.intent("deny"); update() }
     @objc private func stopHost() { resident.close(); update() }
     @objc private func stopAndQuit() { NSApp.terminate(nil) }
@@ -106,7 +110,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         on.isEnabled = state.canOn; off.isEnabled = state.canOff
         stop.isEnabled = state.canStop; quit.title = state.quitTitle
         status.stringValue = state.status; detail.stringValue = state.detail
-        allow.isEnabled = state.canAllow; deny.isEnabled = state.canDeny; runState.stringValue = state.run
+        allow.isEnabled = state.canAllow; allowLength.isEnabled = state.canAllow; deny.isEnabled = state.canDeny; runState.stringValue = state.run
         let now = ResidentProcess.now()
         if now >= lastHistoryRead, now - lastHistoryRead >= 1000 {
             lastHistoryRead = now

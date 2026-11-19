@@ -22,10 +22,19 @@ replay 拒否、元 owner の回収は既存実装を使います。operation �
 `TETHER_MCP_GUI_BEGIN` 出力、5秒待機、`TETHER_MCP_GUI_END` 出力だけで、
 ON だけでは command/path/env を client が指定する入口はありません。
 
-`allow <request_id> <expected_revision>` は、署名付きの汎用コマンド
-（[run-command-design](run-command-design.md)）を現在の待機の間、最大15分だけ
-通します。`deny` は取り消します。期間は pipe で指定できません。許可は待機の
-状態遷移ではないので `status` には出ず、結果は receipt だけで返ります。
+`allow <request_id> <expected_revision> <hours>` は、署名付きの汎用コマンド
+（[run-command-design](run-command-design.md)）を現在の待機の間、選んだ時間だけ
+通します。`<hours>` は `2`・`4`・`8`・`12`・`24` のどれかで、それ以外の値や
+綴り（`02`、`3`、時間なし）は protocol error です
+（[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399)）。もう一度 `allow`
+すると、その時点から選んだ時間に置き換わります。延長はこの操作だけです。
+`deny` は取り消します。期限は経過時間と壁時計の早い方で切れ、スリープ中も進みます。
+期限が来ると、待機 OFF と同じく受付を閉じ、所有作業を止めて回収します。
+許可は待機の状態遷移ではないので `transition` には出ません。foreground の
+`status` の snapshot だけが、許可の壁時計の終わり `runUntil`（Unix ミリ秒、
+許可が無ければ `null`）、期限の10分前からの `runEndingSoon`、期限で止まったことを
+示す `runExpired`（次の ON で `false`）を持ちます。JSON の方言の `status` は
+変えていません。
 pipe 側が未知（poisoned）または遷移待ちの間は `deny` も Mac 側の owner へ
 届きません。その間に許可を確実に閉じる手段は `close` か `off` です。
 ON で `allow` が受理される経路は source 試験では通しておらず、CI の実 producer
@@ -47,10 +56,13 @@ ON で `allow` が受理される経路は source 試験では通しておらず
 - 通常製品の経路も同じ読込みを通りますが、汎用コマンドの許可を開く入口が
   無いので、記録は書かれません。
 
-15分の終了要求期限は invocation の最初に固定し、ON/OFF・再接続で延長しません。
-期限・signal・close・入力断は元 owner の Close を要求します。終了要求の時刻と
-実際の cleanup 完了は異なり、unknown は既存実装どおり retained になります。
-ローカル timer を公開アクセスの厳密な絶対期限の代わりにはしません。実試験には
+起動から15分で終了を要求する寿命は、許可の期限に置き換えました
+（[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399)）。process は自分の
+寿命では終了せず、許可の期限は待機を OFF にするだけです。signal・close・入力断は
+元 owner の Close を要求します。終了要求の時刻と実際の cleanup 完了は異なり、
+unknown は既存実装どおり retained になります。許可なしの待機 ON（固定 operation
+だけ）には期限がありません。
+ローカルの期限を公開アクセスの厳密な絶対期限の代わりにはしません。実試験には
 別途固定した server-side bounded pilot の期限・同じ対象の停止確認が必要です。
 LaunchAgent、ログイン起動、自動更新・再起動はありません。
 

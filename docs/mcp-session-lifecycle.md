@@ -14,7 +14,7 @@
 
 `deploy/cloudflare/native/worker.mjs`の`forwardRegister`は、通常登録とresidentの両subprotocolに同じ`LIMITS.lifetimeMs = 300_000`を渡します。共有relayは期限で両socketをclose code 4000にしてtimerを解除します。Worker自身は再接続しません。
 
-Goのresident control自体は5分timerを持ちません。MacのResidentClientは4000を再接続可能な終了として扱いますが、元transportの回収確認が前提です。初回5秒、最大30秒のbackoffと再認証を使い、回収不明なら停止します。開発helper全体の15分期限は別で、再接続によって延長しません。
+Goのresident control自体は5分timerを持ちません。MacのResidentClientは4000を再接続可能な終了として扱いますが、元transportの回収確認が前提です。初回5秒、最大30秒のbackoffと再認証を使い、回収不明なら停止します。開発helperに自身の寿命はなく、コマンド実行の許可の期限（2〜24時間）は再接続によって延長しません。
 
 gatewayは、同じhost/principalの古いcontrolがまだ枠を持つ間の登録を4013で拒否し、生きている古いcontrolを置き換えません。gatewayは、生きている重複と、古いcontrolの終了に気づく前に届いた同じMacの再接続を区別できないためです（[#380](https://github.com/O2-CONNECTIVE/Tether/issues/380)）。共有relayの`closeCode`は3000〜4999をそのまま通し、1013は1011へ変えるため、4000番台を使います。Macは4013を同じbackoffで再試行し、最後の認証成功の後の最初の4013から60秒を過ぎると停止します。身元の拒否（1008）は再試行しません。4013を知らない古いMacは、1008と同じく再試行せずに停止します。
 
