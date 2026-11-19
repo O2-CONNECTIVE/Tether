@@ -251,7 +251,7 @@ func TestConnectRejectsOldHostKeyAfterPairingReplacementA9(t *testing.T) {
 	if err := r.gw.ConfigurePairing(agentgateway.PairingConfig{Verifier: pairingVerifier(t), Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: "wss://gateway.example.invalid/register", Records: []agentgateway.PairRecord{{HostLabel: "host-1", HostKey: newKey, Issuer: testIssuer, Subject: subjects[0]}}}); err != nil {
 		t.Fatal(err)
 	}
-	d := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Identity: supervisor.Identity{LaunchID: "fresh-launch"}}, Profile: agentexec.ProfileMacCurrentUser}, Deadline: time.Now().Add(time.Minute), HostKey: oldKey}
+	d := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Identity: supervisor.Identity{LaunchID: "fresh-launch"}}, ConnectionGeneration: 1, Profile: agentexec.ProfileMacCurrentUser}, Deadline: time.Now().Add(time.Minute), HostKey: oldKey}
 	client, peer := net.Pipe()
 	_ = peer.Close()
 	err := r.gw.Connect(label(0), d, client)

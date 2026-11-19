@@ -35,17 +35,21 @@ var answerReception = bytes.Repeat([]byte{0x72}, agentgateway.RescueReceptionSiz
 // result. The test supplies the request; the host's answer and stream come
 // back to the test, which owns the stream.
 type answerRegistry struct {
-	key      chan []byte // K as the host proved it
-	request  chan agentgateway.RescueIdentity
-	done     chan struct{}
-	once     sync.Once
-	ended    chan []byte
-	answered chan rescueAnswerCall
+	key                  chan []byte // K as the host proved it
+	request              chan agentgateway.RescueIdentity
+	done                 chan struct{}
+	once                 sync.Once
+	ended                chan []byte
+	answered             chan rescueAnswerCall
+	disconnected         chan []byte
+	observeStream        bool
+	preserveOnDisconnect bool
+	streamRead           chan struct{}
 }
 
 func newAnswerRegistry() *answerRegistry {
 	return &answerRegistry{key: make(chan []byte, 1), request: make(chan agentgateway.RescueIdentity, 1), done: make(chan struct{}),
-		ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1)}
+		ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1), disconnected: make(chan []byte, 1), streamRead: make(chan struct{}, 1)}
 }
 
 func (*answerRegistry) AdmitRescue() error { return nil }
@@ -55,7 +59,7 @@ func (r *answerRegistry) OpenRescue(q agentgateway.RescueRequest) (agentgateway.
 	if err != nil {
 		return agentgateway.RescueReception{}, err
 	}
-	return agentgateway.RescueReception{ID: answerReception, Code: "123456789012", Signature: sig.Blob, Request: r.request, Done: r.done}, nil
+	return agentgateway.RescueReception{ID: answerReception, AttemptID: 1, Code: "123456789012", Signature: sig.Blob, Request: r.request, Done: r.done}, nil
 }
 func (r *answerRegistry) EndRescue(id []byte) {
 	select {
@@ -64,9 +68,27 @@ func (r *answerRegistry) EndRescue(id []byte) {
 	}
 	r.end()
 }
-func (r *answerRegistry) end() { r.once.Do(func() { close(r.done) }) }
-func (r *answerRegistry) AnswerRescue(id []byte, a agentgateway.RescueAnswer, conn net.Conn) error {
+func (r *answerRegistry) EndRescueAttempt(id []byte, _ uint64) { r.EndRescue(id) }
+func (r *answerRegistry) DisconnectRescue(id []byte, _ uint64) {
+	if r.preserveOnDisconnect {
+		select {
+		case r.disconnected <- append([]byte(nil), id...):
+		default:
+		}
+		return
+	}
+	r.EndRescue(id)
+}
+func (*answerRegistry) TouchRescue([]byte, uint64) {}
+func (r *answerRegistry) end()                     { r.once.Do(func() { close(r.done) }) }
+func (r *answerRegistry) AnswerRescue(id []byte, _ uint64, a agentgateway.RescueAnswer, conn net.Conn, _ func()) error {
 	r.answered <- rescueAnswerCall{id: append([]byte(nil), id...), a: a, conn: conn}
+	if r.observeStream {
+		go func() {
+			r.streamRead <- struct{}{}
+			_, _ = io.Copy(io.Discard, conn)
+		}()
+	}
 	return nil
 }
 
@@ -446,6 +468,43 @@ func TestRescueHostKeyIsKUntilTheReceptionEnds(t *testing.T) {
 	}
 }
 
+func TestRescueClientCloseSendsEndFrameAfterAllow(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.observeStream = true
+	reg.preserveOnDisconnect = true
+	c, kWire, k := openAnswer(t, reg)
+	sent := valuesFor(kWire)
+	reg.request <- sent.identity(sent.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	reg.answer(t)
+	select {
+	case <-reg.streamRead:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not start reading the channel stream")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case id := <-reg.ended:
+		if !bytes.Equal(id, answerReception) {
+			t.Fatalf("ended reception %x, want %x", id, answerReception)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not send an end frame to the gateway")
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the WebSocket close")
+	}
+	expectDone(t, c)
+	expectDropped(t, k)
+}
+
 // Between the request and the answer the gateway sends nothing; a frame there
 // is not the channel's, so the reception ends rather than hand it to a grant.
 func TestRescueHostEndsWhenTheGatewaySpeaksBeforeTheAnswer(t *testing.T) {
@@ -563,7 +622,7 @@ func TestRescueHostAnswersTheRealGatewayOverItsReception(t *testing.T) {
 		}
 	})
 	d := session.Grant()
-	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, KeySetDigest: d.KeySetDigest, Profile: session.Profile()},
+	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, ConnectionGeneration: 1, KeySetDigest: d.KeySetDigest, Profile: session.Profile()},
 		Deadline: d.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}
 	conn, err := c.Allow(dispatch)
 	if err != nil {
@@ -612,4 +671,170 @@ func TestRescueHostAnswersTheRealGatewayOverItsReception(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("agentlink.Host.Serve did not end within 5s of the reception closing")
 	}
+}
+
+type rescueActivityPath struct {
+	gateway   *agentgateway.Gateway
+	recorder  *rescueRecorder
+	client    *RescueClient
+	conn      net.Conn
+	ready     <-chan struct{}
+	requests  <-chan *ssh.Request
+	served    <-chan error
+	reception agentgateway.RescueReception
+}
+
+func newRescueActivityPath(t *testing.T, budgets agentchannel.Budgets) rescueActivityPath {
+	t.Helper()
+	now := time.Now()
+	gateway := newRescueGatewayWithBudgets(t, &now, budgets)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := gateway.Close(ctx); err != nil {
+			t.Errorf("Gateway.Close: %v", err)
+		}
+	})
+	recorder := newRescueRecorder(gateway)
+	handler := newRescueHandler(t, recorder)
+	client := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, newMemTransport(handler))
+	code, err := openRescue(t, client)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	reception := <-recorder.opened
+	requester := newVerticalMCP(t, gateway)
+	if pending, failed := requester.tool("rescue_request", map[string]any{"code": code}); failed || pending["state"] != "pending" {
+		t.Fatalf("rescue_request = %v, isError %v; want pending", pending, failed)
+	}
+	identity := receiveRequest(t, client)
+	hostKey := client.HostKey()
+	dispatch := fixtureDispatch(hostKey, "rescue-activity", time.Now().Add(time.Hour))
+	digest, err := runbackend.KeySetDigest([]ssh.PublicKey{identity.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch.Binding.KeySetDigest = digest
+	conn, err := client.Allow(dispatch)
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	ready, requests, served := serveRescueActivitySSH(t, conn, hostKey, identity.Client(), dispatch.Binding.Grant.Identity.LaunchID)
+	return rescueActivityPath{gateway: gateway, recorder: recorder, client: client, conn: conn, ready: ready,
+		requests: requests, served: served, reception: reception}
+}
+
+func serveRescueActivitySSH(t *testing.T, conn net.Conn, hostKey ssh.Signer, clientKey ssh.PublicKey, launchID string) (<-chan struct{}, <-chan *ssh.Request, <-chan error) {
+	t.Helper()
+	ready := make(chan struct{})
+	requestsOut := make(chan *ssh.Request, 8)
+	served := make(chan error, 1)
+	go func() {
+		config := &ssh.ServerConfig{PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if meta.User() != launchID || !bytes.Equal(key.Marshal(), clientKey.Marshal()) {
+				return nil, ErrRefused
+			}
+			return nil, nil
+		}}
+		config.AddHostKey(hostKey)
+		server, channels, requests, err := ssh.NewServerConn(conn, config)
+		if err != nil {
+			served <- err
+			return
+		}
+		defer server.Close()
+		go func() {
+			for request := range requests {
+				requestsOut <- request
+			}
+		}()
+		for open := range channels {
+			if open.ChannelType() != agentchannel.ChannelType {
+				_ = open.Reject(ssh.UnknownChannelType, "unsupported")
+				continue
+			}
+			channel, channelRequests, err := open.Accept()
+			if err != nil {
+				served <- err
+				return
+			}
+			close(ready)
+			go io.Copy(io.Discard, channel)
+			go func() {
+				for request := range channelRequests {
+					if request.WantReply {
+						_ = request.Reply(false, nil)
+					}
+				}
+			}()
+		}
+		served <- nil
+	}()
+	return ready, requestsOut, served
+}
+
+func TestRescueHandlerTouchesOnlyAuthenticatedChannelActivity(t *testing.T) {
+	t.Run("positive heartbeat reply", func(t *testing.T) {
+		path := newRescueActivityPath(t, chanBudgets())
+		select {
+		case <-path.ready:
+		case <-time.After(3 * time.Second):
+			t.Fatal("SSH channel did not open")
+		}
+		select {
+		case call := <-path.recorder.touched:
+			t.Fatalf("TouchRescue before authenticated channel activity: attempt %d", call.attemptID)
+		default:
+		}
+		var heartbeat *ssh.Request
+		select {
+		case heartbeat = <-path.requests:
+		case <-time.After(2 * time.Second):
+			t.Fatal("gateway did not send an SSH heartbeat")
+		}
+		if heartbeat.Type != agentchannel.HeartbeatRequest || !heartbeat.WantReply || len(heartbeat.Payload) != 0 {
+			t.Fatalf("heartbeat = %+v", heartbeat)
+		}
+		if err := heartbeat.Reply(true, nil); err != nil {
+			t.Fatalf("reply to SSH heartbeat: %v", err)
+		}
+		select {
+		case call := <-path.recorder.touched:
+			if !bytes.Equal(call.id, path.reception.ID) || call.attemptID != path.reception.AttemptID {
+				t.Fatalf("TouchRescue event = %x/%d; want %x/%d", call.id, call.attemptID, path.reception.ID, path.reception.AttemptID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("authenticated heartbeat reply did not call TouchRescue through WSS")
+		}
+	})
+
+	t.Run("malformed SSH bytes", func(t *testing.T) {
+		budgets := chanBudgets()
+		budgets.HeartbeatInterval = agentchannel.MaxHeartbeatInterval
+		budgets.ReadStall = budgets.HeartbeatInterval + budgets.HeartbeatTimeout + time.Second
+		path := newRescueActivityPath(t, budgets)
+		select {
+		case <-path.ready:
+		case <-time.After(3 * time.Second):
+			t.Fatal("SSH channel did not open")
+		}
+		select {
+		case call := <-path.recorder.touched:
+			t.Fatalf("TouchRescue before authenticated channel activity: attempt %d", call.attemptID)
+		default:
+		}
+		if _, err := path.conn.Write([]byte("not an authenticated SSH packet")); err != nil {
+			t.Fatalf("write malformed SSH bytes over WSS: %v", err)
+		}
+		select {
+		case <-path.served:
+		case <-time.After(3 * time.Second):
+			t.Fatal("malformed SSH bytes did not end the channel")
+		}
+		select {
+		case call := <-path.recorder.touched:
+			t.Fatalf("malformed SSH bytes advanced lastFrame through TouchRescue for attempt %d", call.attemptID)
+		default:
+		}
+	})
 }

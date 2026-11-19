@@ -31,11 +31,20 @@ import (
 )
 
 type requestRescueRegistry struct {
-	request  chan agentgateway.RescueIdentity
-	done     chan struct{}
-	ended    chan []byte
-	answered chan rescueAnswerCall
-	once     sync.Once
+	request          chan agentgateway.RescueIdentity
+	done             chan struct{}
+	ended            chan []byte
+	answered         chan rescueAnswerCall
+	once             sync.Once
+	mu               sync.Mutex
+	nextAttempt      uint64
+	attempts         map[uint64]*requestRescueAttempt
+	keepOnDisconnect bool
+}
+
+type requestRescueAttempt struct {
+	done   chan struct{}
+	closed bool
 }
 
 type rescueAnswerCall struct {
@@ -47,26 +56,61 @@ type rescueAnswerCall struct {
 func newRequestRescueRegistry() *requestRescueRegistry {
 	return &requestRescueRegistry{
 		request: make(chan agentgateway.RescueIdentity, 1), done: make(chan struct{}),
-		ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1),
+		ended: make(chan []byte, 20), answered: make(chan rescueAnswerCall, 1), attempts: map[uint64]*requestRescueAttempt{},
 	}
 }
 
 func (*requestRescueRegistry) AdmitRescue() error { return nil }
 func (r *requestRescueRegistry) OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error) {
+	r.mu.Lock()
+	r.nextAttempt++
+	attemptID := r.nextAttempt
+	attempt := &requestRescueAttempt{done: make(chan struct{})}
+	r.attempts[attemptID] = attempt
+	r.mu.Unlock()
 	return agentgateway.RescueReception{
-		ID: bytes.Repeat([]byte{0x71}, agentgateway.RescueReceptionSize), Code: "123456789012",
-		Request: r.request, Done: r.done,
+		ID: bytes.Repeat([]byte{0x71}, agentgateway.RescueReceptionSize), AttemptID: attemptID, Code: "123456789012",
+		Request: r.request, Done: r.done, AttemptDone: attempt.done,
 	}, nil
 }
 func (r *requestRescueRegistry) EndRescue(id []byte) {
 	r.ended <- append([]byte(nil), id...)
 	r.endReception()
 }
+func (r *requestRescueRegistry) EndRescueAttempt(id []byte, _ uint64) { r.EndRescue(id) }
+func (r *requestRescueRegistry) DisconnectRescue(id []byte, attemptID uint64) {
+	r.mu.Lock()
+	keep := r.keepOnDisconnect
+	r.mu.Unlock()
+	if keep {
+		r.endAttempt(attemptID)
+		return
+	}
+	r.EndRescue(id)
+}
+func (*requestRescueRegistry) TouchRescue([]byte, uint64) {}
 
 func (r *requestRescueRegistry) endReception() {
 	r.once.Do(func() { close(r.done) })
+	r.mu.Lock()
+	for _, attempt := range r.attempts {
+		if !attempt.closed {
+			attempt.closed = true
+			close(attempt.done)
+		}
+	}
+	r.mu.Unlock()
 }
-func (r *requestRescueRegistry) AnswerRescue(id []byte, a agentgateway.RescueAnswer, conn net.Conn) error {
+
+func (r *requestRescueRegistry) endAttempt(attemptID uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if attempt := r.attempts[attemptID]; attempt != nil && !attempt.closed {
+		attempt.closed = true
+		close(attempt.done)
+	}
+}
+func (r *requestRescueRegistry) AnswerRescue(id []byte, _ uint64, a agentgateway.RescueAnswer, conn net.Conn, _ func()) error {
 	r.answered <- rescueAnswerCall{id: append([]byte(nil), id...), a: a, conn: conn}
 	return conn.Close()
 }
@@ -234,7 +278,8 @@ func TestRescueHandlerForwardsIdentityAndSignedAnswer(t *testing.T) {
 	}
 	answer := map[string]any{"type": "answer", "answer": agentgateway.RescueAllow,
 		"signature":  base64.RawURLEncoding.EncodeToString(signature.Blob),
-		"generation": strconv.FormatUint(d.Binding.Grant.Generation, 10), "launch_id": d.Binding.Grant.Identity.LaunchID, "epoch": d.Binding.Grant.Identity.Epoch,
+		"generation": strconv.FormatUint(d.Binding.Grant.Generation, 10), "connection_generation": strconv.FormatUint(d.Binding.ConnectionGeneration, 10),
+		"launch_id": d.Binding.Grant.Identity.LaunchID, "epoch": d.Binding.Grant.Identity.Epoch,
 		"policy_digest": d.Binding.Grant.Identity.PolicyDigest, "key_set_digest": hex.EncodeToString(d.Binding.KeySetDigest[:]),
 		"profile": profileMac, "deadline_unix_nano": strconv.FormatInt(d.Deadline.UnixNano(), 10), "host_key": base64.RawURLEncoding.EncodeToString(d.HostKey)}
 	b, _ := json.Marshal(answer)
@@ -336,6 +381,90 @@ func TestRescueHandlerClosesWebSocketWhenReceptionEnds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRescueHandlerClosesOnlyTheExpiredAttemptWebSocket(t *testing.T) {
+	registry := newRequestRescueRegistry()
+	registry.keepOnDisconnect = true
+	h := newRescueHandler(t, registry)
+	key := rescueKey(0x49)
+	ws1, id := openRescueWebSocketForPurpose(t, h, key, agentgateway.RescuePurposeNew, nil)
+	registry.request <- agentgateway.RescueIdentity{Nonce: bytes.Repeat([]byte{0x22}, agentgateway.RescueNonceSize), Profile: agentgateway.RescueProfile}
+	if got := rawString(t, ws1.readJSON()["type"]); got != "request" {
+		t.Fatalf("first attempt frame type = %q; want request", got)
+	}
+	registry.endAttempt(1) // answer expiry ends this WSS but leaves the reception available
+	op, _, err := ws1.next(2 * time.Second)
+	if err != nil || op != opClose {
+		t.Fatalf("expired attempt WSS remained open: opcode=%d err=%v", op, err)
+	}
+	select {
+	case <-registry.done:
+		t.Fatal("ending one attempt closed the reception")
+	default:
+	}
+
+	ws2, _ := openRescueWebSocketForPurpose(t, h, key, agentgateway.RescuePurposeResume, id)
+	registry.request <- agentgateway.RescueIdentity{Nonce: bytes.Repeat([]byte{0x23}, agentgateway.RescueNonceSize), Profile: agentgateway.RescueProfile}
+	if got := rawString(t, ws2.readJSON()["type"]); got != "request" {
+		t.Fatalf("next attempt frame type = %q; want request", got)
+	}
+}
+
+func openRescueWebSocketForPurpose(t *testing.T, h *RescueHandler, key ssh.Signer, purpose string, reception []byte) (*rawWS, []byte) {
+	t.Helper()
+	ws, response := upgrade(t, h, func(req *http.Request) {
+		req.URL.Path = agentgateway.RescuePath
+		req.Header.Set("Sec-WebSocket-Protocol", RescueSubprotocol)
+	})
+	if response.StatusCode != http.StatusSwitchingProtocols || response.Header.Get("Sec-WebSocket-Protocol") != RescueSubprotocol {
+		t.Fatalf("rescue websocket upgrade = %d %v", response.StatusCode, response.Header)
+	}
+	hostNonce := bytes.Repeat([]byte{0x31}, agentgateway.RescueNonceSize)
+	ws.text(mustJSON(t, map[string]string{"type": "hello", "nonce": base64.RawURLEncoding.EncodeToString(hostNonce)}))
+	gatewayNonce := ws.challenge()
+	keyWire := key.PublicKey().Marshal()
+	signature, err := key.Sign(rand.Reader, agentgateway.RescueTranscript(rescueEndpoint, keyWire, gatewayNonce, purpose, reception))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := map[string]string{"type": "proof", "purpose": purpose,
+		"key": base64.RawURLEncoding.EncodeToString(keyWire), "signature": base64.RawURLEncoding.EncodeToString(signature.Blob)}
+	if purpose == agentgateway.RescuePurposeResume {
+		proof["reception"] = base64.RawURLEncoding.EncodeToString(reception)
+	}
+	ws.text(mustJSON(t, proof))
+	frame := ws.readJSON()
+	if rawString(t, frame["type"]) != "reception" {
+		t.Fatalf("rescue result type = %q; want reception", rawString(t, frame["type"]))
+	}
+	id, err := base64.RawURLEncoding.DecodeString(rawString(t, frame["reception"]))
+	if err != nil {
+		t.Fatalf("decode reception id: %v", err)
+	}
+	return ws, id
+}
+
+func (r *rawWS) readJSON() map[string]json.RawMessage {
+	r.t.Helper()
+	op, payload, err := r.next(2 * time.Second)
+	if err != nil || op != opText {
+		r.t.Fatalf("rescue websocket text frame: opcode=%d err=%v", op, err)
+	}
+	var frame map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &frame); err != nil {
+		r.t.Fatalf("decode rescue websocket frame: %v", err)
+	}
+	return frame
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	b, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func TestRescueRequestRealGatewayBindsFreshRoute(t *testing.T) {
@@ -530,15 +659,16 @@ func TestRescueRequestRealGatewayBindsFreshRoute(t *testing.T) {
 		}
 	})
 	d := session.Grant()
-	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, KeySetDigest: d.KeySetDigest, Profile: session.Profile()}, Deadline: d.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}
+	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, ConnectionGeneration: 1, KeySetDigest: d.KeySetDigest, Profile: session.Profile()}, Deadline: d.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}
 	digestRequest := sha256.Sum256(transcript)
 	signature, err := hostKey.Sign(rand.Reader, agentgateway.RescueAnswerTranscript(receptionID, requestIdentity.Nonce, digestRequest[:], agentgateway.RescueAllow, dispatch))
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeFrame(map[string]any{"type": "answer", "answer": agentgateway.RescueAllow, "signature": base64.RawURLEncoding.EncodeToString(signature.Blob),
-		"generation": strconv.FormatUint(dispatch.Binding.Grant.Generation, 10), "launch_id": dispatch.Binding.Grant.Identity.LaunchID,
-		"epoch": dispatch.Binding.Grant.Identity.Epoch, "policy_digest": dispatch.Binding.Grant.Identity.PolicyDigest,
+		"generation": strconv.FormatUint(dispatch.Binding.Grant.Generation, 10), "connection_generation": strconv.FormatUint(dispatch.Binding.ConnectionGeneration, 10),
+		"launch_id": dispatch.Binding.Grant.Identity.LaunchID,
+		"epoch":     dispatch.Binding.Grant.Identity.Epoch, "policy_digest": dispatch.Binding.Grant.Identity.PolicyDigest,
 		"key_set_digest": hex.EncodeToString(dispatch.Binding.KeySetDigest[:]), "profile": profileMac,
 		"deadline_unix_nano": strconv.FormatInt(dispatch.Deadline.UnixNano(), 10), "host_key": base64.RawURLEncoding.EncodeToString(dispatch.HostKey)})
 	// The SSH server writes its version at once, so the channel starts only

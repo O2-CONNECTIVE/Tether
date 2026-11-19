@@ -139,7 +139,7 @@ func TestRescueRequestAllowUsesOnlyPerRequestClientKey(t *testing.T) {
 		t.Fatalf("prepare one-key host: %v", err)
 	}
 	answer := signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch)
-	if err := r.gw.AnswerRescue(res.ID, answer, stream); err != nil {
+	if err := r.gw.AnswerRescue(res.ID, res.AttemptID, answer, stream, nil); err != nil {
 		t.Fatalf("AnswerRescue(allow) = %v", err)
 	}
 	if stream.isClosed() {
@@ -197,7 +197,7 @@ func TestRescueRequestDenyAndTimeoutNeverOpenRoute(t *testing.T) {
 			if err != nil {
 				t.Fatalf("prepare one-key host: %v", err)
 			}
-			if err := r.gw.AnswerRescue(res.ID, signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, answer, m.dispatch), stream); err == nil {
+			if err := r.gw.AnswerRescue(res.ID, res.AttemptID, signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, answer, m.dispatch), stream, nil); err == nil {
 				t.Fatalf("AnswerRescue(%s) = nil; want no connection", answer)
 			}
 			if !stream.isClosed() {
@@ -232,7 +232,7 @@ func TestRescueRequestRejectsLateAllow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare one-key host: %v", err)
 	}
-	err = r.gw.AnswerRescue(res.ID, signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch), stream)
+	err = r.gw.AnswerRescue(res.ID, res.AttemptID, signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch), stream, nil)
 	if err == nil || !stream.isClosed() {
 		t.Fatalf("late allow = %v, stream closed %v; want refusal and close", err, stream.isClosed())
 	}
@@ -286,7 +286,7 @@ func TestRescueRequestInvalidAnswerVariantsFailAndReleaseBusy(t *testing.T) {
 				signedDispatch.HostKey = fixtureSigner(t, 0x7c).PublicKey().Marshal()
 			}
 			wrong := signAnswerFields(t, signingKey, hostKey.PublicKey(), r.gw.RescueEndpoint(), signedID, identity, signedNonce, signedDigest, signedAnswer, sentAnswer, signedDispatch, sentDispatch)
-			if err := r.gw.AnswerRescue(res.ID, wrong, stream); err == nil {
+			if err := r.gw.AnswerRescue(res.ID, res.AttemptID, wrong, stream, nil); err == nil {
 				t.Fatal("invalid answer was accepted")
 			}
 			if !stream.isClosed() {
@@ -343,7 +343,7 @@ func TestRescueRequestReceptionEndingDuringConfirmationEndsRequest(t *testing.T)
 	if err != nil {
 		t.Fatalf("prepare one-key host: %v", err)
 	}
-	err = r.gw.AnswerRescue(res.ID, signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch), stream)
+	err = r.gw.AnswerRescue(res.ID, res.AttemptID, signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch), stream, nil)
 	if err == nil || !stream.isClosed() {
 		t.Fatalf("late answer after EndRescue = %v, closed %v; want refusal and close", err, stream.isClosed())
 	}
@@ -372,7 +372,7 @@ func TestRescueRequestInvalidCodesHaveOneResponse(t *testing.T) {
 					if name == "timed out" {
 						answer = agentgateway.RescueTimeout
 					}
-					_ = r.gw.AnswerRescue(res.ID, signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, answer, agentgateway.Dispatch{}), stream)
+					_ = r.gw.AnswerRescue(res.ID, res.AttemptID, signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, answer, agentgateway.Dispatch{}), stream, nil)
 					_ = peer.Close()
 					waitReceptionDone(t, res)
 				}
@@ -614,12 +614,12 @@ func TestRescueRequestSecondAnswerAfterAllowIsRefused(t *testing.T) {
 		t.Fatalf("prepare one-key host: %v", err)
 	}
 	answer := signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch)
-	if err := r.gw.AnswerRescue(res.ID, answer, stream); err != nil {
+	if err := r.gw.AnswerRescue(res.ID, res.AttemptID, answer, stream, nil); err != nil {
 		t.Fatalf("AnswerRescue(allow) = %v", err)
 	}
 	replay, peer := net.Pipe()
 	defer peer.Close()
-	if err := r.gw.AnswerRescue(res.ID, answer, replay); err == nil {
+	if err := r.gw.AnswerRescue(res.ID, res.AttemptID, answer, replay, nil); err == nil {
 		t.Fatal("second AnswerRescue on an answered reception = nil; want refusal")
 	}
 	if stream.isClosed() {

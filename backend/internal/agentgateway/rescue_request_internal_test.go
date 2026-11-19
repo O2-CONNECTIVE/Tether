@@ -114,7 +114,7 @@ func TestRescueRequestWaitDefaultsToSeventyFiveSecondLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn, peer := net.Pipe()
-	err = g.AnswerRescue(res.ID, RescueAnswer{Answer: RescueAllow, Signature: signature.Blob}, conn)
+	err = g.AnswerRescue(res.ID, res.AttemptID, RescueAnswer{Answer: RescueAllow, Signature: signature.Blob}, conn, nil)
 	if err == nil {
 		t.Fatal("late allow after timeout was accepted")
 	}

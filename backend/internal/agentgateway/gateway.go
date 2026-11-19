@@ -118,6 +118,11 @@ type route struct {
 	cleanupErr  error
 }
 
+type launchGeneration struct {
+	launchID   string
+	generation uint64
+}
+
 type hostSlot struct {
 	key        []byte
 	principals map[string]bool
@@ -159,11 +164,14 @@ type Gateway struct {
 	rescueCodes   *rescueCodes // rescue connection codes; guarded by its own lock
 	rescueSigner  ssh.Signer
 	rescue        *rescueReceptionState
+	// These internal barriers let race tests stop on either side of rescue route publication.
+	rescueBeforePublishHook func(*route)
+	rescueAfterPublishHook  func()
 
 	mu          sync.Mutex
 	closed      bool
 	sessions    map[string]*session
-	launches    map[string]struct{} // every LaunchID registered in this process
+	launches    map[launchGeneration]struct{} // every LaunchID and connection generation registered in this process
 	unconfirmed []*agentchannel.Channel
 	watchers    sync.WaitGroup
 	joinOnce    sync.Once
@@ -206,7 +214,7 @@ func New(cfg Config) (*Gateway, error) {
 		residentOnly: cfg.ResidentOnly, discoveryOnly: cfg.DiscoveryOnly, organization: cfg.Organization, verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
 		bySubject: map[string]*principal{}, byLabel: map[string]*principal{},
 		budgets: cfg.Budgets, callTimeout: cfg.CallTimeout, clock: cfg.Clock, inflight: make(chan struct{}, MaxInflightRequests),
-		sessions: map[string]*session{}, launches: map[string]struct{}{}, joined: make(chan struct{}),
+		sessions: map[string]*session{}, launches: map[launchGeneration]struct{}{}, joined: make(chan struct{}),
 		rescueSigner: cfg.RescueSigner,
 	}
 	if g.clock == nil {
@@ -274,13 +282,14 @@ func validLabel(s string) bool {
 // the principal's enrolled signer and the pinned host key, and only then makes
 // it the principal's route. It refuses, closing conn, an unknown label, a
 // principal without a signer, a principal that already has or is acquiring a
-// route, a profile other than the Mac current user, and any LaunchID already
-// registered in this process (no resume). It is the rescue connection: it
+// route, a profile other than the Mac current user, and any (LaunchID,
+// ConnectionGeneration) already registered in this process. It admits only
+// generation 1; resume is bound to the same reception by AnswerRescue. It
 // also refuses a principal without RoleRescueOperator and a dispatch from a
 // resident host (a pair slot or an enrolled resident), whoever owns it. A
-// refused or failed registration
-// consumes that LaunchID only once opening was admitted. A pre-open refusal
-// closes the supplied stream; it never resumes the Mac approval.
+// refused or failed registration consumes that pair only once opening was
+// admitted. A pre-open refusal closes the supplied stream; it does not resume
+// the approval.
 // The gateway never issues or extends a grant.
 func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
 	// ConnectResident uses the private connect port only after correlation and
@@ -291,6 +300,28 @@ func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
 		}
 		return ErrRefused
 	}
+	if d.Binding.ConnectionGeneration != 1 {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return ErrRefused
+	}
+	if g != nil && g.rescue != nil {
+		g.mu.Lock()
+		principal := g.byLabel[label]
+		g.mu.Unlock()
+		g.rescue.mu.Lock()
+		for _, record := range g.rescue.records {
+			if record.principal != nil && record.dispatch.Binding.Grant.Identity.LaunchID == d.Binding.Grant.Identity.LaunchID && record.principal != principal {
+				g.rescue.mu.Unlock()
+				if conn != nil {
+					_ = conn.Close()
+				}
+				return ErrRefused
+			}
+		}
+		g.rescue.mu.Unlock()
+	}
 	_, e := g.connect(label, d, conn, true)
 	return e
 }
@@ -300,6 +331,11 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 }
 
 func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool) (*route, error) {
+	return g.connectWithSignerForRescue(label, d, conn, rescue, signer, pinned, nil, nil)
+}
+
+func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool,
+	publication *rescueRoutePublication, onActivity func()) (*route, error) {
 	if g == nil || conn == nil {
 		if conn != nil {
 			_ = conn.Close()
@@ -307,19 +343,20 @@ func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, res
 		return nil, ErrConfig
 	}
 	launch := d.Binding.Grant.Identity.LaunchID
+	key := launchGeneration{launchID: launch, generation: d.Binding.ConnectionGeneration}
 	g.mu.Lock()
 	p := g.byLabel[label]
 	if signer == nil && p != nil {
 		signer = p.signer
 	}
-	_, reused := g.launches[launch]
+	_, reused := g.launches[key]
 	var refusal error
 	switch {
 	case g.closed:
 		refusal = ErrClosed
 	case g.discoveryOnly:
 		refusal = ErrRefused
-	case p == nil || signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "":
+	case p == nil || signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "" || key.generation == 0:
 		refusal = ErrConfig
 	case rescue && !p.rescue:
 		refusal = ErrRefused
@@ -329,7 +366,7 @@ func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, res
 		refusal = ErrRefused
 	default:
 		p.connecting = true
-		g.launches[launch] = struct{}{}
+		g.launches[key] = struct{}{}
 		g.watchers.Add(1) // own acquisition before Close can begin waiting
 	}
 	g.mu.Unlock()
@@ -338,27 +375,95 @@ func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, res
 		return nil, refusal
 	}
 	defer g.watchers.Done() // includes failed/late acquisition and retire
-	r, err := g.openWithSigner(p, d, conn, signer)
+	r, err := g.openWithSigner(p, d, conn, signer, onActivity)
+	if err == nil && publication != nil && g.rescueBeforePublishHook != nil {
+		g.rescueBeforePublishHook(r)
+	}
+	if publication != nil {
+		g.rescue.mu.Lock()
+	}
 	g.mu.Lock()
 	p.connecting = false
 	if err != nil {
 		g.mu.Unlock()
+		if publication != nil {
+			g.rescue.mu.Unlock()
+		}
 		return nil, err
 	}
 	if g.closed {
 		g.mu.Unlock()
+		if publication != nil {
+			g.rescue.mu.Unlock()
+		}
 		g.retire(r)
 		return r, ErrClosed
 	}
 	if !pinned && !g.dispatchHostAllowedLocked(p, d.HostKey, rescue) {
 		g.mu.Unlock()
+		if publication != nil {
+			g.rescue.mu.Unlock()
+		}
 		g.retire(r)
 		return nil, ErrRefused
 	}
-	r.rescue = rescue
-	p.route = r
+	if publication != nil {
+		record := publication.record
+		publicationAt := g.clock()
+		currentAttempt := g.rescue.records[publication.id] == record && record.attemptID == publication.attemptID
+		channelEnded, clientEnded := false, false
+		select {
+		case <-r.channel.Done():
+			channelEnded = true
+		default:
+		}
+		select {
+		case <-r.client.Done():
+			clientEnded = true
+		default:
+		}
+		if currentAttempt && record.resuming && rescueGraceExpired(record, publicationAt) {
+			g.mu.Unlock()
+			g.endRescueLocked([]byte(publication.id), record)
+			g.rescue.mu.Unlock()
+			g.retire(r)
+			return nil, ErrRefused
+		}
+		validState := record.opening && !record.awaitingAnswer && !record.disconnected &&
+			((record.answered && record.resuming) || (!record.answered && !record.resuming))
+		hardDeadlineExpired := !publicationAt.Before(record.dispatch.Deadline)
+		if !currentAttempt || !validState || channelEnded || clientEnded || hardDeadlineExpired ||
+			(record.resuming && rescueGraceExpired(record, publicationAt)) {
+			g.mu.Unlock()
+			g.rescue.mu.Unlock()
+			g.retire(r)
+			return nil, ErrRefused
+		}
+		r.rescue = rescue
+		p.route = r
+		record.route = r
+		record.connectionGeneration = d.Binding.ConnectionGeneration
+		record.answered = true
+		record.active = true
+		record.opening = false
+		record.awaitingAnswer = false
+		record.resuming = false
+		record.disconnected = false
+		record.lastFrame = publicationAt
+		record.graceUntil = time.Time{}
+		g.setRescueStateLocked(p, RescueAllow)
+	} else {
+		r.rescue = rescue
+		p.route = r
+	}
 	g.watchers.Add(1)
 	g.mu.Unlock()
+	if publication != nil {
+		g.rescue.mu.Unlock()
+		if g.rescueAfterPublishHook != nil {
+			g.rescueAfterPublishHook()
+		}
+	}
 	go g.watch(r)
 	return r, nil
 }
@@ -395,10 +500,10 @@ func (g *Gateway) residentHostLocked(name string, slot *hostSlot) bool {
 }
 
 func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) {
-	return g.openWithSigner(p, d, conn, p.signer)
+	return g.openWithSigner(p, d, conn, p.signer, nil)
 }
 
-func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer) (*route, error) {
+func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func()) (*route, error) {
 	host, err := ssh.ParsePublicKey(d.HostKey)
 	if err != nil {
 		_ = conn.Close()
@@ -407,7 +512,7 @@ func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer
 	// The channel lives until the gateway closes or the channel ends; its own
 	// deadline is the dispatched grant deadline.
 	ch, err := agentchannel.Open(g.ctx, agentchannel.ClientConfig{
-		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline, Budgets: g.budgets,
+		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline, Budgets: g.budgets, OnActivity: onActivity,
 	}, conn)
 	if err != nil {
 		if ch != nil {
@@ -421,7 +526,7 @@ func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer
 	if ch.Binding() != d.Binding {
 		return nil, errors.Join(ErrRefused, g.closeChannel(ch))
 	}
-	client, err := agentwire.NewClient(ch)
+	client, err := agentwire.NewClientWithActivity(ch, onActivity)
 	if err != nil {
 		return nil, errors.Join(err, g.closeChannel(ch))
 	}
@@ -470,6 +575,16 @@ func (g *Gateway) retire(r *route) {
 	close(r.ended)
 	_ = r.client.Close()
 	r.cleanupErr = g.closeChannel(r.channel)
+	if r.cleanupErr != nil && g.rescue != nil {
+		g.rescue.mu.Lock()
+		for id, record := range g.rescue.records {
+			if record.route == r {
+				g.endRescueLocked([]byte(id), record)
+				break
+			}
+		}
+		g.rescue.mu.Unlock()
+	}
 	close(r.cleanupDone)
 }
 

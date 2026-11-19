@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
+	"math/big"
+	"slices"
 	"sync"
 	"time"
 
@@ -19,11 +22,12 @@ import (
 // per-reception key K and gets a code that the gateway signs with the rescue
 // identity key.
 const (
-	RescuePath          = "/tether-agent/v1/rescue"
-	RescuePurposeNew    = "new"
-	RescuePurposeResume = "resume" // the wire only; #425 resumes
-	RescueNonceSize     = 32
-	RescueReceptionSize = 16 // 128 bit id
+	RescuePath           = "/tether-agent/v1/rescue"
+	RescuePurposeNew     = "new"
+	RescuePurposeResume  = "resume"
+	RescueNonceSize      = 32
+	RescueReceptionSize  = 16 // 128 bit id
+	RescueReconnectGrace = 5 * time.Minute
 
 	// RescueCodeLifetime is how long a code is valid; the host ends its
 	// reception when it passes.
@@ -56,11 +60,13 @@ type RescueRequest struct {
 
 // RescueReception is the signed result the route returns to the host.
 type RescueReception struct {
-	ID        []byte // RescueReceptionSize
-	Code      string
-	Signature []byte // raw ssh-ed25519 signature by the identity key over RescueResultTranscript
-	Request   <-chan RescueIdentity
-	Done      <-chan struct{}
+	ID          []byte // RescueReceptionSize
+	AttemptID   uint64 // gateway-local identity for events from this WSS attempt
+	Code        string
+	Signature   []byte // raw ssh-ed25519 signature by the identity key over RescueResultTranscript
+	Request     <-chan RescueIdentity
+	Done        <-chan struct{}
+	AttemptDone <-chan struct{}
 }
 
 // RescueTranscript is what K signs: the domain, the public reception URL, K,
@@ -90,16 +96,35 @@ func rescueTranscript(parts [][]byte) []byte {
 }
 
 type rescueReceptionRecord struct {
-	key       []byte
-	opened    time.Time
-	requested time.Time
-	principal *principal
-	clientKey ed25519.PrivateKey
-	nonce     []byte
-	request   chan RescueIdentity
-	done      chan struct{}
-	digest    []byte
-	answered  bool
+	key                  []byte
+	opened               time.Time
+	requested            time.Time
+	lastFrame            time.Time
+	graceUntil           time.Time
+	principal            *principal
+	clientKey            ed25519.PrivateKey
+	nonce                []byte
+	request              chan RescueIdentity
+	attemptID            uint64
+	done                 chan struct{}
+	attemptDone          chan struct{}
+	attemptDoneClosed    bool
+	digest               []byte
+	dispatch             Dispatch
+	connectionGeneration uint64
+	route                *route
+	answered             bool
+	active               bool
+	awaitingAnswer       bool
+	resuming             bool
+	opening              bool
+	disconnected         bool
+}
+
+type rescueRoutePublication struct {
+	id        string
+	attemptID uint64
+	record    *rescueReceptionRecord
 }
 
 type rescueReceptionState struct {
@@ -156,6 +181,9 @@ func (g *Gateway) OpenRescue(r RescueRequest) (RescueReception, error) {
 	if err != nil || key.Type() != ssh.KeyAlgoED25519 || !bytes.Equal(key.Marshal(), r.Key) || len(r.HostNonce) != RescueNonceSize || len(r.GatewayNonce) != RescueNonceSize || len(r.Proof) != 64 {
 		return RescueReception{}, ErrRefused
 	}
+	if hasSmallOrderRescueKey(key) {
+		return RescueReception{}, ErrRefused
+	}
 	switch r.Purpose {
 	case RescuePurposeNew:
 		if len(r.Reception) != 0 {
@@ -172,11 +200,15 @@ func (g *Gateway) OpenRescue(r RescueRequest) (RescueReception, error) {
 		return RescueReception{}, ErrRefused
 	}
 	if r.Purpose == RescuePurposeResume {
-		return RescueReception{}, ErrRefused
+		if g.waitRescueRouteCleanup(r.Reception, r.Key, g.clock()) != nil {
+			return RescueReception{}, ErrRefused
+		}
 	}
-
 	g.rescue.mu.Lock()
 	defer g.rescue.mu.Unlock()
+	if r.Purpose == RescuePurposeResume {
+		return g.resumeRescueLocked(r, g.clock())
+	}
 	if err := g.rescueCapacityLocked(); err != nil {
 		return RescueReception{}, err
 	}
@@ -197,7 +229,9 @@ func (g *Gateway) OpenRescue(r RescueRequest) (RescueReception, error) {
 	if err != nil {
 		return RescueReception{}, ErrRefused
 	}
-	record := &rescueReceptionRecord{key: append([]byte(nil), r.Key...), opened: rescueClockTime(g.clock()), request: make(chan RescueIdentity, 1), done: make(chan struct{})}
+	now := g.clock()
+	record := &rescueReceptionRecord{key: append([]byte(nil), r.Key...), opened: rescueClockTime(now),
+		request: make(chan RescueIdentity, 1), attemptID: 1, done: make(chan struct{}), attemptDone: make(chan struct{})}
 	g.rescue.records[string(id[:])] = record
 	sig, err := g.rescueSigner.Sign(rand.Reader, RescueResultTranscript(g.rescue.endpoint, r.HostNonce, r.Key, id[:], code))
 	if err != nil || sig == nil || sig.Format != ssh.KeyAlgoED25519 {
@@ -205,7 +239,188 @@ func (g *Gateway) OpenRescue(r RescueRequest) (RescueReception, error) {
 		g.rescueCodes.end(idHex)
 		return RescueReception{}, ErrRefused
 	}
-	return RescueReception{ID: append([]byte(nil), id[:]...), Code: code, Signature: append([]byte(nil), sig.Blob...), Request: record.request, Done: record.done}, nil
+	return RescueReception{ID: append([]byte(nil), id[:]...), AttemptID: record.attemptID, Code: code,
+		Signature: append([]byte(nil), sig.Blob...), Request: record.request, Done: record.done, AttemptDone: record.attemptDone}, nil
+}
+
+// resumeRescueLocked reuses the reception's C and owner after a valid K proof.
+// g.rescue.mu is held for the whole transition, including the new request.
+func (g *Gateway) waitRescueRouteCleanup(id, hostKey []byte, now time.Time) error {
+	g.rescue.mu.Lock()
+	record := g.rescue.records[string(id)]
+	if record == nil || !bytes.Equal(record.key, hostKey) || record.principal == nil || !record.answered ||
+		!record.disconnected || record.awaitingAnswer || record.opening || record.clientKey == nil {
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	if rescueGraceExpired(record, now) {
+		g.endRescueLocked(id, record)
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	if record.route == nil {
+		g.rescue.mu.Unlock()
+		return nil
+	}
+	done := record.route.cleanupDone
+	select {
+	case <-done:
+		if record.route.cleanupErr != nil {
+			g.endRescueLocked(id, record)
+			g.rescue.mu.Unlock()
+			return ErrRefused
+		}
+		g.rescue.mu.Unlock()
+		return nil
+	default:
+	}
+	record.disconnected = false
+	record.resuming = true
+	g.rescue.mu.Unlock()
+	timeout := g.budgets.Cleanup
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		g.rescue.mu.Lock()
+		if g.rescue.records[string(id)] != record || !record.resuming || record.awaitingAnswer {
+			g.rescue.mu.Unlock()
+			return ErrRefused
+		}
+		if record.route.cleanupErr != nil {
+			g.endRescueLocked(id, record)
+			g.rescue.mu.Unlock()
+			return ErrRefused
+		}
+		if rescueGraceExpired(record, g.clock()) {
+			g.endRescueLocked(id, record)
+			g.rescue.mu.Unlock()
+			return ErrRefused
+		}
+		g.rescue.mu.Unlock()
+		return nil
+	case <-timer.C:
+	case <-g.ctx.Done():
+	}
+	g.rescue.mu.Lock()
+	if g.rescue.records[string(id)] == record && record.resuming && !record.awaitingAnswer {
+		record.resuming = false
+		record.disconnected = true
+	}
+	g.rescue.mu.Unlock()
+	return ErrRefused
+}
+
+func (g *Gateway) resumeRescueLocked(r RescueRequest, now time.Time) (RescueReception, error) {
+	key := string(r.Reception)
+	record := g.rescue.records[key]
+	reserved := record != nil && record.resuming && !record.disconnected && !record.awaitingAnswer
+	if record == nil || !bytes.Equal(record.key, r.Key) || record.principal == nil || !record.answered ||
+		(!record.disconnected && !reserved) || record.awaitingAnswer || record.opening || record.clientKey == nil {
+		return RescueReception{}, ErrRefused
+	}
+	if rescueGraceExpired(record, now) {
+		g.endRescueLocked(r.Reception, record)
+		return RescueReception{}, ErrRefused
+	}
+	if record.attemptID == ^uint64(0) {
+		g.endRescueLocked(r.Reception, record)
+		return RescueReception{}, ErrRefused
+	}
+	attemptID := record.attemptID + 1
+	clientSigner, clientKey, err := newRescueClientSigner(record.clientKey)
+	if err != nil {
+		return RescueReception{}, ErrRefused
+	}
+	defer clearRescueClientKey(clientKey)
+	nonce, err := randomRescueNonce()
+	if err != nil {
+		return RescueReception{}, ErrRefused
+	}
+	client := clientSigner.PublicKey().Marshal()
+	transcript := RescueRequestTranscript(g.RescueEndpoint(), r.Reception, record.key, nonce, client,
+		record.principal.displayName, g.organization, RescueProfile)
+	signature, err := g.rescueSigner.Sign(rand.Reader, transcript)
+	if err != nil || signature == nil || signature.Format != ssh.KeyAlgoED25519 {
+		clear(transcript)
+		clear(nonce)
+		return RescueReception{}, ErrRefused
+	}
+	digest := sha256.Sum256(transcript)
+	clear(transcript)
+	payload := RescueIdentity{Nonce: append([]byte(nil), nonce...), Client: append([]byte(nil), client...),
+		DisplayName: record.principal.displayName, Organization: g.organization, Profile: RescueProfile,
+		Signature: append([]byte(nil), signature.Blob...)}
+	result, err := g.rescueSigner.Sign(rand.Reader, RescueResultTranscript(g.rescue.endpoint, r.HostNonce, r.Key, r.Reception, ""))
+	if err != nil || result == nil || result.Format != ssh.KeyAlgoED25519 {
+		clear(nonce)
+		return RescueReception{}, ErrRefused
+	}
+	request := make(chan RescueIdentity, 1)
+	select {
+	case request <- payload:
+	default:
+		clear(nonce)
+		return RescueReception{}, ErrRefused
+	}
+	record.request = request
+	record.attemptID = attemptID
+	record.attemptDone = make(chan struct{})
+	record.attemptDoneClosed = false
+	record.nonce = append(record.nonce[:0], nonce...)
+	record.digest = append(record.digest[:0], digest[:]...)
+	record.requested = rescueClockTime(g.clock())
+	record.awaitingAnswer = true
+	record.resuming = true
+	record.disconnected = false
+	clear(nonce)
+	return RescueReception{ID: append([]byte(nil), r.Reception...), AttemptID: attemptID,
+		Signature: append([]byte(nil), result.Blob...), Request: request, Done: record.done, AttemptDone: record.attemptDone}, nil
+}
+
+func rescueGraceExpired(record *rescueReceptionRecord, now time.Time) bool {
+	return record.graceUntil.IsZero() || !now.Before(record.graceUntil)
+}
+
+func randomRescueNonce() ([]byte, error) {
+	nonce := make([]byte, RescueNonceSize)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		clear(nonce)
+		return nil, ErrRefused
+	}
+	return nonce, nil
+}
+
+// hasSmallOrderRescueKey reports whether K is one of the eight torsion points
+// of edwards25519, for which anyone can forge a proof that crypto/ed25519
+// accepts. They are exactly the points with y in {0, 1, p-1, y8, p-y8}; y is
+// reduced mod p and x's sign bit is ignored, so the non-canonical encodings Go
+// decodes are caught too. A key that is not a raw Ed25519 key counts as small
+// order. See docs/rescue-connection-start.md, 受付の登録 (#425).
+func hasSmallOrderRescueKey(key ssh.PublicKey) bool {
+	ck, ok := key.(ssh.CryptoPublicKey)
+	if !ok {
+		return true
+	}
+	raw, ok := ck.CryptoPublicKey().(ed25519.PublicKey)
+	if !ok || len(raw) != ed25519.PublicKeySize {
+		return true
+	}
+	be := slices.Clone(raw)
+	be[len(be)-1] &= 0x7f
+	slices.Reverse(be)
+	p := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(19))
+	y := new(big.Int).Mod(new(big.Int).SetBytes(be), p)
+	y8, _ := new(big.Int).SetString("2707385501144840649318225287225658788936804267575313519463743609750303402022", 10)
+	for _, small := range []*big.Int{big.NewInt(0), big.NewInt(1), new(big.Int).Sub(p, big.NewInt(1)), y8, new(big.Int).Sub(p, y8)} {
+		if y.Cmp(small) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // EndRescue drops the reception and its code at once.
@@ -219,6 +434,64 @@ func (g *Gateway) EndRescue(id []byte) {
 		return
 	} else {
 		g.endRescueLocked(id, record)
+	}
+}
+
+// EndRescueAttempt applies an end frame only to the WSS attempt that received it.
+func (g *Gateway) EndRescueAttempt(id []byte, attemptID uint64) {
+	if g == nil || g.rescue == nil {
+		return
+	}
+	g.rescue.mu.Lock()
+	defer g.rescue.mu.Unlock()
+	if record := g.rescue.records[string(id)]; record != nil && record.attemptID == attemptID {
+		g.endRescueLocked(id, record)
+	}
+}
+
+// TouchRescue records a valid frame from the host reception's monotonic clock.
+func (g *Gateway) TouchRescue(id []byte, attemptID uint64) {
+	if g == nil || g.rescue == nil {
+		return
+	}
+	g.rescue.mu.Lock()
+	if record := g.rescue.records[string(id)]; record != nil && record.attemptID == attemptID && record.active {
+		record.lastFrame = g.clock()
+	}
+	g.rescue.mu.Unlock()
+}
+
+// DisconnectRescue preserves an answered reception for its reconnect grace.
+// Before the first allow, a transport loss still ends the reception at once.
+func (g *Gateway) DisconnectRescue(id []byte, attemptID uint64) {
+	if g == nil || g.rescue == nil {
+		return
+	}
+	g.rescue.mu.Lock()
+	defer g.rescue.mu.Unlock()
+	record := g.rescue.records[string(id)]
+	if record == nil || record.attemptID != attemptID {
+		return
+	}
+	closeRescueAttemptLocked(record)
+	if !record.answered || record.opening {
+		g.endRescueLocked(id, record)
+		return
+	}
+	if record.active {
+		record.active = false
+		record.disconnected = true
+		record.graceUntil = record.lastFrame.Add(RescueReconnectGrace)
+		return
+	}
+	record.disconnected = true
+	if record.resuming {
+		record.awaitingAnswer = false
+		record.resuming = false
+		select {
+		case <-record.request:
+		default:
+		}
 	}
 }
 
@@ -237,9 +510,25 @@ func (g *Gateway) endRescueLocked(id []byte, record *rescueReceptionRecord) {
 		record.principal.rescueBusy = false
 		g.mu.Unlock()
 	}
-	clear(record.clientKey)
+	clearRescueClientKey(record.clientKey)
 	record.clientKey = nil
-	close(record.done)
+	closeRescueAttemptLocked(record)
+	if record.done != nil {
+		close(record.done)
+	}
+}
+
+func closeRescueAttemptLocked(record *rescueReceptionRecord) {
+	if record != nil && record.attemptDone != nil && !record.attemptDoneClosed {
+		record.attemptDoneClosed = true
+		close(record.attemptDone)
+	}
+}
+
+func clearRescueClientKey(key ed25519.PrivateKey) {
+	for i := range key {
+		key[i] = 0
+	}
 }
 
 func (g *Gateway) setRescueStateLocked(p *principal, state string) {
@@ -260,18 +549,40 @@ func (g *Gateway) sweepRescue() {
 		case <-g.ctx.Done():
 			return
 		case <-ticker.C:
-			g.rescue.mu.Lock()
-			now := rescueClockTime(g.clock())
-			for id, record := range g.rescue.records {
-				switch {
-				case record.principal == nil && now.UnixNano() >= record.opened.Add(RescueCodeLifetime).UnixNano():
-					g.endRescueLocked([]byte(id), record)
-				case record.principal != nil && !record.answered && now.UnixNano() >= record.requested.Add(RescueRequestLifetime).UnixNano():
-					g.setRescueStateLocked(record.principal, RescueTimeout)
-					g.endRescueLocked([]byte(id), record)
+			g.sweepRescueAt(g.clock())
+		}
+	}
+}
+
+func (g *Gateway) sweepRescueAt(now time.Time) {
+	if g == nil || g.rescue == nil {
+		return
+	}
+	wallNow := rescueClockTime(now)
+	g.rescue.mu.Lock()
+	defer g.rescue.mu.Unlock()
+	for id, record := range g.rescue.records {
+		switch {
+		case record.principal == nil && wallNow.UnixNano() >= record.opened.Add(RescueCodeLifetime).UnixNano():
+			g.endRescueLocked([]byte(id), record)
+		case record.answered && record.resuming && rescueGraceExpired(record, now):
+			g.endRescueLocked([]byte(id), record)
+		case record.principal != nil && record.awaitingAnswer && wallNow.UnixNano() >= record.requested.Add(RescueRequestLifetime).UnixNano():
+			if record.resuming {
+				record.awaitingAnswer = false
+				record.resuming = false
+				record.disconnected = true
+				closeRescueAttemptLocked(record)
+				select {
+				case <-record.request:
+				default:
 				}
+			} else {
+				g.setRescueStateLocked(record.principal, RescueTimeout)
+				g.endRescueLocked([]byte(id), record)
 			}
-			g.rescue.mu.Unlock()
+		case record.answered && record.disconnected && !record.awaitingAnswer && rescueGraceExpired(record, now):
+			g.endRescueLocked([]byte(id), record)
 		}
 	}
 }

@@ -39,7 +39,7 @@ func TestRescueRequestTranscriptLayout(t *testing.T) {
 // the gateway connects with exactly that Binding, deadline and host key.
 func TestRescueAnswerTranscriptLayout(t *testing.T) {
 	d := agentgateway.Dispatch{
-		Binding:  agentchannel.Binding{KeySetDigest: [32]byte{1, 2}, Profile: agentexec.ProfileMacCurrentUser},
+		Binding:  agentchannel.Binding{ConnectionGeneration: 2, KeySetDigest: [32]byte{1, 2}, Profile: agentexec.ProfileMacCurrentUser},
 		Deadline: time.Unix(0, 1_700_000_000_123_456_789), HostKey: []byte("K"),
 	}
 	d.Binding.Grant.Generation = 7
@@ -51,7 +51,7 @@ func TestRescueAnswerTranscriptLayout(t *testing.T) {
 			t.Errorf("%s transcript = %x, want %x (no dispatch)", answer, got, want)
 		}
 	}
-	allow := append(head, []byte("allow"), u64(7), []byte("L"), []byte("E"), []byte("P"), d.Binding.KeySetDigest[:],
+	allow := append(head, []byte("allow"), u64(7), u64(2), []byte("L"), []byte("E"), []byte("P"), d.Binding.KeySetDigest[:],
 		[]byte{byte(agentexec.ProfileMacCurrentUser)}, u64(uint64(d.Deadline.UnixNano())), []byte("K"))
 	if got, want := agentgateway.RescueAnswerTranscript([]byte("R"), []byte("N"), []byte("D"), agentgateway.RescueAllow, d), lp(allow...); !bytes.Equal(got, want) {
 		t.Fatalf("allow transcript = %x, want %x", got, want)

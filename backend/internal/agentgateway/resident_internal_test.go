@@ -170,7 +170,7 @@ func residentLateFailedAcquisition(t *testing.T, residentOnly bool) {
 	b := s.entry.works[id].binding
 	g.mu.Unlock()
 	b.Sequence = 1
-	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "launch-1", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
+	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "launch-1", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, ConnectionGeneration: 1, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
 	// A registration that names a command run must not attach to work the
 	// gateway recorded as fixed, or it would spend that work's one registration.
 	run := b
@@ -323,7 +323,7 @@ func TestResidentPreOpenRefusalPreservesOriginalFailedStreamClose(t *testing.T) 
 	b := s.entry.works[id].binding
 	g.mu.Unlock()
 	b.Sequence = 1
-	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "other-launch", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
+	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "other-launch", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, ConnectionGeneration: 1, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
 	other := make(chan error, 1)
 	rescue := d
 	rescue.HostKey = residentEvidenceDeskKey()
@@ -411,5 +411,30 @@ func TestResidentOnlyRejectsGenericRegistrationAndClosesStream(t *testing.T) {
 	}
 	if len(g.launches) != 0 || g.byLabel["member1"].route != nil {
 		t.Fatal("generic registration consumed state")
+	}
+}
+
+func TestConnectResidentRejectsConnectionGenerationTwo(t *testing.T) {
+	g, s, host, control := residentEvidenceRig(t)
+	t.Cleanup(func() {
+		close(control.begin)
+		ctx, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		_ = g.Close(ctx)
+	})
+	id := strings.Repeat("2", 32)
+	s.FixedStart(context.Background(), id)
+	g.mu.Lock()
+	b := s.entry.works[id].binding
+	g.mu.Unlock()
+	b.Sequence = 1
+	d := Dispatch{Binding: agentchannel.Binding{
+		Grant:                supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "resident-launch-425", Epoch: "epoch-425", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}},
+		ConnectionGeneration: 2, KeySetDigest: [32]byte{1}, Profile: agentexec.ProfileMacCurrentUser,
+	}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
+	client, peer := net.Pipe()
+	defer peer.Close()
+	if err := g.ConnectResident("member1", d, b, client); !errors.Is(err, ErrRefused) {
+		t.Fatalf("ConnectResident generation 2 = %v; want ErrRefused", err)
 	}
 }

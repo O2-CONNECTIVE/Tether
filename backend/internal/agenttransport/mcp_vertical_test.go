@@ -133,7 +133,7 @@ func verticalOwner(t *testing.T, hostKey, client ssh.Signer, rt *verticalRuntime
 		t.Fatal(err)
 	}
 	g := s.Grant()
-	o := &linkOwner{issuer: issuer, session: s, host: h, d: agentchannel.Dispatch{Binding: agentchannel.Binding{Grant: g.Binding, KeySetDigest: g.KeySetDigest, Profile: s.Profile()}, Deadline: g.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}}
+	o := &linkOwner{issuer: issuer, session: s, host: h, d: agentchannel.Dispatch{Binding: agentchannel.Binding{Grant: g.Binding, ConnectionGeneration: 1, KeySetDigest: g.KeySetDigest, Profile: s.Profile()}, Deadline: g.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

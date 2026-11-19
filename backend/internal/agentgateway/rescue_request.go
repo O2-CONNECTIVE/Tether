@@ -65,7 +65,7 @@ func RescueAnswerTranscript(reception, nonce, digest []byte, answer string, d Di
 	parts := [][]byte{[]byte("rescue-host.agentgateway.rescue-answer\x00v1\x00"), reception, nonce, digest, []byte(answer)}
 	if answer == RescueAllow {
 		b := d.Binding
-		parts = append(parts, binary.BigEndian.AppendUint64(nil, b.Grant.Generation), []byte(b.Grant.Identity.LaunchID),
+		parts = append(parts, binary.BigEndian.AppendUint64(nil, b.Grant.Generation), binary.BigEndian.AppendUint64(nil, b.ConnectionGeneration), []byte(b.Grant.Identity.LaunchID),
 			[]byte(b.Grant.Identity.Epoch), []byte(b.Grant.Identity.PolicyDigest), b.KeySetDigest[:], []byte{byte(b.Profile)},
 			binary.BigEndian.AppendUint64(nil, uint64(d.Deadline.UnixNano())), d.HostKey)
 	}
@@ -74,7 +74,7 @@ func RescueAnswerTranscript(reception, nonce, digest []byte, answer string, d Di
 
 // AnswerRescue verifies a host answer and opens its approved channel; see
 // docs/rescue-connection-start.md, 3. 許可と拒否.
-func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
+func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn net.Conn, onActivity func()) error {
 	if conn == nil {
 		return ErrRefused
 	}
@@ -89,13 +89,29 @@ func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
 	}
 	g.rescue.mu.Lock()
 	record := g.rescue.records[string(id)]
-	if record == nil || record.principal == nil || record.answered {
+	if record == nil || record.attemptID != attemptID || record.principal == nil || !record.awaitingAnswer {
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	if record.resuming && rescueGraceExpired(record, g.clock()) {
+		g.endRescueLocked(id, record)
 		g.rescue.mu.Unlock()
 		return ErrRefused
 	}
 	if rescueClockTime(g.clock()).UnixNano() >= record.requested.Add(RescueRequestLifetime).UnixNano() {
-		g.setRescueStateLocked(record.principal, RescueTimeout)
-		g.endRescueLocked(id, record)
+		if record.resuming {
+			record.awaitingAnswer = false
+			record.resuming = false
+			record.disconnected = true
+			closeRescueAttemptLocked(record)
+			select {
+			case <-record.request:
+			default:
+			}
+		} else {
+			g.setRescueStateLocked(record.principal, RescueTimeout)
+			g.endRescueLocked(id, record)
+		}
 		g.rescue.mu.Unlock()
 		return ErrRefused
 	}
@@ -118,7 +134,8 @@ func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
 		g.rescue.mu.Unlock()
 		return ErrRefused // nil only when a channel opens
 	}
-	clientSigner, err := ssh.NewSignerFromKey(ed25519.PrivateKey(record.clientKey))
+	clientSigner, clientKey, err := newRescueClientSigner(record.clientKey)
+	defer clearRescueClientKey(clientKey)
 	var keyDigest [32]byte
 	if err == nil {
 		keyDigest, err = runbackend.KeySetDigest([]ssh.PublicKey{clientSigner.PublicKey()})
@@ -129,22 +146,68 @@ func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
 		g.rescue.mu.Unlock()
 		return ErrRefused
 	}
-	record.answered = true
+	wantGeneration := uint64(1)
+	if record.answered {
+		if record.connectionGeneration == ^uint64(0) {
+			g.setRescueStateLocked(record.principal, "failed")
+			g.endRescueLocked(id, record)
+			g.rescue.mu.Unlock()
+			return ErrRefused
+		}
+		wantGeneration = record.connectionGeneration + 1
+		if !sameRescueDispatch(record.dispatch, a.Dispatch) {
+			g.setRescueStateLocked(record.principal, "failed")
+			g.endRescueLocked(id, record)
+			g.rescue.mu.Unlock()
+			return ErrRefused
+		}
+	}
+	if a.Dispatch.Binding.ConnectionGeneration != wantGeneration {
+		g.setRescueStateLocked(record.principal, "failed")
+		g.endRescueLocked(id, record)
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	record.dispatch = cloneRescueDispatchValue(a.Dispatch)
+	record.awaitingAnswer = false
+	record.opening = true
 	principal := record.principal
 	g.rescue.mu.Unlock()
 	taken = true
-	_, err = g.connectWithSigner(principal.label, a.Dispatch, conn, true, clientSigner, true)
+	newRoute, err := g.connectWithSignerForRescue(principal.label, a.Dispatch, conn, true, clientSigner, true,
+		&rescueRoutePublication{id: string(id), attemptID: attemptID, record: record}, onActivity)
 	g.rescue.mu.Lock()
 	if g.rescue.records[string(id)] == record {
 		if err != nil {
 			g.setRescueStateLocked(principal, "failed")
 			g.endRescueLocked(id, record)
-		} else {
-			g.setRescueStateLocked(principal, RescueAllow)
 		}
+	} else if newRoute != nil {
+		go g.closeChannel(newRoute.channel)
 	}
 	g.rescue.mu.Unlock()
 	return err
+}
+
+func sameRescueDispatch(previous, next Dispatch) bool {
+	return previous.Binding.Grant == next.Binding.Grant && previous.Binding.KeySetDigest == next.Binding.KeySetDigest &&
+		previous.Binding.Profile == next.Binding.Profile && previous.Deadline.Equal(next.Deadline) &&
+		bytes.Equal(previous.HostKey, next.HostKey)
+}
+
+func cloneRescueDispatchValue(d Dispatch) Dispatch {
+	d.HostKey = append([]byte(nil), d.HostKey...)
+	return d
+}
+
+func newRescueClientSigner(key ed25519.PrivateKey) (ssh.Signer, ed25519.PrivateKey, error) {
+	owned := append(ed25519.PrivateKey(nil), key...)
+	signer, err := ssh.NewSignerFromKey(owned)
+	if err != nil {
+		clearRescueClientKey(owned)
+		return nil, nil, err
+	}
+	return signer, owned, nil
 }
 
 func (g *Gateway) rescueRequest(ctx context.Context, p *principal, code string) map[string]any {
@@ -217,6 +280,9 @@ func (g *Gateway) rescueRequest(ctx context.Context, p *principal, code string) 
 						Organization: g.organization, Profile: RescueProfile, Signature: append([]byte(nil), signature.Blob...)}
 					select {
 					case record.request <- payload:
+						record.awaitingAnswer = true
+						record.resuming = false
+						record.disconnected = false
 						g.setRescueStateLocked(p, "pending")
 						g.rescue.mu.Unlock()
 						return map[string]any{"state": "pending"}

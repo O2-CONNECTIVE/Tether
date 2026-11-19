@@ -36,7 +36,7 @@ func TestResidentRunWorkProofsBindTheSignedScope(t *testing.T) {
 	collect := func(b agentgateway.ResidentWorkBinding) string {
 		return transcriptDigest(agentgateway.ResidentCollectionTranscript(agentgateway.ResidentCollectionProof{Binding: b, Endpoint: testEndpoint, ClientNonce: nonce, ServerNonce: nonce, HostKey: []byte("host"), PrincipalKey: []byte("principal"), Cleanup: "confirmed"}))
 	}
-	// Recorded from the implementation before command runs existed.
+	// Recorded from the pre-425 v1 registration transcript, before command runs existed.
 	if got := work(fixed); got != "b5ea7f826598b59d7dc526061566188fb001c097f8759835c9e43b2cf9b32b2d" {
 		t.Fatal("fixed work registration proof changed", got)
 	}

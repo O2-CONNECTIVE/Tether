@@ -271,7 +271,7 @@ func (r *rig) prepareApprovedHost(i int, lifetime time.Duration, keys []ssh.Publ
 	}
 	g := m.authority.Grant()
 	m.dispatch = agentgateway.Dispatch{
-		Binding:  agentchannel.Binding{Grant: g.Binding, KeySetDigest: g.KeySetDigest, Profile: agentexec.ProfileMacCurrentUser},
+		Binding:  agentchannel.Binding{Grant: g.Binding, ConnectionGeneration: 1, KeySetDigest: g.KeySetDigest, Profile: agentexec.ProfileMacCurrentUser},
 		Deadline: g.HardDeadline, HostKey: host.PublicKey().Marshal(),
 	}
 	sConn, cConn := memPair()

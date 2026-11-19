@@ -16,14 +16,16 @@ type memConn struct {
 	rd, wr *pipeBuf
 	link   *memLink
 
-	mu        sync.Mutex
-	readDL    time.Time
-	writeDL   time.Time
-	dlWake    chan struct{}
-	closed    bool
-	closedCh  chan struct{}
-	closeGate chan struct{}
-	closes    int
+	mu           sync.Mutex
+	readDL       time.Time
+	writeDL      time.Time
+	dlWake       chan struct{}
+	closed       bool
+	closedCh     chan struct{}
+	closeGate    chan struct{}
+	closes       int
+	writeGate    <-chan struct{}
+	writeStarted chan struct{}
 	// Set before use to hold the peer's EOF observation independently of Close.
 	readEOFGate <-chan struct{}
 }
@@ -120,6 +122,18 @@ func (c *memConn) Read(p []byte) (int, error) {
 }
 
 func (c *memConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	gate, started := c.writeGate, c.writeStarted
+	c.writeGate, c.writeStarted = nil, nil
+	c.mu.Unlock()
+	if gate != nil {
+		close(started)
+		select {
+		case <-gate:
+		case <-c.closedCh:
+			return 0, net.ErrClosed
+		}
+	}
 	written := 0
 	for {
 		closed, _, dl, dlWake := c.state()
@@ -150,6 +164,12 @@ func (c *memConn) Write(p []byte) (int, error) {
 			return written, err
 		}
 	}
+}
+
+func (c *memConn) blockNextWrite(started chan struct{}, release <-chan struct{}) {
+	c.mu.Lock()
+	c.writeStarted, c.writeGate = started, release
+	c.mu.Unlock()
 }
 
 // Close marks the conn closed at once (so blocked I/O returns) but, with a

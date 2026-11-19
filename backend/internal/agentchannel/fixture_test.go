@@ -104,7 +104,7 @@ func newEnvElapsed(t *testing.T, lifetime, elapsed time.Duration) *grantEnv {
 	grant := authority.Grant()
 	return &grantEnv{
 		issuer: issuer, authority: authority, session: session, host: host, client: client, keys: keys,
-		binding: Binding{Grant: grant.Binding, KeySetDigest: digest, Profile: agentexec.ProfileMacCurrentUser}, deadline: grant.HardDeadline,
+		binding: Binding{Grant: grant.Binding, ConnectionGeneration: 1, KeySetDigest: digest, Profile: agentexec.ProfileMacCurrentUser}, deadline: grant.HardDeadline,
 		notBefore: notBefore,
 	}
 }

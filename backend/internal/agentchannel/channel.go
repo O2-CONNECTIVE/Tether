@@ -76,13 +76,15 @@ func (b Budgets) valid() bool {
 		b.Cleanup > 0 && b.Cleanup <= MaxCleanup
 }
 
-// Binding is the immutable grant metadata one channel serves. The server reads
-// it from its Authority and Session; the client gets it from the explicit
-// dispatch. Neither end derives it from bytes the peer sent.
+// Binding is the immutable grant metadata and connection generation one
+// channel serves. The server reads the grant from its Authority and Session;
+// the client gets the binding from the explicit dispatch. Neither end derives
+// it from bytes the peer sent.
 type Binding struct {
-	Grant        supervisor.Binding
-	KeySetDigest [32]byte
-	Profile      agentexec.Profile
+	Grant                supervisor.Binding
+	ConnectionGeneration uint64
+	KeySetDigest         [32]byte
+	Profile              agentexec.Profile
 }
 
 // Dispatch is public routing and pinning metadata for one approved channel.
@@ -97,7 +99,7 @@ type Dispatch struct {
 }
 
 func (b Binding) valid() bool {
-	return b.Grant.Generation != 0 && b.Grant.Identity.Valid() && b.KeySetDigest != ([32]byte{}) && boundaryFor(b.Profile) != 0
+	return b.Grant.Generation != 0 && b.ConnectionGeneration != 0 && b.Grant.Identity.Valid() && b.KeySetDigest != ([32]byte{}) && boundaryFor(b.Profile) != 0
 }
 
 // boundaryFor pairs each agent profile with the only grant boundary it serves.
@@ -210,6 +212,7 @@ type Channel struct {
 	answered   int
 	beatWindow time.Time
 	peerBeats  int
+	onActivity func()
 }
 
 func newChannel(conn net.Conn, b Budgets, deadline time.Time, binding Binding, session *agentexec.Session) *Channel {
