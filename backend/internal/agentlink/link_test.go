@@ -130,6 +130,7 @@ type path struct {
 	issuer    *ephemeral.Issuer
 	authority *supervisor.Authority
 	session   *agentexec.Session
+	host      *agentlink.Host
 	runtime   *macRuntime
 	hostConn  *memConn
 	hostDone  chan error
@@ -196,6 +197,7 @@ func newPath(t *testing.T, lifetime time.Duration, mutate func(*agentchannel.Cli
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.host = h
 	sConn, cConn := memPair()
 	p.hostConn = sConn
 	go func() { p.hostDone <- h.Serve(context.Background(), sConn) }()
@@ -357,12 +359,46 @@ func (p *path) ownerStatus(id string) agentexec.Status {
 	}
 }
 
-func (p *path) revokedBeforeTerminate(proc *fakeProc) <-chan supervisor.State {
-	observed := make(chan supervisor.State, 1)
+type terminationObservation struct {
+	state      supervisor.State
+	reason     supervisor.Reason
+	stopReason agentexec.StopReason
+}
+
+func readTerminationObservation(authority *supervisor.Authority, stopReason agentexec.StopReason) terminationObservation {
+	state, reason := authority.Status()
+	return terminationObservation{state: state, reason: reason, stopReason: stopReason}
+}
+
+func (p *path) revokedBeforeTerminate(proc *fakeProc) <-chan terminationObservation {
+	observed := make(chan terminationObservation, 1)
 	proc.mu.Lock()
-	proc.onTerminate = func() { observed <- p.authority.Snapshot(time.Now()).State }
+	proc.onTerminate = func() {
+		observed <- readTerminationObservation(p.authority, p.session.StopReason())
+	}
 	proc.mu.Unlock()
 	return observed
+}
+
+func TestTerminationStateObservationDoesNotRevokeOnStaleTimestamp(t *testing.T) {
+	keys := []ssh.PublicKey{fixtureSigner(t, 0x33).PublicKey()}
+	_, authority, _ := grant(t, time.Minute, keys, &macRuntime{procs: make(chan *fakeProc, 1)})
+	stale := time.Now()
+	ready, continueObservation := make(chan struct{}), make(chan struct{})
+	observed := make(chan terminationObservation, 1)
+	go func() {
+		close(ready)
+		<-continueObservation
+		observed <- readTerminationObservation(authority, agentexec.StopNone)
+	}()
+	<-ready
+	if advanced := authority.Snapshot(stale.Add(time.Second)); advanced.State != supervisor.Granted {
+		t.Fatalf("grant before termination observation = %s (%s)", advanced.State, advanced.Reason)
+	}
+	close(continueObservation)
+	if got := <-observed; got.state != supervisor.Granted {
+		t.Fatalf("termination state observation revoked the grant: %s (%s)", got.state, got.reason)
+	}
 }
 
 func emit(t *testing.T, proc *fakeProc, s agentexec.Stream, data string) {
@@ -458,8 +494,8 @@ func TestOwnedChannelLossPreservesGrantAndCleansUpForReconnect(t *testing.T) {
 	if err := p.waitHost(); errors.Is(err, agentchannel.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown) || err == nil {
 		t.Fatalf("host Serve after channel loss = %v", err)
 	}
-	if state := <-observed; state != supervisor.Granted {
-		t.Fatalf("shell stopped while the grant was %s", state)
+	if observation := <-observed; observation.state != supervisor.Granted {
+		t.Fatalf("shell stopped while the grant was %s (authority reason=%s, session stop=%v, host reconnectable=%t, serve=%v)", observation.state, observation.reason, observation.stopReason, p.host.Reconnectable(), p.hostErr)
 	}
 	final := p.ownerStatus(id)
 	if final.Stop != agentexec.StopTransportLost || final.Cleanup != agentexec.CleanupConfirmed {
@@ -491,8 +527,8 @@ func TestOwnedChannelLossRevokesThenCleansUp(t *testing.T) {
 	if err := p.waitHost(); errors.Is(err, agentchannel.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown) || err == nil {
 		t.Fatalf("host Serve after channel loss = %v", err)
 	}
-	if state := <-observed; state != supervisor.Revoked {
-		t.Fatalf("shell stopped while the grant was %s", state)
+	if observation := <-observed; observation.state != supervisor.Revoked {
+		t.Fatalf("shell stopped while the grant was %s (authority reason=%s, session stop=%v, host reconnectable=%t, serve=%v)", observation.state, observation.reason, observation.stopReason, p.host.Reconnectable(), p.hostErr)
 	}
 	final := p.ownerStatus(id)
 	if final.Stop != agentexec.StopTransportLost || final.Cleanup != agentexec.CleanupConfirmed {
@@ -523,8 +559,8 @@ func TestShortHardDeadlineWithoutRequests(t *testing.T) {
 	if err := p.waitHost(); errors.Is(err, agentchannel.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown) || err == nil {
 		t.Fatalf("host Serve at the deadline = %v", err)
 	}
-	if state := <-observed; state != supervisor.Revoked {
-		t.Fatalf("shell stopped while the grant was %s", state)
+	if observation := <-observed; observation.state != supervisor.Revoked {
+		t.Fatalf("shell stopped while the grant was %s (authority reason=%s, session stop=%v, host reconnectable=%t, serve=%v)", observation.state, observation.reason, observation.stopReason, p.host.Reconnectable(), p.hostErr)
 	}
 	if final := p.ownerStatus(id); final.Stop != agentexec.StopHardDeadline || final.Cleanup != agentexec.CleanupConfirmed {
 		t.Fatalf("owner status = %+v", final)
