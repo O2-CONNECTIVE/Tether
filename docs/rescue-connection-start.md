@@ -2,7 +2,7 @@
 
 [文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md)
 
-**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）、WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）、担当者の要求と身元の証明・回答の検証（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）を実装しました。ホストの許可の状態機械（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）は、試験だけで使う形で実装しました（製品の入口からは使いません）。猶予（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）は未実装で、ホストの側はまだ要求に答えません。**
+**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）、WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）、担当者の要求と身元の証明・回答の検証（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）を実装しました。ホストの許可の状態機械と、受付での身元の証明の検証・K で署名した回答（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）を実装しましたが、製品の入口からは使わず、試験だけで使います。猶予（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）は未実装です。**
 切断の後の扱いは、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（accepted）が [ADR 0003](adr/0003-owned-guest-workload.md) の該当の部分を置き換えます。
 実装されるまで、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
 この文書は、ホストを接続コードで指し、要求の時点の許可のポップアップでレスキューの接続を始める流れを決めます。
@@ -82,7 +82,7 @@ proof が示すのは「K を持っている」ことだけで、ホストの身
 受付口は `GET /tether-agent/v1/rescue` の WSS で、subprotocol は `rescue-agent-reception.v1` だけです。text JSON frame を使い、各 message は 2 KiB 以下、nonce と署名・鍵は登録経路と同じ base64url（padding なし）です。
 ホストは `hello`（nonce）、gateway は `challenge`（nonce）、ホストは `proof`（purpose=`new`、K、署名。resume の場合は reception id も含む）、gateway は `reception`（id、12 桁コード、署名）を送ります。署名対象は `RescueTranscript` と `RescueResultTranscript` です。
 受付上限は upgrade 前に busy の 503（`Retry-After: 1`）、rate の 429（`Retry-After: 60`）で返します。拒否は reception frame を返さず close code 1008 で接続を閉じます。
-reception の後、gateway は担当者の要求が来たら `request`（身元の証明）を 1 つだけ送ります。ホストは `request` を受けた後に `answer` を 1 つだけ送ります。`request` の後に届いた frame は回答として扱い、受け取れない形（JSON でない、binary、dispatch の確認に通らない `allow`）なら検証に通らない回答として `failed` で受付を終えます。それ以外の frame・close は受付を終えます。
+reception の後、gateway は担当者の要求が来たら `request`（身元の証明）を 1 つだけ送ります。ホストは `request` を受けた後に `answer` を 1 つだけ送ります。ホストは、`answer` を送る前に gateway から届いた frame でも受付を終えます。`request` の後に届いた frame は回答として扱い、受け取れない形（JSON でない、binary、dispatch の確認に通らない `allow`）なら検証に通らない回答として `failed` で受付を終えます。それ以外の frame・close は受付を終えます。
 `allow` の後、同じ WSS は登録経路と同じく binary の channel の stream になります。
 
 | frame | 向き | 欄 | 署名 |
@@ -99,6 +99,7 @@ transcript の byte の並びは `backend/internal/agentgateway/rescue_request.g
 - 有効時間は gateway の時計で 5 分です。照合に使われた時点で消費し、許可・拒否・時間切れのどれでも二度と使えません。
 - gateway はコードを、起動ごとの乱数の秘密を鍵にした HMAC-SHA-256 の値で引きます。コードの平文を記録やログに残しません。
 - コードが失効したら受付を終えます。ホストは新しいコードを自動では取りません。利用者がもう一度受付を ON にします。
+- 要求が届いた後は、コードは使用済みなので、5 分を過ぎても受付を終えません（gateway とホストで同じ）。
 
 使い終わったコードの値が、後で別の受付に偶然もう一度出ることは除きません。
 古いコードを送って当たる確率は、でたらめな 12 桁で当たる確率と同じで、下の推測への耐性の計算に含まれます。
@@ -158,6 +159,8 @@ gateway は、コードの照合に成功した要求ごとに、担当者のそ
 
 ホストは、pin した公開鍵で署名を検証し、受付 id と K が自分のものであること、この受付で最初の要求であることを確かめてから、ポップアップを出します。
 どれかが合わなければ、ポップアップを出さずに拒否します。
+拒否は回答を送らずに受付を終え、K を捨てます。確かめられない身元の証明には、回答の署名対象になる digest を定められないためです。
+nonce が 32 byte でない、C が Ed25519 の鍵でない、操作範囲が `mac_current_user` でない証明も、署名が通っても受けません。
 
 ### 名前と組織の出どころ
 
@@ -227,6 +230,7 @@ WebView から来た許可は受けません。
 署名対象は、`rescue-host.agentgateway.rescue-answer\u0000v1\u0000`、受付 id、要求の nonce、身元の証明の digest、回答（`allow`・`deny`・`timeout`）です。
 `allow` のときは、grant の dispatch（Binding と期限）も署名対象に入れます。gateway はこれを検証して、C を signer にして `Connect` します。
 host 鍵は、設定の host の鍵（今の `Connect` の照合）ではなく、受付記録の K に pin します。
+ホストの側も、grant の host 鍵に K そのものを使います。受付が終わって K を捨てると、grant の host 鍵も署名できなくなります。
 dispatch を真正に届ける責任は登録 adapter にあり（[信頼の前提](agent-gateway.md#信頼の前提)）、この回答の署名がそれを担います。
 
 担当者には、`allow`・`deny`（拒否）・`timeout`（時間切れ）を区別して返します。コードが正しかった場合だけなので、区別しても推測の手がかりになりません。

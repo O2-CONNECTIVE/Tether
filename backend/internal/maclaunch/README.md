@@ -77,6 +77,9 @@ uses the same issuance as the terminal path, allows C alone, pins K as the host
 key and lasts the chosen 2, 4, 8, 12 or 24 hours from the time of approval. Any
 end revokes and reclaims the grant, closes the reception (discarding K) and never
 restarts it. Tests drive it with a fake helper, a fake reception and fake clocks.
-The wire verification of the identity proof, the K-signed answers, the helper's
-authenticated path (#410) and the grace period (#425) are not here. It is not
-enabled as a product: the Mac guest account is not designed yet.
+On the wire the reception is `agenttransport.RescueClient`: it verifies the
+identity proof against its pins, URL, reception id and K, hands the one verified
+request to `ReceiveFrom`, signs the answer with K, and its `HostKey` (K itself)
+is the grant's host key. The helper's authenticated path (#410) and the grace
+period (#425) are not here. It is not enabled as a product: the Mac guest
+account is not designed yet.
