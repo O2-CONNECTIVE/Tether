@@ -467,6 +467,7 @@ func TestRescueLateAllowIsDiscarded(t *testing.T) {
 	}{
 		{"単調時計で 60 秒", RescuePromptTimeout, 0},
 		{"壁時計で 60 秒", 0, RescuePromptTimeout},
+		{"壁時計が戻る", time.Second, -time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newRescueFixture(t, 0)
@@ -648,6 +649,16 @@ func TestRescueEndRevokesGrant(t *testing.T) {
 			f.waitDone(t)
 			if _, _, closes := f.rec.state(); closes != 1 {
 				t.Fatalf("the reception was closed %d times, want 1 (K discarded)", closes)
+			}
+			// 停止と回収: the grant's owner ran its cleanup, not only lost its authority.
+			f.r.mu.Lock()
+			owner := f.r.approved
+			f.r.mu.Unlock()
+			if owner == nil {
+				t.Fatal("no grant was recorded")
+			}
+			if _, observed := owner.CleanupResult(); !observed {
+				t.Fatal("the end did not reclaim the grant")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
