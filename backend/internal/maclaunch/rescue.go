@@ -131,6 +131,10 @@ const (
 
 // Rescue owns one reception from 受付中 to 終了. It never restarts the reception.
 type Rescue struct {
+	// step serializes the transitions that call the helper or the reception
+	// (Show, the grant's issuance and hand-over) with the end, so the end
+	// withdraws only a shown prompt and revokes every issued grant before Done.
+	step         sync.Mutex
 	mu           sync.Mutex
 	state        rescueState
 	cfg          RescueConfig
@@ -142,7 +146,6 @@ type Rescue struct {
 	client       ssh.PublicKey
 	shownWall    time.Time
 	shownMono    time.Duration
-	promptReady  bool
 	approvedWall time.Time
 	approvedMono time.Duration
 	approved     *Approved
@@ -206,104 +209,96 @@ func newRescue(cfg RescueConfig, runtime agentexec.ProfiledRuntime, clock rescue
 }
 
 // Receive moves 受付中 to 確認中 and returns after Show. Any other state
-// refuses without a prompt.
+// refuses without a prompt. The 60 seconds count from before Show.
 func (r *Rescue) Receive(req RescueRequest) error {
-	r.mu.Lock()
-	if r.state != rescueAccepting || req.client == nil {
-		r.mu.Unlock()
+	if req.client == nil {
 		return ErrDenied
 	}
-	r.state = rescueConfirming
-	r.mu.Unlock()
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		r.finish(false, false, false, nil)
 		return errors.Join(ErrDenied, err)
 	}
 	p := RescuePrompt{RequestID: hex.EncodeToString(id[:]), Organization: req.organization, DisplayName: req.displayName, Profile: req.profile, Duration: r.cfg.Duration, ClientFingerprint: ssh.FingerprintSHA256(req.client), Warning: RescueWarning}
-	if err := r.helper.Show(p); err != nil {
-		r.finish(false, false, false, nil)
-		return errors.Join(ErrDenied, err)
-	}
-	w, m := r.clock.wall(), r.clock.mono()
+	r.step.Lock()
 	r.mu.Lock()
-	if r.state == rescueConfirming {
-		r.prompt = p
-		r.client = req.client
-		r.shownWall = w
-		r.shownMono = m
-		r.promptReady = true
-	}
-	ended := r.state != rescueConfirming
-	r.mu.Unlock()
-	if ended {
+	if r.state != rescueAccepting {
+		r.mu.Unlock()
+		r.step.Unlock()
 		return ErrDenied
+	}
+	r.state, r.prompt, r.client = rescueConfirming, p, req.client
+	r.shownWall, r.shownMono = r.clock.wall(), r.clock.mono()
+	r.mu.Unlock()
+	err := r.helper.Show(p)
+	r.step.Unlock()
+	if err != nil {
+		r.finish(false, false, false)
+		return errors.Join(ErrDenied, err)
 	}
 	return nil
 }
 
 // Answer accepts reply only from the helper this Rescue was built with, for the
-// current prompt, within RescuePromptTimeout. Allow issues the grant.
+// current prompt, within RescuePromptTimeout. Allow issues the grant. A
+// host-side end that arrives meanwhile waits for the hand-over, then revokes it.
 func (r *Rescue) Answer(from RescueHelper, reply RescueReply) error {
+	r.step.Lock()
 	r.mu.Lock()
 	if r.state != rescueConfirming || from == nil || from != r.helper || reply.RequestID != r.prompt.RequestID || reply.Digest != r.prompt.Digest() {
 		r.mu.Unlock()
+		r.step.Unlock()
 		return ErrDenied
 	}
 	wall, mono := r.clock.wall(), r.clock.mono()
-	if mono-r.shownMono >= RescuePromptTimeout || wall.Sub(r.shownWall) >= RescuePromptTimeout || wall.Before(r.shownWall) {
+	late := mono-r.shownMono >= RescuePromptTimeout || wall.Sub(r.shownWall) >= RescuePromptTimeout || wall.Before(r.shownWall)
+	if late || !reply.Allow {
 		r.mu.Unlock()
-		r.finish(true, true, true, nil)
-		return ErrDenied
-	}
-	if !reply.Allow {
-		r.mu.Unlock()
-		r.finish(false, true, false, nil)
+		r.step.Unlock()
+		r.finish(late, true, late)
+		if late {
+			return ErrDenied
+		}
 		return nil
 	}
-	r.state = rescueIssuing
-	r.approvedWall = wall
-	r.approvedMono = mono
+	r.state, r.approvedWall, r.approvedMono = rescueIssuing, wall, mono
+	client := r.client
 	r.mu.Unlock()
-	p, err := prepare(Config{HostKey: r.cfg.HostKey, AllowedKeys: []ssh.PublicKey{r.client}, Runtime: r.cfg.Runtime, Deadline: wall.Add(r.cfg.Duration), CleanupTimeout: r.cfg.CleanupTimeout, Budgets: r.cfg.Budgets}, r.runtime)
-	var a *Approved
-	if err == nil {
-		a, err = p.completeApproved(r.life)
-	}
+	a, conn, err := r.issue(wall, client)
 	if err != nil {
-		if a != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
-			_ = a.Close(ctx)
-			cancel()
-		}
-		if p != nil {
-			_ = p.issuer.Close()
-		}
-		r.finish(false, false, false, nil)
+		r.step.Unlock()
+		r.finish(false, false, false)
 		return err
 	}
-	conn, allowErr := r.reception.Allow(a.Dispatch())
-	if allowErr != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
-		_ = a.Close(ctx)
-		cancel()
-		_ = p.issuer.Close()
-		r.finish(false, false, false, nil)
-		return allowErr
-	}
 	r.mu.Lock()
-	r.approved = a
-	if r.state == rescueIssuing {
-		r.state = rescueSession
-	}
-	ended := r.state == rescueEnded
+	r.state, r.approved = rescueSession, a
 	r.mu.Unlock()
-	if ended {
-		_ = conn.Close()
-		return nil
-	}
-	go func() { _ = a.Serve(r.life, conn); r.finish(false, false, false, a) }()
+	go func() { _ = a.Serve(r.life, conn); r.finish(false, false, false) }()
+	r.step.Unlock()
 	return nil
+}
+
+// issue grants C alone, with K as the host key, until the time of approval
+// plus the chosen lifetime, through the same issuance as the terminal path,
+// and hands its dispatch to the reception.
+func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, net.Conn, error) {
+	p, err := prepare(Config{HostKey: r.cfg.HostKey, AllowedKeys: []ssh.PublicKey{client}, Runtime: r.cfg.Runtime, Deadline: approvedAt.Add(r.cfg.Duration), CleanupTimeout: r.cfg.CleanupTimeout, Budgets: r.cfg.Budgets}, r.runtime)
+	if err != nil {
+		return nil, nil, err
+	}
+	a, err := p.completeApproved(r.life)
+	if err == nil {
+		var conn net.Conn
+		if conn, err = r.reception.Allow(a.Dispatch()); err == nil {
+			return a, conn, nil
+		}
+	}
+	if a == nil {
+		_ = p.issuer.Close()
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
+	defer cancel()
+	return nil, nil, errors.Join(err, a.Close(ctx))
 }
 
 // Stop is a host-side end: the stop operation, 受付 OFF, app exit, logout or restart.
@@ -317,22 +312,22 @@ func (r *Rescue) loop() {
 	for {
 		select {
 		case <-r.stop:
-			r.finish(false, false, true, nil)
+			r.finish(false, false, true)
 			return
 		case <-r.reception.Done():
-			r.finish(false, false, true, nil)
+			r.finish(false, false, true)
 			return
 		case <-r.clock.tick:
 			r.mu.Lock()
 			s := r.state
-			wall, mono, sw, sm, aw, am, ready := r.clock.wall(), r.clock.mono(), r.shownWall, r.shownMono, r.approvedWall, r.approvedMono, r.promptReady
+			wall, mono, sw, sm, aw, am := r.clock.wall(), r.clock.mono(), r.shownWall, r.shownMono, r.approvedWall, r.approvedMono
 			r.mu.Unlock()
-			if s == rescueConfirming && ready && (mono-sm >= RescuePromptTimeout || wall.Sub(sw) >= RescuePromptTimeout || wall.Before(sw)) {
-				r.finish(true, true, true, nil)
+			if s == rescueConfirming && (mono-sm >= RescuePromptTimeout || wall.Sub(sw) >= RescuePromptTimeout || wall.Before(sw)) {
+				r.finish(true, true, true)
 				return
 			}
 			if s == rescueSession && (mono-am >= r.cfg.Duration || !wall.Before(aw.Add(r.cfg.Duration))) {
-				r.finish(false, false, false, nil)
+				r.finish(false, false, false)
 				return
 			}
 		case <-r.life.Done():
@@ -340,27 +335,28 @@ func (r *Rescue) loop() {
 		}
 	}
 }
-func (r *Rescue) finish(timeout, refuse, withdraw bool, a *Approved) {
+
+// finish ends once: it withdraws a shown prompt (withdraw), sends a deny or a
+// timeout (refuse), revokes and reclaims the grant, discards K and closes Done.
+func (r *Rescue) finish(timedOut, refuse, withdraw bool) {
+	r.step.Lock()
+	defer r.step.Unlock()
 	r.mu.Lock()
 	if r.state == rescueEnded {
 		r.mu.Unlock()
 		return
 	}
-	old := r.state
-	prompt := r.prompt
-	if r.approved != nil {
-		a = r.approved
-	}
+	confirming, id, a := r.state == rescueConfirming, r.prompt.RequestID, r.approved
 	r.state = rescueEnded
 	r.mu.Unlock()
 	if r.ticker != nil {
 		r.ticker.Stop()
 	}
-	if old == rescueConfirming && withdraw {
-		r.helper.Withdraw(prompt.RequestID)
+	if confirming && withdraw {
+		r.helper.Withdraw(id)
 	}
 	if refuse {
-		_ = r.reception.Refuse(timeout)
+		_ = r.reception.Refuse(timedOut)
 	}
 	if a != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
