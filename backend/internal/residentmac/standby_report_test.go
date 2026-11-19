@@ -156,6 +156,10 @@ func TestStandbyEndsWhileAReportIsStuck(t *testing.T) {
 		if n := calls.Load(); n != 1 {
 			t.Fatalf("reports tried = %d; want 1", n)
 		}
+		// Standby changes twice while the first report is stuck: the extended
+		// end, then stopping. Only the latest is worth sending.
+		extend(t, s, 2, 4*time.Hour)
+		settle()
 		// Hold the cycle while the last proof is pending, so the control is
 		// still there when standby runs out.
 		s.mu.Lock()
@@ -167,7 +171,7 @@ func TestStandbyEndsWhileAReportIsStuck(t *testing.T) {
 		cycle.mu.Lock()
 		cycle.proved = proved
 		cycle.mu.Unlock()
-		clock.awake(2 * time.Hour)
+		clock.awake(4 * time.Hour)
 		settle()
 		if o := s.Snapshot(); o.Standby != "stopping" {
 			t.Fatal("standby did not end while a report was stuck:", o.Standby)
@@ -175,7 +179,7 @@ func TestStandbyEndsWhileAReportIsStuck(t *testing.T) {
 		unblock()
 		settle()
 		sent := log.all()
-		if last := sent[len(sent)-1]; last.lease != lease || last.report.Standby != "stopping" || !last.report.Until.IsZero() {
+		if last := sent[len(sent)-1]; len(sent) != 2 || last.lease != lease || last.report.Standby != "stopping" || !last.report.Until.IsZero() {
 			t.Fatalf("latest report not sent once the control took reports again: %+v", sent)
 		}
 		prove()

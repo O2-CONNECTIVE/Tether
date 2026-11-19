@@ -1,6 +1,7 @@
 package agenttransport
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"time"
@@ -26,7 +27,12 @@ func (s *ResidentSourceLease) ReportStandby(r agentgateway.ResidentStandby) erro
 		return err
 	}
 	msg := residentJSON(map[string]string{"type": "resident_standby", "generation": values[0], "revision": values[1], "standby": values[2], "until_unix_ms": values[3], "signature": b64.EncodeToString(sig)})
-	return residentWrite(s.receiver.Context(), s.receiver.ws, msg)
+	// Bounded like every other resident write: a report must not hold the
+	// write lock past a collection proof's wait, or the proof fails while the
+	// control lives on and is not resent (#412 review).
+	ctx, cancel := context.WithTimeout(s.receiver.Context(), 5*time.Second)
+	defer cancel()
+	return residentWrite(ctx, s.receiver.ws, msg)
 }
 
 func validResidentStandby(r agentgateway.ResidentStandby) bool {
