@@ -58,6 +58,8 @@ type RescueReception struct {
 	ID        []byte // RescueReceptionSize
 	Code      string
 	Signature []byte // raw ssh-ed25519 signature by the identity key over RescueResultTranscript
+	Request   <-chan RescueIdentity
+	Done      <-chan struct{}
 }
 
 // RescueTranscript is what K signs: the domain, the public reception URL, K,

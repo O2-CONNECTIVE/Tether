@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"slices"
 	"sync"
@@ -24,6 +25,7 @@ type RescueRegistry interface {
 	AdmitRescue() error
 	OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error)
 	EndRescue([]byte)
+	AnswerRescue([]byte, agentgateway.RescueAnswer, net.Conn) error
 }
 
 // RescueHandler serves the gateway end of the rescue reception route.

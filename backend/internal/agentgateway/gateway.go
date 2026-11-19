@@ -48,10 +48,11 @@ var (
 // composition from protected storage; it is optional at New, and Connect
 // refuses a principal without one.
 type Principal struct {
-	Label   string
-	Subject string
-	Roles   []Role
-	Signer  ssh.Signer
+	Label       string
+	DisplayName string
+	Subject     string
+	Roles       []Role
+	Signer      ssh.Signer
 }
 
 // Config is chosen by the trusted operator composition, never by a request.
@@ -64,6 +65,7 @@ type Config struct {
 	Verifier       *Verifier       // OAuth bearer JWT mode
 	Access         *AccessVerifier // Cloudflare Access assertion mode
 	Resource       string          // public MCP resource URL; OAuth audience may differ
+	Organization   string
 	Principals     []Principal
 	RoleAssurance  map[Role]Assurance   // IdP strength per role; a missing role requires AssuranceAny
 	AllowedOrigins []string             // exact Origin values; requests with any other Origin are refused
@@ -150,6 +152,7 @@ type Gateway struct {
 	rescueCodes   *rescueCodes // rescue connection codes; guarded by its own lock
 	rescueSigner  ssh.Signer
 	rescue        *rescueReceptionState
+	rescueWait    time.Duration
 
 	mu          sync.Mutex
 	closed      bool

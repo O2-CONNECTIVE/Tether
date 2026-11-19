@@ -50,7 +50,8 @@ type FileConfig struct {
 	Listen          string            // numeric host:port admitted by Profile; see listenAllowed
 	Profile         DeploymentProfile // ProfileLoopback unless the document names another
 	Mode            AuthMode
-	Resource        string               // the public MCP resource URL in both modes
+	Resource        string // the public MCP resource URL in both modes
+	Organization    string
 	Verifier        VerifierConfig       // ModeOAuthBearer only
 	Access          AccessVerifierConfig // ModeCloudflareAccess only
 	AccessKeySource string               // empty: static access_keys; cloudflare_certs: bounded HTTPS refresh

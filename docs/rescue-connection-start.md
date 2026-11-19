@@ -81,7 +81,16 @@ proof が示すのは「K を持っている」ことだけで、ホストの身
 
 受付口は `GET /tether-agent/v1/rescue` の WSS で、subprotocol は `rescue-agent-reception.v1` だけです。text JSON frame を使い、各 message は 2 KiB 以下、nonce と署名・鍵は登録経路と同じ base64url（padding なし）です。
 ホストは `hello`（nonce）、gateway は `challenge`（nonce）、ホストは `proof`（purpose=`new`、K、署名。resume の場合は reception id も含む）、gateway は `reception`（id、12 桁コード、署名）を送ります。署名対象は `RescueTranscript` と `RescueResultTranscript` です。
-受付上限は upgrade 前に busy の 503（`Retry-After: 1`）、rate の 429（`Retry-After: 60`）で返します。拒否は reception frame を返さず close code 1008 で接続を閉じます。reception 後は双方とも追加 frame を送らず、相手の frame・close で受付を終えます。
+受付上限は upgrade 前に busy の 503（`Retry-After: 1`）、rate の 429（`Retry-After: 60`）で返します。拒否は reception frame を返さず close code 1008 で接続を閉じます。
+reception の後、gateway は担当者の要求が来たら `request`（身元の証明）を 1 つだけ送ります。ホストは `request` を受けた後に `answer` を 1 つだけ送ります。それ以外の frame・close は受付を終えます。
+`allow` の後、同じ WSS は登録経路と同じく binary の channel の stream になります。
+
+| frame | 向き | 欄 | 署名 |
+| --- | --- | --- | --- |
+| `request` | gateway → ホスト | `nonce`（32 byte）、`client`（C の SSH wire）、`display_name`、`organization`、`profile`（`mac_current_user`）、`signature` | 身元の証明鍵で `RescueRequestTranscript` |
+| `answer` | ホスト → gateway | `answer`（`allow`・`deny`・`timeout`）、`signature`。`allow` のときだけ、登録の frame と同じ dispatch の欄（`generation`、`launch_id`、`epoch`、`policy_digest`、`key_set_digest`、`profile`、`deadline_unix_nano`、`host_key`） | K で `RescueAnswerTranscript`。digest は `RescueRequestTranscript` の SHA-256 |
+
+transcript の byte の並びは `backend/internal/agentgateway/rescue_request.go` にあり、試験 `rescue_wire_test.go` が固定します。
 
 ### 接続コード
 
