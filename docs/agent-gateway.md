@@ -68,11 +68,26 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 - discoveryとOAuth challengeはedgeのものです。originは`/.well-known/oauth-protected-resource*`を返さず（404）、Access issuerをOAuth discovery issuerとして公開しません。assertionのない・無効なrequestがoriginに届くのはedgeを経由していない（または設定不整合）ためで、originから再認証を促せないので401 challengeではなく403を返します。
 - `sub`はCloudflare accountとemailに固有で、利用者の削除・再追加で変わります。そのときは設定を更新して再起動します。
 
+## principalの役割
+
+[#404](https://github.com/O2-CONNECTIVE/Tether/issues/404)の決定で、レスキューと常駐は認証の経路を分けます。principalは`roles`に次の役割を1つ以上持ちます（両方も可）。
+
+| 役割（`roles`の値） | できること | できないこと |
+| --- | --- | --- |
+| `rescue_operator`（レスキュー担当） | レスキューの受付をしているホストへの接続の要求。今は受領者の同意で始まる一時派遣（`Connect`） | 常駐のhost（paired枠と`resident`に載るhost）への接続、ペア登録、常駐の作業 |
+| `resident_owner`（常駐の本人） | 自分の常駐のhostのペア登録（[ホストのペア登録](host-pairing.md)）と、そのhostへの常駐の作業 | レスキューの接続（一時派遣の`Connect`を含む） |
+
+- `roles`のない principal、空の`roles`、知らない値・重複は、設定の読み込みで拒否し、gatewayは起動しません。
+- 両方の役割を持つ本人でも、自分の常駐のhostへレスキューの接続はできません。常駐のペアがあるMacでのレスキューは、[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)の流れ（モードを切り替え、その回だけの鍵を使う）で行い、常駐のhostの項目や鍵を経由しません。
+- 判定はgatewayの`Connect`・`ConfigureHosts`（paired枠）・`ConfigureResident`で行います。CLI envelopeの検査は[agent CLI](agent-cli.md#役割と-host-の分け方)を参照してください。
+- 役割ごとにIdPへ求める強さは`role_assurance`で指定します（省略時はどの役割も`any`）。`multi_factor`は、tokenの多要素を確かめる検査（[#398](https://github.com/O2-CONNECTIVE/Tether/issues/398)）が入るまで、指定すると起動を拒否します。検査しないまま受理すると、単要素のtokenが通るためです。
+- 起動を拒否したときの診断は、文書の何番目の項目かと理由を示します。label・subject・鍵は出力しません。
+
 ## principal・route・sessionの束縛
 
-- principalは1〜4人で、label（運用者の表示名）、subject、signerを持ちます。labelとsubjectの重複は拒否します。
+- principalは1〜4人で、label（運用者の表示名）、subject、役割、signerを持ちます。labelとsubjectの重複は拒否します。
 - 1 principalにつき、live routeは最大1本です。routeは1つのgrant（LaunchID、epoch、generation、鍵集合digest、Mac profile）と、1本のchannel・wire clientに対応します。この対応は変わりません。
-- Connectは、未知のlabel、signerのないprincipal、route取得中・保持中のprincipal、Mac以外のprofile、このprocessで既に使ったLaunchIDを拒否し、渡されたconnを閉じます。open に進んだ Connect は失敗してもその LaunchID を消費します。open 前の拒否は LaunchID を記録せず、渡された stream を閉じます。その場合の Mac 承認失効は既存 host の接続喪失処理が担い、gateway による消費とは区別します。
+- Connectは、未知のlabel、signerのないprincipal、`rescue_operator`のないprincipal、常駐のhost（paired枠と`resident`に載るhost）からのdispatch、route取得中・保持中のprincipal、Mac以外のprofile、このprocessで既に使ったLaunchIDを拒否し、渡されたconnを閉じます。open に進んだ Connect は失敗してもその LaunchID を消費します。open 前の拒否は LaunchID を記録せず、渡された stream を閉じます。その場合の Mac 承認失効は既存 host の接続喪失処理が担い、gateway による消費とは区別します。
 - `initialize`が成功したときだけ、128 bit乱数の`Mcp-Session-Id`を発行します。sessionはそのprincipalへ固定されます。その時点で有効なrouteがあれば同routeへ束縛し、なければ恒久的に未束縛のdiscovery専用sessionを作ります。後からgrantへattachしません。
 - 後続の各requestでは、毎回tokenを検証したうえで、次の条件をすべて確認します。いずれかが外れると404です。
   - sessionのprincipalが同じであること。他principalのsession IDは未知のものと同じに扱います
@@ -139,7 +154,7 @@ OAuth bearer方式：
   "token_types": ["JWT"],
   "leeway_seconds": 30,
   "jwks_url": "https://syiadkekkobdkplpnivl.supabase.co/auth/v1/.well-known/jwks.json",
-  "principals": [ { "label": "member-1", "subject": "<o2c-identity-sub>" } ],
+  "principals": [ { "label": "member-1", "subject": "<o2c-identity-sub>", "roles": ["rescue_operator"] } ],
   "allowed_origins": []
 }
 ```
@@ -161,7 +176,7 @@ Cloudflare Access assertion方式：
   "access_aud": "<access-application-aud-tag>",
   "access_keys": { "keys": [ { "kty": "RSA", "kid": "<team-kid>", "alg": "RS256", "use": "sig", "n": "<base64url>", "e": "AQAB" } ] },
   "leeway_seconds": 30,
-  "principals": [ { "label": "member-1", "subject": "<access-user-sub-of-member-1>" } ],
+  "principals": [ { "label": "member-1", "subject": "<access-user-sub-of-member-1>", "roles": ["rescue_operator"] } ],
   "allowed_origins": []
 }
 ```
@@ -180,6 +195,8 @@ Cloudflare Access assertion方式：
 | `access_keys` | teamのcerts文書（`https://<team-domain>/cdn-cgi/access/certs`）の`keys` memberをそのまま`{"keys":[…]}`として転記したもの。RSA（2048〜8192 bit）だけ、`alg`は省略可だが書くなら`RS256`、`use`は書くなら`sig`、1〜16鍵、kid重複・private member・`key_ops`などは拒否。`public_cert`/`public_certs`は含めません（top-levelの未知memberとして拒否） |
 | `access_key_source` | `"cloudflare_certs"` だけ。指定時は `access_keys` を省略必須。固定5秒取得・完了後60秒待機・開始から300秒の鍵寿命とCLI ownerは[詳細](access-key-rotation-candidate.md)を参照。省略時は従来の静的鍵を要求 |
 | `principals[].subject` | Accessの`sub`（利用者ごと）。emailは書けません |
+| `principals[].roles` | 必須。`"rescue_operator"`・`"resident_owner"`の1つ以上を重複なく（[役割](#principalの役割)） |
+| `role_assurance` | 任意。`{"rescue_operator": "any", "resident_owner": "any"}`の形で、役割ごとにIdPへ求める強さ。値は`any`か`multi_factor`（現在は起動を拒否）。空のobject・知らない役割は拒否 |
 
 CLI envelopeは[agent CLI](agent-cli.md)に記載します。保護文書と登録済み鍵を検証し、最後に既定loopbackまたは明示container_privateで待受するsourceです。実起動は未承認です。診断は固定文だけで、subject、path、token、headerを出力しません。
 

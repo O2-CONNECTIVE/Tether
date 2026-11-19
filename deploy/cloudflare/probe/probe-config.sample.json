@@ -8,6 +8,6 @@
   "access_keys": {"keys": []},
   "leeway_seconds": 0,
   "principals": [
-    {"label": "member-1", "subject": ""}
+    {"label": "member-1", "subject": "", "roles": ["rescue_operator"]}
   ]
 }
