@@ -8,12 +8,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"golang.org/x/crypto/ssh"
@@ -221,6 +223,49 @@ func TestEntryRefusesLoadedKeyOtherThanReferenced(t *testing.T) {
 	checkDiagnostic(t, diagnostic.String())
 }
 
+type rescueRegistryStub struct{}
+
+func (rescueRegistryStub) AdmitRescue() error { return nil }
+func (rescueRegistryStub) OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error) {
+	return agentgateway.RescueReception{}, nil
+}
+func (rescueRegistryStub) EndRescue([]byte) {}
+
+func TestRescueRouteMountedOnlyWithIdentityHandler(t *testing.T) {
+	h, err := agenttransport.NewRescueHandler(rescueRegistryStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close(context.Background())
+	with := routes("/mcp", "/agent-register", false, nil, http.NotFoundHandler(), http.NotFoundHandler(), h)
+	without := routes("/mcp", "/agent-register", false, nil, http.NotFoundHandler(), http.NotFoundHandler(), nil)
+	for _, tc := range []struct {
+		name    string
+		handler http.Handler
+		want    int
+	}{{"configured", with, http.StatusBadRequest}, {"omitted", without, http.StatusNotFound}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, agentgateway.RescuePath, nil)
+			w := httptest.NewRecorder()
+			tc.handler.ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("status=%d want %d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestRescueIdentityKeyFingerprintMismatchStopsBeforeListen(t *testing.T) {
+	doc := localDoc(t)
+	doc["rescue_identity_key"] = map[string]any{"path": `C:\Users\synthetic\rescue\keys\identity`, "fingerprint": fingerprint(t, 0x13)}
+	r := newRecorder(t, encode(t, doc))
+	r.signers[fingerprint(t, 0x13)] = signerOf(t, 0x14)
+	var diagnostic bytes.Buffer
+	if code := execute(context.Background(), []string{"-config", configPath}, &diagnostic, r.deps()); code != 2 || strings.Contains(r.trace(), "listen") {
+		t.Fatalf("exit=%d trace=%q", code, r.trace())
+	}
+}
+
 func TestEntryListenFailureClosesOwners(t *testing.T) {
 	r := newRecorder(t, encode(t, localDoc(t)))
 	var diagnostic bytes.Buffer
@@ -308,8 +353,11 @@ func exchange(t *testing.T, l *fakeListener, request string) (int, http.Header, 
 }
 
 func TestEntryMountsBothHandlersAfterValidation(t *testing.T) {
-	doc := encode(t, localDoc(t))
+	local := localDoc(t)
+	local["rescue_identity_key"] = map[string]any{"path": `C:\Users\synthetic\rescue\keys\identity`, "fingerprint": fingerprint(t, 0x13)}
+	doc := encode(t, local)
 	r := newRecorder(t, doc)
+	r.signers[fingerprint(t, 0x13)] = signerOf(t, 0x13)
 	r.listener = newFakeListener()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -321,7 +369,7 @@ func TestEntryMountsBothHandlersAfterValidation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("never listened")
 	}
-	if got := r.trace(); got != "read load:member-1 load:member-2 listen:127.0.0.1:8787" {
+	if got := r.trace(); got != "read load:member-1 load:member-2 load:identity listen:127.0.0.1:8787" {
 		t.Fatalf("trace = %q", got)
 	}
 	if !bytes.Equal(doc, make([]byte, len(doc))) {
@@ -342,6 +390,9 @@ func TestEntryMountsBothHandlersAfterValidation(t *testing.T) {
 	// The registration handler answers its own prechecks; no upgrade happens.
 	if code, _ := roundTrip(t, r.listener, "GET /agent-register HTTP/1.1\r\n"+host+"\r\n"); code != http.StatusBadRequest {
 		t.Fatalf("registration without subprotocol: %d", code)
+	}
+	if code, _ := roundTrip(t, r.listener, "GET "+agentgateway.RescuePath+" HTTP/1.1\r\n"+host+"\r\n"); code != http.StatusBadRequest {
+		t.Fatalf("configured rescue route: %d", code)
 	}
 	if code, _ := roundTrip(t, r.listener, "GET /agent-register HTTP/1.1\r\n"+host+"Sec-WebSocket-Protocol: "+agenttransport.Subprotocol+"\r\nAuthorization: Bearer synthetic\r\n\r\n"); code != http.StatusForbidden {
 		t.Fatalf("registration with ambient credential: %d", code)
@@ -625,5 +676,76 @@ func TestHTTPServerBounds(t *testing.T) {
 	srv := newHTTPServer(nil)
 	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= srv.ReadTimeout || srv.IdleTimeout <= 0 || srv.MaxHeaderBytes <= 0 || srv.ErrorLog == nil {
 		t.Fatalf("server bounds = %+v", srv)
+	}
+}
+
+// Without rescue_identity_key the composition mounts no reception: the route
+// is 404 through execute, not only through routes.
+func TestEntryLeavesTheRescueRouteUnmountedWithoutTheIdentityKey(t *testing.T) {
+	r := newRecorder(t, encode(t, localDoc(t)))
+	r.listener = newFakeListener()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var diagnostic bytes.Buffer
+	exited := make(chan int, 1)
+	go func() { exited <- execute(ctx, []string{"-config", configPath}, &diagnostic, r.deps()) }()
+	select {
+	case <-r.listened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("never listened")
+	}
+	const host = "Host: gateway.example.invalid\r\nConnection: close\r\n"
+	if code, _ := roundTrip(t, r.listener, "GET /agent-register HTTP/1.1\r\n"+host+"\r\n"); code != http.StatusBadRequest {
+		t.Fatalf("registration without subprotocol: %d", code)
+	}
+	if code, _ := roundTrip(t, r.listener, "GET "+agentgateway.RescuePath+" HTTP/1.1\r\n"+host+"Sec-WebSocket-Protocol: "+agenttransport.RescueSubprotocol+"\r\n\r\n"); code != http.StatusNotFound {
+		t.Fatalf("unconfigured rescue route: %d", code)
+	}
+	cancel()
+	select {
+	case code := <-exited:
+		if code != 0 {
+			t.Fatalf("exit = %d (%q)", code, diagnostic.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("shutdown did not finish")
+	}
+}
+
+// The reception route is fixed, so with rescue_identity_key it would shadow an
+// MCP resource or a registration route on the same path. Like the pair route,
+// the composition is refused before any key is read. Without the identity key
+// the same paths still serve (the positive control).
+func TestRescueRouteConflictStopsBeforeAnyKeyRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(map[string]any)
+	}{
+		{"the MCP resource", func(doc map[string]any) {
+			doc["gateway"].(map[string]any)["resource"] = "https://gateway.example.invalid" + agentgateway.RescuePath
+		}},
+		{"the registration route", func(doc map[string]any) {
+			doc["registration_endpoint"] = "wss://gateway.example.invalid" + agentgateway.RescuePath
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, identity := range []bool{false, true} {
+				doc := localDoc(t)
+				tc.edit(doc)
+				if identity {
+					doc["rescue_identity_key"] = map[string]any{"path": `C:\Users\synthetic\rescue\keys\identity`, "fingerprint": fingerprint(t, 0x13)}
+				}
+				r := newRecorder(t, encode(t, doc))
+				r.signers[fingerprint(t, 0x13)] = signerOf(t, 0x13)
+				var diagnostic bytes.Buffer
+				code := execute(context.Background(), []string{"-config", configPath}, &diagnostic, r.deps())
+				if identity && (code != 2 || r.trace() != "read") {
+					t.Fatalf("with the identity key: exit=%d trace=%q", code, r.trace())
+				}
+				if !identity && !strings.Contains(r.trace(), "listen") {
+					t.Fatalf("without the identity key: exit=%d trace=%q", code, r.trace())
+				}
+			}
+		})
 	}
 }

@@ -12,6 +12,7 @@ source/memory試験と限定native実演・HTTP discoveryは別の検証境界�
 ## 呼出し経路
 
 設定に`pairing`がある場合だけ、ホスト登録口`POST /tether-agent/v1/pair`も有効です。MCP入口はpairing audienceを含むtokenを拒否します。登録の契約は[ホストのペア登録](host-pairing.md)を参照してください。
+保護設定に`rescue_identity_key`（`path`と`fingerprint`）がある場合だけ、身元証明用のssh-ed25519鍵を読み込み、`GET /tether-agent/v1/rescue` の受付口をmountします。登録口と同じ保護鍵loaderで指紋を照合します。設定が無い場合、このrouteは404です。受付のwireは[レスキュー接続開始](rescue-connection-start.md#受付口の-wire)を参照してください。
 
 ```text
 dots（遠隔MCP client）

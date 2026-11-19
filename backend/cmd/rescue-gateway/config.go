@@ -32,13 +32,14 @@ const (
 // enrolled key path plus an independently recorded fingerprint, the exact wss
 // registration endpoint and the enrolled host keys. It holds no private byte.
 type localConfig struct {
-	gateway      agentgateway.FileConfig
-	endpoint     string
-	keys         []agentkeys.Config // keys[i] belongs to gateway.Principals[i]
-	hosts        []agenttransport.EnrolledHost
-	resident     []agentgateway.ResidentEnrollment // explicit fixed-scope opt-in only
-	residentOnly bool                              // rejects legacy registration and generic MCP binding
-	pairing      *pairingConfig
+	gateway        agentgateway.FileConfig
+	endpoint       string
+	keys           []agentkeys.Config // keys[i] belongs to gateway.Principals[i]
+	hosts          []agenttransport.EnrolledHost
+	resident       []agentgateway.ResidentEnrollment // explicit fixed-scope opt-in only
+	residentOnly   bool                              // rejects legacy registration and generic MCP binding
+	pairing        *pairingConfig
+	rescueIdentity *agentkeys.Config
 }
 
 // pairingConfig is the optional host-pairing composition input.
@@ -57,7 +58,7 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	if len(raw) == 0 || len(raw) > agentkeys.MaxTrustConfigBytes || agentwire.CheckJSON(raw, false) != nil {
 		return localConfig{}, errConfig
 	}
-	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident", "resident_only", "pairing")
+	m, fieldErr := agentwire.Fields(raw, "gateway", "registration_endpoint", "principal_keys", "hosts", "resident", "resident_only", "pairing", "rescue_identity_key")
 	defer wipeMembers(m)
 	if fieldErr != nil || m["gateway"] == nil || m["registration_endpoint"] == nil || m["principal_keys"] == nil || m["hosts"] == nil {
 		return localConfig{}, errConfig
@@ -81,6 +82,24 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	}
 	if c.keys, ok = principalKeys(m["principal_keys"], labels, configPath); !ok {
 		return localConfig{}, errConfig
+	}
+	if rawKey, present := m["rescue_identity_key"]; present {
+		f, e := agentwire.Fields(rawKey, "path", "fingerprint")
+		path, pOK := text(f["path"], maxPathBytes)
+		fingerprint, fOK := text(f["fingerprint"], 64)
+		if e != nil || len(f) != 2 || !pOK || !fOK || !absolutePath(path) || !validFingerprint(fingerprint) || samePath(path, configPath) ||
+			fixedPathConflict(c.gateway.Resource, c.endpoint, agentgateway.RescuePath) {
+			wipeMembers(f)
+			return localConfig{}, errConfig
+		}
+		for _, k := range c.keys {
+			if samePath(path, k.Path) || fingerprint == k.Fingerprint {
+				wipeMembers(f)
+				return localConfig{}, errConfig
+			}
+		}
+		c.rescueIdentity = &agentkeys.Config{Path: path, Fingerprint: fingerprint}
+		wipeMembers(f)
 	}
 	if c.hosts, ok = enrolledHosts(m["hosts"], labels, c.keys); !ok {
 		return localConfig{}, errConfig
@@ -128,7 +147,7 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 		}
 		if c.gateway.Mode != agentgateway.ModeOAuthBearer || p.Audience == c.gateway.Verifier.Audience ||
 			(p.Audience == p.ClientID && containsNormalType(p.TokenTypes, "jwt")) ||
-			pairingPathConflict(c.gateway.Resource, c.endpoint) || samePath(p.RegistryPath, configPath) {
+			fixedPathConflict(c.gateway.Resource, c.endpoint, agentgateway.PairPath) || samePath(p.RegistryPath, configPath) {
 			return localConfig{}, errConfig
 		}
 		for _, k := range c.keys {
@@ -198,13 +217,13 @@ func containsNormalType(types []string, target string) bool {
 	return false
 }
 
-// pairingPathConflict reports whether the fixed pair route would shadow the MCP
-// resource or the host registration route. Metadata paths start with
-// MetadataPrefix and cannot equal the fixed PairPath.
-func pairingPathConflict(resource, endpoint string) bool {
+// fixedPathConflict reports whether a fixed route (PairPath or RescuePath)
+// would shadow the MCP resource or the host registration route. Metadata
+// paths start with MetadataPrefix and cannot equal either fixed path.
+func fixedPathConflict(resource, endpoint, fixed string) bool {
 	r, err := url.Parse(resource)
 	e, ok := wssEndpoint(endpoint)
-	return err != nil || !ok || r.Path == agentgateway.PairPath || e.Path == agentgateway.PairPath
+	return err != nil || !ok || r.Path == fixed || e.Path == fixed
 }
 
 // residentEnrollments selects an existing, unambiguous principal/host pair.

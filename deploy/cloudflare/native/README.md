@@ -2,7 +2,7 @@
 
 [配置準備へ戻る](../README.md) / [commandless probe](../probe/README.md) / 実演準備・操作承認票（過去の参照資料・本文非同梱）
 
-既存Goの `rescue-gateway` へ、固定VPC Service binding 1件だけを通して2経路を中継するWorkerです。4名試行用の最小構成です。
+既存Goの `rescue-gateway` へ、固定VPC Service binding 1件だけを通して各固定経路を中継するWorkerです。4名試行用の最小構成です。
 **source候補のみです。** 配置・Worker作成・route/hostname設定・VPC Service作成・binding設定・gate開放・Access application作成・dot側のMCP接続登録は、どれも実行・承認されていません。この文書は承認ではありません。
 Workerはgrant・token・cookie・session・command権限を発行しません。経路があってもcommand権限は生じません。権限は受信者の明示承認（grant）とGo側の検証だけで決まります。
 
@@ -10,7 +10,7 @@ Workerはgrant・token・cookie・session・command権限を発行しません�
 
 | 部品 | 場所 | 役割 |
 | --- | --- | --- |
-| Worker | [`worker.mjs`](worker.mjs) | 既定で全拒否。gate開放時も固定2経路だけを `env.TETHER_NATIVE_VPC` へ転送する。認証しない |
+| Worker | [`worker.mjs`](worker.mjs) | 既定で全拒否。gate開放時も固定pathだけを `env.TETHER_NATIVE_VPC` へ転送する。認証しない |
 | Worker試験 | [`worker.test.mjs`](worker.test.mjs) | `node --test deploy/cloudflare/native/`（fake binding/WebSocket/timerのみ。global `fetch` は呼ばれたら失敗する罠） |
 | WebSocket relay | [`../probe/worker.mjs`](../probe/worker.mjs) の `relay` | 独立review済みの実装をimportして再利用（accept前の `binaryType = "arraybuffer"`、1回だけのclose、1本のlifetime timer）。上限値だけnative用を渡す |
 | Go MCP | `backend/internal/agentgateway`（`cloudflare_access` mode） | assertionの署名・issuer・AUD・期限を検証し、検証済み `sub` を設定principalへ対応させる |
@@ -30,6 +30,7 @@ wrangler設定・compatibility date・hostnameは用意していません（未�
 | --- | --- | --- | --- | --- |
 | `/mcp` | POST / DELETE | assertion欠落・重複（`,` 含む）・8 KiB超は403。値の長さ超過は400。本文は宣言/実測とも512 KiB超で413、10秒で408 | `Cf-Access-Jwt-Assertion`、POSTのみ `Content-Type`・`Accept`、両方で `Mcp-Session-Id`・`Mcp-Protocol-Version` | assertionの暗号検証とsubject対応、media type・version・sessionの検査 |
 | `/tether-agent/v1/register` | GET upgrade | `Cookie`・`Authorization`・`Proxy-Authorization`・`Cf-Access-Jwt-Assertion` 付きは403。`Sec-WebSocket-Protocol` が `rescue-agent-register.v1` の1件以外は400 | `Upgrade: websocket` と固定subprotocolだけ | challenge（text ≤2 KiB）、host proof、dispatch検査、`Connect` 後のbinary stream（≤32 KiB）とagent channelの相互認証 |
+| `/tether-agent/v1/rescue` | GET upgrade（`TETHER_NATIVE_RESCUE` opt-in時のみ） | 登録と同じ禁止headerは403。`rescue-agent-reception.v1` の1件以外は400 | `Upgrade: websocket` と固定subprotocolだけ | gatewayの受付処理と認証・回数制限 |
 
 共通：完全一致のpathのみ（末尾slash・大文字・percent-encoded・probe path・`/.well-known/*` は404）、query（空の `?` を含む）は400、その他のmethod・`Upgrade` 付きMCP・GET stream・CORS preflightは405、`Origin` 付きは403（Go側にもallowlistを設定しない前提。CORS応答は出さない）。
 `Authorization`（Access edgeのopaque token）・cookie・email等のidentity header・forwarding headerは転送しません。assertionの有無は早期拒否にだけ使い、認証とはみなしません。
@@ -109,6 +110,8 @@ The wrapper pins only the time window, not VPC binding identity. Deployment must
 `TETHER_RESIDENT_GATE=open-resident-tether-control` を明示した場合だけ、同じ登録pathで `rescue-agent-resident.v1` も受け付けます。既存のnative gateと固定VPC bindingは引き続き必須です。未設定・未知値では従来の `rescue-agent-register.v1` だけを受け付けます。複数protocol、ambient credential、Originは拒否し、応答protocolは要求と完全一致しなければ中継しません。
 
 `TETHER_NATIVE_PAIRING=open-native-tether-pairing` を明示した場合だけ、`POST /tether-agent/v1/pair` を `Authorization` 付きで転送します。既存のnative gateとVPC bindingは引き続き必須です。Workerは認証せず、gatewayがIdP tokenとhost鍵の証明を検証します。未設定・未知値では登録口は404になります。
+
+`TETHER_NATIVE_RESCUE=open-native-tether-rescue` を明示した場合だけ、`GET /tether-agent/v1/rescue` のWebSocket upgradeを `rescue-agent-reception.v1` だけで固定pathへ転送します。既存のnative gateとVPC bindingも必須です。登録口と同じくCookie・Authorization・Proxy-Authorization・Access assertionを拒否し、認証やrate limitはWorkerで行いません。未設定・未知値では404です。送信元IPごとの1分5件制限はCloudflare edgeのrate limiting ruleで配置してください（手順は[container配置のroute節](../linux-container.md#待受するroute-cmdrescue-gatewayのroutes)）。
 
 これはGoの既存常駐認証を通すsource候補です。本人の実行承認、host/principal署名、generation、同じ所有者の回収確認をWorkerが代行するものではありません。既存MCP認証、5分のrelay上限、frame/message上限とbounded pilotの絶対期限は維持します。Worker自身は再接続しません。Macの既存ResidentClientはcode4000による終了後、回収を確認して新しい接続を試みます。常駐制御の再接続は実行grantの更新・復帰を意味せず、制御断による進行中作業への影響はGo側の失効規則に従います。5分を超える単一接続や無中断実行は提供しません。
 

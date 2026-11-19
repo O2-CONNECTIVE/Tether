@@ -80,7 +80,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/workerowner': {'owner.go', 'run_once.go', 'wait_source.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink': {'host.go', 'client.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter': {'jsonrpc.go', 'server.go', 'tools.go', 'output_schema.go', 'http_bridge.go', 'resident_http.go', 'resident_output_schema.go', 'resident_list.go', 'resident_read_output.go', 'resident_get_execution.go', 'resident_standby.go'},
-    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway': {'gateway.go', 'http.go', 'token.go', 'access_rotation.go', 'config.go', 'resident.go', 'resident_capacity.go', 'resident_list.go', 'resident_read_output.go', 'resident_get_execution.go', 'resident_standby.go', 'jwks_refresh.go', 'pairing.go', 'roles.go', 'rescue_code.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway': {'gateway.go', 'http.go', 'token.go', 'access_rotation.go', 'config.go', 'resident.go', 'resident_capacity.go', 'resident_list.go', 'resident_read_output.go', 'resident_get_execution.go', 'resident_standby.go', 'jwks_refresh.go', 'pairing.go', 'roles.go', 'rescue_code.go', 'rescue_reception.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-gateway': {'main.go', 'config.go', 'discovery_pilot.go', 'access_refresh.go', 'pairing_registry.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-echo-probe': {'main.go', 'probe.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/tether-access-identity': {'main.go'},
@@ -91,7 +91,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/resident-pipe': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent': {'runtime.go', 'process.go', 'cleanup_diagnostic.go', 'groupobserver.go', 'start_diagnostic.go', 'terminal_disposition.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch': {'approval.go', 'resident_policy.go', 'resident_source.go', 'resident_wire.go', 'resident_worker.go', 'startup_policy.go'},
-    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport': {'protocol.go', 'stream.go', 'gateway.go', 'mac.go', 'resident_gateway.go', 'resident_handoff.go', 'resident_intent.go', 'resident_io.go', 'resident_mac.go', 'resident_protocol.go', 'resident_receiver.go', 'resident_rotation.go', 'resident_run.go', 'resident_work.go', 'resident_standby.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport': {'protocol.go', 'stream.go', 'gateway.go', 'mac.go', 'resident_gateway.go', 'resident_handoff.go', 'resident_intent.go', 'resident_io.go', 'resident_mac.go', 'resident_protocol.go', 'resident_receiver.go', 'resident_rotation.go', 'resident_run.go', 'resident_work.go', 'resident_standby.go', 'rescue_gateway.go', 'rescue_host.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys': {'loader.go', 'path.go', 'policy.go', 'acl.go', 'source.go', 'format.go', 'trust_config.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/operatorauth': {
         'collector.go', 'controller.go', 'helper.go', 'types.go', 'launch.go', 'native_batch.go',

@@ -70,6 +70,9 @@ type Config struct {
 	Budgets        agentchannel.Budgets // every agent channel's budgets; see ChannelBudgets
 	CallTimeout    time.Duration        // one wire round trip; zero selects mcpadapter.DefaultCallTimeout
 	Clock          func() time.Time
+	// RescueSigner is the rescue identity key (raw Ed25519) from protected
+	// storage. Without it the rescue reception is closed.
+	RescueSigner ssh.Signer
 }
 
 // ChannelBudgets are the fixed product budgets for an agent channel over a
@@ -145,6 +148,8 @@ type Gateway struct {
 	clock         func() time.Time
 	inflight      chan struct{}
 	rescueCodes   *rescueCodes // rescue connection codes; guarded by its own lock
+	rescueSigner  ssh.Signer
+	rescue        *rescueReceptionState
 
 	mu          sync.Mutex
 	closed      bool
@@ -182,15 +187,20 @@ func New(cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, ErrConfig
 	}
+	if cfg.RescueSigner != nil && (cfg.DiscoveryOnly || cfg.RescueSigner.PublicKey().Type() != ssh.KeyAlgoED25519) {
+		return nil, ErrConfig
+	}
 	g := &Gateway{
 		residentOnly: cfg.ResidentOnly, discoveryOnly: cfg.DiscoveryOnly, verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
 		bySubject: map[string]*principal{}, byLabel: map[string]*principal{},
 		budgets: cfg.Budgets, callTimeout: cfg.CallTimeout, clock: cfg.Clock, inflight: make(chan struct{}, MaxInflightRequests),
 		sessions: map[string]*session{}, launches: map[string]struct{}{}, joined: make(chan struct{}),
+		rescueSigner: cfg.RescueSigner,
 	}
 	if g.clock == nil {
 		g.clock = time.Now
 	}
+	g.rescue = &rescueReceptionState{endpoint: "wss://" + resource.Host + RescuePath, records: make(map[string]rescueReceptionRecord)}
 	g.rescueCodes = newRescueCodes(g.clock)
 	if err := checkAssurance(cfg.RoleAssurance); err != nil {
 		return nil, err

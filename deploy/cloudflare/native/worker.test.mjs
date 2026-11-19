@@ -642,7 +642,7 @@ test("throwing bindings and failing streams leave no timer, socket or open reade
 test("the source imports only the probe relay and has no global fetch, logging, cookie or CORS handling", () => {
   const source = readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
   assert.deepEqual(source.match(/^import .*$/gm), ['import { relay } from "../probe/worker.mjs";']);
-  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding.", "binding."]);
+  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding.", "binding.", "binding."]);
   assert.doesNotMatch(source, /console\.|globalThis\.fetch|Access-Control|"Set-Cookie"|caches\.|\.connect\(/);
   assert.ok(!source.includes("tether-echo-probe.internal"));
 });
@@ -910,5 +910,80 @@ test("B1: every pairing answer carries the gateway's media type, and Allow or a 
   assert.equal(unauthorized.headers.get("Allow"), null);
   const method = await send(() => pairRefusal(405, { Allow: "POST", "WWW-Authenticate": "Bearer" }));
   assert.equal(method.headers.get("WWW-Authenticate"), null);
+  assert.equal(rt.timers.size, 0);
+});
+
+// The rescue reception route (#422, docs/rescue-connection-start.md 受付の登録):
+// an opt-in like pairing, and as credential free as registration.
+const rescueHeaders = () => ({ Upgrade: "websocket", "Sec-WebSocket-Protocol": native.RESCUE_SUBPROTOCOL });
+const rescueEnv = (binding) => ({ ...openEnv(binding), TETHER_NATIVE_RESCUE: native.RESCUE_GATE_VALUE });
+
+test("the rescue reception forwards only the fixed upgrade and subprotocol; the Worker adds no credential and sends nothing", async () => {
+  assert.equal(native.RESCUE_PATH, "/tether-agent/v1/rescue");
+  assert.equal(native.RESCUE_SUBPROTOCOL, "rescue-agent-reception.v1");
+  const rt = fakeRuntime();
+  const { upstream, respond } = upgraded(native.RESCUE_SUBPROTOCOL);
+  const binding = fakeBinding(respond);
+  const r = await createNativeWorker(rt).fetch(request(native.RESCUE_PATH, {
+    method: "GET", headers: { ...rescueHeaders(), "X-Forwarded-For": "192.0.2.1", "Sec-WebSocket-Extensions": "permessage-deflate" },
+  }), rescueEnv(binding));
+  assert.equal(r.status, 101);
+  assert.equal(r.headers.get("Sec-WebSocket-Protocol"), native.RESCUE_SUBPROTOCOL);
+  const [client, server] = rt.pairs[0];
+  assert.equal(r.webSocket, client);
+  const [{ url, init }] = binding.calls;
+  assert.equal(url, UPSTREAM_ORIGIN + native.RESCUE_PATH);
+  assert.deepEqual(init.headers, { Upgrade: "websocket", "Sec-WebSocket-Protocol": native.RESCUE_SUBPROTOCOL });
+  assert.equal(init.method, "GET");
+  assert.equal(init.redirect, "manual");
+  // The nonces, K's proof and the signed result are Go's and the host's.
+  assert.deepEqual(server.sent, []);
+  assert.deepEqual(upstream.sent, []);
+});
+
+test("the rescue reception is closed unless the deployment opts in", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(upgraded("rescue-agent-reception.v1").respond);
+  const headers = { Upgrade: "websocket", "Sec-WebSocket-Protocol": "rescue-agent-reception.v1" };
+  for (const env of [openEnv(binding), { ...openEnv(binding), TETHER_NATIVE_RESCUE: "yes" }, { ...openEnv(binding), TETHER_NATIVE_PAIRING: native.PAIRING_GATE_VALUE }]) {
+    assert.equal((await worker.fetch(request("/tether-agent/v1/rescue", { method: "GET", headers }), env)).status, 404);
+  }
+  assert.equal(binding.calls.length, 0);
+  assert.equal((await worker.fetch(request("/tether-agent/v1/rescue", { method: "GET", headers }), rescueEnv(binding))).status, 101);
+});
+
+test("the rescue reception refuses cookies, authorization, Access assertions and any other subprotocol before forwarding", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(upgraded(native.RESCUE_SUBPROTOCOL).respond);
+  for (const extra of [{ Cookie: "CF_Authorization=synthetic" }, { Authorization: "Bearer synthetic" }, { "Proxy-Authorization": "Basic synthetic" },
+    { [ASSERTION_HEADER]: TOKEN }]) {
+    assert.equal((await worker.fetch(request(native.RESCUE_PATH, { method: "GET", headers: { ...rescueHeaders(), ...extra } }), rescueEnv(binding))).status, 403);
+  }
+  for (const protocol of [undefined, SUBPROTOCOL, native.RESIDENT_SUBPROTOCOL, `${native.RESCUE_SUBPROTOCOL}, other`]) {
+    const headers = rescueHeaders();
+    if (protocol === undefined) delete headers["Sec-WebSocket-Protocol"]; else headers["Sec-WebSocket-Protocol"] = protocol;
+    assert.equal((await worker.fetch(request(native.RESCUE_PATH, { method: "GET", headers }), rescueEnv(binding))).status, 400);
+  }
+  assert.equal((await worker.fetch(request(native.RESCUE_PATH, { method: "POST", headers: rescueHeaders() }), rescueEnv(binding))).status, 405);
+  assert.equal(binding.calls.length, 0);
+  assert.equal(rt.pairs.length, 0);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("the rescue reception relays the gateway's 429 and 503; other answers stay refusals", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const send = (respond) => worker.fetch(request(native.RESCUE_PATH, { method: "GET", headers: rescueHeaders() }), rescueEnv(fakeBinding(respond)));
+  const rate = await send(() => new Response("Too Many Requests\n", { status: 429, headers: { "Retry-After": "60" } }));
+  assert.equal(rate.status, 429);
+  assert.equal(rate.headers.get("Retry-After"), "60");
+  const busy = await send(() => new Response("Service Unavailable\n", { status: 503, headers: { "Retry-After": "1" } }));
+  assert.equal(busy.status, 503);
+  assert.equal(busy.headers.get("Retry-After"), "1");
+  assert.equal((await send(() => new Response("ok", { status: 200 }))).status, 502);
+  assert.equal((await send(upgraded(SUBPROTOCOL).respond)).status, 502);
+  assert.equal(rt.pairs.length, 0);
   assert.equal(rt.timers.size, 0);
 });

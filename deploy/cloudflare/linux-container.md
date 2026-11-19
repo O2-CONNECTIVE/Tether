@@ -61,7 +61,10 @@ pairing登録簿のlock fileは登録簿と同じdirectoryに作られます。�
 | MCP resource（POST/DELETE） | 同時処理枠（最大32、`MaxInflightRequests`）の取得、method/Origin/query検査、header上限16KiBでの署名検証 | OAuth：Bearer JWT（401、challenge付き）。Access：assertion 1件（403）。どちらも検証済みsubjectが設定principalと一致する場合だけ（不一致は403）。session作成・command実行はその後、かつ受信者が承認したrouteがある場合だけ |
 | OAuth方式のprotected resource metadata（GET） | 公開設定値の静的JSONだけ | なし（秘密・commandなし）。Access方式は404 |
 | WSS登録endpoint（GET） | precheck、未認証登録の同時枠（`MaxPending`=4、追跡上限`MaxTracked`=8）、upgrade、nonce challenge、2KiB以下の1 message読取りを登録期限10秒まで | 登録済みMac host鍵による、endpoint・nonce・dispatchへ束縛した署名proof。成功後もgatewayは登録済みsignerでagent channelを開き、host鍵をpinします |
+| WSSレスキュー受付口（`GET /tether-agent/v1/rescue`） | precheck、受付の上限（有効なコード 100 件と受付記録 1,000 件で 503、新しい受付 1 分 30 件で 429）、upgrade、nonce の交換、2KiB 以下の message の読取りを登録期限 10 秒まで | その回だけの鍵 K の proof（受付口の公開 URL・gateway の nonce・目的に束縛）。誰でも登録できる口で、守りは回数の制限と、要求の側の認証 |
 | 上記以外 | なし | 404 |
+
+Workerは `TETHER_NATIVE_RESCUE=open-native-tether-rescue` を明示した配置だけでこのpathを中継します（`TETHER_NATIVE_GATE` と固定VPC bindingも必要）。公開routeを有効にする配置では、Cloudflareのrate limiting ruleを別途作成し、対象を `/tether-agent/v1/rescue`、特性を送信元IP、期間を1分、閾値を5件に設定して、超過要求をblockします。この5件制限は[レスキューの接続の開始の「回数の制限」](../../docs/rescue-connection-start.md#回数の制限)に対応します。gatewayからは接続元IPを確かめられず、同一bridge経由の発信元を識別できないため、Worker内ではなくCloudflare edgeで適用します。gatewayの全体制限とedgeの送信元別制限は別の制御です。
 
 認証なしでcommandを実行するendpointはありません。一方、以下のunauthenticatedな資源消費は**origin側でedge認可を代替しません**：
 
