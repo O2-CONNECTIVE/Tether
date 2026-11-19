@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"math/big"
+	"slices"
 	"sync"
 	"time"
 
@@ -156,6 +158,9 @@ func (g *Gateway) OpenRescue(r RescueRequest) (RescueReception, error) {
 	if err != nil || key.Type() != ssh.KeyAlgoED25519 || !bytes.Equal(key.Marshal(), r.Key) || len(r.HostNonce) != RescueNonceSize || len(r.GatewayNonce) != RescueNonceSize || len(r.Proof) != 64 {
 		return RescueReception{}, ErrRefused
 	}
+	if hasSmallOrderRescueKey(key) {
+		return RescueReception{}, ErrRefused
+	}
 	switch r.Purpose {
 	case RescuePurposeNew:
 		if len(r.Reception) != 0 {
@@ -206,6 +211,35 @@ func (g *Gateway) OpenRescue(r RescueRequest) (RescueReception, error) {
 		return RescueReception{}, ErrRefused
 	}
 	return RescueReception{ID: append([]byte(nil), id[:]...), Code: code, Signature: append([]byte(nil), sig.Blob...), Request: record.request, Done: record.done}, nil
+}
+
+// hasSmallOrderRescueKey reports whether K is one of the eight torsion points
+// of edwards25519, for which anyone can forge a proof that crypto/ed25519
+// accepts. They are exactly the points with y in {0, 1, p-1, y8, p-y8}; y is
+// reduced mod p and x's sign bit is ignored, so the non-canonical encodings Go
+// decodes are caught too. A key that is not a raw Ed25519 key counts as small
+// order. See docs/rescue-connection-start.md, 受付の登録 (#425).
+func hasSmallOrderRescueKey(key ssh.PublicKey) bool {
+	ck, ok := key.(ssh.CryptoPublicKey)
+	if !ok {
+		return true
+	}
+	raw, ok := ck.CryptoPublicKey().(ed25519.PublicKey)
+	if !ok || len(raw) != ed25519.PublicKeySize {
+		return true
+	}
+	be := slices.Clone(raw)
+	be[len(be)-1] &= 0x7f
+	slices.Reverse(be)
+	p := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(19))
+	y := new(big.Int).Mod(new(big.Int).SetBytes(be), p)
+	y8, _ := new(big.Int).SetString("2707385501144840649318225287225658788936804267575313519463743609750303402022", 10)
+	for _, small := range []*big.Int{big.NewInt(0), big.NewInt(1), new(big.Int).Sub(p, big.NewInt(1)), y8, new(big.Int).Sub(p, y8)} {
+		if y.Cmp(small) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // EndRescue drops the reception and its code at once.
