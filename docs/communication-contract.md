@@ -34,10 +34,10 @@
 新規開始はGUI入口とワーカー入口の両方で常時拒否していました。
 GUIとともに開始処理も削除済みで、通信契約の提供済み機能に数えません。
 
-[旧CLIラッパー](../src/rescue_core.py)の `session info` はJSONの名前と状態を検証します。
-既知状態は `starting/ready/reconnecting/disconnected/ending/ended` です。
-古い `info_ok` は現在の名前と一致しなければ無視し、`stop_ok` も一致する名前だけを画面から消します。
-名前には起動世代の証明がないため、`ended` 応答だけで回復情報を削除しません。
+旧CLIラッパー（`rescue_core.py`、#416 で削除）の `session info` はJSONの名前と状態を検証していました。
+既知状態は `starting/ready/reconnecting/disconnected/ending/ended` でした。
+古い `info_ok` は当時の名前と一致しなければ無視し、`stop_ok` も一致する名前だけを画面から消していました。
+名前には起動世代の証明がないため、`ended` 応答だけで回復情報を削除しない扱いでした。
 CLIの停止受付、GUI終了、鍵ファイル削除を既存接続の終了証明にしない扱いは[回復処理](recovery.md)に従います。
 
 CLI呼出しの予算はversion確認10秒、info 15秒、stop 65秒です。

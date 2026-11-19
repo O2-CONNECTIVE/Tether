@@ -8,7 +8,7 @@ Rust が接続機能の未配線状態だけを返す開発用 shell です。
 [Resident wireのClose証跡前提](RESIDENT_CLOSE_PROOF.md)と[具体duplex所有契約](RESIDENT_DUPLEX_OWNER.md)は内部sourceです。通常起動/IPC、trusted launcher、outer終了判定は未接続です。
 操作する担当者向けの[操作側GUIプロトタイプ](operator/README.md)は別入口・別buildです。host shellと実接続の配線は共有しません。
 Go、SSH、sidecar の起動や停止は実装していません。
-既存 Tkinter、旧記録の回復、製品接続ゲートと起動方法は変更しません。
+製品接続ゲートと起動方法は変更しません。
 開始と停止は常に無効で、通信終了は未確認のままです。
 
 ## フロントエンドの確認

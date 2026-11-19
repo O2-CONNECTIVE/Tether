@@ -26,7 +26,6 @@ worktreeの分離は同一branchへのpush競合やremote更新を防ぐロッ�
 | tokensとsource-size | [開発手順](development.md)、[source-size方針](../.source-size-policy.json) | [Python offline](../.github/workflows/python-offline.yml) |
 | frontend型/lint/Knip/回帰 | [Tauri README](../ui/tauri/README.md)、[package scripts](../ui/tauri/package.json) | [Tauri品質・build](../.github/workflows/tauri-shell.yml) |
 | frontend notice | [notice手順](frontend-notices.md) | [notice 3OS](../.github/workflows/frontend-notices.yml) |
-| Python build依存 | [配布条件](distribution.md)、[lock checker](../scripts/check_build_lock.py) | [build-lock](../.github/workflows/python-build-lock.yml) |
 | Rust IPC・native起動/close | [Tauri README](../ui/tauri/README.md)、[native smoke](tauri-native-smoke.md) | [Tauri品質・build](../.github/workflows/tauri-shell.yml)、[Windows native smoke](../.github/workflows/tauri-native-smoke.yml) |
 
 Pythonの`check`は既存試験と構文の入口で、`tokens`、`sizes`、開発toolの全件試験を包含しません。

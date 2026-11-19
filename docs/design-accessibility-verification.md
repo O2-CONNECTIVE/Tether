@@ -53,7 +53,6 @@ APG の例を写したことだけで WCAG の達成や実機相互運用の合�
 
 上記は対応 OS を追加する宣言ではありません。
 host と controller の[対応範囲](status.md#osと役割ごとの範囲)を維持します。
-既存 Tkinter を変更する場合も対象 OS の実操作を確認し、WebView の DOM 検査の成功を流用しません。
 Tauri の拡大機能やキーの扱いには[プラットフォーム差](https://v2.tauri.app/reference/javascript/api/namespacewebview/#webviewoptions)があるため、使用する版と設定で再確認します。
 この確認計画を理由に toolchain、支援技術、WebView2、OS 設定を勝手に追加変更しません。
 

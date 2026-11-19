@@ -2,11 +2,11 @@
 
 `rescue_policy.py` と `rescue_lease.py` は標準ライブラリだけで動く設計検証用の中核処理です。
 **SSHサーバー、Windowsサービス、実認証、実プロセス停止、安全なIPC、独立して期限を強制するタイマーではありません。**
-`require_secure_session_backend()` の常時拒否は維持します。このモデルの `ACTIVE`・`READY` を本番接続の許可証に使ってはいけません。
+Python の開始処理と開始ゲート `require_secure_session_backend()` は #416 で削除し、Python に実セッションを開始する経路はありません。このモデルの `ACTIVE`・`READY` を本番接続の許可証に使ってはいけません。
 
-## GUIとモード
+## モード
 
-`Settings.to_operation_policy()` は検証したGUI設定を変更不能な `OperationPolicy` へ変換します。これは設定から方針への変換であり、実セッションの起動・認可ではありません。
+旧 GUI の設定から変換していた `Settings.to_operation_policy()` は #416 で `rescue_core` とともに削除しました。`OperationPolicy` は直接組み立てます。
 `OperationPolicy(operation_mode="restricted" | "full")` の既定値は `restricted` です。旧接続方式の `ssh`・`terminal` とは別の概念です。
 
 - 両モードとも外側のゲートウェイで許可するのは `direct-tcpip`、**文字列 `127.0.0.1`、整数型 `22` の完全一致**だけです。セッション、シェル、コマンド実行、PTY、サブシステム、SFTP、逆向き転送、エージェント・X11転送は許可しません。

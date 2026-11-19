@@ -8,34 +8,22 @@
 配置の採用はWindows実行方式の採用や実接続の有効化を意味しません。
 
 新規接続は無効です。
-以下の図は公開済みソースの構成を示し、実GUIのスクリーンショットではありません。
-
-![Rescue Hostの構成図。実装済みのGUI設定とオフラインモデル、常時拒否する開始ゲート、未実装の実SSHとWindows監督を区別。](assets/architecture.svg)
-
-[PNGで開く](assets/architecture.png) / [編集可能なSVG](assets/architecture.svg)
-
-実線は実装済み、赤い領域は常時拒否する開始ゲート、破線は未実装の計画です。
-色のほか番号、文字、線種でも区別しています。
-GUIから実セッションへの接続線はありません。
-
 公開CLIと未公開の限定評価stdio、将来のTauri adapter案の区別は[通信契約](communication-contract.md)を参照してください。
 保護資産と信頼境界、残る受入条件は[脅威モデル](threat-model.md)に整理しています。
 
 | 部分 | 役割と境界 | 公開ソースまたは詳細 |
 |---|---|---|
-| 設定 | `Settings`が操作範囲を保持する。旧Tkinter GUIは[#407](https://github.com/O2-CONNECTIVE/Tether/issues/407)で削除した。`Settings.to_operation_policy()`で不変方針に変換するが、起動や認可はしない | [設定と回復処理](../src/rescue_core.py) |
 | オフライン制御 | 固定宛先と許可操作IDを判定し、準備、有効化、失効、終了、期限、競合、再試行をモデル化 | [操作方針](../src/rescue_policy.py)、[期限モデル](../src/rescue_lease.py)、[モデルのAPIと限界](OFFLINE_BACKEND_MODEL.md) |
-| 開始ゲート | 実セッションの開始を拒否する。設定や環境変数で解除できない。呼び出し元だった旧GUIとワーカーは削除済みで、開始処理は残っていない | [require_secure_session_backend()](../src/rescue_core.py) |
-| 旧記録の回復 | 記録の検証と停止要求を補助。同一ユーザーの監視は安全境界や確実な失効機構ではない。監視を起動していた旧GUIと`launch_watchdog`は削除済みで、`watchdog_main`の起動経路は残っていない | [監視処理](../src/rescue_watchdog.py)、[回復と画面終了](recovery.md) |
+| 旧 Python 実装 | 旧 Tkinter GUI は #407、設定（`Settings`）・開始ゲート（`require_secure_session_backend()`）・Upterm の起動と停止の `rescue_core` と、期限監視の `rescue_watchdog` は #416 で削除した。Python に実セッションを開始する経路は残っていない | [旧記録の扱い](recovery.md) |
 | 将来の安全境界 | 実SSH、固定宛先接続、内側sshdの制約、保護されたWindows監督は未実装 | [バックエンド契約](SECURITY_BACKEND_CONTRACT.md) |
 
 ## 操作モードと実権限
 
-GUIで「制限付き診断・修復」と「フル操作」を選択して保存できます。
-既定は制限付きで、旧設定の接続方式とは区別して移行します。
+旧 GUI で選んで保存していた 2 つのモードは、GUI と `Settings` ごと削除しました。
+残るのは `OperationPolicy`（`rescue_policy.py`）が 2 つのモードを表すオフラインのモデルだけで、既定は制限付きです。
 両方とも実接続は無効です。
 
 制限付きの操作IDは将来のヘルパー仕様であり、診断や修復コマンド自体は未実装です。
 フル操作は通常ユーザーのシェル操作を意図し、管理者昇格を認可しません。
-GUIの選択や外側のTCP宛先判定だけでは、内側SSHの実操作権限は制御できません。
+モードの選択や外側のTCP宛先判定だけでは、内側SSHの実操作権限は制御できません。
 詳しくは[オフラインモデル](OFFLINE_BACKEND_MODEL.md)を参照してください。
