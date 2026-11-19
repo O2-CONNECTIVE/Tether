@@ -45,6 +45,7 @@ type RescueClient struct {
 	mu                  sync.Mutex
 	used, closed, ended bool
 	requested, answered bool
+	expired             bool
 	cancel              context.CancelFunc
 	ws                  *websocket.Conn
 	closer              *closer
@@ -192,6 +193,7 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 		case <-expires:
 			c.mu.Lock()
 			requested := c.requested
+			c.expired = !requested // serve passes on no request after this
 			c.mu.Unlock()
 			if !requested {
 				c.end()
@@ -288,7 +290,7 @@ func (c *RescueClient) serve() {
 	}
 	stream := newStream(life, ws, link, DefaultBudgets().Cleanup)
 	c.mu.Lock()
-	if c.ended {
+	if c.ended || c.expired {
 		c.mu.Unlock()
 		return
 	}
@@ -365,12 +367,16 @@ func (c *RescueClient) Close() error {
 type VerifiedRescueIdentity struct {
 	client                             ssh.PublicKey
 	displayName, organization, profile string
+	hostKey                            []byte
 }
 
 func (v VerifiedRescueIdentity) Client() ssh.PublicKey { return v.client }
 func (v VerifiedRescueIdentity) DisplayName() string   { return v.displayName }
 func (v VerifiedRescueIdentity) Organization() string  { return v.organization }
 func (v VerifiedRescueIdentity) Profile() string       { return v.profile }
+
+// HostKey is K (SSH wire form) of the reception that verified the request.
+func (v VerifiedRescueIdentity) HostKey() []byte { return append([]byte(nil), v.hostKey...) }
 
 // VerifyRescueRequest verifies the identity proof of a request on reception
 // id at endpoint, whose host key is K (hostKey, SSH wire form): one of pins
@@ -407,7 +413,7 @@ func verifyRescueRequest(endpoint string, reception, hostKey []byte, pins []ssh.
 	if !valid {
 		return VerifiedRescueIdentity{}, [32]byte{}, ErrRefused
 	}
-	return VerifiedRescueIdentity{client: client, displayName: id.DisplayName, organization: id.Organization, profile: id.Profile}, sha256.Sum256(transcript), nil
+	return VerifiedRescueIdentity{client: client, displayName: id.DisplayName, organization: id.Organization, profile: id.Profile, hostKey: append([]byte(nil), hostKey...)}, sha256.Sum256(transcript), nil
 }
 
 // Request delivers the reception's one request once it verifies; a request

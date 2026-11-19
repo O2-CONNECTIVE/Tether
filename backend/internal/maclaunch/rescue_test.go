@@ -352,20 +352,20 @@ func TestRescuePromptShowsVerifiedIdentity(t *testing.T) {
 	}
 }
 
-// verifiedFor is C's request as the reception verifies it on the wire: the
-// gateway's pinned identity key signed it for this reception and K.
-func verifiedFor(t *testing.T, c ssh.PublicKey) agenttransport.VerifiedRescueIdentity {
+// verifiedFor is C's request as the reception with host key k verifies it on
+// the wire: the gateway's pinned identity key signed it for that reception.
+func verifiedFor(t *testing.T, c ssh.PublicKey, k ssh.Signer) agenttransport.VerifiedRescueIdentity {
 	t.Helper()
 	const endpoint = "wss://gateway.example.invalid" + agentgateway.RescuePath
 	identity, reception := rescueSigner(0x49), bytes.Repeat([]byte{0x72}, agentgateway.RescueReceptionSize)
-	k, nonce := rescueK.PublicKey().Marshal(), bytes.Repeat([]byte{0x6e}, agentgateway.RescueNonceSize)
+	kWire, nonce := k.PublicKey().Marshal(), bytes.Repeat([]byte{0x6e}, agentgateway.RescueNonceSize)
 	id := agentgateway.RescueIdentity{Nonce: nonce, Client: c.Marshal(), DisplayName: "山田（サポート）", Organization: "O2 CONNECTIVE", Profile: agentgateway.RescueProfile}
-	sig, err := identity.Sign(rand.Reader, agentgateway.RescueRequestTranscript(endpoint, reception, k, id.Nonce, id.Client, id.DisplayName, id.Organization, id.Profile))
+	sig, err := identity.Sign(rand.Reader, agentgateway.RescueRequestTranscript(endpoint, reception, kWire, id.Nonce, id.Client, id.DisplayName, id.Organization, id.Profile))
 	if err != nil {
 		t.Fatal(err)
 	}
 	id.Signature = sig.Blob
-	v, err := agenttransport.VerifyRescueRequest(endpoint, reception, k, []ssh.PublicKey{identity.PublicKey()}, id)
+	v, err := agenttransport.VerifyRescueRequest(endpoint, reception, kWire, []ssh.PublicKey{identity.PublicKey()}, id)
 	if err != nil {
 		t.Fatalf("VerifyRescueRequest = %v", err)
 	}
@@ -379,7 +379,7 @@ func TestRescueReceivesOnlyARequestTheReceptionVerified(t *testing.T) {
 	t.Run("verified", func(t *testing.T) {
 		f := newRescueFixture(t, 0)
 		requests := make(chan agenttransport.VerifiedRescueIdentity, 1)
-		requests <- verifiedFor(t, rescueC.PublicKey())
+		requests <- verifiedFor(t, rescueC.PublicKey(), rescueK)
 		if err := f.r.ReceiveFrom(requests); err != nil {
 			t.Fatalf("ReceiveFrom = %v", err)
 		}
@@ -397,6 +397,19 @@ func TestRescueReceivesOnlyARequestTheReceptionVerified(t *testing.T) {
 		want, err := runbackend.KeySetDigest([]ssh.PublicKey{rescueC.PublicKey()})
 		if err != nil || d.Binding.KeySetDigest != want {
 			t.Fatal("the grant does not allow exactly the verified C")
+		}
+	})
+	// Each reception verifies against its own K, which is also this Rescue's
+	// host key: a request verified by another reception is not this one's.
+	t.Run("verified by another reception", func(t *testing.T) {
+		f := newRescueFixture(t, 0)
+		requests := make(chan agenttransport.VerifiedRescueIdentity, 1)
+		requests <- verifiedFor(t, rescueC.PublicKey(), rescueSigner(0x4c))
+		if err := f.r.ReceiveFrom(requests); !errors.Is(err, ErrDenied) {
+			t.Fatalf("ReceiveFrom = %v, want ErrDenied", err)
+		}
+		if shown := f.helper.shown(); len(shown) != 0 {
+			t.Fatalf("showed %d prompts for another reception's request", len(shown))
 		}
 	})
 	t.Run("never verified", func(t *testing.T) {

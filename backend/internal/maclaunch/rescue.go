@@ -1,6 +1,7 @@
 package maclaunch
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -249,11 +250,16 @@ func (r *Rescue) Receive(req RescueRequest) error {
 	return nil
 }
 
-// ReceiveFrom passes the reception's one verified request to Receive. It
-// returns ErrDenied without a request once the state machine has ended.
+// ReceiveFrom passes the reception's one verified request to Receive. A
+// request verified for another K than this Rescue's host key is another
+// reception's and is denied. It returns ErrDenied without a request once the
+// state machine has ended.
 func (r *Rescue) ReceiveFrom(requests <-chan agenttransport.VerifiedRescueIdentity) error {
 	select {
 	case v := <-requests:
+		if !bytes.Equal(v.HostKey(), r.cfg.HostKey.PublicKey().Marshal()) {
+			return ErrDenied
+		}
 		return r.Receive(RescueRequest{client: v.Client(), displayName: v.DisplayName(), organization: v.Organization(), profile: v.Profile()})
 	case <-r.done:
 		return ErrDenied
