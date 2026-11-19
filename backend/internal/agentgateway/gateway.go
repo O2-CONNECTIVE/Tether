@@ -70,6 +70,9 @@ type Config struct {
 	Budgets        agentchannel.Budgets // every agent channel's budgets; see ChannelBudgets
 	CallTimeout    time.Duration        // one wire round trip; zero selects mcpadapter.DefaultCallTimeout
 	Clock          func() time.Time
+	// RescueSigner is the rescue identity key (raw Ed25519) from protected
+	// storage. Without it the rescue reception is closed.
+	RescueSigner ssh.Signer
 }
 
 // ChannelBudgets are the fixed product budgets for an agent channel over a
