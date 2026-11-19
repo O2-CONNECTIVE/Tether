@@ -56,8 +56,8 @@ func gatewayDoc() map[string]any {
 		"jwks": map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": "synthetic-ed", "alg": "EdDSA",
 			"x": base64.RawURLEncoding.EncodeToString(pub)}}},
 		"principals": []any{
-			map[string]any{"label": "member-1", "subject": "synthetic-subject-1"},
-			map[string]any{"label": "member-2", "subject": "synthetic-subject-2"},
+			map[string]any{"label": "member-1", "subject": "synthetic-subject-1", "roles": []any{"rescue_operator", "resident_owner"}},
+			map[string]any{"label": "member-2", "subject": "synthetic-subject-2", "roles": []any{"rescue_operator", "resident_owner"}},
 		},
 	}
 }

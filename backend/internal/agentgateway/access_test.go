@@ -432,7 +432,7 @@ func TestAccessVerifierAndGatewayConfigRefusals(t *testing.T) {
 	}
 
 	access, oauth := accessVerifier(t), verifier(t)
-	ps := []agentgateway.Principal{{Label: "member-1", Subject: subjects[0]}}
+	ps := []agentgateway.Principal{{Label: "member-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subjects[0]}}
 	for _, tc := range []struct {
 		name string
 		cfg  agentgateway.Config
@@ -459,7 +459,7 @@ func accessConfigDoc(t *testing.T, edit func(map[string]any)) []byte {
 	_ = json.Unmarshal(accessKeys(t), &keys)
 	var ps []any
 	for i, s := range subjects {
-		ps = append(ps, map[string]any{"label": label(i), "subject": s})
+		ps = append(ps, map[string]any{"label": label(i), "subject": s, "roles": []string{"rescue_operator", "resident_owner"}})
 	}
 	doc := map[string]any{
 		"listen": "127.0.0.1:8787", "auth_mode": "cloudflare_access", "resource": testResource,
@@ -514,7 +514,7 @@ func TestParseAccessConfig(t *testing.T) {
 		{"resource without path", func(d map[string]any) { d["resource"] = "https://gateway.example.invalid/" }},
 		{"public listener", func(d map[string]any) { d["listen"] = "0.0.0.0:8787" }},
 		{"email as principal member", func(d map[string]any) {
-			d["principals"] = []any{map[string]any{"label": "member-1", "subject": subjects[0], "email": syntheticEmail}}
+			d["principals"] = []any{map[string]any{"label": "member-1", "subject": subjects[0], "roles": []string{"rescue_operator", "resident_owner"}, "email": syntheticEmail}}
 		}},
 		{"unknown member", func(d map[string]any) { d["client_secret"] = "placeholder" }},
 		{"null member", func(d map[string]any) { d["allowed_origins"] = nil }},

@@ -116,7 +116,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 	cfg, err := parseLocalConfig(raw, args[1])
 	wipe(raw)
 	if err != nil {
-		report(diagnostic, "設定が不正または不完全です")
+		report(diagnostic, configRefusal(err, "設定が不正または不完全です"))
 		return 2
 	}
 	// Every principal needs its own enrolled key; one refusal stops the start
@@ -381,6 +381,16 @@ func newHTTPServer(h http.Handler) *http.Server {
 		WriteTimeout: 30*time.Second + mcpadapter.DefaultCallTimeout + 15*time.Second, IdleTimeout: 60 * time.Second,
 		MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0),
 	}
+}
+
+// configRefusal is a role rule's positional reason, or the fixed fallback.
+// Neither names a label, subject, key or path.
+func configRefusal(err error, fallback string) string {
+	var re *agentgateway.RoleError
+	if errors.As(err, &re) {
+		return re.Reason
+	}
+	return fallback
 }
 
 func report(w io.Writer, message string) {

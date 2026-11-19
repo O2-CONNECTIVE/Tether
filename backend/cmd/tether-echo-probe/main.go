@@ -94,6 +94,11 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) i
 	}
 	c, err := agentgateway.ParseConfig(raw)
 	wipe(raw)
+	var re *agentgateway.RoleError
+	if errors.As(err, &re) {
+		report(diagnostic, re.Reason+"。待受しません")
+		return 2
+	}
 	if err != nil {
 		report(diagnostic, "設定が不正または不完全です。待受しません")
 		return 2

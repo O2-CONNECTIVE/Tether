@@ -182,14 +182,14 @@ func TestVerifierAndGatewayConfigRefusals(t *testing.T) {
 		{"none", nil},
 		{"five principals", func() (ps []agentgateway.Principal) {
 			for i, s := range five {
-				ps = append(ps, agentgateway.Principal{Label: "member-" + string(rune('1'+i)), Subject: s})
+				ps = append(ps, agentgateway.Principal{Label: "member-" + string(rune('1'+i)), Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: s})
 			}
 			return
 		}()},
-		{"duplicate subject", []agentgateway.Principal{{Label: "member-1", Subject: subjects[0]}, {Label: "member-2", Subject: subjects[0]}}},
-		{"duplicate label", []agentgateway.Principal{{Label: "member-1", Subject: subjects[0]}, {Label: "member-1", Subject: subjects[1]}}},
-		{"bad label", []agentgateway.Principal{{Label: "Member 1", Subject: subjects[0]}}},
-		{"empty subject", []agentgateway.Principal{{Label: "member-1"}}},
+		{"duplicate subject", []agentgateway.Principal{{Label: "member-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subjects[0]}, {Label: "member-2", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subjects[0]}}},
+		{"duplicate label", []agentgateway.Principal{{Label: "member-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subjects[0]}, {Label: "member-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subjects[1]}}},
+		{"bad label", []agentgateway.Principal{{Label: "Member 1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subjects[0]}}},
+		{"empty subject", []agentgateway.Principal{{Label: "member-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := agentgateway.New(agentgateway.Config{Verifier: v, Principals: tc.ps}); !errors.Is(err, agentgateway.ErrConfig) {
@@ -197,7 +197,7 @@ func TestVerifierAndGatewayConfigRefusals(t *testing.T) {
 			}
 		})
 	}
-	if _, err := agentgateway.New(agentgateway.Config{Principals: []agentgateway.Principal{{Label: "member-1", Subject: subjects[0]}}}); !errors.Is(err, agentgateway.ErrConfig) {
+	if _, err := agentgateway.New(agentgateway.Config{Principals: []agentgateway.Principal{{Label: "member-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subjects[0]}}}); !errors.Is(err, agentgateway.ErrConfig) {
 		t.Fatalf("New without a verifier = %v", err)
 	}
 }
@@ -208,7 +208,7 @@ func configDoc(t *testing.T, edit func(map[string]any)) []byte {
 	_ = json.Unmarshal(jwks(t), &keys)
 	var ps []any
 	for i, s := range subjects {
-		ps = append(ps, map[string]any{"label": label(i), "subject": s})
+		ps = append(ps, map[string]any{"label": label(i), "subject": s, "roles": []string{"rescue_operator", "resident_owner"}})
 	}
 	doc := map[string]any{
 		"listen": "127.0.0.1:8787", "auth_mode": "oauth_bearer_jwt", "issuer": testIssuer, "resource": testResource, "scope": testScope,
@@ -253,7 +253,7 @@ func TestParseConfig(t *testing.T) {
 		{"unknown member", func(d map[string]any) { d["client_secret"] = "placeholder" }},
 		{"missing issuer", func(d map[string]any) { delete(d, "issuer") }},
 		{"signer in file", func(d map[string]any) {
-			d["principals"] = []any{map[string]any{"label": "member-1", "subject": subjects[0], "signer": "placeholder"}}
+			d["principals"] = []any{map[string]any{"label": "member-1", "subject": subjects[0], "roles": []string{"rescue_operator", "resident_owner"}, "signer": "placeholder"}}
 		}},
 		{"leeway beyond bound", func(d map[string]any) { d["leeway_seconds"] = 1 << 40 }},
 		{"null member", func(d map[string]any) { d["allowed_origins"] = nil }},

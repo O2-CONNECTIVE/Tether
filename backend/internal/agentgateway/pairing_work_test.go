@@ -113,7 +113,7 @@ func pairOnlyRig(t *testing.T) (*Gateway, *principal) {
 		t.Fatal(err)
 	}
 	signer, _ := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{8}, 32)))
-	g, err := New(Config{Verifier: verifier, Principals: []Principal{{Label: "member1", Subject: "subject", Signer: signer}}})
+	g, err := New(Config{Verifier: verifier, Principals: []Principal{{Label: "member1", Subject: "subject", Roles: []Role{RoleRescueOperator, RoleResidentOwner}, Signer: signer}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestConfigureHostsRejectsPairingSlotWithoutPrincipalKeyA3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := New(Config{Verifier: verifier, Principals: []Principal{{Label: "member1", Subject: "subject"}}})
+	g, err := New(Config{Verifier: verifier, Principals: []Principal{{Label: "member1", Roles: []Role{RoleRescueOperator, RoleResidentOwner}, Subject: "subject"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

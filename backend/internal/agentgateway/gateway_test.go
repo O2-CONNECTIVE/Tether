@@ -229,7 +229,7 @@ func TestRegistrationRefusesAmbiguousOrReusedBindings(t *testing.T) {
 		t.Fatal("a refused registration disturbed the live route")
 	}
 
-	unsigned, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), Principals: []agentgateway.Principal{{Label: "member-1", Subject: subjects[0]}}, Budgets: budgets()})
+	unsigned, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), Principals: []agentgateway.Principal{{Label: "member-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subjects[0]}}, Budgets: budgets()})
 	if err != nil {
 		t.Fatal(err)
 	}

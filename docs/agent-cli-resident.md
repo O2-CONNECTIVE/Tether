@@ -26,6 +26,7 @@
 - 省略時は以前の構成と同じで、常駐subprotocolを受理しません。既存のhost登録・principal鍵だけから常駐利用を推定しません。
 - 明示時は1〜4件。null、空配列、余剰member、重複member、同じprincipalの重複、未知host/principalを拒否します。
 - principalは既存`hosts`全体でちょうど1つのhostに対応し、そのlabelが指定hostと一致する必要があります。複数hostのうち1つを暗黙選択しません。
+- principalは`resident_owner`の役割を持つ必要があります。指定hostの`principals`は、その本人1人だけです（[役割と host の分け方](agent-cli.md#役割と-host-の分け方)）。
 - 公開鍵はそのhost登録から取得し、signerは既存の保護loaderで読んだ同じprincipal鍵だけです。ここへ別の鍵・signer・tokenは指定できません。
 - operationは`tether-fixed-command-v1`だけです。任意command・timeout・grant・承認flag・共有policyは追加できません。固定commandと15秒の上限は既存実装が所有します。
 

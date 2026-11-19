@@ -32,7 +32,7 @@ func TestConfigurePairingRejectsInvalidRegistrationEndpoint(t *testing.T) {
 	for _, endpoint := range []string{"wss://gw.example/", "wss://GW.example/register", "wss://" + strings.Repeat("a", 250) + ".test/register"} {
 		t.Run(endpoint, func(t *testing.T) {
 			host := fixtureSigner(t, 0x51)
-			g, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), Resource: testResource, Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Signer: fixtureSigner(t, 0x52)}}})
+			g, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), Resource: testResource, Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Signer: fixtureSigner(t, 0x52)}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -56,7 +56,7 @@ func pairSetupWithRecords(t *testing.T, subject string, hosts []agentgateway.Hos
 	}
 	principals := make([]agentgateway.Principal, len(subjects))
 	for i := range subjects {
-		principals[i] = agentgateway.Principal{Label: label(i), Subject: subjects[i], Signer: fixtureSigner(t, byte(0x21+i))}
+		principals[i] = agentgateway.Principal{Label: label(i), Subject: subjects[i], Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Signer: fixtureSigner(t, byte(0x21+i))}
 	}
 	principals[0].Subject = subject
 	g, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), Resource: testResource, Principals: principals})

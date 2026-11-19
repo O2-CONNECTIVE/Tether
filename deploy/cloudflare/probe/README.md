@@ -61,7 +61,7 @@ Node（fakeのみ。global `fetch` は呼ばれたら失敗する罠に置換）
 
 Worker gate（`TETHER_PROBE_GATE`）を `worker.mjs` の `GATE_VALUE` へ変えるのは、次がすべて揃い、承認された後だけです。
 
-1. Go probeが保護文書（実issuer・AUD・現行公開鍵・subject 1件）で、container内の承認済みaddressだけで待受している。
+1. Go probeが保護文書（実issuer・AUD・現行公開鍵・subject 1件と、その`roles`。probeは役割を使いませんが、gatewayと同じ文書規則で`roles`のないprincipalを拒否します）で、container内の承認済みaddressだけで待受している。
 2. **hostname/path単位のAccess self-hosted application** が、Workerの公開hostnameの `/tether-probe/v1/echo` と `/tether-probe/v1/ws` を許可subjectだけに限定している。Worker設定画面のWorker-level Accessは使いません（WebSocketが403になる既知の制約）。
 3. VPC Serviceが既存Tunnel経由でprobeのcontainer portだけを指し、Workerのbindingはその1件だけ。
 
