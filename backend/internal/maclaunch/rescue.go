@@ -75,7 +75,8 @@ func (p RescuePrompt) Digest() [32]byte {
 }
 
 // RescueHelper is the native helper's connection as Go sees it. #410
-// authenticates that connection; a WebView IPC handler never holds it.
+// authenticates that connection; a WebView IPC handler never holds it. Answer
+// compares it with ==, so it is a pointer.
 type RescueHelper interface {
 	// Show hands p to the helper. It does not wait for the user's answer.
 	Show(RescuePrompt) error
@@ -104,7 +105,9 @@ type RescueReception interface {
 
 // RescueConfig is supplied at 受付 ON.
 type RescueConfig struct {
-	HostKey        ssh.Signer // K, the channel host key
+	// HostKey is K, the channel host key. It must sign with the reception's own
+	// K, so that Reception.Close discarding K also disables it.
+	HostKey        ssh.Signer
 	Runtime        macagent.Config
 	Duration       time.Duration
 	CleanupTimeout time.Duration
@@ -208,8 +211,9 @@ func newRescue(cfg RescueConfig, runtime agentexec.ProfiledRuntime, clock rescue
 	return r, nil
 }
 
-// Receive moves 受付中 to 確認中 and returns after Show. Any other state
-// refuses without a prompt. The 60 seconds count from before Show.
+// Receive moves 受付中 to 確認中 and returns after Show. Any other state, or a
+// host-side end or lost reception not handled yet, refuses without a prompt.
+// The 60 seconds count from before Show.
 func (r *Rescue) Receive(req RescueRequest) error {
 	if req.client == nil {
 		return ErrDenied
@@ -220,19 +224,21 @@ func (r *Rescue) Receive(req RescueRequest) error {
 	}
 	p := RescuePrompt{RequestID: hex.EncodeToString(id[:]), Organization: req.organization, DisplayName: req.displayName, Profile: req.profile, Duration: r.cfg.Duration, ClientFingerprint: ssh.FingerprintSHA256(req.client), Warning: RescueWarning}
 	r.step.Lock()
+	defer r.step.Unlock()
+	if r.cutOff() {
+		r.end(false, false, true)
+		return ErrDenied
+	}
 	r.mu.Lock()
 	if r.state != rescueAccepting {
 		r.mu.Unlock()
-		r.step.Unlock()
 		return ErrDenied
 	}
 	r.state, r.prompt, r.client = rescueConfirming, p, req.client
 	r.shownWall, r.shownMono = r.clock.wall(), r.clock.mono()
 	r.mu.Unlock()
-	err := r.helper.Show(p)
-	r.step.Unlock()
-	if err != nil {
-		r.finish(false, false, false)
+	if err := r.helper.Show(p); err != nil {
+		r.end(false, false, false)
 		return errors.Join(ErrDenied, err)
 	}
 	return nil
@@ -243,18 +249,21 @@ func (r *Rescue) Receive(req RescueRequest) error {
 // host-side end that arrives meanwhile waits for the hand-over, then revokes it.
 func (r *Rescue) Answer(from RescueHelper, reply RescueReply) error {
 	r.step.Lock()
+	defer r.step.Unlock()
+	if r.cutOff() {
+		r.end(false, false, true)
+		return ErrDenied
+	}
 	r.mu.Lock()
 	if r.state != rescueConfirming || from == nil || from != r.helper || reply.RequestID != r.prompt.RequestID || reply.Digest != r.prompt.Digest() {
 		r.mu.Unlock()
-		r.step.Unlock()
 		return ErrDenied
 	}
 	wall, mono := r.clock.wall(), r.clock.mono()
-	late := mono-r.shownMono >= RescuePromptTimeout || wall.Sub(r.shownWall) >= RescuePromptTimeout || wall.Before(r.shownWall)
+	late := r.late(wall, mono)
 	if late || !reply.Allow {
 		r.mu.Unlock()
-		r.step.Unlock()
-		r.finish(late, true, late)
+		r.end(late, true, late)
 		if late {
 			return ErrDenied
 		}
@@ -265,16 +274,39 @@ func (r *Rescue) Answer(from RescueHelper, reply RescueReply) error {
 	r.mu.Unlock()
 	a, conn, err := r.issue(wall, client)
 	if err != nil {
-		r.step.Unlock()
-		r.finish(false, false, false)
+		r.end(false, false, false)
 		return err
 	}
 	r.mu.Lock()
 	r.state, r.approved = rescueSession, a
 	r.mu.Unlock()
 	go func() { _ = a.Serve(r.life, conn); r.finish(false, false, false) }()
-	r.step.Unlock()
 	return nil
+}
+
+// late reports the 60 seconds on either clock, or the wall clock before the
+// prompt. r.mu is held.
+func (r *Rescue) late(wall time.Time, mono time.Duration) bool {
+	return mono-r.shownMono >= RescuePromptTimeout || wall.Sub(r.shownWall) >= RescuePromptTimeout || wall.Before(r.shownWall)
+}
+
+// expired reports the chosen lifetime from the time of approval on either
+// clock. r.mu is held.
+func (r *Rescue) expired(wall time.Time, mono time.Duration) bool {
+	return mono-r.approvedMono >= r.cfg.Duration || !wall.Before(r.approvedWall.Add(r.cfg.Duration))
+}
+
+// cutOff reports a host-side end or a lost reception, even before the loop
+// handles it.
+func (r *Rescue) cutOff() bool {
+	select {
+	case <-r.stop:
+		return true
+	case <-r.reception.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 // issue grants C alone, with K as the host key, until the time of approval
@@ -305,7 +337,8 @@ func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, n
 // It does not wait.
 func (r *Rescue) Stop() { r.stopOnce.Do(func() { close(r.stop) }) }
 
-// Done closes after the end: the grant revoked and reclaimed, K discarded.
+// Done closes after the end: the grant revoked, its cleanup run within
+// CleanupTimeout (the result is not reported here), K discarded.
 func (r *Rescue) Done() <-chan struct{} { return r.done }
 
 func (r *Rescue) loop() {
@@ -318,16 +351,7 @@ func (r *Rescue) loop() {
 			r.finish(false, false, true)
 			return
 		case <-r.clock.tick:
-			r.mu.Lock()
-			s := r.state
-			wall, mono, sw, sm, aw, am := r.clock.wall(), r.clock.mono(), r.shownWall, r.shownMono, r.approvedWall, r.approvedMono
-			r.mu.Unlock()
-			if s == rescueConfirming && (mono-sm >= RescuePromptTimeout || wall.Sub(sw) >= RescuePromptTimeout || wall.Before(sw)) {
-				r.finish(true, true, true)
-				return
-			}
-			if s == rescueSession && (mono-am >= r.cfg.Duration || !wall.Before(aw.Add(r.cfg.Duration))) {
-				r.finish(false, false, false)
+			if r.recheck() {
 				return
 			}
 		case <-r.life.Done():
@@ -336,11 +360,33 @@ func (r *Rescue) loop() {
 	}
 }
 
-// finish ends once: it withdraws a shown prompt (withdraw), sends a deny or a
-// timeout (refuse), revokes and reclaims the grant, discards K and closes Done.
+// recheck ends a prompt past 60 seconds or a session past its lifetime. It
+// decides under step, so no answer or issuance interleaves with the decision.
+func (r *Rescue) recheck() bool {
+	r.step.Lock()
+	defer r.step.Unlock()
+	r.mu.Lock()
+	wall, mono := r.clock.wall(), r.clock.mono()
+	timedOut := r.state == rescueConfirming && r.late(wall, mono)
+	expired := r.state == rescueSession && r.expired(wall, mono)
+	r.mu.Unlock()
+	if timedOut || expired {
+		r.end(timedOut, timedOut, timedOut)
+	}
+	return timedOut || expired
+}
+
+// finish takes step and ends, waiting for a transition in progress.
 func (r *Rescue) finish(timedOut, refuse, withdraw bool) {
 	r.step.Lock()
 	defer r.step.Unlock()
+	r.end(timedOut, refuse, withdraw)
+}
+
+// end runs once, with step held, so whoever decides the end also makes it: it
+// withdraws a shown prompt (withdraw), sends a deny or a timeout (refuse),
+// revokes the grant and runs its cleanup, discards K and closes Done.
+func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	r.mu.Lock()
 	if r.state == rescueEnded {
 		r.mu.Unlock()
