@@ -148,8 +148,10 @@ func (h *Host) Serve(ctx context.Context, conn net.Conn) error {
 	return h.finish(ch, errors.Join(agentwire.ErrPeerLost, wire.Serve(ctx, ch)))
 }
 
-// finish revokes, closes and joins the one channel (if any), then waits for
-// the Session's guest cleanup, and reports everything unconfirmed.
+// An opt-in reconnectable loss retains the grant for the next generation only
+// after closing and joining the channel and confirming Session cleanup.
+// Otherwise, or if cleanup is unconfirmed, finish revokes, closes and joins,
+// then awaits Session cleanup; both paths report anything unconfirmed.
 func (h *Host) finish(ch *agentchannel.Channel, served error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), h.budget.Cleanup)
 	defer cancel()

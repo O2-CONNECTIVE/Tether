@@ -136,6 +136,7 @@ Macの現在利用者profileは、guest分離を偽って表明しないよう�
   これはローカルの受付順序を決めるだけで、OS上の開始と失効を原子化しません。
   確認後の失効はctxの取消で伝わり、遅れて返ったprocessは同じcommandが回収します。native側にも、開始直前の再検査とctxへの追従が必要です。
 - transport喪失は一時停止ではありません。同じSessionは再開せず、次のcommandには新しい承認、新しいAuthority、新しいSessionが必要です。隠れた再接続はありません。
+  ただし、`AllowReconnect`を明示したレスキュー経路では、Accept後の通信切断に限り、回収を確認した後、5分の猶予の間に同じgrant・同じSessionの次の接続世代で再接続します。受付口の`resume`とKのproofを通る明示経路であり、隠れた再接続ではありません（[agent channel](agent-channel.md)、[ADR 0005](adr/0005-rescue-reconnect-grace.md)）。
 - Cancelとcommand timeoutは、そのcommandだけを止め、grantは維持します。
 - 1つのAuthorityから作れるSessionは1つだけです（`ErrSessionClaimed`）。同時の`New`でも同じです。Closeしても専有は戻らず、同じgrantで新しいSessionは作れません。
 

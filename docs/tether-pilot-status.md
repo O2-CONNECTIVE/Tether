@@ -2,7 +2,7 @@
 
 [プロジェクト入口](../README.md) / [文書索引](README.md)
 
-記録対象: 2026-11-01。案内更新: 2026-11-08。これは限定 pilot の固定証跡索引と未実演の再開手順であり、起動許可・配布許可・認証情報ではありません。
+記録対象: 2026-11-01。案内更新: 2026-11-20。これは限定 pilot の固定証跡索引と未実演の再開手順であり、起動許可・配布許可・認証情報ではありません。
 
 **最新main全体の検証結果ではありません。** 以下の件数・hash・OS宣言・403は各記録時点の事実です。後続sourceの状態は対象PRの固定headとCI、目標は[製品文書](product/README.md)、読者別の入口と停止時の参照先は[文書索引](README.md#読者別の入口)で確認してください。実GUIとagentの同時動作、実dot接続、一般配布を、この履歴や後続CIの成功から確認済みへ変更しません。
 
@@ -34,8 +34,8 @@ CLI の source 上の期限上限と、実試験で承認された 180 秒 grant
 
 ## 決まったレスキューの始め方
 
-**未実装です。** 2026-11-18 に [#404](https://github.com/O2-CONNECTIVE/Tether/issues/404) で決まった流れで、上の「人間側の実装済み入口」を置き換える予定です。
-設計は [レスキューの接続の開始](rescue-connection-start.md)（[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)、2026-11-19 承認）、Go の側の実装は [#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)〜[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)、principal の役割は [#408](https://github.com/O2-CONNECTIVE/Tether/issues/408)、画面は [#410](https://github.com/O2-CONNECTIVE/Tether/issues/410) で行います。
+**製品のレスキュー入口は未実装です。** 2026-11-18 に [#404](https://github.com/O2-CONNECTIVE/Tether/issues/404) で決まった流れで、上の「人間側の実装済み入口」を置き換える予定です。接続猶予のsource実装が完了しても、製品の入口にはまだ接続していません。
+設計は [レスキューの接続の開始](rescue-connection-start.md)（[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)、2026-11-19 承認）。Go source は[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)〜[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)に続き、接続猶予と世代を[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)のgateway [PR #443](https://github.com/O2-CONNECTIVE/Tether/pull/443)・host [PR #444](https://github.com/O2-CONNECTIVE/Tether/pull/444)で実装しました。principal の役割と画面は [#408](https://github.com/O2-CONNECTIVE/Tether/issues/408)、[#410](https://github.com/O2-CONNECTIVE/Tether/issues/410) で個別に追跡します。
 モードの切り替えと認証の出し分けは [製品目標](product/goals-and-acceptance.md#レスキューと常駐を-1-つのホスト-gui-で切り替える) を参照してください。
 
 1. ホストの利用者が、ホスト GUI のモードをレスキューにして、受付を ON にする。ホスト側は IdP のアカウントを持たない。受付 OFF のホストには、要求が届かない。
@@ -50,7 +50,7 @@ CLI の source 上の期限上限と、実試験で承認された 180 秒 grant
 
 手順 5 は、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（2026-11-19 accepted）で、[ADR 0003](adr/0003-owned-guest-workload.md) と [一時guestアカウント](temporary-guest-account.md) の「切断後の新規承認」を「猶予の間を除いて、切断後は新規承認」に改めました。
 
-#409 で決める点としていた、接続コードの形と回数の制限、身元の渡し方、今の承認画面の置き換え、セッションの鍵とゲストのアカウントの対応は、[レスキューの接続の開始](rescue-connection-start.md)で決めました（2026-11-19 承認、未実装）。
+#409 で決める点としていた接続コード、身元の渡し方、承認画面、セッションの鍵とguest accountの対応は、[レスキューの接続の開始](rescue-connection-start.md)で設計を決定しました（2026-11-19承認）。接続コードから接続世代までのsourceは実装済みですが、製品の入口は未接続です。猶予中もguest accountの所有記録を保持する受け入れ条件は未実装です。
 今の Mac の入口は現在ユーザーの権限で隔離なしに動きます。Mac のゲストのアカウントが使えるようになるまで、この流れを製品として有効にしません。
 
 ## 最小の受領者手順（未実演の runbook）

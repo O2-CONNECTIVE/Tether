@@ -2,9 +2,9 @@
 
 [文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md)
 
-**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）、WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）、担当者の要求と身元の証明・回答の検証（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）を実装しました。ホストの許可の状態機械と、受付での身元の証明の検証・K で署名した回答（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）を実装しましたが、製品の入口からは使わず、試験だけで使います。猶予（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）は未実装です。**
+**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）、WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）、担当者の要求と身元の証明・回答の検証（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）、ホストの許可の状態機械（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）をsource実装しました。猶予と接続世代（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）もgatewayの[PR #443](https://github.com/O2-CONNECTIVE/Tether/pull/443)とhostの[PR #444](https://github.com/O2-CONNECTIVE/Tether/pull/444)でsource実装済みです。これらは製品の入口からは使わず、試験だけで使います。Macのguest accountと猶予中の所有記録は未実装です。**
 切断の後の扱いは、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（accepted）が [ADR 0003](adr/0003-owned-guest-workload.md) の該当の部分を置き換えます。
-実装されるまで、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
+製品の入口がつながるまでは、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
 この文書は、ホストを接続コードで指し、要求の時点の許可のポップアップでレスキューの接続を始める流れを決めます。
 画面は [#410](https://github.com/O2-CONNECTIVE/Tether/issues/410) で作ります。
 
@@ -302,12 +302,13 @@ K を盗んだ者は、C を持たないので担当者として接続できま�
 
 猶予の間は grant を失効させず、新しい作業の受け付け（admission）だけを止めます。
 猶予に入るのは、確立した channel の通信の切断（transport の終了、心拍の失敗、読み書きの停滞）だけです。取消、書込み失敗、正規 stop、期限、相手の違反、Accept 前の認証失敗は、今のとおりすぐ失効させます。
+channel の書込みが通信の切断で失敗したときは transport の終了として扱い、1 回の書込みが `WriteStall` を超えたときは書込みの停滞として扱います（どちらも猶予に入ります）。
 再接続は、同じ grant の新しい接続世代（1 から増やす）として開きます。
 
 - channel の commitment に世代を入れます。gateway は (LaunchID, 世代) の組を 1 回だけ使います。ホストの Session は、世代ごとに transport を 1 回だけ受け取ります。
 - 期限、許可鍵集合、操作範囲、境界は、世代が変わっても変えません。期限は延びません。
 - 接続世代は、今の `Binding.Generation` や常駐の世代とは別の値です。名前と wire で区別します。
-- 今の「1 grant に接続 1 回」（[agent channel](agent-channel.md)）を、「1 grant に、世代ごとに接続 1 回」に改めます。実装は [#425](https://github.com/O2-CONNECTIVE/Tether/issues/425) です。
+- 今の「1 grant に接続 1 回」（[agent channel](agent-channel.md)）を、「1 grant に、世代ごとに接続 1 回」に改めました。gateway と host のsource実装は [#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)、[PR #443](https://github.com/O2-CONNECTIVE/Tether/pull/443)、[PR #444](https://github.com/O2-CONNECTIVE/Tether/pull/444) です。
 
 ### 猶予の間の作業
 
@@ -453,6 +454,6 @@ ADR 0005 の承認（2026-11-19）と同じ PR で、次の文書を直しまし
 
 - [ADR 0003](adr/0003-owned-guest-workload.md): 「切断後の新規承認」と「取消・書込み失敗・切断・正規stopはcanonical issuer/authの失効へ結ぶ」に、ADR 0005 による改訂を注記しました。本文は書き換えていません。
 - [一時guestアカウント](temporary-guest-account.md): 「接続が切れた場合の再承認」の要件に、猶予を注記しました。
-- [agent channel](agent-channel.md): 「再接続・再試行・再開はありません」に注記しました。本文は、接続世代の実装（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）と同じ PR で改めます。
+- [agent channel](agent-channel.md): 「再接続・再試行・再開はありません」を、通常経路と`AllowReconnect` opt-inのレスキュー経路の接続世代の契約に改めました（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)、[PR #443](https://github.com/O2-CONNECTIVE/Tether/pull/443)、[PR #444](https://github.com/O2-CONNECTIVE/Tether/pull/444)）。
 - [製品目標](product/goals-and-acceptance.md) と [検証状態](tether-pilot-status.md): 「それまでは ADR 0003 が有効」の注記を外し、ADR 0005 とこの文書へつなぎました。
-- [文書索引](README.md) と [gateway](agent-gateway.md): この文書へのリンクを、承認済み・未実装として直しました。
+- [文書索引](README.md) と [gateway](agent-gateway.md): この文書へのリンクを、承認済みの設計として追加しました。source実装と製品入口の状態は各文書の現在地に記載しています。
