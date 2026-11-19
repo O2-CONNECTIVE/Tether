@@ -431,3 +431,32 @@ func TestRescueHostKeyIsKUntilTheReceptionEnds(t *testing.T) {
 		t.Fatal("HostKey signed after the reception ended")
 	}
 }
+
+// Between the request and the answer the gateway sends nothing; a frame there
+// is not the channel's, so the reception ends rather than hand it to a grant.
+func TestRescueHostEndsWhenTheGatewaySpeaksBeforeTheAnswer(t *testing.T) {
+	reg := newAnswerRegistry()
+	m := newMemTransport(newRescueHandler(t, reg))
+	servers := make(chan *memConn, 1)
+	m.prepare = func(_, server *memConn) { servers <- server }
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, m)
+	k := c.key
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(reg.end)
+	kWire := <-reg.key
+	sent := valuesFor(kWire)
+	reg.request <- sent.identity(sent.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	// One unmasked binary WebSocket frame from the gateway's side.
+	if _, err := (<-servers).Write([]byte{0x82, 5, 'e', 'a', 'r', 'l', 'y'}); err != nil {
+		t.Fatal(err)
+	}
+	expectDone(t, c)
+	expectDropped(t, k)
+	if _, err := c.Allow(dispatchFor(kWire)); err == nil {
+		t.Fatal("Allow after an early gateway frame was sent")
+	}
+	reg.requireNoAnswer(t)
+}
