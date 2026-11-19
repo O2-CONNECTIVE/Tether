@@ -570,6 +570,9 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 func (s *Standby) monitor(c *standbyCycle) {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
+	var reportedLease *agenttransport.ResidentSourceLease
+	var reported agentgateway.ResidentStandby
+	hasReported := false
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -653,7 +656,21 @@ func (s *Standby) monitor(c *standbyCycle) {
 		if !reflect.DeepEqual(before, s.observation) {
 			s.changedLocked()
 		}
+		var report agentgateway.ResidentStandby
+		sendReport := false
+		if lease != nil && (s.observation.Standby == "on" || s.observation.Standby == "stopping") {
+			report = agentgateway.ResidentStandby{Revision: s.observation.Revision, Standby: s.observation.Standby, Until: s.observation.StandbyUntil, Expired: s.observation.StandbyExpired}
+			sendReport = !hasReported || reportedLease != lease || reported.Standby != report.Standby || !reported.Until.Equal(report.Until) || reported.Expired != report.Expired
+		}
 		s.mu.Unlock()
+		if sendReport {
+			if s.reportStandby != nil {
+				s.reportStandby(lease, report)
+			} else {
+				_ = lease.ReportStandby(report)
+			}
+			reportedLease, reported, hasReported = lease, report, true
+		}
 		if work != nil && lease != nil && (owned.Unknown || owned.Owned == 0) {
 			var collection error
 			if owned.Unknown {

@@ -44,7 +44,8 @@ type residentPeer struct {
 	seen      map[string]bool
 	pending   *residentPending
 	intents   map[string]agentgateway.ResidentWorkBinding
-	ready     bool // guarded by Handler.mu
+	standby   *agentgateway.ResidentStandby // guarded by mu
+	ready     bool                          // guarded by Handler.mu
 	finished  chan struct{}
 	registrar Registrar
 }
@@ -213,6 +214,17 @@ func (p *residentPeer) readReceipts() error {
 		msg, e := residentRead(p.ctx, p.ws)
 		if e != nil {
 			return e
+		}
+		if residentMessageType(msg) == "resident_standby" {
+			report, valid := decodeResidentStandby(p.binding, msg, p.key)
+			if valid {
+				p.mu.Lock()
+				if p.standby == nil || report.Revision > p.standby.Revision {
+					p.standby = &report
+				}
+				p.mu.Unlock()
+			}
+			continue
 		}
 		if m, ok := residentFields(msg, "resident_collected", "generation", "sequence", "request_id", "cleanup", "signature"); ok {
 			p.mu.Lock()

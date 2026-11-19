@@ -76,7 +76,8 @@ func TestStandbyMonitorReportsTheObservedEndUnchanged(t *testing.T) {
 			if last.lease != lease || last.report.Standby != standby || !last.report.Until.Equal(o.StandbyUntil) || last.report.Expired != expired || last.report.Revision == 0 || last.report.Revision > o.Revision {
 				t.Fatalf("report %+v does not copy %+v", last.report, o)
 			}
-			if n > 1 && last.report.Revision <= sent[n-2].report.Revision {
+			// The gateway compares revisions within one control only.
+			if n > 1 && sent[n-2].lease == last.lease && last.report.Revision <= sent[n-2].report.Revision {
 				t.Fatal("revision did not grow", sent)
 			}
 			return last.report
