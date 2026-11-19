@@ -34,6 +34,9 @@ const ciPrincipal = "ci-member"
 const ciSubject = "ci-synthetic-user"
 const ciIssuer = "https://issuer.example.invalid/"
 
+// Both synthetic members carry both roles (#408); the other member is still refused the resident work.
+var ciRoles = []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}
+
 // Every acquired owner remains reachable even after a fatal assertion. There
 // is no automatic cleanup retry, process signal, or disposal after unknown.
 var ciGateways struct {
@@ -121,7 +124,7 @@ func newCIGateway(t *testing.T, root string, diag *ciDiagnostic) *ciGateway {
 	checked(err)
 	verifier, err := agentgateway.NewVerifier(agentgateway.VerifierConfig{Issuer: ciIssuer, Audience: g.resource, Scope: "ci", Types: []string{"at+jwt"}, JWKS: jwks})
 	checked(err)
-	g.gateway, err = agentgateway.New(agentgateway.Config{Verifier: verifier, Principals: []agentgateway.Principal{{Label: ciPrincipal, Subject: ciSubject, Signer: principal}, {Label: "ci-other-member", Subject: "ci-other-synthetic-user", Signer: otherPrincipal}}, Budgets: agentgateway.ChannelBudgets()})
+	g.gateway, err = agentgateway.New(agentgateway.Config{Verifier: verifier, Principals: []agentgateway.Principal{{Label: ciPrincipal, Subject: ciSubject, Roles: ciRoles, Signer: principal}, {Label: "ci-other-member", Subject: "ci-other-synthetic-user", Roles: ciRoles, Signer: otherPrincipal}}, Budgets: agentgateway.ChannelBudgets()})
 	checked(err)
 	g.handler, err = agenttransport.NewHandler(agenttransport.HandlerConfig{Endpoint: g.endpoint, Registrar: g.gateway, Budgets: agenttransport.DefaultBudgets(), Hosts: []agenttransport.EnrolledHost{{Label: ciHost, PublicKey: host.PublicKey(), Principals: []string{ciPrincipal}}}, ResidentPrincipals: []agenttransport.ResidentPrincipal{{Label: ciPrincipal, Signer: principal}}})
 	checked(err)
