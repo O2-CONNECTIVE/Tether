@@ -1045,3 +1045,14 @@ test("the rescue relay keeps registration's frame rate over its lifetime: a day 
   assert.equal(upstream.closed.code, 1008);
   assert.equal(rt.timers.size, 0);
 });
+
+test("the rescue relay keeps registration's 32 KiB message limit; only the lifetime and frame budget differ", async () => {
+  const { rt, server, upstream } = await relayedRescue();
+  server.emit("message", { data: new Uint8Array(LIMITS.message).buffer });
+  assert.equal(upstream.sent.length, 1);
+  server.emit("message", { data: new Uint8Array(LIMITS.message + 1).buffer });
+  assert.equal(upstream.sent.length, 1);
+  assert.equal(upstream.closed.code, 1009);
+  assert.equal(server.closed.code, 1009);
+  assert.equal(rt.timers.size, 0);
+});
