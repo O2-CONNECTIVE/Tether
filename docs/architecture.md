@@ -23,10 +23,10 @@ GUIから実セッションへの接続線はありません。
 
 | 部分 | 役割と境界 | 公開ソースまたは詳細 |
 |---|---|---|
-| 設定 | GUIで操作範囲を保存。`Settings.to_operation_policy()`で不変方針に変換するが、起動や認可はしない | [GUI](../src/rescue_host.py)、[設定と回復処理](../src/rescue_core.py) |
+| 設定 | `Settings`が操作範囲を保持する。旧Tkinter GUIは[#407](https://github.com/O2-CONNECTIVE/Tether/issues/407)で削除した。`Settings.to_operation_policy()`で不変方針に変換するが、起動や認可はしない | [設定と回復処理](../src/rescue_core.py) |
 | オフライン制御 | 固定宛先と許可操作IDを判定し、準備、有効化、失効、終了、期限、競合、再試行をモデル化 | [操作方針](../src/rescue_policy.py)、[期限モデル](../src/rescue_lease.py)、[モデルのAPIと限界](OFFLINE_BACKEND_MODEL.md) |
-| 開始ゲート | GUIとワーカーで実セッションの開始を拒否。設定や環境変数で解除できない | [require_secure_session_backend()](../src/rescue_core.py) |
-| 旧記録の回復 | 記録の検証と停止要求を補助。同一ユーザーの監視は安全境界や確実な失効機構ではない | [監視処理](../src/rescue_watchdog.py)、[回復と画面終了](recovery.md) |
+| 開始ゲート | 実セッションの開始を拒否する。設定や環境変数で解除できない。呼び出し元だった旧GUIとワーカーは削除済みで、開始処理は残っていない | [require_secure_session_backend()](../src/rescue_core.py) |
+| 旧記録の回復 | 記録の検証と停止要求を補助。同一ユーザーの監視は安全境界や確実な失効機構ではない。監視を起動していた旧GUIと`launch_watchdog`は削除済みで、`watchdog_main`の起動経路は残っていない | [監視処理](../src/rescue_watchdog.py)、[回復と画面終了](recovery.md) |
 | 将来の安全境界 | 実SSH、固定宛先接続、内側sshdの制約、保護されたWindows監督は未実装 | [バックエンド契約](SECURITY_BACKEND_CONTRACT.md) |
 
 ## 操作モードと実権限

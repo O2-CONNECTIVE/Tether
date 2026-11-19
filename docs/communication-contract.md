@@ -28,11 +28,11 @@
 
 ## 公開mainのGUIと旧CLI
 
-[GUI](../src/rescue_host.py)はワーカースレッドの結果をプロセス内のQueueへ入れ、150msごとに取り出します。
+旧Tkinter GUI（[#407](https://github.com/O2-CONNECTIVE/Tether/issues/407)で削除）は、ワーカースレッドの結果をプロセス内のQueueへ入れ、150msごとに取り出していました。
 `start_ok/error`、`stop_ok/error`、`info_ok/error` はPython内部のイベント名で、Goのeventではありません。
 エラーpayloadは例外の文字列で、安定したwire error codeはありません。
-新規開始はGUI入口とワーカー入口の両方で常時拒否します。
-残っている開始処理の実行可能性を、通信契約の提供済み機能に数えません。
+新規開始はGUI入口とワーカー入口の両方で常時拒否していました。
+GUIとともに開始処理も削除済みで、通信契約の提供済み機能に数えません。
 
 [旧CLIラッパー](../src/rescue_core.py)の `session info` はJSONの名前と状態を検証します。
 既知状態は `starting/ready/reconnecting/disconnected/ending/ended` です。
