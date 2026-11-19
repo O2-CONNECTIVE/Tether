@@ -51,7 +51,7 @@ func executeDiscovery(parent context.Context, path string, diagnostic io.Writer,
 	cfg, err := parseDiscoveryConfig(raw)
 	wipe(raw)
 	if err != nil {
-		report(diagnostic, "Invalid discovery configuration")
+		report(diagnostic, configRefusal(err, "Invalid discovery configuration"))
 		return 2
 	}
 	gwConfig, err := cfg.GatewayConfig()

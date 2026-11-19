@@ -48,6 +48,7 @@ var (
 type Principal struct {
 	Label   string
 	Subject string
+	Roles   []Role
 	Signer  ssh.Signer
 }
 
@@ -62,6 +63,7 @@ type Config struct {
 	Access         *AccessVerifier // Cloudflare Access assertion mode
 	Resource       string          // public MCP resource URL; OAuth audience may differ
 	Principals     []Principal
+	RoleAssurance  map[Role]Assurance   // IdP strength per role; a missing role requires AssuranceAny
 	AllowedOrigins []string             // exact Origin values; requests with any other Origin are refused
 	Budgets        agentchannel.Budgets // every agent channel's budgets; see ChannelBudgets
 	CallTimeout    time.Duration        // one wire round trip; zero selects mcpadapter.DefaultCallTimeout
@@ -81,6 +83,8 @@ type Dispatch = agentchannel.Dispatch
 
 type principal struct {
 	label, subject string
+	rescue         bool // RoleRescueOperator: the rescue connection (Connect)
+	resident       bool // RoleResidentOwner: a pair slot and resident work
 	signer         ssh.Signer
 	route          *route // the current live route, guarded by Gateway.mu
 	connecting     bool
@@ -183,6 +187,9 @@ func New(cfg Config) (*Gateway, error) {
 	if g.clock == nil {
 		g.clock = time.Now
 	}
+	if err := checkAssurance(cfg.RoleAssurance); err != nil {
+		return nil, err
+	}
 	// In Access mode discovery belongs to the Access edge (Managed OAuth); the
 	// origin publishes no metadata of its own that could name another issuer.
 	if cfg.Verifier != nil {
@@ -196,14 +203,18 @@ func New(cfg Config) (*Gateway, error) {
 		}
 		g.origins[o] = true
 	}
-	for _, p := range cfg.Principals {
+	for i, p := range cfg.Principals {
 		if !validLabel(p.Label) || !printable(p.Subject) || g.byLabel[p.Label] != nil || g.bySubject[p.Subject] != nil {
 			return nil, ErrConfig
 		}
 		if p.Signer != nil && (cfg.DiscoveryOnly || p.Signer.PublicKey().Type() != ssh.KeyAlgoED25519) {
 			return nil, ErrConfig
 		}
-		pr := &principal{label: p.Label, subject: p.Subject, signer: p.Signer}
+		rescue, resident, ok := principalRoles(p.Roles)
+		if !ok {
+			return nil, rolesError(i)
+		}
+		pr := &principal{label: p.Label, subject: p.Subject, rescue: rescue, resident: resident, signer: p.Signer}
 		g.byLabel[p.Label], g.bySubject[p.Subject] = pr, pr
 	}
 	g.ctx, g.cancel = context.WithCancel(context.Background())
@@ -230,7 +241,10 @@ func validLabel(s string) bool {
 // it the principal's route. It refuses, closing conn, an unknown label, a
 // principal without a signer, a principal that already has or is acquiring a
 // route, a profile other than the Mac current user, and any LaunchID already
-// registered in this process (no resume). A refused or failed registration
+// registered in this process (no resume). It is the rescue connection: it
+// also refuses a principal without RoleRescueOperator and a dispatch from a
+// resident host (a pair slot or an enrolled resident), whoever owns it. A
+// refused or failed registration
 // consumes that LaunchID only once opening was admitted. A pre-open refusal
 // closes the supplied stream; it never resumes the Mac approval.
 // The gateway never issues or extends a grant.
@@ -243,11 +257,11 @@ func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
 		}
 		return ErrRefused
 	}
-	_, e := g.connect(label, d, conn)
+	_, e := g.connect(label, d, conn, true)
 	return e
 }
 
-func (g *Gateway) connect(label string, d Dispatch, conn net.Conn) (*route, error) {
+func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) (*route, error) {
 	if g == nil || conn == nil {
 		if conn != nil {
 			_ = conn.Close()
@@ -266,7 +280,9 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn) (*route, erro
 		refusal = ErrRefused
 	case p == nil || p.signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "":
 		refusal = ErrConfig
-	case !g.dispatchHostAllowedLocked(p, d.HostKey):
+	case rescue && !p.rescue:
+		refusal = ErrRefused
+	case !g.dispatchHostAllowedLocked(p, d.HostKey, rescue):
 		refusal = ErrRefused
 	case reused || p.route != nil || p.connecting || len(g.launches) >= MaxAttachments:
 		refusal = ErrRefused
@@ -293,7 +309,7 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn) (*route, erro
 		g.retire(r)
 		return r, ErrClosed
 	}
-	if !g.dispatchHostAllowedLocked(p, d.HostKey) {
+	if !g.dispatchHostAllowedLocked(p, d.HostKey, rescue) {
 		g.mu.Unlock()
 		g.retire(r)
 		return nil, ErrRefused
@@ -305,13 +321,32 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn) (*route, erro
 	return r, nil
 }
 
-func (g *Gateway) dispatchHostAllowedLocked(p *principal, key []byte) bool {
+// dispatchHostAllowedLocked never admits a resident host for a rescue
+// connection: its key and grants belong to the resident owner's own use.
+func (g *Gateway) dispatchHostAllowedLocked(p *principal, key []byte, rescue bool) bool {
 	if g.hosts == nil {
 		return true
 	}
-	for _, slot := range g.hosts {
+	for name, slot := range g.hosts {
+		if rescue && g.residentHostLocked(name, slot) {
+			continue
+		}
 		if slot.principals[p.label] && !slot.replacing && len(slot.key) != 0 && bytes.Equal(slot.key, key) {
 			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) residentHostLocked(name string, slot *hostSlot) bool {
+	if slot.paired != nil {
+		return true
+	}
+	if g.resident != nil {
+		for _, e := range g.resident.entries {
+			if e.enrollment.HostLabel == name {
+				return true
+			}
 		}
 	}
 	return false

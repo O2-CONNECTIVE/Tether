@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -64,6 +66,10 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	var err error
 	var ok bool
 	if c.gateway, err = agentgateway.ParseConfig(m["gateway"]); err != nil {
+		var re *agentgateway.RoleError
+		if errors.As(err, &re) {
+			return localConfig{}, err
+		}
 		return localConfig{}, errConfig
 	}
 	if c.endpoint, ok = text(m["registration_endpoint"], maxEndpointBytes); !ok || !distinctEndpoints(c.gateway.Resource, c.endpoint) {
@@ -80,8 +86,8 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 		return localConfig{}, errConfig
 	}
 	if raw, present := m["resident"]; present {
-		if c.resident, ok = residentEnrollments(raw, c.hosts); !ok {
-			return localConfig{}, errConfig
+		if c.resident, err = residentEnrollments(raw, c.hosts, c.gateway.Principals); err != nil {
+			return localConfig{}, err
 		}
 	}
 	if raw, present := m["resident_only"]; present {
@@ -153,7 +159,32 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 	if paired && c.pairing == nil {
 		return localConfig{}, errConfig
 	}
+	if err := hostRoles(c.hosts, c.resident, c.gateway.Principals); err != nil {
+		return localConfig{}, err
+	}
 	return c, nil
+}
+
+// hostRoles splits the hosts by use. A resident host (an enrolled resident or
+// a pair slot) serves only its owner: the gateway never opens a rescue
+// connection there, so listing anyone else would only hide that refusal.
+// Every other host serves the rescue connection, so each principal it lists
+// needs RoleRescueOperator.
+func hostRoles(hosts []agenttransport.EnrolledHost, resident []agentgateway.ResidentEnrollment, principals []agentgateway.Principal) error {
+	for i, h := range hosts {
+		if slices.ContainsFunc(resident, func(r agentgateway.ResidentEnrollment) bool { return r.HostLabel == h.Label }) {
+			if len(h.Principals) != 1 {
+				return &agentgateway.RoleError{Reason: fmt.Sprintf("hosts の %d 番目は常駐の host なので、principals には常駐の本人 1 人だけを書いてください。レスキューには別の host を使います", i+1)}
+			}
+			continue
+		}
+		for j, label := range h.Principals {
+			if !slices.Contains(principalByLabel(principals, label).Roles, agentgateway.RoleRescueOperator) {
+				return &agentgateway.RoleError{Reason: fmt.Sprintf("hosts の %d 番目はレスキュー用の host ですが、その principals の %d 番目に rescue_operator の役割がありません", i+1, j+1)}
+			}
+		}
+	}
+	return nil
 }
 
 // containsNormalType normalizes like the token verifier does (lower case,
@@ -179,24 +210,25 @@ func pairingPathConflict(resource, endpoint string) bool {
 // residentEnrollments selects an existing, unambiguous principal/host pair.
 // The fixed operation is explicit: no command, timeout, grant or policy input
 // is accepted here. All validation finishes before any native key read.
-func residentEnrollments(raw json.RawMessage, hosts []agenttransport.EnrolledHost) ([]agentgateway.ResidentEnrollment, bool) {
+// Only a RoleResidentOwner principal may be enrolled.
+func residentEnrollments(raw json.RawMessage, hosts []agenttransport.EnrolledHost, principals []agentgateway.Principal) ([]agentgateway.ResidentEnrollment, error) {
 	items, ok := array(raw, agentgateway.MaxPrincipals)
 	if !ok || len(items) == 0 {
-		return nil, false
+		return nil, errConfig
 	}
 	entries := make([]agentgateway.ResidentEnrollment, 0, len(items))
 	seen := map[string]bool{}
-	for _, item := range items {
+	for n, item := range items {
 		m, ok := members(item, "host_label", "principal_label", "operation")
 		if !ok {
-			return nil, false
+			return nil, errConfig
 		}
 		host, hostOK := text(m["host_label"], maxLabelBytes)
 		principal, principalOK := text(m["principal_label"], maxLabelBytes)
 		operation, operationOK := text(m["operation"], 64)
 		wipeMembers(m)
 		if !hostOK || !principalOK || !operationOK || operation != agentgateway.ResidentFixedID || seen[principal] {
-			return nil, false
+			return nil, errConfig
 		}
 		var selected *agenttransport.EnrolledHost
 		count := 0
@@ -211,12 +243,15 @@ func residentEnrollments(raw json.RawMessage, hosts []agenttransport.EnrolledHos
 			}
 		}
 		if count != 1 || selected == nil {
-			return nil, false
+			return nil, errConfig
+		}
+		if !slices.Contains(principalByLabel(principals, principal).Roles, agentgateway.RoleResidentOwner) {
+			return nil, &agentgateway.RoleError{Reason: fmt.Sprintf("resident の %d 番目の principal に resident_owner の役割がありません。常駐とペア登録は resident_owner だけが使えます", n+1)}
 		}
 		seen[principal] = true
 		entries = append(entries, agentgateway.ResidentEnrollment{HostLabel: host, PrincipalLabel: principal})
 	}
-	return entries, true
+	return entries, nil
 }
 
 // principalKeys requires exactly one key reference per configured principal.

@@ -33,7 +33,7 @@ func TestDiscoveryResidentGuardPrecedesOtherwiseValidEnrollment(t *testing.T) {
 	// White-box defense-in-depth test: New forbids this signer in discovery.
 	// Identical otherwise-valid composition succeeds only in ordinary mode.
 	for _, discovery := range []bool{false, true} {
-		g := &Gateway{discoveryOnly: discovery, byLabel: map[string]*principal{"member-1": {label: "member-1", signer: signer}}}
+		g := &Gateway{discoveryOnly: discovery, byLabel: map[string]*principal{"member-1": {label: "member-1", rescue: true, resident: true, signer: signer}}}
 		if err := g.ConfigureHosts([]HostEntry{{Label: "host-1", Key: host.PublicKey().Marshal(), Principals: []string{"member-1"}}}); err != nil {
 			t.Fatal(err)
 		}

@@ -24,9 +24,9 @@ func legacyEnrollmentFixture(t *testing.T) (*Gateway, []ResidentEnrollment) {
 	template, s, host, _ := residentEvidenceRig(t)
 	defer template.Close(context.Background())
 	g, err := New(Config{Verifier: template.verifier, Budgets: template.budgets,
-		Principals: []Principal{{Label: "member1", Subject: "subject", Signer: s.principal.signer},
-			{Label: "member2", Subject: "subject2", Signer: s.principal.signer},
-			{Label: "unsigned", Subject: "subject3"}}})
+		Principals: []Principal{{Label: "member1", Subject: "subject", Roles: []Role{RoleRescueOperator, RoleResidentOwner}, Signer: s.principal.signer},
+			{Label: "member2", Subject: "subject2", Roles: []Role{RoleRescueOperator, RoleResidentOwner}, Signer: s.principal.signer},
+			{Label: "unsigned", Subject: "subject3", Roles: []Role{RoleRescueOperator, RoleResidentOwner}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

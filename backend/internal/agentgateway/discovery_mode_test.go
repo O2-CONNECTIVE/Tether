@@ -20,7 +20,7 @@ func newDiscoveryRig(t *testing.T, access bool) *rig {
 		cfg.Access, cfg.Resource = accessVerifier(t), testResource
 	}
 	for i, subject := range subjects {
-		cfg.Principals = append(cfg.Principals, agentgateway.Principal{Label: label(i), Subject: subject})
+		cfg.Principals = append(cfg.Principals, agentgateway.Principal{Label: label(i), Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Subject: subject})
 	}
 	gw, err := agentgateway.New(cfg)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestExplicitDiscoveryRetainsAuthMembershipAndSessionIsolation(t *testing.T)
 }
 
 func TestExplicitDiscoveryForbidsSignersAndRegistration(t *testing.T) {
-	cfg := agentgateway.Config{DiscoveryOnly: true, Verifier: verifier(t), Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Signer: fixtureSigner(t, 0x21)}}}
+	cfg := agentgateway.Config{DiscoveryOnly: true, Verifier: verifier(t), Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Signer: fixtureSigner(t, 0x21)}}}
 	if gw, err := agentgateway.New(cfg); err == nil || gw != nil {
 		t.Fatal("discovery accepted signer")
 	}

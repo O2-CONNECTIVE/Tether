@@ -80,6 +80,11 @@ type fixtureResidentAddr struct{}
 
 func (fixtureResidentAddr) Network() string { return "memory" }
 func (fixtureResidentAddr) String() string  { return "memory" }
+func residentEvidenceDeskKey() []byte {
+	desk, _ := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{6}, 32)))
+	return desk.PublicKey().Marshal()
+}
+
 func residentEvidenceRig(t *testing.T, pairing ...bool) (*Gateway, *residentSession, ssh.Signer, *residentControlFixture) {
 	t.Helper()
 	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, 32))
@@ -91,7 +96,7 @@ func residentEvidenceRig(t *testing.T, pairing ...bool) (*Gateway, *residentSess
 	signer, _ := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{8}, 32)))
 	host, _ := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32)))
 	budgets := agentchannel.Budgets{Handshake: time.Second, HeartbeatInterval: 10 * time.Millisecond, HeartbeatTimeout: 20 * time.Millisecond, ReadStall: 100 * time.Millisecond, WriteStall: 50 * time.Millisecond, Cleanup: 50 * time.Millisecond}
-	g, e := New(Config{Verifier: verifier, Principals: []Principal{{Label: "member1", Subject: "subject", Signer: signer}}, Budgets: budgets})
+	g, e := New(Config{Verifier: verifier, Principals: []Principal{{Label: "member1", Subject: "subject", Roles: []Role{RoleRescueOperator, RoleResidentOwner}, Signer: signer}}, Budgets: budgets})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -107,7 +112,9 @@ func residentEvidenceRig(t *testing.T, pairing ...bool) (*Gateway, *residentSess
 			e = g.ConfigurePairing(PairingConfig{Verifier: pairingVerifier, Endpoint: pairingEndpoint, RegistrationEndpoint: "wss://example.test/register", Records: []PairRecord{{HostLabel: "host1", HostKey: host.PublicKey().Marshal(), Issuer: "https://issuer.example.invalid/", Subject: "subject"}}})
 		}
 	} else {
-		e = g.ConfigureHosts([]HostEntry{{Label: "host1", Key: host.PublicKey().Marshal(), Principals: []string{"member1"}}})
+		// desk1 is a rescue host of the same principal: a rescue connection
+		// never reaches the resident host1 (#408).
+		e = g.ConfigureHosts([]HostEntry{{Label: "host1", Key: host.PublicKey().Marshal(), Principals: []string{"member1"}}, {Label: "desk1", Key: residentEvidenceDeskKey(), Principals: []string{"member1"}}})
 	}
 	if e != nil {
 		t.Fatal(e)
@@ -318,7 +325,9 @@ func TestResidentPreOpenRefusalPreservesOriginalFailedStreamClose(t *testing.T) 
 	b.Sequence = 1
 	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "other-launch", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
 	other := make(chan error, 1)
-	go func() { other <- g.Connect("member1", d, legacy) }()
+	rescue := d
+	rescue.HostKey = residentEvidenceDeskKey()
+	go func() { other <- g.Connect("member1", rescue, legacy) }()
 	select {
 	case <-legacy.started:
 	case <-time.After(time.Second):

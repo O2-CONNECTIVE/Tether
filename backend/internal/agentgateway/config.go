@@ -55,6 +55,7 @@ type FileConfig struct {
 	Access          AccessVerifierConfig // ModeCloudflareAccess only
 	AccessKeySource string               // empty: static access_keys; cloudflare_certs: bounded HTTPS refresh
 	Principals      []Principal          // Signer is never read from the file
+	RoleAssurance   map[Role]Assurance   // optional "role_assurance"
 	AllowedOrigins  []string
 }
 
@@ -77,13 +78,14 @@ func (c FileConfig) PairingVerifier(audience string, types []string) (*Verifier,
 // Members of each mode. The sets share only the mode-neutral members, so a
 // document can never mix the two modes' trust inputs.
 var (
-	oauthMembers  = []string{"listen", "deployment_profile", "auth_mode", "resource", "audience", "issuer", "scope", "token_types", "leeway_seconds", "jwks", "jwks_url", "principals", "allowed_origins"}
-	accessMembers = []string{"listen", "deployment_profile", "auth_mode", "resource", "access_issuer", "access_aud", "access_keys", "access_key_source", "leeway_seconds", "principals", "allowed_origins"}
+	oauthMembers  = []string{"listen", "deployment_profile", "auth_mode", "resource", "audience", "issuer", "scope", "token_types", "leeway_seconds", "jwks", "jwks_url", "principals", "role_assurance", "allowed_origins"}
+	accessMembers = []string{"listen", "deployment_profile", "auth_mode", "resource", "access_issuer", "access_aud", "access_keys", "access_key_source", "leeway_seconds", "principals", "role_assurance", "allowed_origins"}
 )
 
 // ParseConfig reads the strict JSON configuration. "auth_mode" is required and
 // selects the member set; every member of that set is required except
-// deployment_profile and allowed_origins. Access requires either access_keys
+// deployment_profile, role_assurance and allowed_origins. Every principal names
+// its roles. Access requires either access_keys
 // or access_key_source="cloudflare_certs", never both; unknown (including the other
 // mode's), duplicate or null members are refused.
 func ParseConfig(raw []byte) (FileConfig, error) {
@@ -140,6 +142,16 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 	if raw, has := m["allowed_origins"]; has {
 		ok = ok && decodeInto(raw, &c.AllowedOrigins)
 	}
+	if raw, has := m["role_assurance"]; has {
+		f, err := agentwire.Fields(raw, string(RoleRescueOperator), string(RoleResidentOwner))
+		ok = ok && err == nil && len(f) != 0
+		c.RoleAssurance = map[Role]Assurance{}
+		for role, v := range f {
+			var a Assurance
+			ok = ok && firstByte(v) == '"' && decodeInto(v, &a)
+			c.RoleAssurance[Role(role)] = a
+		}
+	}
 	c.Profile = ProfileLoopback
 	if raw, has := m["deployment_profile"]; has {
 		ok = ok && decodeInto(raw, &c.Profile)
@@ -149,11 +161,15 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 		leeway < 0 || leeway > int(MaxLeeway/time.Second) {
 		return FileConfig{}, ErrConfig
 	}
-	for _, item := range people {
-		pm, err := agentwire.Fields(item, "label", "subject")
+	for i, item := range people {
+		pm, err := agentwire.Fields(item, "label", "subject", "roles")
 		var p Principal
 		if err != nil || !decodeInto(pm["label"], &p.Label) || !decodeInto(pm["subject"], &p.Subject) {
 			return FileConfig{}, ErrConfig
+		}
+		// New checks the values; only the shape is read here.
+		if firstByte(pm["roles"]) != '[' || !decodeInto(pm["roles"], &p.Roles) {
+			return FileConfig{}, rolesError(i)
 		}
 		c.Principals = append(c.Principals, p)
 	}
@@ -181,7 +197,7 @@ func ParseConfig(raw []byte) (FileConfig, error) {
 // Config naming it, the principals (without signers) and the origins. Trusted
 // composition adds signers and budgets before New.
 func (c FileConfig) GatewayConfig() (Config, error) {
-	cfg := Config{Resource: c.Resource, Principals: append([]Principal(nil), c.Principals...), AllowedOrigins: c.AllowedOrigins}
+	cfg := Config{Resource: c.Resource, Principals: append([]Principal(nil), c.Principals...), RoleAssurance: c.RoleAssurance, AllowedOrigins: c.AllowedOrigins}
 	var err error
 	switch c.Mode {
 	case ModeOAuthBearer:

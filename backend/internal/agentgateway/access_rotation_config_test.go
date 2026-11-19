@@ -18,7 +18,7 @@ func TestConfiguredAccessRotationPolicyAndFreshness(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{
 		"listen": "127.0.0.1:8787", "auth_mode": "cloudflare_access", "resource": "https://gateway.example.invalid/mcp",
 		"access_issuer": rotationIssuer, "access_aud": "synthetic-aud", "access_key_source": "cloudflare_certs", "leeway_seconds": 0,
-		"principals": []any{map[string]any{"label": "owner", "subject": "synthetic-subject"}},
+		"principals": []any{map[string]any{"label": "owner", "subject": "synthetic-subject", "roles": []string{"rescue_operator", "resident_owner"}}},
 	})
 	c, err := ParseConfig(raw)
 	if err != nil {

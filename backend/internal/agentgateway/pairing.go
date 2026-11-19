@@ -76,7 +76,9 @@ func (g *Gateway) ConfigureHosts(hosts []HostEntry) error {
 		slot := &hostSlot{principals: map[string]bool{}}
 		for _, label := range h.Principals {
 			p := g.byLabel[label]
-			if p == nil || slot.principals[label] || (h.Paired && p.signer == nil) {
+			// A pair slot replaces its host key on its owner's IdP login
+			// alone, so only a resident owner may hold one.
+			if p == nil || slot.principals[label] || (h.Paired && (p.signer == nil || !p.resident)) {
 				return ErrConfig
 			}
 			slot.principals[label] = true

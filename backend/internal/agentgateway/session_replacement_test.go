@@ -53,7 +53,10 @@ func newCapacityRig(t *testing.T) *capacityRig {
 		{HostLabel: "host1", PrincipalLabel: label(0)},
 		{HostLabel: "host2", PrincipalLabel: label(1)},
 	}
-	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "host1", Key: fixtureSigner(t, 0x61).PublicKey().Marshal(), Principals: []string{label(0)}}, {Label: "host2", Key: fixtureSigner(t, 0x62).PublicKey().Marshal(), Principals: []string{label(1)}}}); err != nil {
+	// approve(0) presents the 0x61 host key. A rescue connection never
+	// reaches a resident host (#408), so that key is a separate rescue host
+	// of the same principal and the resident host has its own key.
+	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "host1", Key: fixtureSigner(t, 0x71).PublicKey().Marshal(), Principals: []string{label(0)}}, {Label: "host2", Key: fixtureSigner(t, 0x62).PublicKey().Marshal(), Principals: []string{label(1)}}, {Label: "desk1", Key: fixtureSigner(t, 0x61).PublicKey().Marshal(), Principals: []string{label(0)}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.gw.ConfigureResident("wss://example.test/register", control, entries); err != nil {

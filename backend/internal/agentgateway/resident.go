@@ -129,6 +129,7 @@ func (g *Gateway) hostReplacingLocked(label string) bool {
 
 // ConfigureResident is one-shot, before any MCP session or work. A principal
 // has exactly one explicitly enrolled host here; ambiguous mappings refuse.
+// Only a RoleResidentOwner principal may be enrolled.
 func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, entries []ResidentEnrollment) error {
 	if g == nil || g.discoveryOnly || control == nil || len(entries) == 0 || len(entries) > MaxPrincipals || len(endpoint) > 512 {
 		return ErrConfig
@@ -149,7 +150,7 @@ func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, en
 		}
 		g.mu.Unlock()
 		validStaticKey := err == nil && key.Type() == ssh.KeyAlgoED25519
-		if p == nil || p.signer == nil || !validLabel(e.HostLabel) || (!validStaticKey && !pairedSlot) || setup.entries[p] != nil {
+		if p == nil || p.signer == nil || !p.resident || !validLabel(e.HostLabel) || (!validStaticKey && !pairedSlot) || setup.entries[p] != nil {
 			return ErrConfig
 		}
 		setup.entries[p] = &residentEntry{enrollment: e, works: map[string]*residentWork{}}
@@ -346,7 +347,7 @@ func (g *Gateway) ConnectResident(label string, d Dispatch, b ResidentWorkBindin
 	}
 	defer close(w.registrationDone)
 	defer g.watchers.Done()
-	rt, err := g.connect(label, d, w.registrationConn)
+	rt, err := g.connect(label, d, w.registrationConn, false)
 	if rt == nil && err != nil {
 		if closed, closeErr := w.registrationConn.result(); !closed || closeErr != nil {
 			err = errors.Join(err, agentchannel.ErrCleanupUnknown, closeErr)
