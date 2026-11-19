@@ -3,6 +3,7 @@ package agenttransport
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -524,5 +526,137 @@ func TestRescueHostKeyNeverReachesTheDisk(t *testing.T) {
 	}
 	if !generates {
 		t.Fatal("no rescue_*.go file makes K, so this inspection covers nothing")
+	}
+}
+
+// closingPin turns the reception OFF while the host checks the result's
+// signature: the window between the last read and Open's return.
+type closingPin struct {
+	ssh.PublicKey
+	c **RescueClient
+}
+
+func (p closingPin) CryptoPublicKey() crypto.PublicKey {
+	_ = (*p.c).Close()
+	return p.PublicKey.(ssh.CryptoPublicKey).CryptoPublicKey()
+}
+
+// 受付 OFF wins over a code still being verified: the user turned the
+// reception off, so the host must not show a code for it.
+func TestRescueOffDuringOpenShowsNoCode(t *testing.T) {
+	now := time.Now()
+	reg := newRescueRecorder(newRescueGateway(t, &now))
+	var c *RescueClient
+	c = newRescueClient(t, []ssh.PublicKey{closingPin{PublicKey: rescueIdentity.PublicKey(), c: &c}}, newMemTransport(newRescueHandler(t, reg)))
+	code, err := openRescue(t, c)
+	if code != "" || !errors.Is(err, ErrClosed) {
+		t.Fatalf("Open = %q, %v; want no code and ErrClosed", code, err)
+	}
+	opened := <-reg.opened
+	reg.expectEnded(t, opened.ID)
+	expectDone(t, c)
+}
+
+// rescueProtocol rewrites the upgrade response's subprotocol, as a wrong
+// server behind the endpoint would answer.
+type rescueProtocol struct {
+	*memTransport
+	set func(http.Header)
+}
+
+func (p rescueProtocol) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := p.memTransport.RoundTrip(r)
+	if resp != nil {
+		p.set(resp.Header)
+	}
+	return resp, err
+}
+
+// The host speaks only rescue-agent-reception.v1, exactly, as the Mac
+// registration client checks its own subprotocol.
+func TestRescueHostRequiresTheExactSubprotocol(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(http.Header)
+		ok   bool
+	}{
+		{"the reception subprotocol", func(http.Header) {}, true},
+		{"no subprotocol", func(h http.Header) { h.Del("Sec-WebSocket-Protocol") }, false},
+		{"another letter case", func(h http.Header) { h.Set("Sec-WebSocket-Protocol", strings.ToUpper(RescueSubprotocol)) }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			reg := newRescueRecorder(newRescueGateway(t, &now))
+			m := newMemTransport(newRescueHandler(t, reg))
+			c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, m)
+			c.transport = func(own acquirer) http.RoundTripper {
+				m.own = own
+				m.track = own.attach
+				return rescueProtocol{m, tc.set}
+			}
+			code, err := openRescue(t, c)
+			if tc.ok != (err == nil && code != "") {
+				t.Fatalf("Open = %q, %v", code, err)
+			}
+			if !tc.ok {
+				expectDone(t, c)
+			}
+		})
+	}
+}
+
+// A used host refuses another Open with ErrUsed, or ErrClosed once 受付 OFF
+// came first, without racing Close (run with -race).
+func TestRescueClientReopenAndCloseDoNotRace(t *testing.T) {
+	for range 50 {
+		c, err := NewRescueClient(RescueClientConfig{Endpoint: rescueEndpoint, Pins: []ssh.PublicKey{rescueIdentity.PublicKey()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.used = true
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = c.Close()
+		}()
+		_, err = c.Open(context.Background())
+		wg.Wait()
+		if !errors.Is(err, ErrUsed) && !errors.Is(err, ErrClosed) {
+			t.Fatalf("Open = %v, want ErrUsed or ErrClosed", err)
+		}
+	}
+}
+
+// While a dropped connection's close is still unconfirmed, Close does not
+// report a clean end, as the registration Handler keeps its transports until
+// their close is confirmed. Once the close finishes, Close succeeds.
+func TestRescueCloseWaitsForAConnectionStillClosing(t *testing.T) {
+	now := time.Now()
+	reg := newRescueRecorder(newRescueGateway(t, &now))
+	h := newRescueHandler(t, reg)
+	m := newMemTransport(h)
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	m.prepare = func(_, server *memConn) { server.setGate(gate) }
+	t.Cleanup(release) // before the handler's Close
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, m)
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	opened := <-reg.opened
+	_ = c.Close()
+	reg.expectEnded(t, opened.ID)
+	short, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := h.Close(short); err == nil {
+		t.Fatal("Close reported a clean end while the connection's close was unconfirmed")
+	}
+	release()
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if err := h.Close(ctx); err != nil {
+		t.Fatalf("Close after the connection closed = %v", err)
 	}
 }

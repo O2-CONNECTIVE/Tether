@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -334,5 +335,29 @@ func TestRescueReceptionNeedsAnEd25519IdentityKey(t *testing.T) {
 	cfg.RescueSigner = rescueIdentity
 	if _, err := New(cfg); !errors.Is(err, ErrConfig) {
 		t.Fatalf("New with an identity key in discovery only = %v, want ErrConfig", err)
+	}
+}
+
+// A closed gateway takes no reception, as every other gateway operation
+// refuses once Close began.
+func TestRescueReceptionClosesWithTheGateway(t *testing.T) {
+	now := time.Now()
+	g := rescueReceptionGateway(t, &now)
+	if err := g.AdmitRescue(); err != nil {
+		t.Fatalf("AdmitRescue before Close = %v", err)
+	}
+	if _, err := g.OpenRescue(newRescueRequest(t, g, rescueHostKey(0))); err != nil {
+		t.Fatalf("OpenRescue before Close = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := g.Close(ctx); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	if err := g.AdmitRescue(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("AdmitRescue after Close = %v, want ErrClosed", err)
+	}
+	if _, err := g.OpenRescue(newRescueRequest(t, g, rescueHostKey(1))); !errors.Is(err, ErrClosed) {
+		t.Fatalf("OpenRescue after Close = %v, want ErrClosed", err)
 	}
 }

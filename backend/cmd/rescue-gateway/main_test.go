@@ -711,3 +711,41 @@ func TestEntryLeavesTheRescueRouteUnmountedWithoutTheIdentityKey(t *testing.T) {
 		t.Fatal("shutdown did not finish")
 	}
 }
+
+// The reception route is fixed, so with rescue_identity_key it would shadow an
+// MCP resource or a registration route on the same path. Like the pair route,
+// the composition is refused before any key is read. Without the identity key
+// the same paths still serve (the positive control).
+func TestRescueRouteConflictStopsBeforeAnyKeyRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(map[string]any)
+	}{
+		{"the MCP resource", func(doc map[string]any) {
+			doc["gateway"].(map[string]any)["resource"] = "https://gateway.example.invalid" + agentgateway.RescuePath
+		}},
+		{"the registration route", func(doc map[string]any) {
+			doc["registration_endpoint"] = "wss://gateway.example.invalid" + agentgateway.RescuePath
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, identity := range []bool{false, true} {
+				doc := localDoc(t)
+				tc.edit(doc)
+				if identity {
+					doc["rescue_identity_key"] = map[string]any{"path": `C:\Users\synthetic\rescue\keys\identity`, "fingerprint": fingerprint(t, 0x13)}
+				}
+				r := newRecorder(t, encode(t, doc))
+				r.signers[fingerprint(t, 0x13)] = signerOf(t, 0x13)
+				var diagnostic bytes.Buffer
+				code := execute(context.Background(), []string{"-config", configPath}, &diagnostic, r.deps())
+				if identity && (code != 2 || r.trace() != "read") {
+					t.Fatalf("with the identity key: exit=%d trace=%q", code, r.trace())
+				}
+				if !identity && !strings.Contains(r.trace(), "listen") {
+					t.Fatalf("without the identity key: exit=%d trace=%q", code, r.trace())
+				}
+			}
+		})
+	}
+}
