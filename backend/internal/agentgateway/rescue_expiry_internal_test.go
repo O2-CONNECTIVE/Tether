@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 type rescueExpiryClock struct {
@@ -30,6 +31,27 @@ func (c *rescueExpiryClock) Add(d time.Duration) {
 	c.mu.Lock()
 	c.now = c.now.Add(d)
 	c.mu.Unlock()
+}
+
+// MoveWall models an operating-system wall-clock correction while preserving
+// the monotonic reading returned by time.Now. time.Time intentionally has no
+// public constructor for this combination.
+func (c *rescueExpiryClock) MoveWall(d time.Duration) {
+	type timeLayout struct {
+		wall uint64
+		ext  int64
+		loc  *time.Location
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	shifted := c.now.Add(d)
+	from := (*timeLayout)(unsafe.Pointer(&c.now))
+	to := (*timeLayout)(unsafe.Pointer(&shifted))
+	if from.wall&(uint64(1)<<63) == 0 || to.wall&(uint64(1)<<63) == 0 {
+		panic("rescue expiry test clock requires monotonic readings")
+	}
+	to.ext = from.ext
+	c.now = shifted
 }
 
 func waitRescueDone(t *testing.T, done <-chan struct{}, label string) {

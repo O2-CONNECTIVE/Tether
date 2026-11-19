@@ -169,6 +169,21 @@ type resumeMemConn struct {
 	rest      []byte
 }
 
+type gatedCloseConn struct {
+	net.Conn
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (c *gatedCloseConn) Close() error {
+	c.once.Do(func() {
+		close(c.started)
+		<-c.release
+	})
+	return c.Conn.Close()
+}
+
 func resumeMemPair() (*resumeMemConn, *resumeMemConn) {
 	ab, ba := make(chan []byte, 128), make(chan []byte, 128)
 	closedA, closedB := make(chan struct{}), make(chan struct{})
@@ -439,6 +454,7 @@ func TestGatewayConnectRejectsAnotherPrincipalsResume(t *testing.T) {
 	record.clientKey = clientPrivate
 	record.answered = true
 	record.active = true
+	record.awaitingAnswer = false
 	record.connectionGeneration = 1
 	record.dispatch = cloneRescueDispatch(d)
 	g.rescue.mu.Unlock()
@@ -755,6 +771,205 @@ func TestAnswerRescueDoesNotPublishAfterReceptionEndsDuringSSH(t *testing.T) {
 	}
 }
 
+func TestAnswerRescueDoesNotPublishAfterClientEndsBeforePublication(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(39)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d := resumeDispatch(t, 1, key, clientPublic)
+	res, identity, _ := seedRescueAnswer(t, g, key, clientPrivate, d)
+	client, host := resumeMemPair()
+	defer host.Close()
+	opened, payloads := startFakeChannelHostWithData(t, host, key, clientPublic, d.Binding.Grant.Identity.LaunchID)
+	defer close(payloads)
+	answer := signAllowedAnswer(t, g, key, res.ID, identity, d)
+	g.rescueBeforePublishHook = func(r *route) {
+		select {
+		case <-opened:
+		case <-time.After(time.Second):
+			t.Error("SSH channel did not open before the publication barrier")
+			return
+		}
+		payloads <- []byte{0, 0, 0, 0}
+		select {
+		case <-r.client.Done():
+		case <-time.After(time.Second):
+			t.Error("agentwire client did not finish before route publication")
+		}
+	}
+	if err := g.AnswerRescue(res.ID, res.AttemptID, answer, client, nil); !errors.Is(err, ErrRefused) {
+		t.Fatalf("AnswerRescue after client.Done before publication = %v; want ErrRefused", err)
+	}
+	g.mu.Lock()
+	route := g.byLabel["op1"].route
+	g.mu.Unlock()
+	if route != nil {
+		t.Fatal("AnswerRescue published a route after client.Done")
+	}
+	waitRescueDone(t, res.Done, "client ending before publication")
+}
+
+func TestAnswerRescueDoesNotPublishAfterHardDeadline(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(40)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d := resumeDispatch(t, 1, key, clientPublic)
+	d.Deadline = clock.Now().Add(time.Minute)
+	res, identity, _ := seedRescueAnswer(t, g, key, clientPrivate, d)
+	client, host := resumeMemPair()
+	defer host.Close()
+	opened := startFakeChannelHost(t, host, key, clientPublic, d.Binding.Grant.Identity.LaunchID)
+	answer := signAllowedAnswer(t, g, key, res.ID, identity, d)
+	g.rescueBeforePublishHook = func(r *route) {
+		select {
+		case <-opened:
+		case <-time.After(time.Second):
+			t.Error("SSH channel did not open before the publication barrier")
+			return
+		}
+		clock.Add(2 * time.Minute)
+		select {
+		case <-r.channel.Done():
+			t.Error("channel ended before the publication deadline check")
+		default:
+		}
+		select {
+		case <-r.client.Done():
+			t.Error("agentwire client ended before the publication deadline check")
+		default:
+		}
+	}
+	if err := g.AnswerRescue(res.ID, res.AttemptID, answer, client, nil); !errors.Is(err, ErrRefused) {
+		t.Fatalf("AnswerRescue after hard deadline = %v; want ErrRefused", err)
+	}
+	g.mu.Lock()
+	route := g.byLabel["op1"].route
+	g.mu.Unlock()
+	if route != nil {
+		t.Fatal("AnswerRescue published a route after its hard deadline")
+	}
+	waitRescueDone(t, res.Done, "hard deadline before publication")
+}
+
+func TestAnswerRescueRejectsMonotonicGraceExpiryAfterWallRollback(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(41)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d1 := resumeDispatch(t, 1, key, clientPublic)
+	first, _, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
+	g.rescue.mu.Lock()
+	record.answered = true
+	record.active = true
+	record.awaitingAnswer = false
+	record.connectionGeneration = 1
+	g.rescue.mu.Unlock()
+	g.TouchRescue(first.ID, first.AttemptID)
+	g.DisconnectRescue(first.ID, first.AttemptID)
+	g.rescue.mu.Lock()
+	fixedGrace := record.graceUntil == record.lastFrame.Add(RescueReconnectGrace)
+	g.rescue.mu.Unlock()
+	if !fixedGrace {
+		t.Fatal("disconnect did not fix graceUntil from lastFrame")
+	}
+	clock.Add(4*time.Minute + 59*time.Second)
+
+	resumed, err := g.OpenRescue(resumeRequest(t, g, key, first.ID))
+	if err != nil {
+		t.Fatalf("resume at 4m59s: %v", err)
+	}
+	nextIdentity := <-resumed.Request
+	d2 := cloneRescueDispatch(d1)
+	d2.Binding.ConnectionGeneration = 2
+	client, host := resumeMemPair()
+	defer host.Close()
+	_ = startFakeChannelHost(t, host, key, clientPublic, d2.Binding.Grant.Identity.LaunchID)
+	answer := signAllowedAnswer(t, g, key, first.ID, nextIdentity, d2)
+	g.rescueBeforePublishHook = func(*route) {
+		clock.Add(2 * time.Second)
+		clock.MoveWall(-2 * time.Minute)
+	}
+	err = g.AnswerRescue(first.ID, resumed.AttemptID, answer, client, nil)
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("AnswerRescue after monotonic grace expiry and wall rollback = %v; want ErrRefused", err)
+	}
+	g.mu.Lock()
+	published := g.byLabel["op1"].route != nil
+	g.mu.Unlock()
+	if published {
+		t.Fatal("route was published after monotonic grace expiry when the wall clock moved back")
+	}
+	waitRescueDone(t, first.Done, "monotonic grace expiry after wall rollback")
+}
+
+func TestImmediateDisconnectAfterPublicationUsesMonotonicGrace(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	key := rescueHostKey(42)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d1 := resumeDispatch(t, 1, key, clientPublic)
+	first, _, record := seedRescueAnswer(t, g, key, clientPrivate, d1)
+	g.rescue.mu.Lock()
+	record.answered = true
+	record.active = true
+	record.awaitingAnswer = false
+	record.connectionGeneration = 1
+	g.rescue.mu.Unlock()
+	g.TouchRescue(first.ID, first.AttemptID)
+	g.DisconnectRescue(first.ID, first.AttemptID)
+	clock.Add(4*time.Minute + 59*time.Second)
+
+	resumed, err := g.OpenRescue(resumeRequest(t, g, key, first.ID))
+	if err != nil {
+		t.Fatalf("resume at 4m59s: %v", err)
+	}
+	nextIdentity := <-resumed.Request
+	d2 := cloneRescueDispatch(d1)
+	d2.Binding.ConnectionGeneration = 2
+	client, host := resumeMemPair()
+	defer host.Close()
+	_ = startFakeChannelHost(t, host, key, clientPublic, d2.Binding.Grant.Identity.LaunchID)
+	answer := signAllowedAnswer(t, g, key, first.ID, nextIdentity, d2)
+	var publishedAt time.Time
+	g.rescueAfterPublishHook = func() { publishedAt = clock.Now() }
+	if err := g.AnswerRescue(first.ID, resumed.AttemptID, answer, client, nil); err != nil {
+		t.Fatalf("generation 2 AnswerRescue: %v", err)
+	}
+	g.rescue.mu.Lock()
+	publicationKeptMonotonic := record.lastFrame == publishedAt
+	route2 := record.route
+	g.rescue.mu.Unlock()
+	if !publicationKeptMonotonic {
+		t.Fatal("published lastFrame lost its monotonic reading")
+	}
+	_ = host.Close()
+	select {
+	case <-route2.cleanupDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("generation 2 cleanup did not finish")
+	}
+	g.DisconnectRescue(first.ID, resumed.AttemptID) // no heartbeat after publication
+	g.rescue.mu.Lock()
+	fixedGrace := record.graceUntil == record.lastFrame.Add(RescueReconnectGrace)
+	g.rescue.mu.Unlock()
+	if !fixedGrace {
+		t.Fatal("immediate disconnect did not fix the next grace deadline")
+	}
+	clock.MoveWall(-2 * time.Minute)
+	clock.Add(4*time.Minute + 59*time.Second)
+	third, err := g.OpenRescue(resumeRequest(t, g, key, first.ID))
+	if err != nil {
+		t.Fatalf("resume at 4m59s after immediate disconnect: %v", err)
+	}
+	g.DisconnectRescue(first.ID, third.AttemptID)
+	clock.Add(2 * time.Second)
+	if _, err := g.OpenRescue(resumeRequest(t, g, key, first.ID)); !errors.Is(err, ErrRefused) {
+		t.Fatalf("resume after monotonic 5-minute grace = %v; want ErrRefused", err)
+	}
+	waitRescueDone(t, first.Done, "next grace after immediate disconnect")
+}
+
 func TestAnswerRescueDoesNotPublishAfterGraceExpiresDuringSSH(t *testing.T) {
 	clock := newRescueExpiryClock(time.Now())
 	g := newResumeGateway(t, clock.Now, false)
@@ -849,6 +1064,12 @@ func TestRescuePublicationCommitsActiveStateBeforeSweep(t *testing.T) {
 	answer := signAllowedAnswer(t, g, key, first.ID, identity, d2)
 	var publishedAt time.Time
 	g.rescueAfterPublishHook = func() {
+		g.rescue.mu.Lock()
+		activeAtPublication := record.active
+		g.rescue.mu.Unlock()
+		if !activeAtPublication {
+			t.Error("publication hook observed an inactive reception")
+		}
 		publishedAt = clock.Now()
 		clock.Add(2 * time.Second) // publication succeeded before the original deadline
 		g.sweepRescueAt(clock.Now())
@@ -1059,6 +1280,65 @@ func TestAnswerRescueRejectsAttemptSupersededDuringSSH(t *testing.T) {
 	g.mu.Unlock()
 	if route != nil {
 		t.Fatal("stale resume attempt published a route")
+	}
+}
+
+func TestFailedRouteCleanupEndsReceptionWithoutResume(t *testing.T) {
+	clock := newRescueExpiryClock(time.Now())
+	g := newResumeGateway(t, clock.Now, false)
+	g.budgets.Cleanup = 20 * time.Millisecond
+	key := rescueHostKey(45)
+	clientPrivate, clientPublic := newClientPrivateKey(t)
+	d := resumeDispatch(t, 1, key, clientPublic)
+	res, identity, record := seedRescueAnswer(t, g, key, clientPrivate, d)
+	client, host := resumeMemPair()
+	releaseClose := make(chan struct{})
+	blockedClient := &gatedCloseConn{Conn: client, started: make(chan struct{}), release: releaseClose}
+	opened := startFakeChannelHost(t, host, key, clientPublic, d.Binding.Grant.Identity.LaunchID)
+	answer := signAllowedAnswer(t, g, key, res.ID, identity, d)
+	if err := g.AnswerRescue(res.ID, res.AttemptID, answer, blockedClient, nil); err != nil {
+		t.Fatalf("AnswerRescue: %v", err)
+	}
+	if data := <-opened; len(data) != 32 {
+		t.Fatalf("commitment length = %d; want 32", len(data))
+	}
+	g.rescue.mu.Lock()
+	route := record.route
+	privateKey := record.clientKey
+	g.mu.Lock()
+	record.principal.rescueBusy = true
+	g.mu.Unlock()
+	g.rescue.mu.Unlock()
+	_ = host.Close()
+	select {
+	case <-route.cleanupDone:
+	case <-time.After(time.Second):
+		close(releaseClose)
+		t.Fatal("route cleanup did not complete")
+	}
+	close(releaseClose)
+	if !errors.Is(route.cleanupErr, agentchannel.ErrCleanupUnknown) {
+		t.Fatalf("route cleanup error = %v; want ErrCleanupUnknown", route.cleanupErr)
+	}
+	select {
+	case <-res.Done:
+	default:
+		t.Fatal("failed route cleanup left the reception alive without a resume")
+	}
+	g.rescue.mu.Lock()
+	_, retained := g.rescue.records[string(res.ID)]
+	keyCleared := record.clientKey == nil
+	zeroed := true
+	for _, b := range privateKey {
+		zeroed = zeroed && b == 0
+	}
+	g.mu.Lock()
+	busy := record.principal.rescueBusy
+	g.mu.Unlock()
+	g.rescue.mu.Unlock()
+	if retained || !keyCleared || !zeroed || busy {
+		t.Fatalf("cleanup failure retained=%v C-cleared=%v C-zeroed=%v busy=%v; want false/true/true/false",
+			retained, keyCleared, zeroed, busy)
 	}
 }
 

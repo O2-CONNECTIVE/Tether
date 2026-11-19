@@ -409,8 +409,19 @@ func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.
 	}
 	if publication != nil {
 		record := publication.record
-		publicationAt := rescueClockTime(g.clock())
+		publicationAt := g.clock()
 		currentAttempt := g.rescue.records[publication.id] == record && record.attemptID == publication.attemptID
+		channelEnded, clientEnded := false, false
+		select {
+		case <-r.channel.Done():
+			channelEnded = true
+		default:
+		}
+		select {
+		case <-r.client.Done():
+			clientEnded = true
+		default:
+		}
 		if currentAttempt && record.resuming && rescueGraceExpired(record, publicationAt) {
 			g.mu.Unlock()
 			g.endRescueLocked([]byte(publication.id), record)
@@ -420,7 +431,9 @@ func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.
 		}
 		validState := record.opening && !record.awaitingAnswer && !record.disconnected &&
 			((record.answered && record.resuming) || (!record.answered && !record.resuming))
-		if !currentAttempt || !validState || (record.resuming && rescueGraceExpired(record, publicationAt)) {
+		hardDeadlineExpired := !publicationAt.Before(record.dispatch.Deadline)
+		if !currentAttempt || !validState || channelEnded || clientEnded || hardDeadlineExpired ||
+			(record.resuming && rescueGraceExpired(record, publicationAt)) {
 			g.mu.Unlock()
 			g.rescue.mu.Unlock()
 			g.retire(r)
@@ -562,6 +575,16 @@ func (g *Gateway) retire(r *route) {
 	close(r.ended)
 	_ = r.client.Close()
 	r.cleanupErr = g.closeChannel(r.channel)
+	if r.cleanupErr != nil && g.rescue != nil {
+		g.rescue.mu.Lock()
+		for id, record := range g.rescue.records {
+			if record.route == r {
+				g.endRescueLocked([]byte(id), record)
+				break
+			}
+		}
+		g.rescue.mu.Unlock()
+	}
 	close(r.cleanupDone)
 }
 
