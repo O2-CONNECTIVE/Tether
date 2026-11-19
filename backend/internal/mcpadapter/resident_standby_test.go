@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter"
 )
 
@@ -159,5 +160,25 @@ func TestResidentStandbyToolAbsentWithoutBackend(t *testing.T) {
 	}
 	if e, success := call(map[string]any{"name": "tether_standby_status", "arguments": map[string]any{}}); success || !reflect.DeepEqual(e["code"], -32602.0) {
 		t.Fatal(e)
+	}
+}
+
+// The resident client reads tools/list with JSON null forbidden
+// (residentclient fields: agentwire.CheckJSON(raw, false)) and, on any
+// failure, drops the whole catalog: tether_fixed_list and the rest stop
+// working for the CLI (#412 CI). So the catalog that offers the standby tool
+// carries no JSON null, even where an output value may be null.
+func TestResidentStandbyCatalogHasNoNull(t *testing.T) {
+	s, _ := standbySession(t, &standbyShapeBackend{})
+	reply := s.Handle([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`))
+	var v struct{ Result json.RawMessage }
+	if reply.Error || json.Unmarshal(reply.Body, &v) != nil {
+		t.Fatal(string(reply.Body))
+	}
+	if standbyTool(t, s) == nil {
+		t.Fatal("tether_standby_status not offered")
+	}
+	if err := agentwire.CheckJSON(v.Result, false); err != nil {
+		t.Fatal("the resident client would refuse this catalog:", err)
 	}
 }
