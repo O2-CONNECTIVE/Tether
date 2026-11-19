@@ -85,6 +85,7 @@ pairing verifierはBearer用OAuth設定から作られます。MCP verifierはpa
 }
 ```
 
+paired枠のprincipalは`resident_owner`の役割を持つ必要があります（[principalの役割](agent-gateway.md#principalの役割)）。`rescue_operator`だけのprincipalはペア登録できません。
 `hosts`項目は`public_key`か`"paired": true`のどちらか一方です。`paired`は`true`以外の値を受け付けません。paired枠はprincipalちょうど1人を持ち、そのprincipalの`resident.host_label`は同じhost labelを指します。
 
 設定エラーとなる条件は次のとおりです。

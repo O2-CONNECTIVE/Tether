@@ -98,7 +98,7 @@ func TestExecuteRefusesBeforeListen(t *testing.T) {
 		}), nil},
 		{"unset sample values", []string{"-config", configPath}, probeDoc(t, func(d map[string]any) {
 			d["listen"], d["access_issuer"], d["access_aud"], d["access_keys"] = "", "", "", map[string]any{"keys": []any{}}
-			d["principals"] = []any{map[string]any{"label": "member-1", "subject": ""}}
+			d["principals"] = []any{map[string]any{"label": "member-1", "subject": "", "roles": []string{"rescue_operator", "resident_owner"}}}
 		}), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

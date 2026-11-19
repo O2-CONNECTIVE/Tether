@@ -58,8 +58,8 @@ func accessGatewayDoc(t *testing.T) map[string]any {
 		"access_keys": map[string]any{"keys": []any{map[string]any{"kty": "RSA", "kid": accessKid, "alg": "RS256", "use": "sig",
 			"n": base64.RawURLEncoding.EncodeToString(k.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(k.E)).Bytes())}}},
 		"principals": []any{
-			map[string]any{"label": "member-1", "subject": "synthetic-subject-1"},
-			map[string]any{"label": "member-2", "subject": "synthetic-subject-2"},
+			map[string]any{"label": "member-1", "subject": "synthetic-subject-1", "roles": []any{"rescue_operator", "resident_owner"}},
+			map[string]any{"label": "member-2", "subject": "synthetic-subject-2", "roles": []any{"rescue_operator", "resident_owner"}},
 		},
 	}
 }

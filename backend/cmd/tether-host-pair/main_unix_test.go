@@ -71,7 +71,7 @@ func TestExecutePairsWithRealGatewayServePair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw, err := agentgateway.New(agentgateway.Config{Verifier: mainVerifier, Resource: "https://gateway.example.test/mcp", Principals: []agentgateway.Principal{{Label: "member", Subject: "subject-1", Signer: principalSigner}}})
+	gw, err := agentgateway.New(agentgateway.Config{Verifier: mainVerifier, Resource: "https://gateway.example.test/mcp", Principals: []agentgateway.Principal{{Label: "member", Subject: "subject-1", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Signer: principalSigner}}})
 	if err != nil {
 		t.Fatal(err)
 	}

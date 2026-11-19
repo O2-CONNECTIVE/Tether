@@ -47,7 +47,7 @@ func TestProbeConfigAcceptsOnlyAccessProbeDocument(t *testing.T) {
 		return func(d map[string]any) {
 			var ps []any
 			for i := range n {
-				ps = append(ps, map[string]any{"label": "member-" + string(rune('1'+i)), "subject": "synthetic-subject-" + string(rune('1'+i))})
+				ps = append(ps, map[string]any{"label": "member-" + string(rune('1'+i)), "subject": "synthetic-subject-" + string(rune('1'+i)), "roles": []string{"rescue_operator", "resident_owner"}})
 			}
 			d["principals"] = ps
 		}
@@ -67,10 +67,10 @@ func TestProbeConfigAcceptsOnlyAccessProbeDocument(t *testing.T) {
 		{"five subjects", principals(5)},
 		{"no subjects", func(d map[string]any) { d["principals"] = []any{} }},
 		{"email as principal member", func(d map[string]any) {
-			d["principals"] = []any{map[string]any{"label": "member-1", "subject": subject1, "email": "member@example.invalid"}}
+			d["principals"] = []any{map[string]any{"label": "member-1", "subject": subject1, "roles": []string{"rescue_operator", "resident_owner"}, "email": "member@example.invalid"}}
 		}},
 		{"duplicate subject", func(d map[string]any) {
-			d["principals"] = []any{map[string]any{"label": "member-1", "subject": subject1}, map[string]any{"label": "member-2", "subject": subject1}}
+			d["principals"] = []any{map[string]any{"label": "member-1", "subject": subject1, "roles": []string{"rescue_operator", "resident_owner"}}, map[string]any{"label": "member-2", "subject": subject1, "roles": []string{"rescue_operator", "resident_owner"}}}
 		}},
 		{"missing auth_mode", func(d map[string]any) { delete(d, "auth_mode") }},
 		{"missing access_aud", func(d map[string]any) { delete(d, "access_aud") }},

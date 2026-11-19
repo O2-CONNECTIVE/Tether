@@ -65,8 +65,8 @@ func probeDoc(t *testing.T, edit func(map[string]any)) []byte {
 		"access_keys": map[string]any{"keys": []any{map[string]any{"kty": "RSA", "kid": testKid, "alg": "RS256", "use": "sig",
 			"n": enc.EncodeToString(k.N.Bytes()), "e": enc.EncodeToString(big.NewInt(int64(k.E)).Bytes())}}},
 		"principals": []any{
-			map[string]any{"label": "member-1", "subject": subject1},
-			map[string]any{"label": "member-2", "subject": subject2},
+			map[string]any{"label": "member-1", "subject": subject1, "roles": []string{"rescue_operator", "resident_owner"}},
+			map[string]any{"label": "member-2", "subject": subject2, "roles": []string{"rescue_operator", "resident_owner"}},
 		},
 	}
 	if edit != nil {

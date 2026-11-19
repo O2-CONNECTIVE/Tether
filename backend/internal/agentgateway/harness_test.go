@@ -52,6 +52,9 @@ var subjects = []string{"synthetic-subject-1", "synthetic-subject-2", "synthetic
 
 func label(i int) string { return "member-" + string(rune('1'+i)) }
 
+// bothRoles is the default for fixtures that are not about roles.
+var bothRoles = []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}
+
 func seedKey(seed byte) ed25519.PrivateKey {
 	return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize))
 }
@@ -160,11 +163,12 @@ func newRig(t *testing.T, callTimeout time.Duration) *rig {
 // newModeRig completes cfg (one verifier mode) with the four principals.
 func newModeRig(t *testing.T, cfg agentgateway.Config) *rig {
 	t.Helper()
-	var ps []agentgateway.Principal
-	for i, s := range subjects {
-		ps = append(ps, agentgateway.Principal{Label: label(i), Subject: s, Signer: fixtureSigner(t, byte(0x21+i))})
+	if cfg.Principals == nil {
+		for i, s := range subjects {
+			cfg.Principals = append(cfg.Principals, agentgateway.Principal{Label: label(i), Subject: s, Roles: bothRoles, Signer: fixtureSigner(t, byte(0x21+i))})
+		}
 	}
-	cfg.Principals, cfg.Budgets, cfg.AllowedOrigins = ps, budgets(), []string{"https://client.example.invalid"}
+	cfg.Budgets, cfg.AllowedOrigins = budgets(), []string{"https://client.example.invalid"}
 	gw, err := agentgateway.New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -209,6 +213,17 @@ func (m *mac) waitHost(t *testing.T) error {
 }
 
 func (r *rig) approve(i int, lifetime time.Duration) *mac {
+	r.t.Helper()
+	m, err := r.connectApproved(i, lifetime)
+	if err != nil {
+		r.t.Fatalf("Connect(%s) = %v", label(i), err)
+	}
+	return m
+}
+
+// connectApproved is approve that returns the Connect result instead of
+// failing the test, for the cases where the gateway must refuse.
+func (r *rig) connectApproved(i int, lifetime time.Duration) (*mac, error) {
 	t := r.t
 	t.Helper()
 	client := fixtureSigner(t, byte(0x21+i))
@@ -255,10 +270,7 @@ func (r *rig) approve(i int, lifetime time.Duration) *mac {
 		_ = m.session.Close(ctx)
 		_ = m.issuer.Close()
 	})
-	if err := r.gw.Connect(label(i), m.dispatch, cConn); err != nil {
-		t.Fatalf("Connect(%s) = %v", label(i), err)
-	}
-	return m
+	return m, r.gw.Connect(label(i), m.dispatch, cConn)
 }
 
 func (m *mac) proc(t *testing.T) *fakeProc {

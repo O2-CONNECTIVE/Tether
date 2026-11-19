@@ -522,7 +522,7 @@ func newGateway(t *testing.T, members map[string]ssh.Signer) *agentgateway.Gatew
 	var principals []agentgateway.Principal
 	for i, label := range []string{member1, member2} {
 		if s, ok := members[label]; ok {
-			principals = append(principals, agentgateway.Principal{Label: label, Subject: fmt.Sprintf("synthetic-subject-%d", i+1), Signer: s})
+			principals = append(principals, agentgateway.Principal{Label: label, Subject: fmt.Sprintf("synthetic-subject-%d", i+1), Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Signer: s})
 		}
 	}
 	g, err := agentgateway.New(agentgateway.Config{Verifier: v, Principals: principals, Budgets: chanBudgets()})

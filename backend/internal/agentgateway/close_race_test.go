@@ -95,7 +95,7 @@ func TestConcurrentCloseRetainsUnknownAcquisitionAndSharedRetry(t *testing.T) {
 	b := budgets()
 	b.Cleanup = 100 * time.Millisecond
 	gw, err := agentgateway.New(agentgateway.Config{
-		Verifier: verifier(t), Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Signer: fixtureSigner(t, 0x21)}}, Budgets: b,
+		Verifier: verifier(t), Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Signer: fixtureSigner(t, 0x21)}}, Budgets: b,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -129,6 +129,7 @@ func (g *Gateway) hostReplacingLocked(label string) bool {
 
 // ConfigureResident is one-shot, before any MCP session or work. A principal
 // has exactly one explicitly enrolled host here; ambiguous mappings refuse.
+// Only a RoleResidentOwner principal may be enrolled.
 func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, entries []ResidentEnrollment) error {
 	if g == nil || g.discoveryOnly || control == nil || len(entries) == 0 || len(entries) > MaxPrincipals || len(endpoint) > 512 {
 		return ErrConfig
@@ -142,21 +143,26 @@ func (g *Gateway) ConfigureResident(endpoint string, control ResidentControl, en
 		p := g.byLabel[e.PrincipalLabel]
 		hostKey := g.HostKey(e.HostLabel)
 		key, err := ssh.ParsePublicKey(hostKey)
-		pairedSlot := false
+		pairedSlot, ownSlot := false, false
 		g.mu.Lock()
 		if slot := g.hosts[e.HostLabel]; slot != nil {
 			pairedSlot = slot.paired == p && g.pairing != nil
+			// A resident host serves only its owner: anyone else listed on
+			// it could reach the owner's host.
+			ownSlot = len(slot.principals) == 1 && slot.principals[e.PrincipalLabel]
 		}
 		g.mu.Unlock()
 		validStaticKey := err == nil && key.Type() == ssh.KeyAlgoED25519
-		if p == nil || p.signer == nil || !validLabel(e.HostLabel) || (!validStaticKey && !pairedSlot) || setup.entries[p] != nil {
+		if p == nil || p.signer == nil || !p.resident || !ownSlot || !validLabel(e.HostLabel) || (!validStaticKey && !pairedSlot) || setup.entries[p] != nil {
 			return ErrConfig
 		}
 		setup.entries[p] = &residentEntry{enrollment: e, works: map[string]*residentWork{}}
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.closed || g.hosts == nil || g.resident != nil || len(g.sessions) != 0 {
+	// Host use is fixed before any registration, so no rescue route can
+	// already be on a host that becomes resident here.
+	if g.closed || g.hosts == nil || g.resident != nil || len(g.sessions) != 0 || len(g.launches) != 0 {
 		return ErrRefused
 	}
 	g.resident = setup
@@ -346,7 +352,7 @@ func (g *Gateway) ConnectResident(label string, d Dispatch, b ResidentWorkBindin
 	}
 	defer close(w.registrationDone)
 	defer g.watchers.Done()
-	rt, err := g.connect(label, d, w.registrationConn)
+	rt, err := g.connect(label, d, w.registrationConn, false)
 	if rt == nil && err != nil {
 		if closed, closeErr := w.registrationConn.result(); !closed || closeErr != nil {
 			err = errors.Join(err, agentchannel.ErrCleanupUnknown, closeErr)

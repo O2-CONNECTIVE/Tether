@@ -15,7 +15,7 @@
 - 厳格JSON：`agentwire.CheckJSON`（重複member・null・不正UTF-8を全深さで拒否）と`agentwire.Fields`（未知member拒否）に加え、CLI envelopeの全memberを必須とします（内側gateway.allowed_originsだけは省略可）。秘密鍵・secret・承認・再接続などのmemberは未知memberとして拒否します。
 - 鍵は「path + 別経路で記録した`SHA256:`fingerprint」の参照だけです。読込みは`agentkeys.LoadCurrentUser`（期限付きctx）で、返ったsignerのfingerprintも照合します。設定文書と鍵のpathは文字列で区別し、大文字小文字違いも同一扱いです。filesystem aliasの非同一性をこの比較だけで証明せず、保護loaderとschema/fingerprint照合も必要です。
 - 公開鍵は正規の1行`ssh-ed25519 <base64>`だけ（option・comment・証明書・他種別・非正規base64は拒否）。
-- 診断は固定文だけです。path、label、subject、fingerprint、endpoint、鍵、tokenを出力しません。
+- 診断は固定文だけです。path、label、subject、fingerprint、endpoint、鍵、tokenを出力しません。役割の規則による拒否だけは、文書の何番目の項目か（例「hosts の 2 番目」）と理由を出力します。
 
 ## gateway（`rescue-gateway -config <path>`）
 
@@ -40,6 +40,29 @@
 resourceのpathに%エスケープ（`RawPath`）がある場合も拒否します。
 
 任意の固定常駐構成 `resident` は[通常gatewayの常駐組成](agent-cli-resident.md)を参照してください。省略時の既存文書は常駐protocolを有効化しません。
+
+### 役割と host の分け方
+
+gatewayの各principalは`roles`を持ちます（[principalの役割](agent-gateway.md#principalの役割)）。envelopeでは、hostを常駐用とレスキュー用に分けて検査し、どれか1つでも外れたら鍵を読む前に終了値2で止まります。
+
+| host | 条件 |
+| --- | --- |
+| 常駐用（`resident`に載るhost。静的鍵とpaired枠の両方） | `principals`は常駐の本人1人だけ。その本人は`resident_owner`を持つ |
+| レスキュー用（それ以外のhost） | `principals`に載る全員が`rescue_operator`を持つ |
+
+`resident`に載るprincipalは、ほかのhostに載せられません（既存の規則）。そのため、常駐の本人がレスキューも担う場合、今のgatewayでのレスキュー（一時派遣）はできません。[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)の流れを使います。
+
+#### 役割の無い設定からの移し方
+
+役割の無い文書では、gatewayは起動しません。次の順に直します。
+
+1. principalごとに役割を決めます。他人のMacへ一時派遣で接続する人は`rescue_operator`、`resident`に載る人は`resident_owner`です。
+2. `gateway.principals[]`の各項目に`"roles"`を足します。例：`{ "label": "member-1", "subject": "<sub>", "roles": ["resident_owner"] }`。
+3. `resident`に載るhostの`principals`を、そのhostの常駐の本人1人だけにします。外した人がそのMacへレスキューで接続していた場合、その接続は今のgatewayではできなくなります（常駐のhostの鍵とgrantは本人のものだからです）。
+4. 残りのhostはレスキュー用です。`principals`には`rescue_operator`を持つ人だけを残します。
+5. 起動して確かめます。拒否されたら、診断の「何番目」の項目を直します。
+
+同じMacを常駐とレスキューの両方に使っていた構成は、常駐用として残します。そのMacへのレスキューは、#409の流れが入るまで使えません。
 
 ### 起動順序
 
