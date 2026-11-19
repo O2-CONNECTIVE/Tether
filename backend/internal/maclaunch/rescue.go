@@ -252,7 +252,12 @@ func (r *Rescue) Receive(req RescueRequest) error {
 // ReceiveFrom passes the reception's one verified request to Receive. It
 // returns ErrDenied without a request once the state machine has ended.
 func (r *Rescue) ReceiveFrom(requests <-chan agenttransport.VerifiedRescueIdentity) error {
-	return ErrDenied
+	select {
+	case v := <-requests:
+		return r.Receive(RescueRequest{client: v.Client(), displayName: v.DisplayName(), organization: v.Organization(), profile: v.Profile()})
+	case <-r.done:
+		return ErrDenied
+	}
 }
 
 // Answer accepts reply only from the helper this Rescue was built with, for the

@@ -368,6 +368,28 @@ func (m *msgConn) Read(p []byte) (int, error) {
 	return n, m.read.finish(nil)
 }
 
+// fill reads one message into rest without delivering it to a stream reader.
+func (m *msgConn) fill() error {
+	m.readMu.Lock()
+	defer m.readMu.Unlock()
+	if m.readErr != nil {
+		return m.readErr
+	}
+	if err := m.read.begin(); err != nil {
+		return err
+	}
+	if len(m.rest) != 0 {
+		return m.read.finish(nil)
+	}
+	msg, err := m.next()
+	if err != nil {
+		m.readErr = m.read.finish(err)
+		return m.readErr
+	}
+	m.rest = msg
+	return m.read.finish(nil)
+}
+
 // next reads one whole message, validating type and size before delivery.
 func (m *msgConn) next() ([]byte, error) {
 	typ, r, err := m.ws.Reader(m.readCtx)

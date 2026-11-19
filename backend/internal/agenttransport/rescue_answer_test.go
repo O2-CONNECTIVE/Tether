@@ -160,10 +160,15 @@ func TestVerifyRescueRequestTakesOnlyValuesSignedForThisReception(t *testing.T) 
 	pins := []ssh.PublicKey{rescueIdentity.PublicKey(), rescueNext.PublicKey()}
 	sent := valuesFor(k)
 	for _, s := range []ssh.Signer{rescueIdentity, rescueNext} {
-		v, err := VerifyRescueRequest(rescueEndpoint, answerReception, k, pins, sent.identity(sent.sign(t, s)))
+		frame := valuesFor(k)
+		frame.client = append([]byte(nil), frame.client...)
+		v, err := VerifyRescueRequest(rescueEndpoint, answerReception, k, pins, frame.identity(frame.sign(t, s)))
 		if err != nil {
 			t.Fatalf("a proof by a pinned key: %v", err)
 		}
+		// The grant allows this C long after the frame's buffers are cleared,
+		// so the verified identity must not share them.
+		clear(frame.client)
 		if v.Client() == nil || !bytes.Equal(v.Client().Marshal(), sent.client) || v.DisplayName() != sent.name ||
 			v.Organization() != sent.org || v.Profile() != sent.profile {
 			t.Fatalf("verified %+v, want the signed values", v)

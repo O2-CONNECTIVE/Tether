@@ -281,17 +281,20 @@ type registration struct {
 }
 
 func encodeRegister(host, principal string, d agentgateway.Dispatch, sig []byte) []byte {
+	m := dispatchFields(d)
+	m["type"], m["host"], m["principal"], m["signature"] = typeRegister, host, principal, b64.EncodeToString(sig)
+	out, _ := json.Marshal(m)
+	return out
+}
+
+func dispatchFields(d agentgateway.Dispatch) map[string]string {
 	b := d.Binding
-	m := map[string]string{
-		"type": typeRegister, "host": host, "principal": principal,
+	return map[string]string{
 		"generation": strconv.FormatUint(b.Grant.Generation, 10), "launch_id": b.Grant.Identity.LaunchID,
 		"epoch": b.Grant.Identity.Epoch, "policy_digest": b.Grant.Identity.PolicyDigest,
 		"key_set_digest": hex.EncodeToString(b.KeySetDigest[:]), "profile": profileMac,
-		"deadline_unix_nano": strconv.FormatInt(d.Deadline.UnixNano(), 10),
-		"host_key":           b64.EncodeToString(d.HostKey), "signature": b64.EncodeToString(sig),
+		"deadline_unix_nano": strconv.FormatInt(d.Deadline.UnixNano(), 10), "host_key": b64.EncodeToString(d.HostKey),
 	}
-	out, _ := json.Marshal(m)
-	return out
 }
 
 // decodeRegister parses canonical encodings only; it derives no trust. The
@@ -338,6 +341,31 @@ func encodeRescueRequest(r agentgateway.RescueIdentity) []byte {
 		"display_name": r.DisplayName, "organization": r.Organization, "profile": r.Profile,
 		"signature": b64.EncodeToString(r.Signature),
 	})
+	return out
+}
+
+func decodeRescueRequest(msg []byte) (agentgateway.RescueIdentity, error) {
+	m, ok := stringFields(msg, "type", "nonce", "client", "display_name", "organization", "profile", "signature")
+	if !ok || m["type"] != "request" {
+		return agentgateway.RescueIdentity{}, ErrRefused
+	}
+	nonce, nonceOK := decodeB64(m["nonce"])
+	client, clientOK := decodeB64(m["client"])
+	signature, signatureOK := decodeB64(m["signature"])
+	if !nonceOK || !clientOK || !signatureOK {
+		return agentgateway.RescueIdentity{}, ErrRefused
+	}
+	return agentgateway.RescueIdentity{Nonce: nonce, Client: client, DisplayName: m["display_name"], Organization: m["organization"], Profile: m["profile"], Signature: signature}, nil
+}
+
+func encodeRescueAnswer(a agentgateway.RescueAnswer) []byte {
+	m := map[string]string{"type": "answer", "answer": a.Answer, "signature": b64.EncodeToString(a.Signature)}
+	if a.Answer == agentgateway.RescueAllow {
+		for key, value := range dispatchFields(a.Dispatch) {
+			m[key] = value
+		}
+	}
+	out, _ := json.Marshal(m)
 	return out
 }
 
