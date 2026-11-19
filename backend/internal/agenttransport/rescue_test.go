@@ -533,28 +533,42 @@ func TestRescueHostKeyNeverReachesTheDisk(t *testing.T) {
 // signature: the window between the last read and Open's return.
 type closingPin struct {
 	ssh.PublicKey
-	c **RescueClient
+	off func()
 }
 
 func (p closingPin) CryptoPublicKey() crypto.PublicKey {
-	_ = (*p.c).Close()
+	p.off()
 	return p.PublicKey.(ssh.CryptoPublicKey).CryptoPublicKey()
 }
 
 // 受付 OFF wins over a code still being verified: the user turned the
-// reception off, so the host must not show a code for it.
+// reception off, so the host must not show a code for it, even when Close
+// has only recorded 受付 OFF and not yet ended the reception.
 func TestRescueOffDuringOpenShowsNoCode(t *testing.T) {
-	now := time.Now()
-	reg := newRescueRecorder(newRescueGateway(t, &now))
-	var c *RescueClient
-	c = newRescueClient(t, []ssh.PublicKey{closingPin{PublicKey: rescueIdentity.PublicKey(), c: &c}}, newMemTransport(newRescueHandler(t, reg)))
-	code, err := openRescue(t, c)
-	if code != "" || !errors.Is(err, ErrClosed) {
-		t.Fatalf("Open = %q, %v; want no code and ErrClosed", code, err)
+	for _, tc := range []struct {
+		name string
+		off  func(*RescueClient)
+	}{
+		{"受付 OFF finished", func(c *RescueClient) { _ = c.Close() }},
+		{"受付 OFF begun", func(c *RescueClient) { c.mu.Lock(); c.closed = true; c.mu.Unlock() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			reg := newRescueRecorder(newRescueGateway(t, &now))
+			var c *RescueClient
+			pin := closingPin{PublicKey: rescueIdentity.PublicKey(), off: func() { tc.off(c) }}
+			c = newRescueClient(t, []ssh.PublicKey{pin}, newMemTransport(newRescueHandler(t, reg)))
+			k := c.key
+			code, err := openRescue(t, c)
+			if code != "" || !errors.Is(err, ErrClosed) {
+				t.Fatalf("Open = %q, %v; want no code and ErrClosed", code, err)
+			}
+			opened := <-reg.opened
+			reg.expectEnded(t, opened.ID)
+			expectDone(t, c)
+			expectDropped(t, k)
+		})
 	}
-	opened := <-reg.opened
-	reg.expectEnded(t, opened.ID)
-	expectDone(t, c)
 }
 
 // rescueProtocol rewrites the upgrade response's subprotocol, as a wrong
@@ -648,11 +662,31 @@ func TestRescueCloseWaitsForAConnectionStillClosing(t *testing.T) {
 	opened := <-reg.opened
 	_ = c.Close()
 	reg.expectEnded(t, opened.ID)
-	short, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	if err := h.Close(short); err == nil {
-		t.Fatal("Close reported a clean end while the connection's close was unconfirmed")
+	closeShort := func(when string) {
+		t.Helper()
+		short, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		if err := h.Close(short); !errors.Is(err, ErrCleanupUnknown) {
+			t.Fatalf("Close %s = %v, want ErrCleanupUnknown", when, err)
+		}
 	}
+	closeShort("while ServeHTTP waits for the close")
+	// ServeHTTP gives up after DefaultBudgets().Cleanup; the handler still
+	// holds the unconfirmed connection, so Close keeps reporting it.
+	deadline := time.Now().Add(DefaultBudgets().Cleanup + 2*time.Second)
+	for {
+		h.mu.Lock()
+		serving := h.serving
+		h.mu.Unlock()
+		if serving == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ServeHTTP never returned")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	closeShort("after ServeHTTP returned")
 	release()
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
