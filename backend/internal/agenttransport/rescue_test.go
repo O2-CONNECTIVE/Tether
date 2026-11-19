@@ -694,3 +694,35 @@ func TestRescueCloseWaitsForAConnectionStillClosing(t *testing.T) {
 		t.Fatalf("Close after the connection closed = %v", err)
 	}
 }
+
+// The gateway's own 受付 OFF (RescueHandler.Close) cuts every reception
+// connection, and a cut connection ends its reception at once: the codes go
+// before Close confirms the connections' close.
+func TestRescueHandlerCloseEndsReceptionsAtOnce(t *testing.T) {
+	now := time.Now()
+	reg := newRescueRecorder(newRescueGateway(t, &now))
+	h := newRescueHandler(t, reg)
+	m := newMemTransport(h)
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	m.prepare = func(_, server *memConn) { server.setGate(gate) }
+	t.Cleanup(release) // before the handler's Close
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, m)
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	opened := <-reg.opened
+	closed := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		closed <- h.Close(ctx)
+	}()
+	reg.expectEnded(t, opened.ID)
+	release()
+	if err := <-closed; err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	expectDone(t, c)
+}
