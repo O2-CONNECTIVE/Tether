@@ -52,7 +52,7 @@ source commit、アプリの版表示、配布物hash、実画面の確認環境
 | MCP API | [adapter](agent-mcp-adapter.md) / [discovery](mcp-discovery.md) | start/output/status/cancel。discoveryはcommand実行ではない |
 | HTTP認証・主体照合 | [gateway](agent-gateway.md) / [identity](tether-access-identity.md) | 検証したissuer/subjectを登録済みprincipalと結ぶ。メールdomain全員を認可しない |
 | ホストのペア登録 | [ホストのペア登録](host-pairing.md) | gateway側の登録口、登録簿、置換条件。実IdP・実配置は未確認 |
-| レスキューの接続の開始 | [設計の案](rescue-connection-start.md) / [ADR 0005（proposed）](adr/0005-rescue-reconnect-grace.md) | 接続コード、身元の証明、許可のポップアップ、切断後の猶予。未実装・未承認で、承認までは今の承認画面とADR 0003が有効 |
+| レスキューの接続の開始 | [設計](rescue-connection-start.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md) | 接続コード、身元の証明、許可のポップアップ、切断後の猶予。2026-11-19承認・未実装で、実装までは今の承認画面で動く |
 | 配送と暗号channel | [WSS transport](agent-transport.md) / [agent channel](agent-channel.md) | relayは新しい認可源ではない。gatewayはMCPのpayloadを扱う信頼境界で、不透明relayと同一視しない |
 | 承認と実行 | [command契約](agent-command-contract.md) / [CLI](agent-cli.md) / [runtime](mac-agent-runtime.md) | Mac本人のfresh同意がgrant発行元。gateway/adapterは発行・延長しない |
 | 保護入力 | [鍵loader](agent-key-loader.md) / [Linux loader](agent-key-loader-linux.md) | 設定・鍵のowner/権限/同一性を検査。実登録とsource試験は別 |

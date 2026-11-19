@@ -1,11 +1,11 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # レスキューの切断の後、短い猶予の間だけ同じ許可で再接続する
 
-2026-11-19、[#404 の追加の裁定](https://github.com/O2-CONNECTIVE/Tether/issues/404)を受けて、[ADR 0003](0003-owned-guest-workload.md)の「切断後の新規承認」を、レスキューの遠隔接続について「猶予の間を除いて、切断後は新規承認」に改める案である。
-この ADR は proposed で、利用者が承認するまで ADR 0003 がそのまま有効である。
+2026-11-19、[#404 の追加の裁定](https://github.com/O2-CONNECTIVE/Tether/issues/404#issuecomment-6995182359)を受けて、[ADR 0003](0003-owned-guest-workload.md)の「切断後の新規承認」を、レスキューの遠隔接続について「猶予の間を除いて、切断後は新規承認」に改める。
+2026-11-19 に利用者が承認した（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)、[#404 の文言の読み替え](https://github.com/O2-CONNECTIVE/Tether/issues/404#issuecomment-6996862703)）。ADR 0003 のこの部分を置き換える。未実装である。
 流れと確かめ方の詳細は[レスキューの接続の開始](../rescue-connection-start.md)にある（[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)）。
 
 ## 改める内容
@@ -48,6 +48,6 @@ ADR 0003 の「取消・書込み失敗・切断・正規stopはcanonical issuer
 猶予をホストの時計で持つ実装と、スリープと壁時計の後退を含む試験も要る。
 担当者側の鍵を principal の長期の signer から受付ごとの鍵に替えるため、gateway の `Connect` に受付ごとの signer を渡す実装も要る。
 
-## 承認されたら直す文書
+## 直した文書
 
-[レスキューの接続の開始](../rescue-connection-start.md#adr-0005-が-accepted-になったら直す文書)に挙げた文書を、同じ PR か実装の PR で直す。
+承認と同じ PR で、[レスキューの接続の開始](../rescue-connection-start.md#adr-0005-で直した文書)に挙げた文書に、この ADR による改訂を書いた。

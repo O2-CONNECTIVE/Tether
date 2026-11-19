@@ -1,9 +1,10 @@
 # レスキューの接続の開始（設計）
 
-[文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005（proposed）](adr/0005-rescue-reconnect-grace.md)
+[文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md)
 
-**設計の案です。未実装で、利用者の承認を待っています（[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)）。**
-承認されるまで、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）と [ADR 0003](adr/0003-owned-guest-workload.md) が有効です。
+**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。未実装です。**
+切断の後の扱いは、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（accepted）が [ADR 0003](adr/0003-owned-guest-workload.md) の該当の部分を置き換えます。
+実装されるまで、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
 この文書は、ホストを接続コードで指し、要求の時点の許可のポップアップでレスキューの接続を始める流れを決めます。
 画面は [#410](https://github.com/O2-CONNECTIVE/Tether/issues/410) で作ります。
 
@@ -12,8 +13,12 @@
 - [#404](https://github.com/O2-CONNECTIVE/Tether/issues/404) の確定（2026-11-18）: ホスト側はアカウントを持たない。受付 ON の間だけ要求を受ける。要求の時点で許可のポップアップを出し、IdP で確かめた担当者の名前と組織を主に出す。「許可」を既定のボタンにしない。60 秒で自動拒否する。鍵はセッションごとに作り、終わったら捨てる。使い続けられるキーは持たない。Mac に固有の同意と鍵の保管は、Tauri の外のネイティブの補助に分ける。
 - #404 の追加の裁定（2026-11-19）: 切断から短い猶予（目安 5 分）の間だけ、許可をやり直さずに再接続する。猶予を過ぎたら許可のポップアップを出し直す。期限とホスト側の切断では、猶予に関わらず鍵を捨てる。
 - [#399](https://github.com/O2-CONNECTIVE/Tether/issues/399): 許可の期限は 2・4・8・12・24 時間から選び、既定は 2 時間。経過時間と壁時計の両方で判定し、スリープ中も進める。期限が来たら停止と回収に進む。
-- [#408](https://github.com/O2-CONNECTIVE/Tether/issues/408)（[PR #415](https://github.com/O2-CONNECTIVE/Tether/pull/415)、未 merge）: principal の役割 `rescue_operator` と `resident_owner`。レスキューの要求には `rescue_operator` を求める。gateway 内の判定口は principal の `rescue` です。
-- 決定を docs に書く [PR #413](https://github.com/O2-CONNECTIVE/Tether/pull/413) も未 merge です。この文書は #413 の「決まったレスキューの始め方」の未定の点に答えます。
+- [#408](https://github.com/O2-CONNECTIVE/Tether/issues/408)（[PR #415](https://github.com/O2-CONNECTIVE/Tether/pull/415)、2026-11-19 に merge）: principal の役割 `rescue_operator` と `resident_owner`。レスキューの要求には `rescue_operator` を求める。gateway 内の判定口は principal の `rescue` です。
+- 決定を docs に書いた [PR #413](https://github.com/O2-CONNECTIVE/Tether/pull/413)（merge 済み）: この文書は、#413 の「決まったレスキューの始め方」の未定の点に答えます。
+- 設計の承認（2026-11-19、利用者の裁定、[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)、[#404](https://github.com/O2-CONNECTIVE/Tether/issues/404#issuecomment-6996862703)）: 承認の前に確かめた次の 3 点は、どれもこの文書の設計のままとしました。ADR 0005 は accepted です。
+  1. 名前と組織は、gateway の設定の値（principal の表示名と、gateway の組織名）から出す（[名前と組織の出どころ](#名前と組織の出どころ)）。
+  2. 猶予を過ぎた後は、新しい接続コードで受付を自動で再開し、コードを伝え直す。旧い鍵による引き継ぎはしない（[猶予の超過](#猶予の超過)）。
+  3. 担当者側の鍵もセッションごとにし、principal の長期の signer はレスキューでは使わない（[鍵と信頼の根](#鍵と信頼の根)）。
 
 ## 流れ
 
@@ -144,7 +149,8 @@ IdP の token の `name` などの claim は使いません。
 今の gateway は検証した `sub` だけを識別に使い、`email` も存在の確認だけです（[認証と認可](agent-gateway.md#認証と認可分離)）。
 IdP によっては、利用者が自分の表示名を変えられます。
 token の `sub` は IdP の多要素認証で確かめた値で、運用者がその `sub` に表示名を登録します。
-こうして、表示名は IdP で確かめた本人に結びつきます。#404 の「IdP で確かめた名前と組織」は、この意味で満たします。
+こうして、表示名は IdP で確かめた本人に結びつきます。
+#404 の「IdP で確かめた名前と組織」は、「IdP で確かめた本人（`sub`）に、運用者が gateway の設定で登録した名前と組織」と読みます（[#404 の文言の読み替え](https://github.com/O2-CONNECTIVE/Tether/issues/404#issuecomment-6996862703)、2026-11-19、利用者の裁定）。
 
 組織名は gateway 全体で 1 つの設定値で、gateway を運用する組織（確認する側）を表します。担当者ごとには確かめません。
 gateway の principal は、同じ組織の最大 4 人です。
@@ -271,7 +277,7 @@ K を盗んだ者は、C を持たないので担当者として接続できま�
 
 - channel の commitment に世代を入れます。gateway は (LaunchID, 世代) の組を 1 回だけ使います。ホストの Session は、世代ごとに transport を 1 回だけ受け取ります。
 - 期限、許可鍵集合、操作範囲、境界は、世代が変わっても変えません。期限は延びません。
-- 今の「1 grant に接続 1 回」（[agent channel](agent-channel.md)）を、「1 grant に、世代ごとに接続 1 回」に改めます。ADR 0005 が accepted になってから実装します。
+- 今の「1 grant に接続 1 回」（[agent channel](agent-channel.md)）を、「1 grant に、世代ごとに接続 1 回」に改めます。実装は [#425](https://github.com/O2-CONNECTIVE/Tether/issues/425) です。
 
 ### 猶予の間の作業
 
@@ -291,7 +297,7 @@ K を盗んだ者は、C を持たないので担当者として接続できま�
 4. 許可したら、新しい grant を発行します。期限は、その許可の時刻から選んだ期限までです。ゲストのアカウントも新しく作ります。
 
 これで「猶予を過ぎたら、ホストに許可のポップアップを出し直す」を満たします。
-コードを伝え直さずに同じ担当者だけがポップアップを出せる形も考えましたが、採りません。
+コードを伝え直さずに同じ担当者だけがポップアップを出せる形も考えましたが、採りません（2026-11-19、利用者の裁定で確定）。
 アカウントの無いホストが「同じホストに戻った」ことを gateway に示すには、猶予の後も効く秘密（旧い K による引き継ぎなど）が要ります。
 その秘密が漏れると、漏れた鍵の効力が猶予の後まで延び、ホストがオフラインの間に受付を別の端末へ移せてしまいます。
 鍵の漏れの効力を猶予の間に限るという追加の裁定の理由を優先しました。
@@ -340,6 +346,7 @@ K を盗んだ者は、C を持たないので担当者として接続できま�
 ## 試験で確かめること
 
 #409 の受け入れ条件と、追加の裁定の分です。実装の issue で red から書きます。
+実装は、依存の順に [#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)（接続コード）→ [#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)（受付口）→ [#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)（担当者の要求と身元の証明）→ [#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)（ホストの許可の状態機械）→ [#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)（猶予と接続世代）に分けました。
 
 | 確かめること | 試験の形 |
 | --- | --- |
@@ -382,9 +389,12 @@ K を盗んだ者は、C を持たないので担当者として接続できま�
 - 身元の証明鍵の配布と差し替えの手順（配布の issue）。
 - 受付口の wire の正確な形（frame、subprotocol 名、tool の名前と待ち方）。実装の issue で、この文書の署名対象と不変条件を守って決めます。
 
-## ADR 0005 が accepted になったら直す文書
+## ADR 0005 で直した文書
 
-- [ADR 0003](adr/0003-owned-guest-workload.md): 「切断後の新規承認」と「取消・書込み失敗・切断・正規stopはcanonical issuer/authの失効へ結ぶ」に、ADR 0005 による改訂を注記する。
-- [一時guestアカウント](temporary-guest-account.md): 「接続が切れた場合の再承認」の要件に、猶予を注記する。
-- [agent channel](agent-channel.md): 「再接続・再試行・再開はありません」を、接続世代の規則に改める（実装と同じ PR）。
-- [製品目標](product/goals-and-acceptance.md) と [検証状態](tether-pilot-status.md)（PR #413 の merge の後）: 「それまでは ADR 0003 が有効」の注記を外し、この文書へつなぐ。
+ADR 0005 の承認（2026-11-19）と同じ PR で、次の文書を直しました。
+
+- [ADR 0003](adr/0003-owned-guest-workload.md): 「切断後の新規承認」と「取消・書込み失敗・切断・正規stopはcanonical issuer/authの失効へ結ぶ」に、ADR 0005 による改訂を注記しました。本文は書き換えていません。
+- [一時guestアカウント](temporary-guest-account.md): 「接続が切れた場合の再承認」の要件に、猶予を注記しました。
+- [agent channel](agent-channel.md): 「再接続・再試行・再開はありません」に注記しました。本文は、接続世代の実装（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）と同じ PR で改めます。
+- [製品目標](product/goals-and-acceptance.md) と [検証状態](tether-pilot-status.md): 「それまでは ADR 0003 が有効」の注記を外し、ADR 0005 とこの文書へつなぎました。
+- [文書索引](README.md) と [gateway](agent-gateway.md): この文書へのリンクを、承認済み・未実装として直しました。

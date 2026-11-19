@@ -11,6 +11,8 @@ GUIから許可・停止するoperator、遠隔作業のguest、監督serviceと
 一時guestの方針は、OperatorSIDやAuthenticationIdの認証方式の採用ではない。
 接続が切れた場合の再承認、許可鍵、固定宛先、不変grant、hard deadline、短lease、不可逆revokeの要件を変えない。
 
+> **ADR 0005による改訂（2026-11-19、未実装）:** レスキューの遠隔接続が切れたときは、猶予（5分）の間だけ再承認なしで同じgrantに再接続し、猶予を過ぎたら再承認とする（[ADR 0005](adr/0005-rescue-reconnect-grace.md)）。猶予の間もアカウントの所有記録を保持して削除せず、状態は[ADR 0003](adr/0003-owned-guest-workload.md)のとおりtokenの取得後は無効に戻す（[ゲストのアカウントとの対応](rescue-connection-start.md#ゲストのアカウントとの対応)）。
+
 `backend/internal/guestaccount`は、作成前登録から無効状態の準備と清掃までの純粋な順序・状態管理を準備する。
 native factoryは未設定拒否とし、実アカウントAPIや資格情報生成へ接続しない。
 通常unit/raceはprivate seamの合成記録・合成account・回収receiptだけを使う。

@@ -8,6 +8,8 @@ status: accepted
 運営中継はcontainer、端末は同梱native、一時非管理者guest、切断後の新規承認という既決方針は維持する。
 これは設計の採用であり、実service・account・資格情報・ACL・privilege設定の実行許可ではない。
 
+> **ADR 0005による改訂（2026-11-19）:** レスキューの遠隔接続（担当者とホストのchannel）については、「切断後の新規承認」を[ADR 0005](0005-rescue-reconnect-grace.md)が「猶予（5分）の間を除いて、切断後は新規承認」に置き換えた。この本文は書き換えていない。
+
 ## 選択した理由と負担
 
 既存Windows OpenSSHのservice、設定、鍵、共有DefaultShell、portを変更せず、実行前の停止境界と同じJobの回収を製品ownerへ集約する。
@@ -49,6 +51,8 @@ cleanup予算を実行TTLやaccount期限に読み替えない。
 targetのadmissionは同Serviceが所有し、固定HardDeadlineとService寿命を超えない。
 要求の通常完了とguest全体の終了を分け、取消・書込み失敗・切断・正規stopはcanonical issuer/authの失効へ結ぶ。
 失効したRecord/grant/endpointを同じSIDの再ログインやservice再起動で復元しない。
+
+> **ADR 0005による改訂（2026-11-19）:** レスキューの遠隔接続では、上の「切断」を「猶予（5分）を過ぎた切断」と読む（[ADR 0005](0005-rescue-reconnect-grace.md)）。取消・書込み失敗・正規stopの扱いと、失効したものを同じSIDで復元しない規則は変えない。
 
 source/fake試験とWindows向けcompileは、実Windowsのlogon、保護SD、継承、Job停止、TTLや撤去の証拠ではない。
 製品caller、GUI承認から実実行、実SSH dispatcher、配布と実機受入は未接続または未検証で、製品gateは閉鎖する。
