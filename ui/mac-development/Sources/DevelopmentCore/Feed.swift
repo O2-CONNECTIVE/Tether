@@ -201,12 +201,15 @@ public struct Feed {
             let outcome = try t.text("outcome", ["pending", "applied", "rejected", "unknown"])
             if outcome == "unknown" { invalidateCleanup("owner-result-unknown"); throw Invalid.input }
             guard id > 0, id < nextID else { throw Invalid.input }
+            if outcome == "applied" {
+                guard intent == "on" ? standby == "on" : (standby == "off" && work == "idle" && cleanup == "confirmed") else { throw Invalid.input }
+            }
             if let p = pending {
-                guard id == p.id, intent == p.intent else { throw Invalid.input }
-                if outcome == "applied" {
-                    guard intent == "on" ? standby == "on" : (standby == "off" && work == "idle" && cleanup == "confirmed") else { throw Invalid.input }
-                    pending = nil
-                } else if outcome == "rejected" { pending = nil }
+                if id == p.id && intent == p.intent {
+                    if outcome == "applied" {
+                        pending = nil
+                    } else if outcome == "rejected" { pending = nil }
+                } else if outcome == "pending" { throw Invalid.input }
             } else if outcome == "pending" { throw Invalid.input }
         }
         observation = Observation(revision: revision, sourceMS: source, standby: standby, registration: registration, work: work, cleanup: cleanup, canOn: canOn, canOff: canOff, standbyUntil: standbyUntil, standbyEndingSoon: standbyEndingSoon, standbyExpired: standbyExpired)

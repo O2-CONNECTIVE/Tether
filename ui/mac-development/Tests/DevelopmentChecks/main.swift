@@ -11,8 +11,8 @@ func status(_ revision: Int = 1, time: Int = 1000, standby: String = "off", tran
     {"protocolVersion":1,"type":"status","sourceContinuousMs":\(time),"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":\(revision),"validForMs":3000,"standby":"\(standby)","registration":"\(standby == "on" ? "authenticated" : "disconnected")","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":\(standby == "off"),"canRequestOff":\(standby == "on"),"transition":\(transition),"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired)}}
     """.utf8)
 }
-func receipt(_ disposition: String) -> Data {
-    Data("{\"protocolVersion\":1,\"type\":\"receipt\",\"receipt\":{\"protocolVersion\":1,\"requestId\":1,\"intent\":\"on\",\"disposition\":\"\(disposition)\"}}".utf8)
+func receipt(_ disposition: String, id: Int = 1, intent: String = "on") -> Data {
+    Data("{\"protocolVersion\":1,\"type\":\"receipt\",\"receipt\":{\"protocolVersion\":1,\"requestId\":\(id),\"intent\":\"\(intent)\",\"disposition\":\"\(disposition)\"}}".utf8)
 }
 let applied = "{\"requestId\":1,\"intent\":\"on\",\"outcome\":\"applied\"}"
 var f = Feed()
@@ -28,6 +28,33 @@ f.ingest(receipt("accepted"), at: 1000)
 check(f.pending != nil && !f.can("off", at: 1000), "receipt is not application")
 f.ingest(status(2, standby: "on", transition: applied), at: 1000)
 check(f.pending == nil && f.can("off", at: 1000), "correlated ON transition")
+var priorApplied = Feed()
+priorApplied.ingest(status(), at: 1000)
+check(priorApplied.command("on", at: 1000, hours: 2) == "on 1 1 2\n", "first ON before prior applied transition")
+priorApplied.ingest(receipt("accepted"), at: 1000)
+priorApplied.ingest(status(2, standby: "on", transition: applied), at: 1000)
+check(!priorApplied.fault && priorApplied.pending == nil, "prior ON transition applied")
+check(priorApplied.command("off", at: 1000) == "off 2 2\n", "second OFF becomes pending")
+priorApplied.ingest(receipt("accepted", id: 2, intent: "off"), at: 1000)
+priorApplied.ingest(status(3, standby: "on", transition: applied), at: 1000)
+check(!priorApplied.fault && priorApplied.pending?.id == 2, "prior applied transition keeps newer pending request")
+let appliedOff = "{\"requestId\":2,\"intent\":\"off\",\"outcome\":\"applied\"}"
+priorApplied.ingest(status(4, standby: "off", transition: appliedOff), at: 1000)
+check(!priorApplied.fault && priorApplied.pending == nil, "newer OFF transition resolves pending")
+var priorRejected = Feed()
+priorRejected.ingest(status(), at: 1000)
+_ = priorRejected.command("on", at: 1000, hours: 2)
+priorRejected.ingest(receipt("accepted"), at: 1000)
+let rejectedOn = applied.replacingOccurrences(of: "applied", with: "rejected")
+priorRejected.ingest(status(2, transition: rejectedOn), at: 1000)
+check(!priorRejected.fault && priorRejected.pending == nil, "prior ON transition rejected")
+check(priorRejected.command("on", at: 1000, hours: 2) == "on 2 2 2\n", "retry becomes pending with new ID")
+priorRejected.ingest(receipt("accepted", id: 2), at: 1000)
+priorRejected.ingest(status(3, transition: rejectedOn), at: 1000)
+check(!priorRejected.fault && priorRejected.pending?.id == 2, "prior rejected transition keeps newer pending request")
+let appliedOn2 = "{\"requestId\":2,\"intent\":\"on\",\"outcome\":\"applied\"}"
+priorRejected.ingest(status(4, standby: "on", transition: appliedOn2), at: 1000)
+check(!priorRejected.fault && priorRejected.pending == nil, "newer ON transition resolves pending")
 check(f.requestClose() == "close\n" && f.requestClose() == nil, "close once")
 check(!f.can("off", at: 1000), "close disables intent")
 f.ingest(Data("{\"protocolVersion\":1,\"type\":\"closed\",\"sourceContinuousMs\":1000,\"outcome\":\"confirmed\"}".utf8), at: 1000)
@@ -131,7 +158,7 @@ check(crossed.fault && !crossed.runAllowed, "receipt for another intent is not a
 var stopped = standingBy(); _ = stopped.command("allow", at: 1000)
 stopped.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000)
 check(stopped.runAllowed, "allowance open before standby ends")
-stopped.ingest(status(3, standby: "off", transition: applied, expired: true), at: 1000)
+stopped.ingest(status(3, standby: "off", expired: true), at: 1000)
 check(!stopped.fault && !stopped.runAllowed && stopped.observation?.standbyExpired == true, "standby no longer ON drops the allowance")
 stopped.ingest(status(4, standby: "on", transition: applied, until: until), at: 1000)
 check(!stopped.runAllowed, "a later standby ON does not bring an old allowance back")
