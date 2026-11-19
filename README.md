@@ -100,7 +100,7 @@ gateway は Mac の同意を代行せず、許可を発行・延長しません�
 | `scripts/` | CI と検査の script、その試験 |
 | `tools/` | 調査用の独立 probe と trace |
 | `docs/` | 設計・契約・受入記録。入口は[文書索引](docs/README.md) |
-| `src/`、`tests/`、`build_windows.ps1` | 旧 Python 実装。履歴として保持 |
+| `src/`、`tests/` | 旧 Python 実装のうち、オフラインの操作方針と期限のモデル（`rescue_policy`、`rescue_lease`）とその試験。 |
 
 ## 対象環境
 

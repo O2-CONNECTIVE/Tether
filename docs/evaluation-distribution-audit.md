@@ -8,7 +8,7 @@ READMEと実機試験表の更新は別工程とする。
 
 | 対象 | 現存する入口と同梱物 | 現時点の判定 |
 | --- | --- | --- |
-| 旧Python/Tk版 | [Windows build](../build_windows.ps1)が`dist/RescueHost.exe`を想定。Upterm、固定known_hostsを埋込み、対応する`third_party/UPTERM-LICENSE.txt`を別添する | 依存lockのCIと最終EXEの生成検証は別。新規接続の開始拒否を維持 |
+| 旧Python/Tk版 | `build_windows.ps1`（#416 で削除）が`dist/RescueHost.exe`を想定。Upterm、固定known_hostsを埋込み、対応する`third_party/UPTERM-LICENSE.txt`を別添する | 依存lockのCIと最終EXEの生成検証は別。新規接続の開始拒否を維持 |
 | 未接続Tauri GUI | [ZIP生成CLI](../scripts/package_tauri_evaluation.py)と[専用CI](../.github/workflows/tauri-evaluation.yml)。`rescue-host-shell.exe`、`LICENSE`、`README_JA.txt`、Cargo/npm lock、依存一覧とlicense本文、`MANIFEST.json`を同梱。ZIP横に`.zip.sha256`を置く | 未署名の内部評価候補。Go、SSH、サービスEXEを追加しない。候補ごとのCI終端と証跡が必要 |
 | 実接続版 | [準備契約](connected-evaluation-package-contract.md)のGUI、service、backendの3役。`bin/rescue-service-host.exe`等は提案名 | 準備JSONのみ。サービスlibraryを完成した配布EXEと扱わない。validatorは宣言が整合しても終了値2で停止 |
 

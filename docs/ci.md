@@ -5,7 +5,7 @@
 ## 第1段階で確認する範囲
 
 [Python offline tests](../.github/workflows/python-offline.yml)は、`main`向けのpull requestと`main`へのpushで既存のPythonオフラインテストを実行します。
-開始時の基準は`6499e78f337b500785163fe8fb6ac669eb52ab28`で、既存テストは82件でした。旧Tkinter GUIに依る試験を除いた現在は68件です。
+開始時の基準は`6499e78f337b500785163fe8fb6ac669eb52ab28`で、既存テストは82件でした。#407で旧Tkinter GUIに依る試験を除いて68件となり、#416で20件になりました。
 既存テストの自動化であり、新しい振る舞いテストを後付けでTDDと呼ぶものではありません。
 
 | 標準GitHub-hosted runner | Python | アーキテクチャ |
@@ -21,18 +21,16 @@ Pythonの版を表示し、共通入口`python scripts/dev.py check`を実行し
 続けて`python scripts/dev.py tokens`で公開済みのtoken checkerを実行します。
 現在の対象は120 tokensの参照規則とライトテーマの23組のコントラストです。
 同じPythonの`-I`モードで起動し、`PYTHONOPTIMIZE`環境変数によるassert無効化を避けます。
-`python -m unittest discover -s scripts/tests -v`は従来の異常条件7件とtoken checkerの3件を合わせた10件を別に実行します。
+`python -m unittest discover -s scripts/tests -v`は共通入口、token checker、source-size、commit-message、Go CI helperの検証を別に実行します。
 token checkerの3件は、正常例と、一時コピーでの不正参照、コントラスト1:1への低下を検証します。
 各コマンドの非0終了はCIの失敗に伝わり、`continue-on-error`で隠しません。
-この10件は既存68件と区別する開発ツールと静的checkerの検証で、製品の受入条件やUIのTDD実績へ加算しません。
+この開発ツール試験は既存テストと区別し、製品の受入条件やUIのTDD実績へ加算しません。
 token検証は生成物の一致、描画、Tauri native動作を保証しません。
-追加のpip依存はなく、ビルド用の`requirements-build.txt`はインストールしません。
+追加のpip依存はありません。
 ローカルで同じテストを再現するコマンドは[開発手順](development.md#オフライン試験)を参照してください。
 
 既存のskipはテストの詳細出力に理由とともに残ります。
-WindowsではUnixのshebangを使う模擬Uptermのライフサイクル試験1件をskipし、残る67件を実行する想定です。
-symlinkを作成できない環境では`test_dangling_state_symlink_not_absent`も追加で1件skipします。
-LinuxとmacOSは68件、skip 0件を想定しますが、実際の件数と理由は各jobの結果で確認します。
+Windowsを含む3 OSで20件、skip 0件を想定しますが、実際の件数と理由は各jobの結果で確認します。
 失敗したOSがあっても他のOSを続行し、skipを合格件数へ加算しません。
 
 **CI成功は、[親受入Issueの44条件](https://github.com/O2-CONNECTIVE/Tether/issues/1)が本番受入に合格したことを意味しません。**

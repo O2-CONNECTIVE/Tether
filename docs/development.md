@@ -35,7 +35,6 @@ Pythonの導入やOS設定変更はコマンドに含みません。
 
 開発ツール自身の異常条件は`python3 -m unittest discover -s scripts/tests -v`で別に検証します。
 この全件試験はsource-sizeの検証を含むためPython 3.13以上が必要です（CI固定版は3.13.17）。既存の`check`の下限Python 3.11とは区別します。
-build-lockの有限fixtureは同じPythonのpipも使い、ネットワークなしでhash不一致を拒否することを確認します。
 Windowsでは同じ引数を`py -3.13`に渡します。
 対象欠落、空対象、テスト0件、全件skip、テスト失敗、構文不正などで、実際のコマンドが非0終了することを確認します。
 これは開発ツールの検証であり、製品試験や新しい製品境界のTDDへ加算しません。
@@ -47,7 +46,7 @@ Windowsでは`py -3.13 scripts/dev.py tokens`を使います。
 checkerが使用するassertを`PYTHONOPTIMIZE`環境変数で無効にしないため、[Pythonの隔離モード`-I`](https://docs.python.org/3.13/using/cmdline.html#cmdoption-I)を指定しています。
 CIも独立stepでこの入口を使い、非0終了を失敗として扱います。
 トークン関係の開発ツール試験は正常例、不正参照、白文字と白背景のコントラスト低下を確認します。
-開発ツールの全件試験は共通入口、トークン、source-size、build-lock、commit-message、Go CIのJSONイベントと資源記録の検証を含みます。
+開発ツールの全件試験は共通入口、トークン、source-size、commit-message、Go CIのJSONイベントと資源記録の検証を含みます。
 実行件数、skip、失敗は、対象SHAの[PythonオフラインCI](../.github/workflows/python-offline.yml)のログで確認します。
 不正例は一時コピーにだけ作成し、公開tokenを変更しません。
 検証範囲は既存checkerの参照規則と指定されたライトテーマのコントラストで、生成物の一致、ブラウザー描画、Tauri実機、製品UIのTDDではありません。
@@ -67,9 +66,7 @@ $env:PYTHONPATH = 'src'
 py -3 -m unittest discover -s tests -v
 ```
 
-模擬Uptermとモックによる試験で、公開中継、実PC、TCPポート22には接続しません。
-模擬ライフサイクルはcoreの下位関数を直接呼ぶため、開始ゲートを通りません。
-この成功は実接続の安全性を証明しません。
+残る`tests/test_backend_policy_lease.py`はオフラインモデルを試験します。実接続や開始ゲートを検証するものではありません。
 モデルだけの試験は[既存の実行手順](OFFLINE_BACKEND_MODEL.md#実行)を参照してください。
 
 既存テストの3 OS自動実行、skipの読み方、未検証範囲は[PythonオフラインCI](ci.md)を参照してください。
@@ -85,23 +82,12 @@ shellにも接続や停止のバックエンドは配線していません。
 共通部品と画面を変更するときは[デザインとアクセシビリティの基準案](design-accessibility.md)を参照してください。
 自動検査と実機確認の分担は[確認方法と証跡](design-accessibility-verification.md)へまとめています。
 
-## GUIとWindowsビルド
+## 旧 Python 実装と配布条件
 
 旧Tkinter GUI（`src/rescue_host.py`）は[#407](https://github.com/O2-CONNECTIVE/Tether/issues/407)で削除しました。
-保存された旧セッションを起動時に回復する処理も、このGUIとともになくなっています。
-
-[build_windows.ps1](../build_windows.ps1)はWindows x64向けの未検証スクリプトです。
-想定前提はWindows 10/11 x64、CPython 3.11–3.15 x64、Pythonランチャー`py`、インターネット接続です。
-EXEは未生成で、ARM64も未検証です。
-PyInstallerの入口だった`src/rescue_host.py`を削除したため、現状のスクリプトは最後のbuild手順で失敗します。このスクリプトの扱いは未決です。
-実行時に固定版Upterm v0.39.0とPyInstallerを取得します。
-`-UseLocalUpterm`には独立に確認した`-LocalUptermSha256`と対応ライセンスが必要です。
-ダウンロードと同じ経路のチェックサムだけでは配布元侵害を防げません。
-Windows向けPyInstallerと推移依存6個（計7個）は版とwheel hashを固定し、一時venv内で導入・整合検証します。
-Python/Tk等を含む環境全体の固定と再現ビルドは未実装です。
-ビルドしても新規接続は有効になりません。
-未署名の配布候補に必要なmanifest、ハッシュ、license、依存一覧、sourceとの対応は[配布候補の準備条件](distribution.md)を参照してください。
-開発コマンドはGUIやビルドを自動実行しません。
+保存された旧セッションを起動時に回復する処理（`rescue_core`、`rescue_watchdog`）も #416 で削除しました。
+旧 Windows の PyInstaller の build（`build_windows.ps1`）と依存 lock は #416 で削除しました。
+配布の条件は[配布候補の準備条件](distribution.md)を参照してください。
 
 ## 詳細と履歴
 
