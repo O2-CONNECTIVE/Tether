@@ -581,3 +581,60 @@ func TestRescueRequestRealGatewayBindsFreshRoute(t *testing.T) {
 		t.Fatal("agentlink.Host.Serve did not end within 5s of the gateway closing")
 	}
 }
+
+// A frame the host sends as its answer is an answer even when the transport
+// cannot accept it: the gateway must record it as failed (or timeout after
+// 75 seconds), not as the host closing the reception. An allow whose dispatch
+// fails the registration check must never reach the gateway as an allow.
+func TestRescueHandlerHandsUnacceptableAnswerToGatewayAsUnverifiable(t *testing.T) {
+	expired := fixtureDispatch(rescueIdentity, "rescue-launch", time.Now().Add(-time.Minute))
+	cases := map[string]struct {
+		typ   websocket.MessageType
+		frame []byte
+	}{
+		"not json":     {websocket.MessageText, []byte("{")},
+		"binary frame": {websocket.MessageBinary, []byte(`{"type":"answer","answer":"deny","signature":"AA"}`)},
+		"expired allow": {websocket.MessageText, func() []byte {
+			b, _ := json.Marshal(map[string]any{"type": "answer", "answer": agentgateway.RescueAllow,
+				"signature":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x01}, ed25519.SignatureSize)),
+				"generation": strconv.FormatUint(expired.Binding.Grant.Generation, 10), "launch_id": expired.Binding.Grant.Identity.LaunchID, "epoch": expired.Binding.Grant.Identity.Epoch,
+				"policy_digest": expired.Binding.Grant.Identity.PolicyDigest, "key_set_digest": hex.EncodeToString(expired.Binding.KeySetDigest[:]),
+				"profile": profileMac, "deadline_unix_nano": strconv.FormatInt(expired.Deadline.UnixNano(), 10), "host_key": base64.RawURLEncoding.EncodeToString(expired.HostKey)})
+			return b
+		}()},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			registry := newRequestRescueRegistry()
+			h, err := NewRescueHandler(registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := h.Close(ctx); err != nil {
+					t.Errorf("RescueHandler.Close: %v", err)
+				}
+			})
+			ws, id := openRescueWebSocket(t, h, rescueKey(0x49))
+			registry.request <- agentgateway.RescueIdentity{Nonce: bytes.Repeat([]byte{0x22}, agentgateway.RescueNonceSize), Profile: agentgateway.RescueProfile}
+			if got := rawString(t, readRescueFrame(t, ws)["type"]); got != "request" {
+				t.Fatalf("frame type = %q, want request", got)
+			}
+			if err := ws.conn.Write(ws.ctx, tc.typ, tc.frame); err != nil {
+				t.Fatalf("write answer frame: %v", err)
+			}
+			select {
+			case call := <-registry.answered:
+				if !bytes.Equal(call.id, id) || call.a.Answer == agentgateway.RescueAllow || len(call.a.Signature) != 0 {
+					t.Fatalf("AnswerRescue got answer %q with a %d byte signature; want one that never verifies", call.a.Answer, len(call.a.Signature))
+				}
+			case <-registry.ended:
+				t.Fatal("unacceptable answer ended the reception without reaching AnswerRescue")
+			case <-time.After(5 * time.Second):
+				t.Fatal("AnswerRescue was not called within 5s")
+			}
+		})
+	}
+}

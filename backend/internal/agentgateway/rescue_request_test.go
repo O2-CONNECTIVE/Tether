@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -580,4 +581,56 @@ func signAnswerFields(t *testing.T, key ssh.Signer, hostPublic ssh.PublicKey, en
 		t.Fatal(err)
 	}
 	return agentgateway.RescueAnswer{Answer: sentAnswer, Dispatch: sentDispatch, Signature: sig.Blob}
+}
+
+// A mistyped code must not lock the operator out: the refusal ends the
+// attempt, so the right code still goes through (mutation M5 survived).
+func TestRescueRequestInvalidCodeDoesNotLeavePrincipalBusy(t *testing.T) {
+	r := newRequestRig(t, nil)
+	res, _ := openRequestCode(t, r, 0)
+	c := r.caller(0)
+	if _, msg, failed := c.rescueTool("rescue_request", map[string]any{"code": "000000000000"}); !failed || msg != rescueCodeMessage {
+		t.Fatalf("mistyped code = %q, %v; want %q", msg, failed, rescueCodeMessage)
+	}
+	requirePending(t, c, res.Code)
+	receiveIdentity(t, res)
+}
+
+// One request carries one answer. A replayed allow on a reception whose
+// channel is open must not tear down that session or report it as failed
+// (mutation M12 survived).
+func TestRescueRequestSecondAnswerAfterAllowIsRefused(t *testing.T) {
+	r := newRequestRig(t, nil)
+	res, hostKey := openRequestCode(t, r, 0)
+	c := r.caller(0)
+	requirePending(t, c, res.Code)
+	identity := receiveIdentity(t, res)
+	client, err := ssh.ParsePublicKey(identity.Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, stream, err := r.prepareApprovedHost(0, time.Minute, []ssh.PublicKey{client}, hostKey, 5*time.Second)
+	if err != nil {
+		t.Fatalf("prepare one-key host: %v", err)
+	}
+	answer := signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch)
+	if err := r.gw.AnswerRescue(res.ID, answer, stream); err != nil {
+		t.Fatalf("AnswerRescue(allow) = %v", err)
+	}
+	replay, peer := net.Pipe()
+	defer peer.Close()
+	if err := r.gw.AnswerRescue(res.ID, answer, replay); err == nil {
+		t.Fatal("second AnswerRescue on an answered reception = nil; want refusal")
+	}
+	if stream.isClosed() {
+		t.Fatal("replayed answer closed the open channel")
+	}
+	select {
+	case <-res.Done:
+		t.Fatal("replayed answer ended the reception of an open channel")
+	default:
+	}
+	if status, _, failed := c.rescueTool("rescue_request_status", map[string]any{}); failed || status != agentgateway.RescueAllow {
+		t.Fatalf("status after replayed answer = %q, %v; want allow", status, failed)
+	}
 }
