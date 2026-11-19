@@ -64,7 +64,7 @@ gate未設定・不一致・probe gate/binding名での全拒否と閉gate時の
 1. Worker作成と公開hostname（synthetic例：`tether-native.example.invalid`）、gate変数・binding設定。preview URLは無効のまま
 2. **Access self-hosted application**：同じhostnameの `/mcp` だけを保護し、許可subjectを4名に限定。`/tether-agent/v1/register` は対象外（人のOAuthの外側）。Managed OAuth/discoveryの実設定は未了
 3. VPC Service 1件（既存Tunnel、`rescue-gateway` のportのみ）とbinding 1件
-4. Go設定：`auth_mode: cloudflare_access`、`resource` は `https://<hostname>/mcp`、登録endpointは `wss://<hostname>/tether-agent/v1/register`、`allowed_origins` なし、principal・host鍵の登録
+4. Go設定：`auth_mode: cloudflare_access`、`resource` は `https://<hostname>/mcp`、登録endpointは `wss://<hostname>/tether-agent/v1/register`、`allowed_origins` なし、principal（`roles` を含む。[役割](../../../docs/agent-gateway.md#principalの役割)）・host鍵の登録
 5. dot（MCP client）側の実接続登録。未了
 6. gate開放と、試行後の手動再閉鎖
 
@@ -120,7 +120,7 @@ The wrapper pins only the time window, not VPC binding identity. Deployment must
 既存の `resident` enrollment を明示すると、汎用の登録 `Connect` を拒否し、
 MCP は認証済み常駐 control と同じ世代の固定操作だけを提供します。
 control 不在・未登録 principal の initialize は 503 となり、汎用 MCP へ fallback しません。
-省略時は既存の混在構成を維持します。false、null、文字列、resident enrollment 不在は拒否します。
+省略時は既存の混在構成を維持します。ただし混在構成でも、汎用の `Connect`（レスキューの接続）は常駐の host に届きません（[役割と host の分け方](../../../docs/agent-cli.md#役割と-host-の分け方)）。false、null、文字列、resident enrollment 不在は拒否します。
 
 Worker の `rescue-agent-register.v1` は閉じません。常駐の固定操作もこの protocol を
 実データ経路に使い、origin の `ConnectResident` が署名済みの host と取得済み work の
