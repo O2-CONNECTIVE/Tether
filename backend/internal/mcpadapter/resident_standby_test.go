@@ -62,7 +62,7 @@ func standbyTool(t *testing.T, s *mcpadapter.HTTPSession) map[string]any {
 
 // The tool takes no argument at all, so no argument can ask for more standby.
 func TestResidentStandbyToolTakesNoArgumentAndOnlyReads(t *testing.T) {
-	ok := map[string]any{"schema_version": 1, "standby": "on", "standby_until": "2026-11-19T10:30:01.500Z", "remaining_ms": 5401500, "expired": false}
+	ok := map[string]any{"schema_version": 1, "standby": "on", "standby_until": "2026-11-19T10:30:01.500Z", "remaining_ms": 5401500}
 	b := &standbyShapeBackend{residentShapeBackend: residentShapeBackend{value: ok}}
 	s, call := standbySession(t, b)
 	tool := standbyTool(t, s)
@@ -118,8 +118,8 @@ func TestResidentStandbyToolOutputSchema(t *testing.T) {
 		t.Fatal("missing output schema")
 	}
 	for _, v := range []map[string]any{
-		{"schema_version": 1, "standby": "on", "standby_until": "2026-11-19T10:30:01.500Z", "remaining_ms": 0, "expired": false},
-		{"schema_version": 1, "standby": "stopping", "standby_until": nil, "remaining_ms": 0, "expired": true},
+		{"schema_version": 1, "standby": "on", "standby_until": "2026-11-19T10:30:01.500Z", "remaining_ms": 0},
+		{"schema_version": 1, "standby": "stopping", "standby_until": nil, "remaining_ms": 0},
 		{"error": "not_read"}, {"error": "not_reported"}, {"error": "control_ended", "reinitialize_required": true},
 	} {
 		b.value = v
@@ -133,11 +133,13 @@ func TestResidentStandbyToolOutputSchema(t *testing.T) {
 		}
 	}
 	for _, v := range []map[string]any{
-		{"schema_version": 2, "standby": "on", "standby_until": nil, "remaining_ms": 0, "expired": false},
-		{"schema_version": 1, "standby": "off", "standby_until": nil, "remaining_ms": 0, "expired": false},
-		{"schema_version": 1, "standby": "on", "standby_until": nil, "remaining_ms": -1, "expired": false},
-		{"schema_version": 1, "standby": "on", "standby_until": nil, "remaining_ms": 0},
-		{"schema_version": 1, "standby": "on", "standby_until": nil, "remaining_ms": 0, "expired": false, "host": "PRIVATE"},
+		{"schema_version": 2, "standby": "on", "standby_until": nil, "remaining_ms": 0},
+		{"schema_version": 1, "standby": "off", "standby_until": nil, "remaining_ms": 0},
+		{"schema_version": 1, "standby": "on", "standby_until": nil, "remaining_ms": -1},
+		{"schema_version": 1, "standby": "on", "standby_until": nil},
+		{"schema_version": 1, "standby": "on", "standby_until": nil, "remaining_ms": 0, "host": "PRIVATE"},
+		// The first draft's expired is not in the output (#412 review).
+		{"schema_version": 1, "standby": "stopping", "standby_until": nil, "remaining_ms": 0, "expired": true},
 		{"error": "raw OS error"},
 	} {
 		raw, _ := json.Marshal(v)

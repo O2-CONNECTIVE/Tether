@@ -20,17 +20,30 @@ import (
 type standbyControl struct {
 	*residentControlFixture
 	mu     sync.Mutex
+	live   string // the generation of the control that is up
+	issued string // what ResidentGeneration says: "" once the live control has issued its last work sequence
+	ended  bool
 	report ResidentStandby
-	ok     bool
 	reads  []string
 	begins int
 }
 
+func (c *standbyControl) ResidentGeneration(string, string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.issued
+}
+
+// ResidentStandby answers as the transport does: false unless the control asked
+// for is up; a control that is up and has no report yet has revision 0.
 func (c *standbyControl) ResidentStandby(host, principal, generation string) (ResidentStandby, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reads = append(c.reads, host+"/"+principal+"/"+generation)
-	return c.report, c.ok
+	if c.ended || generation != c.live {
+		return ResidentStandby{}, false
+	}
+	return c.report, true
 }
 func (c *standbyControl) BeginResidentFixed(context.Context, string, string, string, string, time.Time) error {
 	c.mu.Lock()
@@ -53,7 +66,7 @@ func standbyRig(t *testing.T) (*Gateway, *residentSession, *standbyControl, time
 	t.Cleanup(func() { g.Close(context.Background()) })
 	now := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
 	g.clock = func() time.Time { return now }
-	control := &standbyControl{residentControlFixture: fixture, ok: true}
+	control := &standbyControl{residentControlFixture: fixture, live: s.generation, issued: s.generation}
 	g.resident.control = control
 	return g, s, control, now
 }
@@ -77,18 +90,18 @@ func TestResidentStandbyStatusReturnsEndAndRemaining(t *testing.T) {
 		want   string
 	}{
 		{ResidentStandby{Revision: 3, Standby: "on", Until: now.Add(90*time.Minute + 1500*time.Millisecond)},
-			`{"expired":false,"remaining_ms":5401500,"schema_version":1,"standby":"on","standby_until":"2026-11-19T10:30:01.500Z"}`},
+			`{"remaining_ms":5401500,"schema_version":1,"standby":"on","standby_until":"2026-11-19T10:30:01.500Z"}`},
 		// A Mac in another zone still reads in UTC.
 		{ResidentStandby{Revision: 3, Standby: "on", Until: now.Add(time.Hour).In(time.FixedZone("JST", 9*3600))},
-			`{"expired":false,"remaining_ms":3600000,"schema_version":1,"standby":"on","standby_until":"2026-11-19T10:00:00.000Z"}`},
+			`{"remaining_ms":3600000,"schema_version":1,"standby":"on","standby_until":"2026-11-19T10:00:00.000Z"}`},
 		// An end already passed here is no time left, even before the Mac stops.
 		{ResidentStandby{Revision: 4, Standby: "on", Until: now.Add(-time.Second)},
-			`{"expired":false,"remaining_ms":0,"schema_version":1,"standby":"on","standby_until":"2026-11-19T08:59:59.000Z"}`},
+			`{"remaining_ms":0,"schema_version":1,"standby":"on","standby_until":"2026-11-19T08:59:59.000Z"}`},
 		// A Mac that admits no new work publishes no end.
 		{ResidentStandby{Revision: 5, Standby: "on"},
-			`{"expired":false,"remaining_ms":0,"schema_version":1,"standby":"on","standby_until":null}`},
-		{ResidentStandby{Revision: 6, Standby: "stopping", Expired: true},
-			`{"expired":true,"remaining_ms":0,"schema_version":1,"standby":"stopping","standby_until":null}`},
+			`{"remaining_ms":0,"schema_version":1,"standby":"on","standby_until":null}`},
+		{ResidentStandby{Revision: 6, Standby: "stopping"},
+			`{"remaining_ms":0,"schema_version":1,"standby":"stopping","standby_until":null}`},
 	} {
 		control.report = c.report
 		if got := jsonOf(t, s.StandbyStatus(context.Background())); got != c.want {
@@ -107,28 +120,45 @@ func TestResidentStandbyStatusReturnsEndAndRemaining(t *testing.T) {
 	}
 }
 
+// The answer comes from one read of the control (#412 review): a control that
+// is up is never told to the AI as ended, so it does not start over while its
+// work goes on, and an ended one is never read as up.
 func TestResidentStandbyStatusErrors(t *testing.T) {
-	g, s, control, _ := standbyRig(t)
-	control.ok = false
-	if got := jsonOf(t, s.StandbyStatus(context.Background())); got != `{"error":"not_reported"}` {
-		t.Fatal("unreported standby:", got)
+	g, s, control, now := standbyRig(t)
+	status := func(s *residentSession, ctx context.Context) string {
+		t.Helper()
+		return jsonOf(t, s.StandbyStatus(ctx))
+	}
+	if got := status(s, context.Background()); got != `{"error":"not_reported"}` {
+		t.Fatal("control up before the Mac reported:", got)
 	}
 	// A control that cannot report standby reports none.
 	g.resident.control = control.residentControlFixture
-	if got := jsonOf(t, s.StandbyStatus(context.Background())); got != `{"error":"not_reported"}` {
+	if got := status(s, context.Background()); got != `{"error":"not_reported"}` {
 		t.Fatal("control without reports:", got)
 	}
 	g.resident.control = control
-	control.ok = true
-	control.report = ResidentStandby{Revision: 1, Standby: "on", Until: time.Now().Add(time.Hour)}
+	control.report = ResidentStandby{Revision: 1, Standby: "on", Until: now.Add(time.Hour)}
+	// A control that has issued its last work sequence is still up: its
+	// standby is read, not told as ended.
+	control.issued = ""
+	if got := status(s, context.Background()); got != `{"remaining_ms":3600000,"schema_version":1,"standby":"on","standby_until":"2026-11-19T10:00:00.000Z"}` {
+		t.Fatal("control up after its last sequence:", got)
+	}
+	control.issued = s.generation
 	ended := *s
 	ended.generation = strings.Repeat("b", 64)
-	if got := jsonOf(t, ended.StandbyStatus(context.Background())); got != `{"error":"control_ended","reinitialize_required":true}` {
+	if got := status(&ended, context.Background()); got != `{"error":"control_ended","reinitialize_required":true}` {
+		t.Fatal("another generation:", got)
+	}
+	// The control ends between the session's checks and the read.
+	control.ended = true
+	if got := status(s, context.Background()); got != `{"error":"control_ended","reinitialize_required":true}` {
 		t.Fatal("ended control:", got)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got := jsonOf(t, s.StandbyStatus(ctx)); got != `{"error":"not_read"}` {
+	if got := status(s, ctx); got != `{"error":"not_read"}` {
 		t.Fatal("cancelled read:", got)
 	}
 }

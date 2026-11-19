@@ -17,11 +17,11 @@ import (
 
 // standbyFields is the resident_standby message of #412, written here from the
 // spec and not with the product encoder, so the test pins the wire format:
-// the host key signs the binding under "host-standby" and the five values in
+// the host key signs the binding under "host-standby" and the four values in
 // this order.
 func standbyFields(t *testing.T, b residentBinding, key ssh.Signer, role string, v map[string]string) map[string]string {
 	t.Helper()
-	sig, e := sign(key, key.PublicKey(), residentTranscript(b, role, v["generation"], v["revision"], v["standby"], v["until_unix_ms"], v["expired"]))
+	sig, e := sign(key, key.PublicKey(), residentTranscript(b, role, v["generation"], v["revision"], v["standby"], v["until_unix_ms"]))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -33,7 +33,7 @@ func standbyFields(t *testing.T, b residentBinding, key ssh.Signer, role string,
 }
 
 func sameStandby(a, b agentgateway.ResidentStandby) bool {
-	return a.Revision == b.Revision && a.Standby == b.Standby && a.Until.Equal(b.Until) && a.Expired == b.Expired
+	return a.Revision == b.Revision && a.Standby == b.Standby && a.Until.Equal(b.Until)
 }
 
 // The AI reads how long standby has left from the gateway, so the gateway must
@@ -43,8 +43,10 @@ func TestResidentStandbyReportReachesOnlyItsOwnControl(t *testing.T) {
 	done := residentRun(r.c)
 	s := takeSource(t, r)
 	gen := s.Receiver().Generation()
-	if _, ok := r.h.ResidentStandby(hostLabel, member1, gen); ok {
-		t.Fatal("standby known before the Mac reported it")
+	// A live control that has not reported reads as live, with no report, so
+	// the AI is told "not reported", not "control ended" (#412 review).
+	if v, ok := r.h.ResidentStandby(hostLabel, member1, gen); !ok || v.Revision != 0 {
+		t.Fatal("standby before the Mac reported it:", v, ok)
 	}
 	until := time.Now().Add(90*time.Minute + 1500*time.Millisecond)
 	if e := s.ReportStandby(agentgateway.ResidentStandby{Revision: 7, Standby: "on", Until: until}); e != nil {
@@ -58,14 +60,14 @@ func TestResidentStandbyReportReachesOnlyItsOwnControl(t *testing.T) {
 			t.Fatalf("standby of %s/%s/%s read for another control", q[0], q[1], q[2])
 		}
 	}
-	// Standby that ran out is stopping and publishes no end.
-	if e := s.ReportStandby(agentgateway.ResidentStandby{Revision: 9, Standby: "stopping", Expired: true}); e != nil {
+	// Stopping standby publishes no end.
+	if e := s.ReportStandby(agentgateway.ResidentStandby{Revision: 9, Standby: "stopping"}); e != nil {
 		t.Fatal(e)
 	}
-	expired := agentgateway.ResidentStandby{Revision: 9, Standby: "stopping", Expired: true}
+	stopping := agentgateway.ResidentStandby{Revision: 9, Standby: "stopping"}
 	verticalEventually(t, func() bool {
 		v, ok := r.h.ResidentStandby(hostLabel, member1, gen)
-		return ok && sameStandby(v, expired)
+		return ok && sameStandby(v, stopping)
 	})
 	r.c.Stop()
 	if e := finishSource(t, s, nil); e != nil {
@@ -88,7 +90,6 @@ func TestResidentStandbyMacSignsOnlyACoherentReport(t *testing.T) {
 		{Revision: 1, Standby: "off"},
 		{Revision: 1, Standby: "unknown"},
 		{Revision: 1, Standby: "stopping", Until: end},
-		{Revision: 1, Standby: "on", Until: end, Expired: true},
 		{Revision: 1, Standby: "on", Until: time.UnixMilli(123)},
 	} {
 		if e := s.ReportStandby(v); !errors.Is(e, ErrRefused) {
@@ -109,7 +110,7 @@ func TestResidentStandbyGatewayDropsForgedStaleAndIncoherentReports(t *testing.T
 	end := time.Now().Add(time.Hour).UnixMilli()
 	later := end + int64(24*time.Hour/time.Millisecond)
 	value := func(revision uint64, until int64) map[string]string {
-		return map[string]string{"generation": gen, "revision": strconv.FormatUint(revision, 10), "standby": "on", "until_unix_ms": strconv.FormatInt(until, 10), "expired": "false"}
+		return map[string]string{"generation": gen, "revision": strconv.FormatUint(revision, 10), "standby": "on", "until_unix_ms": strconv.FormatInt(until, 10)}
 	}
 	write := func(m map[string]string) {
 		t.Helper()
@@ -132,6 +133,9 @@ func TestResidentStandbyGatewayDropsForgedStaleAndIncoherentReports(t *testing.T
 	otherControl.serverNonce = bytes.Repeat([]byte{0x77}, len(b.serverNonce))
 	extraField := standbyFields(t, b, host, "host-standby", value(9, later))
 	extraField["hours"] = "24"
+	// The first draft's expired field is gone from the wire (#412 review).
+	oldField := standbyFields(t, b, host, "host-standby", value(9, later))
+	oldField["expired"] = "false"
 	incoherent := func(edit func(map[string]string)) map[string]string {
 		v := value(9, later)
 		edit(v)
@@ -145,15 +149,14 @@ func TestResidentStandbyGatewayDropsForgedStaleAndIncoherentReports(t *testing.T
 		"another generation":  standbyFields(t, b, host, "host-standby", otherGeneration),
 		"another control":     standbyFields(t, otherControl, host, "host-standby", value(9, later)),
 		"an extra field":      extraField,
+		"the old field":       oldField,
 		"the same revision":   standbyFields(t, b, host, "host-standby", value(5, later)),
 		"an older revision":   standbyFields(t, b, host, "host-standby", value(4, later)),
 		"revision zero":       incoherent(func(v map[string]string) { v["revision"] = "0" }),
 		"padded revision":     incoherent(func(v map[string]string) { v["revision"] = "09" }),
 		"standby off":         incoherent(func(v map[string]string) { v["standby"] = "off" }),
 		"stopping with end":   incoherent(func(v map[string]string) { v["standby"] = "stopping" }),
-		"expired while on":    incoherent(func(v map[string]string) { v["expired"] = "true" }),
 		"short end":           incoherent(func(v map[string]string) { v["until_unix_ms"] = "123" }),
-		"expired not boolean": incoherent(func(v map[string]string) { v["expired"] = "1" }),
 	} {
 		write(m)
 	}
