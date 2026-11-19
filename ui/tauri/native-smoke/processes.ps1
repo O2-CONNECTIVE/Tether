@@ -32,7 +32,7 @@ function Get-LineageRole($Entry, $Context) {
     } catch { return 'unknown' }
 }
 function Get-LineageBaselineIdentity($Entry, $Snapshot) {
-    # Earlier baseline observation only; never authorizes ownership or changes rejection.
+    # Earlier baseline observation. Never authorizes ownership; only Test-PreexistingChild uses it to prove non-ownership.
     if ($null -eq $Snapshot) { return 'not-recorded' }
     try {
         if (@($Snapshot).Count -gt 4096 -or -not (Test-LineageCreation $Entry)) { return 'unavailable' }
@@ -44,7 +44,7 @@ function Get-LineageBaselineIdentity($Entry, $Snapshot) {
         return 'different'
     } catch { return 'unavailable' }
 }
-# Diagnostic only: the old child's recorded parent-PID relation is not ancestry proof.
+# Not ancestry proof. Test-PreexistingChild uses 'same' only to show the current edge reuses an old parent PID.
 function Get-LineageBaselineParentRelation($Entry, $Snapshot) {
     try {
         $identity = Get-LineageBaselineIdentity $Entry $Snapshot
@@ -62,7 +62,14 @@ function Get-LineageBaselineParentRelation($Entry, $Snapshot) {
         return 'different'
     } catch { return 'unavailable' }
 }
-function Stop-UnconfirmedLineage($Evidence, [string]$Reason, $Parent, $Child, $Snapshot, $ParentDepth, $Context, [string]$SearchRoot) {
+# 起動前のsnapshotに同じ身元・同じ親PIDで載っていた子は、driverより前から居たので所有ではない。
+# 現在の親は起動前にabsent/differentで、子の親PIDは再利用前の別processを指していた。時刻の前後は使わない。
+function Test-PreexistingChild($Parent, $Child, $Context) {
+    if ($Context -isnot [hashtable] -or -not $Context.ContainsKey('BeforeDriverSnapshot')) { return $false }
+    $baseline = $Context.BeforeDriverSnapshot
+    return (Get-LineageBaselineParentRelation $Child $baseline) -eq 'same' -and (Get-LineageBaselineIdentity $Parent $baseline) -in @('absent', 'different')
+}
+function Add-LineageFact($Evidence, [string]$Reason, $Parent, $Child, $Snapshot, $ParentDepth, $Context, [string]$SearchRoot) {
     if ($null -ne $Evidence) {
         $parentKnown = Test-LineageCreation $Parent
         $childKnown = Test-LineageCreation $Child
@@ -89,6 +96,9 @@ function Stop-UnconfirmedLineage($Evidence, [string]$Reason, $Parent, $Child, $S
             childBaselineParentPidRelation = Get-LineageBaselineParentRelation $Child $baseline
         }
     }
+}
+function Stop-UnconfirmedLineage($Evidence, [string]$Reason, $Parent, $Child, $Snapshot, $ParentDepth, $Context, [string]$SearchRoot) {
+    Add-LineageFact $Evidence $Reason $Parent $Child $Snapshot $ParentDepth $Context $SearchRoot
     throw 'NATIVE_LINEAGE_OWNER_UNCONFIRMED'
 }
 function Get-Descendants([int]$RootId, $Snapshot, $LineageEvidence = $null, $Context = $null, [string]$SearchRoot = 'unknown') {
@@ -107,7 +117,11 @@ function Get-Descendants([int]$RootId, $Snapshot, $LineageEvidence = $null, $Con
                     Stop-UnconfirmedLineage $LineageEvidence 'child-row-ambiguous' $parent $child $Snapshot $parentDepth $Context $SearchRoot
                 }
                 if (-not (Test-LineageCreation $child)) { Stop-UnconfirmedLineage $LineageEvidence 'child-creation-unavailable' $parent $child $Snapshot $parentDepth $Context $SearchRoot }
-                # 時刻逆順を非所有確定として除外しない。時計変動も含め探索全体を不確定にする。
+                if (Test-PreexistingChild $parent $child $Context) {
+                    Add-LineageFact $LineageEvidence 'excluded-preexisting-child' $parent $child $Snapshot $parentDepth $Context $SearchRoot
+                    continue
+                }
+                # 時刻逆順だけを根拠に非所有と確定しない。時計変動も含め探索全体を不確定にする。
                 if ($child.CreationDate -lt $parent.CreationDate) { Stop-UnconfirmedLineage $LineageEvidence 'child-older' $parent $child $Snapshot $parentDepth $Context $SearchRoot }
                 $found += $child
                 $next += $child

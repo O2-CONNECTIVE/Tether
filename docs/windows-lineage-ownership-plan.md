@@ -21,9 +21,12 @@ PR #295 の merge `089e75f3540fc0f559f2a525f7110d204d256c8b` に対する [start
 
 既存 `lineage-baseline.test.ps1` は、同じ子が起動前に存在し親が absent の場合も拒否を維持する論理を検査します。別の時間差だけを追加した合成試験は根因の証拠を増やしません。今回、新しい production 修正や重複 fixture は追加しません。
 
+> [!NOTE]
+> 2026-11-19 の [#365](https://github.com/O2-CONNECTIVE/Tether/issues/365) で、子が起動前に同じ身元・同じ親 PID で載っていて、現在の親が起動前に absent/different の場合に限り、その子と子孫を非所有として除外するように変えました。理由と試験は [native smoke の確認範囲](tauri-native-smoke.md) の「起動前から居た子を非所有と確定する」にあります。この節の記述は #295 時点のものです。
+
 ## 不採用の近道
 
-名前・profile 引数・app path・起動前から存在したという理由だけで子を除外しません。探索深さの切詰め、時刻逆順の無視、待機延長、同条件 rerun、未確定候補への kill は行いません。現在の `NATIVE_LINEAGE_OWNER_UNCONFIRMED` は保持します。
+名前・profile 引数・app path・起動前から存在したという理由だけで子を除外しません。#365 の除外は、起動前に同じ身元・同じ親 PID で載っていたことと、現在の親が起動前に absent/different だったことが揃う場合に限ります。探索深さの切詰め、時刻逆順の無視、待機延長、同条件 rerun、未確定候補への kill は行いません。現在の `NATIVE_LINEAGE_OWNER_UNCONFIRMED` は保持します。
 
 ## 次に必要な producer 契約（未実装）
 
