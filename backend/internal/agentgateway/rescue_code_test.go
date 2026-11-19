@@ -47,6 +47,14 @@ func issueRescueCode(t *testing.T, g *Gateway, reception string) string {
 // random, and one hit in 10^12 would only make the test fail, never pass.
 const wrongRescueCode = "000000000000"
 
+// The values of docs/rescue-connection-start.md (回数の制限), written out so a
+// changed constant fails here instead of moving the tests along with it.
+const (
+	specFailures   = 5   // failed matches per principal in 10 minutes
+	specValidCodes = 100 // N
+	specConcurrent = 4   // requests one principal may hold at once
+)
+
 // A code that worked once must never work again, for anyone: otherwise a
 // second operator (or a replay) reaches the host after its user answered.
 func TestRescueCodeRedeemsOnlyOnce(t *testing.T) {
@@ -115,7 +123,7 @@ func TestRescueCodeRefusesPrincipalWithoutRescueRole(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	g := rescueCodeGateway(t, &now)
 	code := issueRescueCode(t, g, "reception-a")
-	for range rescueFailureLimit + 1 {
+	for range specFailures + 1 {
 		if got, err := g.rescueCodes.redeem(g.byLabel["owner"], code); !errors.Is(err, ErrRefused) || got != "" {
 			t.Fatalf("resident_owner redeem = %q, %v; want ErrRefused", got, err)
 		}
@@ -142,7 +150,7 @@ func TestRescueFailuresStopPrincipalForTenMinutes(t *testing.T) {
 	now := start
 	g := rescueCodeGateway(t, &now)
 	op1, op2 := g.byLabel["op1"], g.byLabel["op2"]
-	for i := range rescueFailureLimit {
+	for i := range specFailures {
 		now = start.Add(time.Duration(i) * time.Minute)
 		if _, err := g.rescueCodes.redeem(op1, wrongRescueCode); !errors.Is(err, errRescueCodeInvalid) {
 			t.Fatalf("failure %d = %v; want invalid", i+1, err)
@@ -175,14 +183,14 @@ func TestRescueSuccessKeepsEarlierFailures(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	g := rescueCodeGateway(t, &now)
 	op1 := g.byLabel["op1"]
-	for i := range rescueFailureLimit - 1 {
+	for i := range specFailures - 1 {
 		if _, err := g.rescueCodes.redeem(op1, wrongRescueCode); !errors.Is(err, errRescueCodeInvalid) {
 			t.Fatalf("failure %d = %v; want invalid", i+1, err)
 		}
 	}
 	code := issueRescueCode(t, g, "reception-a")
 	if got, err := g.rescueCodes.redeem(op1, code); err != nil || got != "reception-a" {
-		t.Fatalf("success after %d failures = %q, %v", rescueFailureLimit-1, got, err)
+		t.Fatalf("success after %d failures = %q, %v", specFailures-1, got, err)
 	}
 	if _, err := g.rescueCodes.redeem(op1, wrongRescueCode); !errors.Is(err, errRescueCodeInvalid) {
 		t.Fatalf("the success was counted as a failure: %v", err)
@@ -206,7 +214,7 @@ func TestRescueFailuresHoldUnderConcurrentAttempts(t *testing.T) {
 		var mu sync.Mutex
 		results := map[error]int{}
 		ready := make(chan struct{})
-		for range MaxSessionsPerPrincipal {
+		for range specConcurrent {
 			tried.Add(1)
 			started.Add(1)
 			go func() {
@@ -224,8 +232,8 @@ func TestRescueFailuresHoldUnderConcurrentAttempts(t *testing.T) {
 		started.Wait()
 		close(ready)
 		tried.Wait()
-		if results[errRescueCodeInvalid] != rescueFailureLimit || results[errRescueLocked] != 4*MaxSessionsPerPrincipal-rescueFailureLimit {
-			t.Fatalf("round %d: %v; want %d tries and the rest locked", round, results, rescueFailureLimit)
+		if results[errRescueCodeInvalid] != specFailures || results[errRescueLocked] != 4*specConcurrent-specFailures {
+			t.Fatalf("round %d: %v; want %d tries and the rest locked", round, results, specFailures)
 		}
 	}
 }
@@ -237,23 +245,23 @@ func TestRescueCodesStopAtHundredValid(t *testing.T) {
 	now := start
 	g := rescueCodeGateway(t, &now)
 	var first string
-	for i := range maxRescueCodes {
+	for i := range specValidCodes {
 		code := issueRescueCode(t, g, fmt.Sprintf("reception-%d", i))
 		if i == 0 {
 			first = code
 		}
 	}
 	if code, err := g.rescueCodes.issue("reception-over"); !errors.Is(err, errRescueCodesFull) || code != "" {
-		t.Fatalf("issue over %d = %q, %v; want full", maxRescueCodes, code, err)
+		t.Fatalf("issue over %d = %q, %v; want full", specValidCodes, code, err)
 	}
 	if _, err := g.rescueCodes.redeem(g.byLabel["op1"], first); err != nil {
 		t.Fatal(err)
 	}
 	issueRescueCode(t, g, "reception-after-redeem")
 	if _, err := g.rescueCodes.issue("reception-over"); !errors.Is(err, errRescueCodesFull) {
-		t.Fatalf("issue over %d after one redeem = %v; want full", maxRescueCodes, err)
+		t.Fatalf("issue over %d after one redeem = %v; want full", specValidCodes, err)
 	}
-	now = start.Add(rescueCodeLifetime)
+	now = start.Add(5 * time.Minute)
 	issueRescueCode(t, g, "reception-after-expiry")
 }
 
