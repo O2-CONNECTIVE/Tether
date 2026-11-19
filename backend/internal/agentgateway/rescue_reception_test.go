@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,6 +168,68 @@ func TestRescueReceptionIssuesASignedCodeOnlyForTheHolderOfK(t *testing.T) {
 			if _, err := g.rescueCodes.redeem(g.byLabel["op1"], res.Code); err != nil {
 				t.Fatalf("the signed code is not the live code: %v", err)
 			}
+		})
+	}
+}
+
+// rescueTorsionPoints are the canonical encodings of the eight points of
+// order 1, 2, 4 and 8 on edwards25519 (the same y values as libsodium's
+// has_small_order list).
+var rescueTorsionPoints = []string{
+	"0100000000000000000000000000000000000000000000000000000000000000", // order 1
+	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // order 2, y = p-1
+	"0000000000000000000000000000000000000000000000000000000000000000", // order 4, y = 0
+	"0000000000000000000000000000000000000000000000000000000000000080",
+	"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", // order 8
+	"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+	"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+	"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+}
+
+// A small-order K lets anyone make, without a private key, a proof that
+// crypto/ed25519 accepts: with S = 0 and R one of the torsion points, the
+// check [S]B = R + [k]A holds once R = -[k]A. A reception on such a K would
+// later let anyone resume it and pass the host key pin, so the gateway takes
+// no small-order K, in any encoding Go decodes (PR #429's review, #425).
+func TestRescueReceptionRefusesASmallOrderK(t *testing.T) {
+	keys := append([]string{
+		"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // y = p, so 0
+		"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // y = p+1, so 1
+		"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		"0100000000000000000000000000000000000000000000000000000000000080", // x = -0
+		"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	}, rescueTorsionPoints...)
+	for _, h := range keys {
+		t.Run(h[:8]+".."+h[62:], func(t *testing.T) {
+			now := time.Unix(1_800_000_000, 0)
+			g := rescueReceptionGateway(t, &now)
+			raw, _ := hex.DecodeString(h)
+			pub, err := ssh.NewPublicKey(ed25519.PublicKey(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := RescueRequest{Key: pub.Marshal(), HostNonce: rescueNonce(0x68), Purpose: RescuePurposeNew}
+		forge:
+			for n := range 256 {
+				r.GatewayNonce = rescueNonce(byte(n))
+				msg := RescueTranscript(g.RescueEndpoint(), r.Key, r.GatewayNonce, r.Purpose, nil)
+				for _, rh := range rescueTorsionPoints {
+					sig, _ := hex.DecodeString(rh + "0000000000000000000000000000000000000000000000000000000000000000")
+					if ed25519.Verify(ed25519.PublicKey(raw), msg, sig) {
+						r.Proof = sig
+						break forge
+					}
+				}
+			}
+			if r.Proof == nil {
+				t.Fatal("crypto/ed25519 accepts no forged proof for this K; the threat is gone, so re-read this test")
+			}
+			res, err := g.OpenRescue(r)
+			if !errors.Is(err, ErrRefused) || res.Code != "" || len(g.rescueCodes.codes) != 0 || len(g.rescue.records) != 0 {
+				t.Fatalf("OpenRescue with a small-order K and a forged proof = code %q, %v with %d records; want ErrRefused and no reception", res.Code, err, len(g.rescue.records))
+			}
+			openRescue(t, g, 0) // a K of prime order still opens
 		})
 	}
 }
