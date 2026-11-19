@@ -157,11 +157,24 @@ func (c *rescueClocks) recheck(t *testing.T) {
 	}
 }
 
-// settle delivers two ticks, so the first one was fully handled before it returns.
+// settle delivers two ticks, so the first one was fully handled before it
+// returns. The second one may still be handled after the clocks move next.
 func (c *rescueClocks) settle(t *testing.T) {
 	t.Helper()
 	c.recheck(t)
 	c.recheck(t)
+}
+
+// recheckEnding delivers one tick after the clocks moved past an end, or none
+// if the tick still handled from settle already found that end.
+func (c *rescueClocks) recheckEnding(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case c.tick <- time.Now():
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the state machine neither took a tick nor ended within 10s")
+	}
 }
 
 func rescueSigner(seed byte) ssh.Signer {
@@ -571,14 +584,14 @@ func TestRescueEndRevokesGrant(t *testing.T) {
 			f.clocks.settle(t)
 			f.requireLive(t)
 			f.clocks.advance(time.Nanosecond, 0)
-			f.clocks.recheck(t)
+			f.clocks.recheckEnding(t, f.r.Done())
 		}},
 		{"壁時計で期限", func(t *testing.T, f *rescueFixture) {
 			f.clocks.advance(0, 2*time.Hour-time.Nanosecond)
 			f.clocks.settle(t)
 			f.requireLive(t)
 			f.clocks.advance(0, time.Nanosecond)
-			f.clocks.recheck(t)
+			f.clocks.recheckEnding(t, f.r.Done())
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
