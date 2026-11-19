@@ -20,7 +20,7 @@ func residentStandbySchema() map[string]any {
 	success := closedObject(map[string]any{
 		"schema_version": map[string]any{"type": "integer", "enum": []int{1}},
 		"standby":        stringEnum("on", "stopping"),
-		"standby_until":  map[string]any{"oneOf": []any{map[string]any{"type": "string"}, map[string]any{"enum": []any{nil}}}},
+		"standby_until":  map[string]any{"oneOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "null"}}},
 		"remaining_ms":   nonnegativeInteger(),
 	}, "schema_version", "standby", "standby_until", "remaining_ms")
 	return map[string]any{"type": "object", "oneOf": []any{
