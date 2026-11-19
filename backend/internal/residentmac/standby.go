@@ -53,6 +53,9 @@ type Standby struct {
 	factory       *FixedFactory
 	makeConnector func(context.Context) (residentConnector, error)
 	clock         func() (mono, wall time.Time) // nil reads elapsedNow and time.Now; tests replace it
+	// reportStandby sends one standby report over the control; nil sends it
+	// with lease.ReportStandby. Tests replace it: they cannot hold a real lease.
+	reportStandby func(*agenttransport.ResidentSourceLease, agentgateway.ResidentStandby)
 	updates       chan struct{}
 	observation   StandbyObservation
 	lastRequest   uint64
