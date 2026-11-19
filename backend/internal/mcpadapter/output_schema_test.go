@@ -107,6 +107,10 @@ func checkOutputShape(schema map[string]any, value any) error {
 		if max, ok := schema["maximum"].(float64); ok && n > max {
 			return fmt.Errorf("above maximum")
 		}
+	case "null":
+		if value != nil {
+			return fmt.Errorf("not null")
+		}
 	case nil:
 	default:
 		return fmt.Errorf("unsupported type")

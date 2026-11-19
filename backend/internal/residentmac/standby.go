@@ -53,6 +53,9 @@ type Standby struct {
 	factory       *FixedFactory
 	makeConnector func(context.Context) (residentConnector, error)
 	clock         func() (mono, wall time.Time) // nil reads elapsedNow and time.Now; tests replace it
+	// reportStandby sends one standby report over the control; nil sends it
+	// with lease.ReportStandby. Tests replace it: they cannot hold a real lease.
+	reportStandby func(*agenttransport.ResidentSourceLease, agentgateway.ResidentStandby)
 	updates       chan struct{}
 	observation   StandbyObservation
 	lastRequest   uint64
@@ -303,13 +306,31 @@ func (s *Standby) run(c *standbyCycle) {
 	stop()
 	var runDone chan error
 	monitorDone := make(chan struct{})
+	var reportDone chan struct{}
 	if e == nil {
 		c.mu.Lock()
 		c.connector = connector
 		c.mu.Unlock()
 		runDone = make(chan error, 1)
 		go func() { runDone <- connector.Run(c.ctx) }()
-		go func() { defer close(monitorDone); s.monitor(c) }()
+		reports := make(chan standbyReport, 1)
+		reportDone = make(chan struct{})
+		go func() {
+			defer close(reportDone)
+			for {
+				select {
+				case <-c.ctx.Done():
+					return
+				case report := <-reports:
+					if s.reportStandby != nil {
+						s.reportStandby(report.lease, report.value)
+					} else {
+						_ = report.lease.ReportStandby(report.value)
+					}
+				}
+			}
+		}()
+		go func() { defer close(monitorDone); s.monitor(c, reports) }()
 		for c.ctx.Err() == nil {
 			lease, err := connector.Accept(c.ctx)
 			if err != nil {
@@ -353,6 +374,13 @@ func (s *Standby) run(c *standbyCycle) {
 			case <-cleanup.Done():
 				transportErr = errors.Join(transportErr, ErrStandbyUnknown)
 			}
+		}
+	}
+	if reportDone != nil {
+		select {
+		case <-reportDone:
+		case <-cleanup.Done():
+			transportErr = errors.Join(transportErr, ErrStandbyUnknown)
 		}
 	}
 	select {
@@ -564,9 +592,18 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 	}
 	return errors.Join(err, finish)
 }
-func (s *Standby) monitor(c *standbyCycle) {
+
+type standbyReport struct {
+	lease *agenttransport.ResidentSourceLease
+	value agentgateway.ResidentStandby
+}
+
+func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
+	var reportedLease *agenttransport.ResidentSourceLease
+	var reported agentgateway.ResidentStandby
+	hasReported := false
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -650,7 +687,25 @@ func (s *Standby) monitor(c *standbyCycle) {
 		if !reflect.DeepEqual(before, s.observation) {
 			s.changedLocked()
 		}
+		var report agentgateway.ResidentStandby
+		sendReport := false
+		if lease != nil && (s.observation.Standby == "on" || s.observation.Standby == "stopping") {
+			report = agentgateway.ResidentStandby{Revision: s.observation.Revision, Standby: s.observation.Standby, Until: s.observation.StandbyUntil}
+			sendReport = !hasReported || reportedLease != lease || reported.Standby != report.Standby || !reported.Until.Equal(report.Until)
+		}
 		s.mu.Unlock()
+		if sendReport {
+			select {
+			case reports <- standbyReport{lease: lease, value: report}:
+			default:
+				select {
+				case <-reports:
+				default:
+				}
+				reports <- standbyReport{lease: lease, value: report}
+			}
+			reportedLease, reported, hasReported = lease, report, true
+		}
 		if work != nil && lease != nil && (owned.Unknown || owned.Owned == 0) {
 			var collection error
 			if owned.Unknown {

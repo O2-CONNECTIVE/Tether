@@ -10,6 +10,20 @@
 
 保持出力読取に対応するbackendは `tether_fixed_read_output` も公開します。byte cursorと最大4096 decoded bytesによる非ack読取で、[保持出力読取](resident-read-output.md)のversion 1 schemaを使います。既存work結果schemaは変更しません。
 
+### 待機の期限の照会（#412）
+
+待機の状態に対応するbackendは `tether_standby_status` も公開します。操作する側の AI が、待機の期限の前に作業をまとめられるようにするためです（[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399) の決定）。
+
+- 入力は無しです。argumentsが無いか `{}` だけを受け、それ以外はinvalid paramsとしてbackendを呼びません。延長の口はなく、延長はMacの前にいる人の操作（foregroundの `extend`）だけです。
+- 出力はversion 1の `standby`（`on` / `stopping`）、`standby_until`（UTCのRFC 3339、ミリ秒。Macが終わりを出さない間はnull）、`remaining_ms` です。`remaining_ms` はgatewayの時計で `standby_until` までを数え、負なら0、`standby` が `on` でなければ0です。
+- エラーは `not_read`（要求の取消）、`not_reported`（controlは生きているが、まだ報告していない）、`control_ended`（`reinitialize_required: true`。sessionの世代のcontrolが無い）です。状態照会はcontrolの状態を1回だけ読み、その結果で応答を決めます。
+- 値の出どころは、Macがその常駐のcontrolの上で送る `resident_standby` です。wire fieldは `generation`、`revision`、`standby`、`until_unix_ms` の4値に `type` と `signature` を加えます。Macのホスト鍵で、binding（endpoint・host・principal・世代・両nonce・両鍵）に `host-standby` の役割とこの順の4値を加えて署名します。gatewayは今のcontrolの、前に採ったものよりrevisionの大きい値だけを採り、署名の合わない値・形の違う値・古い値は捨てます。捨てても、報告は権限を持たないのでcontrolは切りません。値はcontrolと一緒に消えます。
+- `stopping` はcontrolが残っている間だけ届きます。作業が無い場合、期限でcontrolはすぐ閉じるため、AIには `remaining_ms` の0と、その後の `control_ended` として見えます。
+- 期限の意味は [#406](https://github.com/O2-CONNECTIVE/Tether/issues/406) のままです。経過時間と壁時計の早い方で切れ、一度切れたら戻りません。Macは自分の観測の値を写して送るだけで、gatewayは値を作りません。
+- 返すのは、sessionの主体（`resident_owner`）・その登録済みhost・sessionの世代のcontrolの値だけです。
+
+制約: 残り時間はgatewayの時計で数えるので、Macとgatewayの時計のずれがそのまま乗ります。新しいMacが古いgatewayに繋ぐと、古いgatewayは知らない型としてcontrolを閉じます。gatewayを先に更新してください。
+
 [gateway](../backend/internal/agentgateway/http.go) が認証済みprincipal・明示enrollment・現在のcontrol generationへ束縛した別経路です。旧4本と恒久的unbound discoveryを変更せず、sessionへ後からgrantを付けません。generation切断後の結果保持・再initialize、許可発行、失効の意味も変えません。
 
 ## 公開名の統一
