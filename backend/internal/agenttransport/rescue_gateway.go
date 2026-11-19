@@ -14,14 +14,20 @@ import (
 	"github.com/coder/websocket"
 )
 
+// RescueSubprotocol is the only subprotocol accepted by the rescue reception route.
+// See docs/rescue-connection-start.md, 受付の登録.
 const RescueSubprotocol = "rescue-agent-reception.v1"
 
+// RescueRegistry stores rescue receptions; *agentgateway.Gateway implements it.
+// See docs/rescue-connection-start.md, 受付の登録 and 受付 OFF のホストへの要求.
 type RescueRegistry interface {
 	AdmitRescue() error
 	OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error)
 	EndRescue([]byte)
 }
 
+// RescueHandler serves the gateway end of the rescue reception route.
+// See docs/rescue-connection-start.md, 受付の登録 and 受付 OFF のホストへの要求.
 type RescueHandler struct {
 	reg    RescueRegistry
 	mu     sync.Mutex
@@ -32,6 +38,8 @@ type RescueHandler struct {
 	cancel context.CancelFunc
 }
 
+// NewRescueHandler creates a handler backed by the given reception registry.
+// See docs/rescue-connection-start.md, 受付の登録.
 func NewRescueHandler(reg RescueRegistry) (*RescueHandler, error) {
 	if reg == nil {
 		return nil, ErrConfig
@@ -40,9 +48,11 @@ func NewRescueHandler(reg RescueRegistry) (*RescueHandler, error) {
 	return &RescueHandler{reg: reg, active: map[*closer][]byte{}, idle: make(chan struct{}), ctx: ctx, cancel: cancel}, nil
 }
 
+// ServeHTTP accepts and serves one host reception.
+// See docs/rescue-connection-start.md, 受付の登録.
 func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h == nil || h.reg == nil {
-		http.Error(w, "", 503)
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
 	status := 0
@@ -69,18 +79,18 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	closed := h.closed
 	h.mu.Unlock()
 	if closed {
-		http.Error(w, "", 503)
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
 	if err := h.reg.AdmitRescue(); err != nil {
 		if errors.Is(err, agentgateway.ErrRescueBusy) {
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, "", 503)
+			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		} else if errors.Is(err, agentgateway.ErrRescueRate) {
 			w.Header().Set("Retry-After", "60")
-			http.Error(w, "", 429)
+			http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
 		} else {
-			http.Error(w, "", 503)
+			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		}
 		return
 	}
@@ -90,16 +100,12 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.closed {
 		h.mu.Unlock()
 		cancel()
-		http.Error(w, "", 503)
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
 	h.active[c] = nil
 	h.mu.Unlock()
 	defer func() {
-		c.start()
-		cleanup, stop := context.WithTimeout(context.Background(), DefaultBudgets().Cleanup)
-		_ = c.wait(cleanup)
-		stop()
 		h.mu.Lock()
 		id := h.active[c]
 		delete(h.active, c)
@@ -107,9 +113,14 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			close(h.idle)
 		}
 		h.mu.Unlock()
+		// End the registry entry before waiting for transport close confirmation.
 		if id != nil {
 			h.reg.EndRescue(id)
 		}
+		c.start()
+		cleanup, stop := context.WithTimeout(context.Background(), DefaultBudgets().Cleanup)
+		_ = c.wait(cleanup)
+		stop()
 	}()
 	timer := time.AfterFunc(DefaultBudgets().Registration, cancel)
 	ws, err := websocket.Accept(&hijackWriter{ResponseWriter: w, closer: c}, r, &websocket.AcceptOptions{Subprotocols: []string{RescueSubprotocol}, CompressionMode: websocket.CompressionDisabled})
@@ -203,6 +214,8 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _, _ = ws.Read(life)
 }
 
+// Close turns the reception route OFF and ends every active reception.
+// See docs/rescue-connection-start.md, 受付 OFF のホストへの要求.
 func (h *RescueHandler) Close(ctx context.Context) error {
 	if h == nil || ctx == nil {
 		return ErrConfig

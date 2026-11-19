@@ -238,7 +238,7 @@ func TestRescueRouteMountedOnlyWithIdentityHandler(t *testing.T) {
 	}
 	defer h.Close(context.Background())
 	with := routes("/mcp", "/agent-register", false, nil, http.NotFoundHandler(), http.NotFoundHandler(), h)
-	without := routes("/mcp", "/agent-register", false, nil, http.NotFoundHandler(), http.NotFoundHandler())
+	without := routes("/mcp", "/agent-register", false, nil, http.NotFoundHandler(), http.NotFoundHandler(), nil)
 	for _, tc := range []struct {
 		name    string
 		handler http.Handler

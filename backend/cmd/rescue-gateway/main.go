@@ -254,12 +254,14 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 		return closeUnserved(nil, gw.Close, diagnostic, 2)
 	}
 	var rescue *agenttransport.RescueHandler
+	var rescueRoute http.Handler
 	if cfg.rescueIdentity != nil {
 		rescue, err = agenttransport.NewRescueHandler(gw)
 		if err != nil {
 			report(diagnostic, "設定が不正または不完全です")
 			return closeUnserved(registration.Close, gw.Close, diagnostic, 2)
 		}
+		rescueRoute = rescue
 	}
 	// One-time composition happens before the listener can initialize any MCP
 	// session. Handler and gateway share the same pinned mapping and signer.
@@ -312,7 +314,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 		errs = append(errs, registration.Close(ctx))
 		return errors.Join(errs...)
 	}
-	code = serve(ctx, ln, routes(mcpPath, registrationPath, metadata, pair, gw, registration, rescue), closeHandlers, gw.Close, diagnostic)
+	code = serve(ctx, ln, routes(mcpPath, registrationPath, metadata, pair, gw, registration, rescueRoute), closeHandlers, gw.Close, diagnostic)
 	if pilot && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		report(diagnostic, "試行期限に達したため停止しました")
 	}
@@ -355,15 +357,15 @@ func closeUnserved(closeRegistration, closeGateway func(context.Context) error, 
 // protected resource metadata to the gateway. In Access mode discovery is the
 // Access edge's, so the metadata paths are 404 here. No prefix match, path
 // cleaning or redirect applies.
-func routes(mcpPath, registrationPath string, metadata bool, pair, gw, registration http.Handler, rescue ...http.Handler) http.Handler {
+func routes(mcpPath, registrationPath string, metadata bool, pair, gw, registration, rescue http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL == nil || r.URL.RawPath != "" {
 			http.NotFound(w, r)
 			return
 		}
 		switch p := r.URL.Path; {
-		case len(rescue) > 0 && rescue[0] != nil && p == agentgateway.RescuePath:
-			rescue[0].ServeHTTP(w, r)
+		case rescue != nil && p == agentgateway.RescuePath:
+			rescue.ServeHTTP(w, r)
 		case pair != nil && p == agentgateway.PairPath:
 			pair.ServeHTTP(w, r)
 		case p == registrationPath:

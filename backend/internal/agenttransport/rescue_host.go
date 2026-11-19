@@ -14,10 +14,16 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// RescueClientConfig selects the public reception endpoint and pinned gateway identity keys.
+// See docs/rescue-connection-start.md, 受付の登録.
 type RescueClientConfig struct {
 	Endpoint string
 	Pins     []ssh.PublicKey
 }
+
+// RescueClient owns one reception from 受付 ON until it ends.
+// Its connection lifetime is independent of the context used to open it; see
+// docs/rescue-connection-start.md, 受付の登録 and 受付 OFF のホストへの要求.
 type RescueClient struct {
 	transport           func(acquirer) http.RoundTripper
 	after               func(time.Duration) <-chan time.Time
@@ -32,6 +38,8 @@ type RescueClient struct {
 	closer              *closer
 }
 
+// NewRescueClient validates the endpoint and pins and creates a fresh reception key.
+// See docs/rescue-connection-start.md, 受付の登録.
 func NewRescueClient(cfg RescueClientConfig) (*RescueClient, error) {
 	u, endpointErr := parseEndpoint(cfg.Endpoint)
 	if endpointErr != nil || u.Path != agentgateway.RescuePath || len(cfg.Pins) < 1 || len(cfg.Pins) > 2 {
@@ -53,6 +61,9 @@ func NewRescueClient(cfg RescueClientConfig) (*RescueClient, error) {
 	_ = pub
 	return &RescueClient{endpoint: cfg.Endpoint, pins: pins, key: key, done: make(chan struct{}), transport: nativeTransport}, nil
 }
+
+// Open registers the reception and returns its code after verifying the signed result.
+// ctx bounds only the handshake; the established reception lasts until Close, code expiry, or peer closure.
 func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	if c == nil || ctx == nil {
 		return "", ErrConfig
@@ -66,13 +77,16 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 		return "", ErrUsed
 	}
 	c.used = true
-	life, cancel := context.WithCancel(ctx)
+	// Keep the reception alive after Open returns; ctx is attached only for the handshake.
+	life, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
 	c.mu.Unlock()
 	link := newCloser(cancel)
 	c.mu.Lock()
 	c.closer = link
 	c.mu.Unlock()
+	stopHandshake := context.AfterFunc(ctx, cancel)
+	defer stopHandshake()
 	context.AfterFunc(life, link.start)
 	hc := &http.Client{Transport: c.transport(link), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	ws, resp, err := websocket.Dial(life, c.endpoint, &websocket.DialOptions{HTTPClient: hc, Subprotocols: []string{RescueSubprotocol}, CompressionMode: websocket.CompressionDisabled})
@@ -204,9 +218,15 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 		c.end()
 		return "", ErrRefused
 	}
+	if !stopHandshake() || !reg.Stop() {
+		c.end()
+		return "", ErrRefused
+	}
 	go func() { _, _, _ = ws.Read(life); c.end() }()
 	return m["code"], nil
 }
+
+// Done closes when the reception ends and its private key is discarded.
 func (c *RescueClient) Done() <-chan struct{} { return c.done }
 func (c *RescueClient) end() {
 	if c == nil {
@@ -235,6 +255,8 @@ func (c *RescueClient) end() {
 		link.start()
 	}
 }
+
+// Close turns reception OFF and ends the connection.
 func (c *RescueClient) Close() error {
 	if c == nil {
 		return ErrConfig
