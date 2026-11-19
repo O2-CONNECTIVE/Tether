@@ -79,7 +79,9 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 
 - `roles`のない principal、空の`roles`、知らない値・重複は、設定の読み込みで拒否し、gatewayは起動しません。
 - 両方の役割を持つ本人でも、自分の常駐のhostへレスキューの接続はできません。常駐のペアがあるMacでのレスキューは、[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)の流れ（モードを切り替え、その回だけの鍵を使う）で行い、常駐のhostの項目や鍵を経由しません。
-- 判定はgatewayの`Connect`・`ConfigureHosts`（paired枠）・`ConfigureResident`で行います。CLI envelopeの検査は[agent CLI](agent-cli.md#役割と-host-の分け方)を参照してください。
+- 常駐の作業のroute（`ConnectResident`）には、汎用のMCP sessionを束縛しません。常駐の接続世代の切り替わりの間でも、汎用の4 toolsで常駐のhostへ作業を送れません。
+- `ConfigureResident`は、hostの`principals`が常駐の本人1人でないとき、またはすでに登録（`Connect`）を受け付けた後には拒否します。
+- 判定はgatewayの`Connect`・`ConfigureHosts`（paired枠）・`ConfigureResident`・`initialize`で行います。CLI envelopeの検査は[agent CLI](agent-cli.md#役割と-host-の分け方)を参照してください。
 - 役割ごとにIdPへ求める強さは`role_assurance`で指定します（省略時はどの役割も`any`）。`multi_factor`は、tokenの多要素を確かめる検査（[#398](https://github.com/O2-CONNECTIVE/Tether/issues/398)）が入るまで、指定すると起動を拒否します。検査しないまま受理すると、単要素のtokenが通るためです。
 - 起動を拒否したときの診断は、文書の何番目の項目かと理由を示します。label・subject・鍵は出力しません。
 

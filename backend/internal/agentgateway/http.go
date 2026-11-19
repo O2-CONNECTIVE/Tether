@@ -264,7 +264,9 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 			}
 		}
 	}
-	if rt != nil && ended(rt) {
+	// A route that ConnectResident opened carries one resident work and is
+	// never a target for the generic tools.
+	if rt != nil && (ended(rt) || !rt.rescue) {
 		rt = nil
 	}
 	// A resident session, or the catalog session of an enrolled principal whose

@@ -49,12 +49,11 @@ func (idleControl) BeginResidentRun(context.Context, string, string, string, str
 const residentEndpoint = "wss://gateway.example.invalid/register"
 
 func TestRoleRescueOperatorCannotReachAResidentHost(t *testing.T) {
-	// member-1 owns "home" as a resident; member-2 only rescues and is (wrongly)
-	// listed on "home" too. member-3 has both roles and owns "home-3".
+	// member-1 owns "home"; member-3 has both roles and owns "home-3";
 	// member-4 only rescues and has a plain host of its own.
 	r := roleRig(t, residentOnly, rescueOnly, bothRoles, rescueOnly)
 	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{
-		{Label: "home", Key: approvedHostKey(t, 1), Principals: []string{label(0), label(1)}},
+		{Label: "home", Key: approvedHostKey(t, 0), Principals: []string{label(0)}},
 		{Label: "home-3", Key: approvedHostKey(t, 2), Principals: []string{label(2)}},
 		{Label: "desk", Key: approvedHostKey(t, 3), Principals: []string{label(3)}},
 	}); err != nil {
@@ -66,20 +65,58 @@ func TestRoleRescueOperatorCannotReachAResidentHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A rescue connection to a host that serves rescue still opens; the
-	// refusals below are about the resident host, not a broken Connect.
+	// refusal below is about the resident host, not a broken Connect.
 	if _, err := r.connectApproved(3, time.Minute); err != nil {
 		t.Fatalf("rescue operator on its rescue host: Connect = %v", err)
-	}
-	// The resident host's key and grant are the owner's. A rescue connection
-	// there would hand a rescue operator the owner's resident host.
-	if _, err := r.connectApproved(1, time.Minute); !errors.Is(err, agentgateway.ErrRefused) {
-		t.Fatalf("rescue operator to a resident host: Connect = %v, want ErrRefused", err)
 	}
 	// #404 decision 4: rescue on a Mac that has a resident pair runs with a
 	// one-time key, never through the resident host entry, so holding both
 	// roles does not open the rescue path to one's own resident host.
 	if _, err := r.connectApproved(2, time.Minute); !errors.Is(err, agentgateway.ErrRefused) {
 		t.Fatalf("dual-role owner to its own resident host: Connect = %v, want ErrRefused", err)
+	}
+}
+
+func TestRoleResidentHostServesOnlyItsOwner(t *testing.T) {
+	r := roleRig(t, residentOnly, rescueOnly, residentOnly, residentOnly)
+	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{
+		{Label: "shared-rescue", Key: approvedHostKey(t, 0), Principals: []string{label(0), label(1)}},
+		{Label: "shared-owners", Key: approvedHostKey(t, 1), Principals: []string{label(2), label(3)}},
+		{Label: "other", Key: approvedHostKey(t, 2), Principals: []string{label(1)}},
+		{Label: "own", Key: approvedHostKey(t, 3), Principals: []string{label(0)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		entries []agentgateway.ResidentEnrollment
+	}{
+		// Anyone else on the resident host could reach the owner's host.
+		{"a rescue operator also listed", []agentgateway.ResidentEnrollment{{HostLabel: "shared-rescue", PrincipalLabel: label(0)}}},
+		{"two owners of one host", []agentgateway.ResidentEnrollment{{HostLabel: "shared-owners", PrincipalLabel: label(2)}, {HostLabel: "shared-owners", PrincipalLabel: label(3)}}},
+		{"a host the owner is not listed on", []agentgateway.ResidentEnrollment{{HostLabel: "other", PrincipalLabel: label(0)}}},
+	} {
+		if err := r.gw.ConfigureResident(residentEndpoint, idleControl{}, tc.entries); !errors.Is(err, agentgateway.ErrConfig) {
+			t.Fatalf("%s: ConfigureResident = %v, want ErrConfig", tc.name, err)
+		}
+	}
+	if err := r.gw.ConfigureResident(residentEndpoint, idleControl{}, []agentgateway.ResidentEnrollment{{HostLabel: "own", PrincipalLabel: label(0)}}); err != nil {
+		t.Fatalf("the owner's own host: ConfigureResident = %v", err)
+	}
+}
+
+func TestRoleResidentEnrollmentAfterAConnectionIsRefused(t *testing.T) {
+	// Host use is fixed before any registration: enrolling a host that a
+	// rescue route already reached would leave that route on a resident host.
+	r := roleRig(t, bothRoles)
+	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "desk", Key: approvedHostKey(t, 0), Principals: []string{label(0)}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.connectApproved(0, time.Minute); err != nil {
+		t.Fatalf("rescue connection: %v", err)
+	}
+	if err := r.gw.ConfigureResident(residentEndpoint, idleControl{}, []agentgateway.ResidentEnrollment{{HostLabel: "desk", PrincipalLabel: label(0)}}); !errors.Is(err, agentgateway.ErrRefused) {
+		t.Fatalf("ConfigureResident after a connection = %v, want ErrRefused", err)
 	}
 }
 
@@ -246,5 +283,21 @@ func TestRoleAssuranceIsCheckedButMultiFactorRefusedUntilEnforced(t *testing.T) 
 	if _, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), RoleAssurance: map[agentgateway.Role]agentgateway.Assurance{agentgateway.RoleResidentOwner: agentgateway.AssuranceMultiFactor},
 		Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Roles: residentOnly}}}); !errors.Is(err, agentgateway.ErrConfig) {
 		t.Fatalf("New with multi_factor = %v, want ErrConfig", err)
+	}
+}
+
+func TestRoleRescueNeverReachesAPairSlot(t *testing.T) {
+	// A pair slot is a resident host even before (or without) a resident
+	// enrollment: its key came from the owner's pairing, not a rescue consent.
+	r := roleRig(t, bothRoles)
+	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: "home", Principals: []string{label(0)}, Paired: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.gw.ConfigurePairing(agentgateway.PairingConfig{Verifier: pairingVerifier(t), Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: residentEndpoint,
+		Records: []agentgateway.PairRecord{{HostLabel: "home", HostKey: approvedHostKey(t, 0), Issuer: testIssuer, Subject: subjects[0]}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.connectApproved(0, time.Minute); !errors.Is(err, agentgateway.ErrRefused) {
+		t.Fatalf("rescue connection to a pair slot: Connect = %v, want ErrRefused", err)
 	}
 }

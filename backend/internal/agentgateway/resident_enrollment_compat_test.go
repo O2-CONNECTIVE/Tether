@@ -115,22 +115,18 @@ func TestResidentEnrollmentCompatibilityOneShotAndDetachedValues(t *testing.T) {
 	}
 }
 
-func TestResidentEnrollmentCompatibilitySameHostIsSeparatePrincipalSlots(t *testing.T) {
+// #408: a resident host serves only its owner. Two principals enrolled on
+// one host were accepted before as separate slots; now the configuration is
+// refused, because either could reach the other's resident host.
+func TestResidentEnrollmentCompatibilitySameHostIsRefused(t *testing.T) {
 	g, entries := legacyEnrollmentFixture(t)
 	entries[1].HostLabel = entries[0].HostLabel
-	if err := g.ConfigureResident(legacyEndpoint, legacyControl(), entries); err != nil {
-		t.Fatal(err)
+	if err := g.ConfigureResident(legacyEndpoint, legacyControl(), entries); !errors.Is(err, ErrConfig) {
+		t.Fatalf("shared resident host = %v, want ErrConfig", err)
 	}
-	a, b := g.resident.entries[g.byLabel["member1"]], g.resident.entries[g.byLabel["member2"]]
-	if len(g.resident.entries) != 2 || a == b || a == nil || b == nil {
-		t.Fatal("unexpected slot mapping")
+	if g.resident != nil {
+		t.Fatal("a refused enrollment configured the resident")
 	}
-	a.works["synthetic"] = &residentWork{}
-	if len(b.works) != 0 {
-		t.Fatal("principal slots share mutable state")
-	}
-	// This is configuration acceptance only, not a shared-host authorization,
-	// connection, concurrent execution or possession proof.
 }
 
 func TestResidentEnrollmentCompatibilityCannotAttachAfterHTTPInitialize(t *testing.T) {

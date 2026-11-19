@@ -99,6 +99,7 @@ type route struct {
 	channel     *agentchannel.Channel
 	client      *agentwire.Client
 	slots       chan struct{}
+	rescue      bool          // opened by Connect; only such a route binds generic MCP sessions
 	ended       chan struct{} // closed once the route is no longer routable
 	cleanupDone chan struct{}
 	cleanupErr  error
@@ -314,6 +315,7 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 		g.retire(r)
 		return nil, ErrRefused
 	}
+	r.rescue = rescue
 	p.route = r
 	g.watchers.Add(1)
 	g.mu.Unlock()
