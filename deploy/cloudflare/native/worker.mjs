@@ -3,8 +3,9 @@
 //
 // DENY ALL unless env.TETHER_NATIVE_GATE equals GATE_VALUE exactly. Even then
 // only POST/DELETE MCP_PATH, OAuth protected-resource metadata GETs, a GET
-// WebSocket upgrade at REGISTER_PATH and, when TETHER_NATIVE_PAIRING opts in,
-// POST PAIR_PATH are forwarded, to fixed upstream paths, through the ONE VPC
+// WebSocket upgrade at REGISTER_PATH, when TETHER_NATIVE_PAIRING opts in POST
+// PAIR_PATH, and when TETHER_NATIVE_RESCUE opts in a GET WebSocket upgrade at
+// RESCUE_PATH are forwarded, to fixed upstream paths, through the ONE VPC
 // Service binding env.TETHER_NATIVE_VPC. There is no global fetch, no
 // request-selected target and no redirect. This Worker authenticates
 // nobody and issues no grant: for
@@ -22,12 +23,15 @@ import { relay } from "../probe/worker.mjs";
 export const MCP_PATH = "/mcp";
 export const REGISTER_PATH = "/tether-agent/v1/register";
 export const PAIR_PATH = "/tether-agent/v1/pair";
+export const RESCUE_PATH = "/tether-agent/v1/rescue";
 export const SUBPROTOCOL = "rescue-agent-register.v1";
+export const RESCUE_SUBPROTOCOL = "rescue-agent-reception.v1";
 export const RESIDENT_SUBPROTOCOL = "rescue-agent-resident.v1";
 export const RESIDENT_GATE_VALUE = "open-resident-tether-control";
 export const ASSERTION_HEADER = "Cf-Access-Jwt-Assertion";
 export const GATE_VALUE = "open-native-tether-gateway";
 export const PAIRING_GATE_VALUE = "open-native-tether-pairing";
+export const RESCUE_GATE_VALUE = "open-native-tether-rescue";
 const OAUTH_BEARER_MODE = "oauth_bearer_jwt";
 const OAUTH_METADATA_PATHS = ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"];
 // URL for binding.fetch. The VPC Service sends to its own fixed host and port,
@@ -66,6 +70,7 @@ const MCP_REPLY_HEADERS = [
 const PAIR_STATUSES = new Set([200, 400, 401, 403, 404, 405, 409, 413, 503]);
 const PAIR_REPLY_HEADERS = { 401: [["WWW-Authenticate", /^Bearer(?: error="invalid_token")?$/]], 405: [["Allow", /^POST$/]] };
 const REGISTER_REFUSALS = [400, 403, 404, 405, 503];
+const RESCUE_REFUSALS = [...REGISTER_REFUSALS, 429];
 // Registration is outside human OAuth: no ambient credential and no Access
 // assertion is accepted or forwarded.
 const REGISTER_FORBIDDEN = ["Cookie", "Authorization", "Proxy-Authorization", ASSERTION_HEADER];
@@ -105,7 +110,8 @@ async function route(request, env, rt) {
   const authMode = env.TETHER_NATIVE_AUTH_MODE;
   const metadataPath = authMode === OAUTH_BEARER_MODE ? OAUTH_METADATA_PATHS.find((path) => path === url.pathname) : undefined;
   const pair = env.TETHER_NATIVE_PAIRING === PAIRING_GATE_VALUE && url.pathname === PAIR_PATH;
-  if (url.pathname !== MCP_PATH && url.pathname !== REGISTER_PATH && !pair && metadataPath === undefined) return deny(rt, 404, "not found");
+  const rescue = env.TETHER_NATIVE_RESCUE === RESCUE_GATE_VALUE && url.pathname === RESCUE_PATH;
+  if (url.pathname !== MCP_PATH && url.pathname !== REGISTER_PATH && !pair && !rescue && metadataPath === undefined) return deny(rt, 404, "not found");
   if (url.search !== "" || request.url.includes("?")) return deny(rt, 400, "query parameters are not accepted");
   // Reject observable raw-path aliases before normalized URL routing.
   if (request.url.slice(url.origin.length) !== url.pathname) return deny(rt, 404, "not found");
@@ -127,7 +133,9 @@ async function route(request, env, rt) {
   if (request.headers.has("Origin")) return deny(rt, 403, "origin not allowed");
   if (metadataPath !== undefined) return forwardProtectedResourceMetadata(metadataPath, binding, rt);
   if (mcp) return forwardMcp(request, binding, rt, authMode);
-  return pair ? forwardPair(request, binding, rt) : forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
+  if (pair) return forwardPair(request, binding, rt);
+  if (rescue) return forwardRescue(request, binding, rt);
+  return forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
 }
 
 async function forwardPair(request, binding, rt) {
@@ -312,6 +320,39 @@ async function forwardRegister(request, binding, rt, residentEnabled) {
   }
   // The Worker sends nothing itself: the challenge, host proof and channel
   // handshake are the Go gateway's and the Mac host's.
+  const [client, server] = rt.newPair();
+  relay(server, upstream, rt, LIMITS);
+  return new rt.Response(null, { status: 101, webSocket: client, headers: { "Sec-WebSocket-Protocol": protocol } });
+}
+
+async function forwardRescue(request, binding, rt) {
+  if (REGISTER_FORBIDDEN.some((name) => request.headers.has(name))) {
+    return deny(rt, 403, "rescue reception accepts no cookie, authorization or Access assertion");
+  }
+  const protocol = request.headers.get("Sec-WebSocket-Protocol");
+  if (protocol !== RESCUE_SUBPROTOCOL) return deny(rt, 400, "the fixed rescue subprotocol is required");
+  const response = await withDeadline(rt, LIMITS.upgradeMs, async (signal) => {
+    const answer = await binding.fetch(UPSTREAM_ORIGIN + RESCUE_PATH, {
+      method: "GET", headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": protocol }, redirect: "manual", signal,
+    });
+    if (signal.aborted) {
+      await discard(answer, 1011, "rescue upstream timed out");
+      return null;
+    }
+    return answer;
+  });
+  if (response === TIMED_OUT || response === null) return deny(rt, 504, "rescue upstream timed out");
+  const upstream = response.webSocket;
+  if (response.status !== 101 || !upstream) {
+    await discard(response, 1011, "rescue upstream refused");
+    const status = RESCUE_REFUSALS.includes(response.status) ? response.status : 502;
+    const retry = response.headers?.get("Retry-After");
+    return deny(rt, status, "rescue upstream refused the WebSocket", (status === 429 || status === 503) && /^\d{1,4}$/.test(retry ?? "") ? { "Retry-After": retry } : {});
+  }
+  if (response.headers.get("Sec-WebSocket-Protocol") !== protocol) {
+    await discard(response, 1002, "rescue subprotocol mismatch");
+    return deny(rt, 502, "rescue upstream subprotocol mismatch");
+  }
   const [client, server] = rt.newPair();
   relay(server, upstream, rt, LIMITS);
   return new rt.Response(null, { status: 101, webSocket: client, headers: { "Sec-WebSocket-Protocol": protocol } });

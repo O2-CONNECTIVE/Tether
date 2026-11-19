@@ -642,7 +642,7 @@ test("throwing bindings and failing streams leave no timer, socket or open reade
 test("the source imports only the probe relay and has no global fetch, logging, cookie or CORS handling", () => {
   const source = readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
   assert.deepEqual(source.match(/^import .*$/gm), ['import { relay } from "../probe/worker.mjs";']);
-  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding.", "binding."]);
+  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding.", "binding.", "binding."]);
   assert.doesNotMatch(source, /console\.|globalThis\.fetch|Access-Control|"Set-Cookie"|caches\.|\.connect\(/);
   assert.ok(!source.includes("tether-echo-probe.internal"));
 });
