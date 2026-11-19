@@ -82,7 +82,7 @@ proof が示すのは「K を持っている」ことだけで、ホストの身
 受付口は `GET /tether-agent/v1/rescue` の WSS で、subprotocol は `rescue-agent-reception.v1` だけです。text JSON frame を使い、各 message は 2 KiB 以下、nonce と署名・鍵は登録経路と同じ base64url（padding なし）です。
 ホストは `hello`（nonce）、gateway は `challenge`（nonce）、ホストは `proof`（purpose=`new`、K、署名。resume の場合は reception id も含む）、gateway は `reception`（id、12 桁コード、署名）を送ります。署名対象は `RescueTranscript` と `RescueResultTranscript` です。
 受付上限は upgrade 前に busy の 503（`Retry-After: 1`）、rate の 429（`Retry-After: 60`）で返します。拒否は reception frame を返さず close code 1008 で接続を閉じます。
-reception の後、gateway は担当者の要求が来たら `request`（身元の証明）を 1 つだけ送ります。ホストは `request` を受けた後に `answer` を 1 つだけ送ります。ホストは、`answer` を送る前に gateway から届いた frame でも受付を終えます。`request` の後に届いた frame は回答として扱い、受け取れない形（JSON でない、binary、dispatch の確認に通らない `allow`）なら検証に通らない回答として `failed` で受付を終えます。それ以外の frame・close は受付を終えます。
+reception の後、gateway は担当者の要求が来たら `request`（身元の証明）を 1 つだけ送ります。ホストは `request` を受けた後に `answer` を 1 つだけ送ります。ホストは、`answer` を決める前に gateway から届き終えた message でも受付を終えます。`answer` を決めた後に届き終えた message は、回答の前に送り始められたものでも channel の最初の message として扱います。gateway は C の鍵を持つ SSH の client で、同じ bytes を `allow` の後に送れるので、区別しても守れることは増えないためです。`request` の後に届いた frame は回答として扱い、受け取れない形（JSON でない、binary、dispatch の確認に通らない `allow`）なら検証に通らない回答として `failed` で受付を終えます。それ以外の frame・close は受付を終えます。
 `allow` の後、同じ WSS は登録経路と同じく binary の channel の stream になります。
 
 | frame | 向き | 欄 | 署名 |
