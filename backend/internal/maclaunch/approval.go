@@ -3,6 +3,8 @@
 // that path: MCP, relay frames,
 // stdin, environment variables and saved approval booleans are not inputs.
 // It does not enroll keys, dial, listen, install or start a command on approval.
+// The rescue state machine (rescue.go) is a separate path approved only by the
+// native helper's reply to its own prompt; it is not enabled as a product.
 package maclaunch
 
 import (

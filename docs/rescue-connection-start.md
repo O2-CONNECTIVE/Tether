@@ -2,7 +2,7 @@
 
 [文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md)
 
-**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）、WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）、担当者の要求と身元の証明・回答の検証（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）を実装しました。ホストの許可の状態機械（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）と猶予（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）は未実装で、ホストの側はまだ要求に答えません。**
+**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）、WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）、担当者の要求と身元の証明・回答の検証（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）を実装しました。ホストの許可の状態機械（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）は、試験だけで使う形で実装しました（製品の入口からは使いません）。猶予（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）は未実装で、ホストの側はまだ要求に答えません。**
 切断の後の扱いは、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（accepted）が [ADR 0003](adr/0003-owned-guest-workload.md) の該当の部分を置き換えます。
 実装されるまで、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
 この文書は、ホストを接続コードで指し、要求の時点の許可のポップアップでレスキューの接続を始める流れを決めます。
@@ -393,8 +393,9 @@ channel が開いた後に切れたら、channel の切断なので、猶予の�
 確認文字列が守っていたのは、本人がその場で画面を見て同意したことと、引数や pipe で同意を渡せないことです。
 この流れでは、ネイティブの補助で出すこと、既定ボタンを置かないこと、表示直後の無効化、60 秒の自動拒否、画面の値を認可の根拠にしない状態機械で守ります。
 
-今の経路（`rescue-mac-agent -config`、確認文字列、旧の `Connect`）は、この流れの Go の側が入るまで残します。
-この流れが入ったら、レスキューは今の承認画面と確認文字列を使いません。今の経路を消すかどうかは、実装の issue で決めます。
+今の経路（`rescue-mac-agent -config`、確認文字列、旧の `Connect`）は残します（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424) で決定）。
+#424 で許可の状態機械は入りましたが、Mac のゲストのアカウントが未設計なので、この流れは製品として有効にせず、試験だけで使います。製品として有効にできるまで、今の Mac の入口は今の経路だけです。
+この流れを製品として有効にする issue で、レスキューの入口をこの流れに切り替え、今の承認画面と確認文字列をレスキューから外します。
 [検証状態](tether-pilot-status.md)の固定証跡は履歴として残し、この流れの成功に読み替えません。
 
 ## 試験で確かめること
