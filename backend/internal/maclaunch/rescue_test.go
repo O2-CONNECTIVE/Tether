@@ -534,6 +534,70 @@ func TestRescueStopWhileConfirmingIssuesNoGrant(t *testing.T) {
 	}
 }
 
+// A host-side end or a lost reception takes effect once it is observed, not
+// when the state machine's loop gets to it: a request or an answer right after
+// it is refused.
+func TestRescueRefusesRightAfterEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		end  func(*rescueFixture)
+	}{
+		{"ホスト側の切断", func(f *rescueFixture) { f.r.Stop() }},
+		{"受付の切断", func(f *rescueFixture) { f.rec.lose() }},
+	} {
+		t.Run(tc.name+"の直後の許可", func(t *testing.T) {
+			f := newRescueFixture(t, 0)
+			p := f.prompt(t)
+			tc.end(f)
+			if err := f.r.Answer(f.helper, RescueReply{RequestID: p.RequestID, Digest: p.Digest(), Allow: true}); !errors.Is(err, ErrDenied) {
+				t.Fatalf("Answer(allow) right after the end = %v, want ErrDenied", err)
+			}
+			f.requireNoGrant(t, p)
+		})
+		t.Run(tc.name+"の直後の要求", func(t *testing.T) {
+			f := newRescueFixture(t, 0)
+			tc.end(f)
+			if err := f.r.Receive(rescueRequestFor(rescueC.PublicKey())); !errors.Is(err, ErrDenied) {
+				t.Fatalf("Receive right after the end = %v, want ErrDenied", err)
+			}
+			if shown := f.helper.shown(); len(shown) != 0 {
+				t.Fatalf("showed %d prompts right after the end", len(shown))
+			}
+		})
+	}
+}
+
+// The user's deny ends the prompt in the same step that accepts it: an allow
+// for the same prompt racing with it never reaches the reception.
+func TestRescueDenyRacingAllowIssuesNoGrant(t *testing.T) {
+	for i := range 50 {
+		f := newRescueFixture(t, 0)
+		p := f.prompt(t)
+		start := make(chan struct{})
+		var deny, allow error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			deny = f.r.Answer(f.helper, RescueReply{RequestID: p.RequestID, Digest: p.Digest(), Allow: false})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			allow = f.r.Answer(f.helper, RescueReply{RequestID: p.RequestID, Digest: p.Digest(), Allow: true})
+		}()
+		close(start)
+		wg.Wait()
+		if (deny == nil) == (allow == nil) {
+			t.Fatalf("iteration %d: deny %v, allow %v, want exactly one accepted", i, deny, allow)
+		}
+		if _, allows, _ := f.rec.state(); deny == nil && len(allows) != 0 {
+			t.Fatalf("iteration %d: the deny was accepted and a grant was handed over", i)
+		}
+	}
+}
+
 // 許可: the grant allows only C, the host key is K, and the lifetime runs
 // from the time of approval, not from the prompt.
 func TestRescueGrantAllowsOnlyCUntilChosenLifetime(t *testing.T) {
