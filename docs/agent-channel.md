@@ -62,6 +62,8 @@
 - 再接続・再試行・再開はありません。次のcommandには新しい承認・Authority・Session・channelが必要です。
 - Accept前の認証失敗でもgrantを失効させます（fail closed）。relayへ届いた未認証の接続1本で、そのgrantが使えなくなることは既知の制約です。
 
+> **ADR 0005による改訂（2026-11-19、未実装）:** レスキューの遠隔接続では、切断から猶予（5分）の間だけ、同じgrantの次の接続世代として再接続すると決まりました（[ADR 0005](adr/0005-rescue-reconnect-grace.md)、[接続世代](rescue-connection-start.md#接続世代)）。猶予に入るのは確立したchannelの通信の切断だけで、取消・書込み失敗・正規stop・期限・相手の違反・Accept前の認証失敗は今のとおりすぐ失効させます。上の「再接続・再試行・再開はありません」は今のsourceの契約です。接続世代の実装（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）と同じPRで改めます。
+
 ## 生存確認と停滞
 
 - 製品固有の心拍`rescue-agent-heartbeat-v1@rescue-host`（応答必須、payload空）を両端が送り、正確に`true`と空payloadの応答だけを成功とします。拒否（既存sshdなど）は失敗で、fallbackはありません。

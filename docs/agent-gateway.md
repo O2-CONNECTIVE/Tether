@@ -205,8 +205,8 @@ CLI envelopeは[agent CLI](agent-cli.md)に記載します。保護文書と登�
 ## 信頼の前提
 
 - gatewayは、4人それぞれのagent署名鍵（raw Ed25519）を保持します。Macの承認画面は鍵のfingerprintを表示するため、受け手はどのmemberの鍵を承認したかを確認できます。gatewayの運用者とhostは、承認済みのMacに対してそのmemberとして操作できます。この信頼は、共有gatewayの設計に含まれます。
-  - [#404](https://github.com/O2-CONNECTIVE/Tether/issues/404)で、承認画面を次のように変えると決まりました（2026-11-18、未実装）。レスキューでは、担当者が接続を要求した時点でホストに許可のポップアップを出し、gatewayがIdPのトークンで確かめた名前と組織を主に表示します。鍵のfingerprintは補足にします。「許可」を既定のボタンにせず、60秒で答えがなければ拒否します。流れは[検証状態](tether-pilot-status.md#決まったレスキューの始め方)を参照してください。
-  - 同じく#404で、principalに役割（レスキュー担当、常駐の本人）を持たせると決まりました。レスキュー担当は受付ONのホストに要求でき、常駐の本人は自分のペアだけを使えます。実装は[#408](https://github.com/O2-CONNECTIVE/Tether/issues/408)、身元の渡し方の設計は[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)です。
+  - [#404](https://github.com/O2-CONNECTIVE/Tether/issues/404)で、承認画面を次のように変えると決まりました（2026-11-18、未実装）。レスキューでは、担当者が接続を要求した時点でホストに許可のポップアップを出し、gatewayがIdPのトークンで確かめた名前と組織を主に表示します（IdPで確かめた本人の`sub`に、運用者がgatewayの設定で登録した名前と組織と読む。[#404の文言の読み替え](https://github.com/O2-CONNECTIVE/Tether/issues/404#issuecomment-6996862703)、2026-11-19）。鍵のfingerprintは補足にします。「許可」を既定のボタンにせず、60秒で答えがなければ拒否します。流れは[検証状態](tether-pilot-status.md#決まったレスキューの始め方)を参照してください。
+  - 同じく#404で、principalに役割（レスキュー担当、常駐の本人）を持たせると決まりました。レスキュー担当は受付ONのホストに要求でき、常駐の本人は自分のペアだけを使えます。実装は[#408](https://github.com/O2-CONNECTIVE/Tether/issues/408)、身元の渡し方の設計は[レスキューの接続の開始](rescue-connection-start.md)（[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)、2026-11-19承認、未実装）です。
 - dispatch（Binding、期限、host公開鍵）は資格情報ではありません。ただし、偽のhost鍵が届くと、偽のhostへ接続してしまいます。dispatchを真正に届けることは、登録adapterの責任です。
 - Access方式の境界：署名検証は「Accessが発行したこのapplication向けのassertionである」ことだけを示します。送信元networkは証明せず、盗まれた有効なassertionの期限内replayも防げません（tokenのbindingやnonce照合はありません）。そのため、originはnamed Tunnelの内側に置き、既定loopback、または専用bridgeとhost側127.0.0.1公開だけの明示container_privateを使用します。公開IPや別の公開hostnameへ直接出さず、host networkは禁止します。CI hostの管理者・到達可能なhost process・bridge peerは有効assertionを直接replayし得るため、到達範囲も信頼境界に含めます。network分離を認証の代替にしません。assertionの寿命はAccess applicationのsession時間で決まるため、24時間以下に設定します（超えると拒否）。
 
