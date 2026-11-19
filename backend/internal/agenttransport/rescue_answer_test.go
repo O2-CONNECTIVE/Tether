@@ -2,16 +2,26 @@ package agenttransport
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentlink"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/supervisor/ephemeral"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -172,6 +182,10 @@ func TestVerifyRescueRequestTakesOnlyValuesSignedForThisReception(t *testing.T) 
 		if v.Client() == nil || !bytes.Equal(v.Client().Marshal(), sent.client) || v.DisplayName() != sent.name ||
 			v.Organization() != sent.org || v.Profile() != sent.profile {
 			t.Fatalf("verified %+v, want the signed values", v)
+		}
+		// The state machine takes only a request verified for its own K.
+		if !bytes.Equal(v.HostKey(), k) {
+			t.Fatal("the verified request does not carry the K it was verified for")
 		}
 	}
 	for _, tc := range []struct {
@@ -459,4 +473,143 @@ func TestRescueHostEndsWhenTheGatewaySpeaksBeforeTheAnswer(t *testing.T) {
 		t.Fatal("Allow after an early gateway frame was sent")
 	}
 	reg.requireNoAnswer(t)
+}
+
+func TestRescueHostAnswersTheRealGatewayOverItsReception(t *testing.T) {
+	pub := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	set, err := json.Marshal(map[string]any{"keys": []any{map[string]any{
+		"kty": "OKP", "crv": "Ed25519", "kid": "synthetic-ed", "alg": "EdDSA", "use": "sig", "x": base64.RawURLEncoding.EncodeToString(pub),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := agentgateway.NewVerifier(agentgateway.VerifierConfig{
+		Issuer: "https://issuer.example.invalid/", Audience: "https://gateway.example.invalid/mcp", Scope: "rescue.agent",
+		Types: []string{"at+jwt"}, JWKS: set,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := agentgateway.New(agentgateway.Config{
+		Verifier: verifier, Resource: "https://gateway.example.invalid/mcp", Organization: "O2 CONNECTIVE",
+		CallTimeout: 5 * time.Second, RescueSigner: rescueIdentity, Budgets: chanBudgets(),
+		Principals: []agentgateway.Principal{{Label: "operator", Subject: "synthetic-subject-1", DisplayName: "山田（サポート）", Roles: []agentgateway.Role{agentgateway.RoleRescueOperator}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gateway.RescueEndpoint(); got != rescueEndpoint {
+		t.Fatalf("RescueEndpoint = %q, want %q", got, rescueEndpoint)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := gateway.Close(ctx); err != nil {
+			t.Errorf("Gateway.Close: %v", err)
+		}
+	})
+	h := newRescueHandler(t, gateway)
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, newMemTransport(h))
+	code, err := openRescue(t, c)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	requester := newVerticalMCP(t, gateway)
+	pending, failed := requester.tool("rescue_request", map[string]any{"code": code})
+	if failed || pending["state"] != "pending" {
+		t.Fatalf("rescue_request = %v, isError %v; want pending", pending, failed)
+	}
+	v := receiveRequest(t, c)
+	hostKey := c.HostKey()
+	if v.Client() == nil || v.DisplayName() != "山田（サポート）" || v.Organization() != "O2 CONNECTIVE" ||
+		!bytes.Equal(v.HostKey(), hostKey.PublicKey().Marshal()) {
+		t.Fatalf("verified request = %+v; want gateway identity and this reception's K", v)
+	}
+
+	runtime := &verticalRuntime{procs: make(chan *verticalProc, 1)}
+	digest, err := runbackend.KeySetDigest([]ssh.PublicKey{v.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := ephemeral.NewCurrentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	challengeOwner, err := issuer.Prepare(ephemeral.ApprovedPolicy{
+		PolicyDigest: agentexec.MacCurrentUserPolicyDigest(), KeySetDigest: digest,
+		GuestBoundary: supervisor.CurrentUserNoIsolation, HardDeadline: time.Now().Add(30 * time.Second), BackendLeaseCeiling: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := issuer.Launch(context.Background(), challengeOwner, time.Now, func(context.Context, *supervisor.Authority) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := agentexec.New(agentexec.Config{Issuer: issuer, Authority: authority, Runtime: runtime, Clock: time.Now, CleanupTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := agentlink.NewHost(agentlink.HostConfig{Session: session, AllowedKeys: []ssh.PublicKey{v.Client()}, HostKey: hostKey, Budgets: chanBudgets()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := errors.Join(issuer.Close(), host.Close(ctx)); err != nil {
+			t.Errorf("close rescue host: %v", err)
+		}
+	})
+	d := session.Grant()
+	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, KeySetDigest: d.KeySetDigest, Profile: session.Profile()},
+		Deadline: d.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}
+	conn, err := c.Allow(dispatch)
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	serveCtx, serveCancel := context.WithCancel(context.Background())
+	t.Cleanup(serveCancel)
+	served := make(chan error, 1)
+	go func() { served <- host.Serve(serveCtx, conn) }()
+	status, failed := requester.tool("rescue_request_status", map[string]any{})
+	if failed || status["state"] != "allow" {
+		t.Fatalf("rescue_request_status = %v, isError %v; want allow", status, failed)
+	}
+
+	fresh := newVerticalMCP(t, gateway)
+	started, failed := fresh.start("rescue-route", "printf ready\n\n")
+	if failed {
+		t.Fatalf("rescue_start failed: %v", started)
+	}
+	commandID := verticalID(t, started)
+	proc := verticalProcNext(t, runtime)
+	if proc.input != "printf ready\n\n" {
+		t.Fatalf("route command = %q, want one command", proc.input)
+	}
+	proc.output <- []byte("ready\n")
+	close(proc.output)
+	close(proc.exited)
+	if terminal := fresh.terminal(commandID); terminal["phase"] != "exited" {
+		t.Fatalf("route command terminal state = %v; want exited", terminal)
+	}
+	output, failed := fresh.tool("rescue_output", map[string]any{"command_id": commandID, "cursor": 0, "max_bytes": 1024})
+	chunks, ok := output["chunks"].([]any)
+	if failed || !ok || len(chunks) != 1 {
+		t.Fatalf("rescue_output = %v, isError %v; want one output chunk", output, failed)
+	}
+	chunk, ok := chunks[0].(map[string]any)
+	if !ok || chunk["stream"] != "stdout" || chunk["encoding"] != "utf-8" || chunk["data"] != "ready\n" {
+		t.Fatalf("rescue_output chunk = %v; want stdout ready newline", chunks[0])
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("agentlink.Host.Serve did not end within 5s of the reception closing")
+	}
 }
