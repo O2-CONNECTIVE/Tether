@@ -13,7 +13,6 @@ type ResidentStandby struct {
 	Revision uint64
 	Standby  string
 	Until    time.Time
-	Expired  bool
 }
 
 func (s *residentSession) StandbyStatus(ctx context.Context) map[string]any {
@@ -21,9 +20,6 @@ func (s *residentSession) StandbyStatus(ctx context.Context) map[string]any {
 		return map[string]any{"error": "not_read"}
 	}
 	host := s.entry.enrollment.HostLabel
-	if s.gateway.resident.control.ResidentGeneration(host, s.principal.label) != s.generation {
-		return map[string]any{"error": "control_ended", "reinitialize_required": true}
-	}
 	control, ok := s.gateway.resident.control.(interface {
 		ResidentStandby(string, string, string) (ResidentStandby, bool)
 	})
@@ -32,6 +28,9 @@ func (s *residentSession) StandbyStatus(ctx context.Context) map[string]any {
 	}
 	r, ok := control.ResidentStandby(host, s.principal.label, s.generation)
 	if !ok {
+		return map[string]any{"error": "control_ended", "reinitialize_required": true}
+	}
+	if r.Revision == 0 {
 		return map[string]any{"error": "not_reported"}
 	}
 	var until any
@@ -45,5 +44,5 @@ func (s *residentSession) StandbyStatus(ctx context.Context) map[string]any {
 			remaining = 0
 		}
 	}
-	return map[string]any{"schema_version": 1, "standby": r.Standby, "standby_until": until, "remaining_ms": remaining, "expired": r.Expired}
+	return map[string]any{"schema_version": 1, "standby": r.Standby, "standby_until": until, "remaining_ms": remaining}
 }

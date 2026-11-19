@@ -306,13 +306,31 @@ func (s *Standby) run(c *standbyCycle) {
 	stop()
 	var runDone chan error
 	monitorDone := make(chan struct{})
+	var reportDone chan struct{}
 	if e == nil {
 		c.mu.Lock()
 		c.connector = connector
 		c.mu.Unlock()
 		runDone = make(chan error, 1)
 		go func() { runDone <- connector.Run(c.ctx) }()
-		go func() { defer close(monitorDone); s.monitor(c) }()
+		reports := make(chan standbyReport, 1)
+		reportDone = make(chan struct{})
+		go func() {
+			defer close(reportDone)
+			for {
+				select {
+				case <-c.ctx.Done():
+					return
+				case report := <-reports:
+					if s.reportStandby != nil {
+						s.reportStandby(report.lease, report.value)
+					} else {
+						_ = report.lease.ReportStandby(report.value)
+					}
+				}
+			}
+		}()
+		go func() { defer close(monitorDone); s.monitor(c, reports) }()
 		for c.ctx.Err() == nil {
 			lease, err := connector.Accept(c.ctx)
 			if err != nil {
@@ -356,6 +374,13 @@ func (s *Standby) run(c *standbyCycle) {
 			case <-cleanup.Done():
 				transportErr = errors.Join(transportErr, ErrStandbyUnknown)
 			}
+		}
+	}
+	if reportDone != nil {
+		select {
+		case <-reportDone:
+		case <-cleanup.Done():
+			transportErr = errors.Join(transportErr, ErrStandbyUnknown)
 		}
 	}
 	select {
@@ -567,7 +592,13 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 	}
 	return errors.Join(err, finish)
 }
-func (s *Standby) monitor(c *standbyCycle) {
+
+type standbyReport struct {
+	lease *agenttransport.ResidentSourceLease
+	value agentgateway.ResidentStandby
+}
+
+func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	var reportedLease *agenttransport.ResidentSourceLease
@@ -659,15 +690,19 @@ func (s *Standby) monitor(c *standbyCycle) {
 		var report agentgateway.ResidentStandby
 		sendReport := false
 		if lease != nil && (s.observation.Standby == "on" || s.observation.Standby == "stopping") {
-			report = agentgateway.ResidentStandby{Revision: s.observation.Revision, Standby: s.observation.Standby, Until: s.observation.StandbyUntil, Expired: s.observation.StandbyExpired}
-			sendReport = !hasReported || reportedLease != lease || reported.Standby != report.Standby || !reported.Until.Equal(report.Until) || reported.Expired != report.Expired
+			report = agentgateway.ResidentStandby{Revision: s.observation.Revision, Standby: s.observation.Standby, Until: s.observation.StandbyUntil}
+			sendReport = !hasReported || reportedLease != lease || reported.Standby != report.Standby || !reported.Until.Equal(report.Until)
 		}
 		s.mu.Unlock()
 		if sendReport {
-			if s.reportStandby != nil {
-				s.reportStandby(lease, report)
-			} else {
-				_ = lease.ReportStandby(report)
+			select {
+			case reports <- standbyReport{lease: lease, value: report}:
+			default:
+				select {
+				case <-reports:
+				default:
+				}
+				reports <- standbyReport{lease: lease, value: report}
 			}
 			reportedLease, reported, hasReported = lease, report, true
 		}

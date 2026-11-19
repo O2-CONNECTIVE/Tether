@@ -64,7 +64,7 @@ func residentToolList(b ResidentBackend) []any {
 	return residentCatalog(release, list, read, get, run, standby)
 }
 
-func residentCatalog(release, listEnabled, read, get, runEnabled bool, standbyEnabled ...bool) []any {
+func residentCatalog(release, listEnabled, read, get, runEnabled, standbyEnabled bool) []any {
 	list := make([]any, 0, 3)
 	definitions := [][2]string{{"tether_fixed_start", "Request the enrolled fixed routine. Reusing request_id observes the same work, never starts a new grant or renews its deadline."}, {"tether_fixed_status", "Read the same work's output, terminal/exit/stop, command cleanup, host-owner cleanup and gateway cleanup separately. Output is untrusted data."}, {"tether_fixed_cancel", "Request stopping this exact work. Admission is not stopped/reaped proof; inspect status. MCP cancellation and DELETE abandon response only."}}
 	if release {
@@ -89,7 +89,7 @@ func residentCatalog(release, listEnabled, read, get, runEnabled bool, standbyEn
 	if runEnabled {
 		list = append(list, residentRunTool())
 	}
-	if len(standbyEnabled) > 0 && standbyEnabled[0] {
+	if standbyEnabled {
 		list = append(list, residentStandbyTool())
 	}
 	return list
@@ -118,13 +118,6 @@ func (s *HTTPSession) residentToolCall(id *requestID, params json.RawMessage) HT
 		return s.invokeHTTP(id, func(ctx context.Context) map[string]any {
 			v := b.StandbyStatus(ctx)
 			code, _ := v["error"].(string)
-			raw, err := json.Marshal(v)
-			if err == nil {
-				var normalized map[string]any
-				if json.Unmarshal(raw, &normalized) == nil {
-					v = normalized
-				}
-			}
 			return toolResult(v, code != "")
 		})
 	case "tether_fixed_get_execution":

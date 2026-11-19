@@ -1,7 +1,6 @@
 package agenttransport
 
 import (
-	"context"
 	"encoding/json"
 	"strconv"
 	"time"
@@ -26,10 +25,8 @@ func (s *ResidentSourceLease) ReportStandby(r agentgateway.ResidentStandby) erro
 	if err != nil {
 		return err
 	}
-	msg := residentJSON(map[string]string{"type": "resident_standby", "generation": values[0], "revision": values[1], "standby": values[2], "until_unix_ms": values[3], "expired": values[4], "signature": b64.EncodeToString(sig)})
-	ctx, cancel := context.WithTimeout(s.receiver.Context(), 5*time.Second)
-	defer cancel()
-	return residentWrite(ctx, s.receiver.ws, msg)
+	msg := residentJSON(map[string]string{"type": "resident_standby", "generation": values[0], "revision": values[1], "standby": values[2], "until_unix_ms": values[3], "signature": b64.EncodeToString(sig)})
+	return residentWrite(s.receiver.Context(), s.receiver.ws, msg)
 }
 
 func validResidentStandby(r agentgateway.ResidentStandby) bool {
@@ -39,7 +36,7 @@ func validResidentStandby(r agentgateway.ResidentStandby) bool {
 	if !r.Until.IsZero() && (r.Until.UnixMilli() < 1_000_000_000_000 || r.Until.UnixMilli() >= 10_000_000_000_000) {
 		return false
 	}
-	return !r.Expired || r.Standby == "stopping"
+	return true
 }
 
 func residentStandbyValues(generation string, r agentgateway.ResidentStandby) []string {
@@ -47,15 +44,11 @@ func residentStandbyValues(generation string, r agentgateway.ResidentStandby) []
 	if !r.Until.IsZero() {
 		until = strconv.FormatInt(r.Until.UnixMilli(), 10)
 	}
-	expired := "false"
-	if r.Expired {
-		expired = "true"
-	}
-	return []string{generation, strconv.FormatUint(r.Revision, 10), r.Standby, until, expired}
+	return []string{generation, strconv.FormatUint(r.Revision, 10), r.Standby, until}
 }
 
 func decodeResidentStandby(b residentBinding, msg []byte, key ssh.PublicKey) (agentgateway.ResidentStandby, bool) {
-	m, ok := residentFields(msg, "resident_standby", "generation", "revision", "standby", "until_unix_ms", "expired", "signature")
+	m, ok := residentFields(msg, "resident_standby", "generation", "revision", "standby", "until_unix_ms", "signature")
 	if !ok || m["generation"] != b.generation {
 		return agentgateway.ResidentStandby{}, false
 	}
@@ -71,10 +64,7 @@ func decodeResidentStandby(b residentBinding, msg []byte, key ssh.PublicKey) (ag
 		}
 		until = time.UnixMilli(int64(ms))
 	}
-	if m["expired"] != "true" && m["expired"] != "false" {
-		return agentgateway.ResidentStandby{}, false
-	}
-	r := agentgateway.ResidentStandby{Revision: revision, Standby: m["standby"], Until: until, Expired: m["expired"] == "true"}
+	r := agentgateway.ResidentStandby{Revision: revision, Standby: m["standby"], Until: until}
 	sig, ok := residentSignature(m)
 	if !validResidentStandby(r) || !ok || verify(key, residentTranscript(b, "host-standby", residentStandbyValues(b.generation, r)...), sig) != nil {
 		return agentgateway.ResidentStandby{}, false
@@ -97,16 +87,16 @@ func (h *Handler) ResidentStandby(host, principal, generation string) (agentgate
 		return agentgateway.ResidentStandby{}, false
 	}
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	p := h.residents[residentMapKey(host, principal)]
 	valid := !h.closed && p != nil && p.ready && p.ctx.Err() == nil && p.binding.generation == generation
-	h.mu.Unlock()
 	if !valid {
 		return agentgateway.ResidentStandby{}, false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.standby == nil {
-		return agentgateway.ResidentStandby{}, false
+		return agentgateway.ResidentStandby{}, true
 	}
 	return *p.standby, true
 }

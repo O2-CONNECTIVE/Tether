@@ -10,7 +10,7 @@ type ResidentStandbyBackend interface {
 func residentStandbyTool() map[string]any {
 	return map[string]any{
 		"name":         "tether_standby_status",
-		"description":  "Read the Mac's reported standby state, its end time, remaining milliseconds and whether the deadline has expired. remaining_ms is calculated using the gateway clock. A null standby_until means the Mac will accept no new work. This tool cannot extend standby; only the person in front of the Mac can extend it.",
+		"description":  "Read the Mac's reported standby state, its end time and remaining milliseconds. remaining_ms is calculated using the gateway clock. A null standby_until means the Mac will accept no new work. This tool cannot extend standby; only the person in front of the Mac can extend it.",
 		"inputSchema":  map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}, "additionalProperties": false},
 		"outputSchema": residentStandbySchema(),
 	}
@@ -22,8 +22,7 @@ func residentStandbySchema() map[string]any {
 		"standby":        stringEnum("on", "stopping"),
 		"standby_until":  map[string]any{"oneOf": []any{map[string]any{"type": "string"}, map[string]any{"enum": []any{nil}}}},
 		"remaining_ms":   nonnegativeInteger(),
-		"expired":        map[string]any{"type": "boolean"},
-	}, "schema_version", "standby", "standby_until", "remaining_ms", "expired")
+	}, "schema_version", "standby", "standby_until", "remaining_ms")
 	return map[string]any{"type": "object", "oneOf": []any{
 		success,
 		closedObject(map[string]any{"error": stringEnum("not_read")}, "error"),
