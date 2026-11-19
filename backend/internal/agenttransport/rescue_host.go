@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -45,6 +46,9 @@ type RescueClient struct {
 	attemptDone         chan struct{}
 	mu                  sync.Mutex
 	wsWriteMu           sync.Mutex
+	closeOnce           sync.Once
+	closeFrameDone      chan struct{}
+	closeFrameErr       error
 	used, closed, ended bool
 	active              bool
 	everAllowed         bool
@@ -57,6 +61,7 @@ type RescueClient struct {
 	cancel              context.CancelFunc
 	ws                  *websocket.Conn
 	closer              *closer
+	cleanup             time.Duration
 }
 
 // NewRescueClient validates the endpoint and pins and creates a fresh reception key.
@@ -87,7 +92,8 @@ func NewRescueClient(cfg RescueClientConfig) (*RescueClient, error) {
 	attemptDone := make(chan struct{})
 	close(attemptDone)
 	return &RescueClient{endpoint: cfg.Endpoint, pins: pins, key: key, hostPublic: hostPublic,
-		done: make(chan struct{}), attemptDone: attemptDone, request: make(chan VerifiedRescueIdentity, 1), transport: nativeTransport}, nil
+		done: make(chan struct{}), closeFrameDone: make(chan struct{}), attemptDone: attemptDone, request: make(chan VerifiedRescueIdentity, 1), transport: nativeTransport,
+		cleanup: DefaultBudgets().Cleanup}, nil
 }
 
 // Open registers the reception and returns its code after verifying the signed result.
@@ -186,7 +192,7 @@ func (c *RescueClient) openAttempt(ctx context.Context, purpose string, receptio
 		}
 		return "", ErrRefused
 	}
-	link := newCloser(cancel)
+	link := newRescueCloser(cancel)
 	c.mu.Lock()
 	c.closer = link
 	c.mu.Unlock()
@@ -478,28 +484,116 @@ func (c *RescueClient) disconnectAttempt(attempt uint64) {
 	}
 }
 
-// Close turns reception OFF, sending end on an active WSS before dropping K.
+// StartClose turns reception OFF, drops K, and starts bounded physical cleanup.
+// It does not wait for WebSocket I/O or the underlying transport Close.
+func (c *RescueClient) StartClose() {
+	if c == nil {
+		return
+	}
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		ws, link, lifeCancel := c.ws, c.closer, c.cancel
+		ended := c.ended
+		if !ended {
+			c.ended = true
+			if c.active {
+				c.active = false
+				close(c.attemptDone)
+			}
+			clear(c.key)
+			c.key = nil
+			clear(c.reception)
+			c.reception = nil
+			clear(c.hostKey)
+			c.hostKey = nil
+			clear(c.nonce)
+			c.nonce = nil
+			clear(c.digest[:])
+			c.code = ""
+			close(c.done)
+		}
+		c.mu.Unlock()
+
+		go func() {
+			var frameErr error
+			if !ended && ws != nil {
+				budget := c.cleanupBudget()
+				frameBudget := min(250*time.Millisecond, budget/2)
+				if frameBudget <= 0 {
+					frameBudget = budget
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), frameBudget)
+				writeDone := make(chan error, 1)
+				go func() {
+					if !c.lockWrite(ctx) {
+						writeDone <- ctx.Err()
+						return
+					}
+					err := ws.Write(ctx, websocket.MessageText, encodeRescueEnd())
+					c.wsWriteMu.Unlock()
+					writeDone <- err
+				}()
+				select {
+				case err := <-writeDone:
+					if err != nil {
+						frameErr = errors.Join(ErrCleanupUnknown, err)
+					}
+				case <-ctx.Done():
+					frameErr = errors.Join(ErrCleanupUnknown, ctx.Err())
+				}
+				cancel()
+			}
+			c.mu.Lock()
+			c.closeFrameErr = frameErr
+			c.mu.Unlock()
+			close(c.closeFrameDone)
+			if link != nil {
+				link.start()
+			} else {
+				if lifeCancel != nil {
+					lifeCancel()
+				}
+				if ws != nil {
+					go func() { _ = ws.CloseNow() }()
+				}
+			}
+		}()
+	})
+}
+
+func (c *RescueClient) cleanupBudget() time.Duration {
+	if c.cleanup > 0 {
+		return c.cleanup
+	}
+	return DefaultBudgets().Cleanup
+}
+
+// Close turns reception OFF and reports whether both its end frame and owned
+// transport cleanup were confirmed within the cleanup budget.
 func (c *RescueClient) Close() error {
 	if c == nil {
 		return ErrConfig
 	}
+	budget := c.cleanupBudget()
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	c.StartClose()
+	if err := waitFor(ctx, c.closeFrameDone); err != nil {
+		return err
+	}
 	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return nil
-	}
-	c.closed = true
-	ws, ended := c.ws, c.ended
+	frameErr, link, ws := c.closeFrameErr, c.closer, c.ws
 	c.mu.Unlock()
-	if ws != nil && !ended {
-		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		if c.lockWrite(ctx) {
-			_ = ws.Write(ctx, websocket.MessageText, encodeRescueEnd())
-			c.wsWriteMu.Unlock()
-		}
-		cancel()
+	var closeErr error
+	if link != nil {
+		closeErr = link.wait(ctx)
+	} else if ws != nil {
+		closeErr = errors.Join(ErrCleanupUnknown, errNoTransport)
 	}
-	c.end()
+	if closeErr != nil {
+		return errors.Join(frameErr, closeErr)
+	}
 	return nil
 }
 

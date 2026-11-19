@@ -69,20 +69,26 @@ func (h *rescueHelper) withdrawn() []string {
 // hands the host one end of an in-memory stream and keeps the other for the
 // 担当者's channel client.
 type rescueReception struct {
-	mu       sync.Mutex
-	done     chan struct{}
-	requests chan agenttransport.VerifiedRescueIdentity
-	refuses  []bool
-	allows   []Dispatch
-	client   net.Conn
-	closes   int
-	resumes  int
-	opens    int
-	code     string
-	key      ssh.Signer
-	onClose  func()
-	onResume func()
-	onAllow  func(Dispatch, net.Conn)
+	mu              sync.Mutex
+	done            chan struct{}
+	requests        chan agenttransport.VerifiedRescueIdentity
+	refuses         []bool
+	allows          []Dispatch
+	client          net.Conn
+	closes          int
+	resumes         int
+	opens           int
+	code            string
+	key             ssh.Signer
+	closeStarted    chan struct{}
+	closeReturned   chan struct{}
+	closeOnce       sync.Once
+	closeDone       chan struct{}
+	closeErr        error
+	logicallyClosed bool
+	onClose         func()
+	onResume        func()
+	onAllow         func(Dispatch, net.Conn)
 	// entered and gate, when set before the answer, hold Allow open as a slow
 	// write to the gateway would.
 	entered, gate    chan struct{}
@@ -100,7 +106,7 @@ type rescueReception struct {
 }
 
 func newRescueReception() *rescueReception {
-	return &rescueReception{done: make(chan struct{}), requests: make(chan agenttransport.VerifiedRescueIdentity, 1), requestCalls: make(chan struct{}, 16), code: "123456789012", key: rescueK}
+	return &rescueReception{done: make(chan struct{}), closeDone: make(chan struct{}), requests: make(chan agenttransport.VerifiedRescueIdentity, 1), requestCalls: make(chan struct{}, 16), code: "123456789012", key: rescueK}
 }
 
 func freshRescueReception(seed byte, code string) *rescueReception {
@@ -175,10 +181,38 @@ func (r *rescueReception) gateNextRequest(entered, gate chan struct{}) {
 func (r *rescueReception) HostKey() ssh.Signer {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.logicallyClosed {
+		return nil
+	}
 	if r.key == nil {
 		return rescueK
 	}
 	return r.key
+}
+
+func (r *rescueReception) StartClose() {
+	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		if r.closeStarted != nil {
+			r.logicallyClosed = true
+			r.key = nil
+		}
+		r.closes++
+		onClose, started, returned := r.onClose, r.closeStarted, r.closeReturned
+		r.mu.Unlock()
+		if started != nil {
+			close(started)
+		}
+		go func() {
+			if onClose != nil {
+				onClose()
+			}
+			if returned != nil {
+				close(returned)
+			}
+			close(r.closeDone)
+		}()
+	})
 }
 
 func (r *rescueReception) Done() <-chan struct{} { return r.done }
@@ -223,14 +257,9 @@ func (c *signalReadConn) Read(p []byte) (int, error) {
 }
 
 func (r *rescueReception) Close() error {
-	r.mu.Lock()
-	r.closes++
-	onClose := r.onClose
-	r.mu.Unlock()
-	if onClose != nil {
-		onClose()
-	}
-	return nil
+	r.StartClose()
+	<-r.closeDone
+	return r.closeErr
 }
 
 func (r *rescueReception) lose() { close(r.done) }
@@ -1604,6 +1633,150 @@ func TestReceptionOpenedNotificationIsSuppressedAfterStop(t *testing.T) {
 	case event := <-events:
 		t.Fatalf("notification after Stop = %+v", event)
 	default:
+	}
+}
+
+func TestRescueStopStartsDetachedReceptionCloseBeforeReturning(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	current, pending := f.rec, newRescueReception()
+	current.closeStarted, pending.closeStarted = make(chan struct{}), make(chan struct{})
+	current.closeReturned, pending.closeReturned = make(chan struct{}), make(chan struct{})
+	releaseCurrent := make(chan struct{})
+	var releaseCurrentOnce sync.Once
+	closeCurrent := func() { releaseCurrentOnce.Do(func() { close(releaseCurrent) }) }
+	current.onClose = func() { <-releaseCurrent }
+	t.Cleanup(closeCurrent)
+	f.r.mu.Lock()
+	f.r.state = rescueReopening
+	f.r.reception = current
+	f.r.pendingReception = &rescueReceptionCandidate{reception: pending}
+	f.r.mu.Unlock()
+
+	finishDone := make(chan struct{})
+	go func() {
+		f.r.finish(false, false, false)
+		close(finishDone)
+	}()
+	select {
+	case <-current.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("end did not start closing the adopted reception")
+	}
+	stopDone := make(chan struct{})
+	go func() {
+		f.r.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("Stop waited for a reception Close that had already started")
+	}
+	select {
+	case <-pending.closeStarted:
+	default:
+		t.Fatal("Stop returned before starting Close on the detached pre-adoption candidate")
+	}
+	if pending.HostKey() != nil {
+		t.Fatal("pre-adoption candidate retained K after Stop returned")
+	}
+	closeCurrent()
+	select {
+	case <-finishDone:
+	case <-time.After(time.Second):
+		t.Fatal("end did not finish after the current reception Close was released")
+	}
+	select {
+	case <-pending.closeReturned:
+	case <-time.After(time.Second):
+		t.Fatal("candidate Close did not finish")
+	}
+}
+
+func TestRescueStopBoundsStalledReceptionAndReportsCleanup(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	f.r.cfg.CleanupTimeout = 40 * time.Millisecond
+	pending := newRescueReception()
+	pending.closeStarted, pending.closeReturned = make(chan struct{}), make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseClose := func() { releaseOnce.Do(func() { close(release) }) }
+	pending.onClose = func() { <-release }
+	t.Cleanup(releaseClose)
+	f.r.mu.Lock()
+	f.r.state = rescueReopening
+	f.r.pendingReception = &rescueReceptionCandidate{reception: pending}
+	f.r.mu.Unlock()
+
+	stopDone := make(chan struct{})
+	go func() {
+		f.r.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-pending.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not synchronously start the pending reception Close")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not return while reception Close was blocked")
+	}
+	select {
+	case <-f.r.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Done did not finish within the cleanup budget")
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventCleanupRequired)
+	releaseClose()
+	select {
+	case <-pending.closeReturned:
+	case <-time.After(time.Second):
+		t.Fatal("stalled reception Close did not finish after release")
+	}
+}
+
+func TestRescueDoneBoundsWaitingForApprovedCloseLock(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	f.r.cfg.CleanupTimeout = 40 * time.Millisecond
+	f.allow(t, f.prompt(t))
+	approved := f.r.approved
+	approved.closeMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			approved.closeMu.Unlock()
+		}
+	}()
+	stopDone := make(chan struct{})
+	go func() {
+		f.r.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("Stop waited for Approved.Close's lock")
+	}
+	select {
+	case <-f.r.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Done waited beyond CleanupTimeout for Approved.Close's lock")
+	}
+	_ = waitRescueEvent(t, f.events, RescueEventCleanupRequired)
+	approved.closeMu.Unlock()
+	locked = false
+	deadline := time.After(time.Second)
+	for {
+		if _, observed := approved.CleanupResult(); observed {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("bounded Approved.Close did not finish after releasing the lock")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 

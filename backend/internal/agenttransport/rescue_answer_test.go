@@ -786,9 +786,10 @@ func TestRescueClientCloseBoundsWaitForWriteLock(t *testing.T) {
 
 type deadlineCloseConn struct {
 	net.Conn
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
+	started  chan struct{}
+	release  chan struct{}
+	returned chan struct{}
+	once     sync.Once
 }
 
 func (c *deadlineCloseConn) Close() error {
@@ -796,7 +797,110 @@ func (c *deadlineCloseConn) Close() error {
 		close(c.started)
 		<-c.release
 	})
-	return c.Conn.Close()
+	err := c.Conn.Close()
+	if c.returned != nil {
+		close(c.returned)
+	}
+	return err
+}
+
+func TestRawConnConcurrentCloseDoesNotWaitInsideOnce(t *testing.T) {
+	base, peer := net.Pipe()
+	defer peer.Close()
+	closeStarted, releaseClose, closeReturned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+	t.Cleanup(release)
+	raw := &rawConn{Conn: &deadlineCloseConn{Conn: base, started: closeStarted, release: releaseClose, returned: closeReturned}, asyncClose: true}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- raw.Close() }()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first Close did not enter the base connection")
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- raw.Close() }()
+	select {
+	case <-secondDone:
+	case <-time.After(100 * time.Millisecond):
+		release()
+		<-firstDone
+		t.Fatal("concurrent Close waited inside sync.Once for the blocked base Close")
+	}
+	release()
+	select {
+	case <-closeReturned:
+	case <-time.After(time.Second):
+		t.Fatal("base Close did not finish after release")
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first Close caller did not return")
+	}
+}
+
+func TestRescueClientCloseReportsUnknownWhenEndFrameAndBaseCloseBlock(t *testing.T) {
+	reg := newAnswerRegistry()
+	transport := newMemTransport(newRescueHandler(t, reg))
+	closeStarted, releaseClose := make(chan struct{}), make(chan struct{})
+	writeStarted, releaseWrite := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseWrite); close(releaseClose) }) }
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, transport)
+	var raw *memConn
+	c.transport = func(own acquirer) http.RoundTripper {
+		transport.own = own
+		transport.track = func(conn net.Conn) (net.Conn, error) {
+			raw = conn.(*memConn)
+			return own.attach(&deadlineCloseConn{Conn: conn, started: closeStarted, release: releaseClose})
+		}
+		return transport
+	}
+	t.Cleanup(reg.end)
+	t.Cleanup(release)
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c.cleanup = 100 * time.Millisecond
+	raw.blockNextWrite(writeStarted, releaseWrite)
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	select {
+	case <-writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("end frame did not enter the blocked WebSocket write")
+	}
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		release()
+		<-closed
+		t.Fatal("base connection Close did not start after the bounded frame-write attempt")
+	}
+	select {
+	case err := <-closed:
+		if !errors.Is(err, ErrCleanupUnknown) {
+			t.Fatalf("explicit RescueClient.Close = %v, want ErrCleanupUnknown", err)
+		}
+	case <-time.After(time.Second):
+		release()
+		<-closed
+		t.Fatal("explicit RescueClient.Close did not return within its cleanup budget")
+	}
+	c.mu.Lock()
+	keyDiscarded := len(c.key) == 0 && c.key == nil
+	c.mu.Unlock()
+	if !keyDiscarded {
+		t.Fatal("explicit Close returned before discarding K")
+	}
+	release()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := c.closer.wait(ctx); err != nil {
+		t.Fatalf("same close attempt after release = %v", err)
+	}
 }
 
 func TestRescueStreamCloseStartsTheCloserBeforeItsDeadline(t *testing.T) {
