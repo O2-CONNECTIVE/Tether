@@ -133,6 +133,16 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 		p.Signer = s
 		principals = append(principals, p)
 	}
+	var rescueSigner ssh.Signer
+	if cfg.rescueIdentity != nil {
+		load, cancel := context.WithTimeout(ctx, readBudget)
+		rescueSigner, err = d.loadKey(load, *cfg.rescueIdentity)
+		cancel()
+		if err != nil || rescueSigner == nil || rescueSigner.PublicKey().Type() != ssh.KeyAlgoED25519 || ssh.FingerprintSHA256(rescueSigner.PublicKey()) != cfg.rescueIdentity.Fingerprint {
+			report(diagnostic, "レスキュー身元鍵を取得できませんでした。待受しません")
+			return 2
+		}
+	}
 	// The document's one auth_mode selects the bearer or Access verifier; the
 	// other is never built.
 	// FileConfig intentionally leaves CallTimeout zero: the default is 30s,
@@ -148,6 +158,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 		return 2
 	}
 	gwConfig.Principals, gwConfig.Budgets = principals, agentgateway.ChannelBudgets()
+	gwConfig.RescueSigner = rescueSigner
 	gwConfig.ResidentOnly = cfg.residentOnly
 	gw, err := agentgateway.New(gwConfig)
 	if err != nil {
@@ -242,6 +253,14 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 		report(diagnostic, "設定が不正または不完全です")
 		return closeUnserved(nil, gw.Close, diagnostic, 2)
 	}
+	var rescue *agenttransport.RescueHandler
+	if cfg.rescueIdentity != nil {
+		rescue, err = agenttransport.NewRescueHandler(gw)
+		if err != nil {
+			report(diagnostic, "設定が不正または不完全です")
+			return closeUnserved(registration.Close, gw.Close, diagnostic, 2)
+		}
+	}
 	// One-time composition happens before the listener can initialize any MCP
 	// session. Handler and gateway share the same pinned mapping and signer.
 	if len(cfg.resident) > 0 {
@@ -285,7 +304,15 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 	if cfg.pairing != nil {
 		pair = http.HandlerFunc(gw.ServePair)
 	}
-	code = serve(ctx, ln, routes(mcpPath, registrationPath, metadata, pair, gw, registration), registration.Close, gw.Close, diagnostic)
+	closeHandlers := func(ctx context.Context) error {
+		var errs []error
+		if rescue != nil {
+			errs = append(errs, rescue.Close(ctx))
+		}
+		errs = append(errs, registration.Close(ctx))
+		return errors.Join(errs...)
+	}
+	code = serve(ctx, ln, routes(mcpPath, registrationPath, metadata, pair, gw, registration, rescue), closeHandlers, gw.Close, diagnostic)
 	if pilot && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		report(diagnostic, "試行期限に達したため停止しました")
 	}
@@ -328,13 +355,15 @@ func closeUnserved(closeRegistration, closeGateway func(context.Context) error, 
 // protected resource metadata to the gateway. In Access mode discovery is the
 // Access edge's, so the metadata paths are 404 here. No prefix match, path
 // cleaning or redirect applies.
-func routes(mcpPath, registrationPath string, metadata bool, pair, gw, registration http.Handler) http.Handler {
+func routes(mcpPath, registrationPath string, metadata bool, pair, gw, registration http.Handler, rescue ...http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL == nil || r.URL.RawPath != "" {
 			http.NotFound(w, r)
 			return
 		}
 		switch p := r.URL.Path; {
+		case len(rescue) > 0 && rescue[0] != nil && p == agentgateway.RescuePath:
+			rescue[0].ServeHTTP(w, r)
 		case pair != nil && p == agentgateway.PairPath:
 			pair.ServeHTTP(w, r)
 		case p == registrationPath:

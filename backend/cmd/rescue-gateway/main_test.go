@@ -8,12 +8,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"golang.org/x/crypto/ssh"
@@ -221,6 +223,49 @@ func TestEntryRefusesLoadedKeyOtherThanReferenced(t *testing.T) {
 	checkDiagnostic(t, diagnostic.String())
 }
 
+type rescueRegistryStub struct{}
+
+func (rescueRegistryStub) AdmitRescue() error { return nil }
+func (rescueRegistryStub) OpenRescue(agentgateway.RescueRequest) (agentgateway.RescueReception, error) {
+	return agentgateway.RescueReception{}, nil
+}
+func (rescueRegistryStub) EndRescue([]byte) {}
+
+func TestRescueRouteMountedOnlyWithIdentityHandler(t *testing.T) {
+	h, err := agenttransport.NewRescueHandler(rescueRegistryStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close(context.Background())
+	with := routes("/mcp", "/agent-register", false, nil, http.NotFoundHandler(), http.NotFoundHandler(), h)
+	without := routes("/mcp", "/agent-register", false, nil, http.NotFoundHandler(), http.NotFoundHandler())
+	for _, tc := range []struct {
+		name    string
+		handler http.Handler
+		want    int
+	}{{"configured", with, http.StatusBadRequest}, {"omitted", without, http.StatusNotFound}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, agentgateway.RescuePath, nil)
+			w := httptest.NewRecorder()
+			tc.handler.ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("status=%d want %d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestRescueIdentityKeyFingerprintMismatchStopsBeforeListen(t *testing.T) {
+	doc := localDoc(t)
+	doc["rescue_identity_key"] = map[string]any{"path": `C:\Users\synthetic\rescue\keys\identity`, "fingerprint": fingerprint(t, 0x13)}
+	r := newRecorder(t, encode(t, doc))
+	r.signers[fingerprint(t, 0x13)] = signerOf(t, 0x14)
+	var diagnostic bytes.Buffer
+	if code := execute(context.Background(), []string{"-config", configPath}, &diagnostic, r.deps()); code != 2 || strings.Contains(r.trace(), "listen") {
+		t.Fatalf("exit=%d trace=%q", code, r.trace())
+	}
+}
+
 func TestEntryListenFailureClosesOwners(t *testing.T) {
 	r := newRecorder(t, encode(t, localDoc(t)))
 	var diagnostic bytes.Buffer
@@ -308,8 +353,11 @@ func exchange(t *testing.T, l *fakeListener, request string) (int, http.Header, 
 }
 
 func TestEntryMountsBothHandlersAfterValidation(t *testing.T) {
-	doc := encode(t, localDoc(t))
+	local := localDoc(t)
+	local["rescue_identity_key"] = map[string]any{"path": `C:\Users\synthetic\rescue\keys\identity`, "fingerprint": fingerprint(t, 0x13)}
+	doc := encode(t, local)
 	r := newRecorder(t, doc)
+	r.signers[fingerprint(t, 0x13)] = signerOf(t, 0x13)
 	r.listener = newFakeListener()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -321,7 +369,7 @@ func TestEntryMountsBothHandlersAfterValidation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("never listened")
 	}
-	if got := r.trace(); got != "read load:member-1 load:member-2 listen:127.0.0.1:8787" {
+	if got := r.trace(); got != "read load:member-1 load:member-2 load:identity listen:127.0.0.1:8787" {
 		t.Fatalf("trace = %q", got)
 	}
 	if !bytes.Equal(doc, make([]byte, len(doc))) {
@@ -342,6 +390,9 @@ func TestEntryMountsBothHandlersAfterValidation(t *testing.T) {
 	// The registration handler answers its own prechecks; no upgrade happens.
 	if code, _ := roundTrip(t, r.listener, "GET /agent-register HTTP/1.1\r\n"+host+"\r\n"); code != http.StatusBadRequest {
 		t.Fatalf("registration without subprotocol: %d", code)
+	}
+	if code, _ := roundTrip(t, r.listener, "GET "+agentgateway.RescuePath+" HTTP/1.1\r\n"+host+"\r\n"); code != http.StatusBadRequest {
+		t.Fatalf("configured rescue route: %d", code)
 	}
 	if code, _ := roundTrip(t, r.listener, "GET /agent-register HTTP/1.1\r\n"+host+"Sec-WebSocket-Protocol: "+agenttransport.Subprotocol+"\r\nAuthorization: Bearer synthetic\r\n\r\n"); code != http.StatusForbidden {
 		t.Fatalf("registration with ambient credential: %d", code)

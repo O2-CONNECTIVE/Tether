@@ -2,7 +2,7 @@
 
 [文書索引](README.md) / [gateway](agent-gateway.md) / [ホストのペア登録](host-pairing.md) / [agent channel](agent-channel.md) / [一時guestアカウント](temporary-guest-account.md) / [ADR 0005](adr/0005-rescue-reconnect-grace.md)
 
-**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の中の接続コードの発行と照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）だけを実装しました。受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）が無いので、まだどこからも呼ばれません。ほかは未実装です。**
+**2026-11-19 に利用者が承認した設計です（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)）。gateway の接続コード発行・照合（[#421](https://github.com/O2-CONNECTIVE/Tether/issues/421)）と WSS 受付口（[#422](https://github.com/O2-CONNECTIVE/Tether/issues/422)）を実装しました。担当者の要求（[#423](https://github.com/O2-CONNECTIVE/Tether/issues/423)）が無いため、受付コードはまだ使われません。ほかは未実装です。**
 切断の後の扱いは、[ADR 0005](adr/0005-rescue-reconnect-grace.md)（accepted）が [ADR 0003](adr/0003-owned-guest-workload.md) の該当の部分を置き換えます。
 実装されるまで、今の Mac の入口は、今の承認画面と確認文字列の契約（[agent CLI](agent-cli.md)、[agent channel](agent-channel.md)）で動きます。
 この文書は、ホストを接続コードで指し、要求の時点の許可のポップアップでレスキューの接続を始める流れを決めます。
@@ -76,6 +76,12 @@ principal の今の signer（gateway の保護設定にある長期の鍵）は�
 proof が示すのは「K を持っている」ことだけで、ホストの身元ではありません。
 アカウントの無いホストの登録口なので、誰でも登録できます。守りは回数の制限と、要求の側の認証です。
 受付の結果の署名で、relay が別の受付のコードに差し替えることを防ぎます。
+
+#### 受付口の wire
+
+受付口は `GET /tether-agent/v1/rescue` の WSS で、subprotocol は `rescue-agent-reception.v1` だけです。text JSON frame を使い、各 message は 2 KiB 以下、nonce と署名・鍵は登録経路と同じ base64url（padding なし）です。
+ホストは `hello`（nonce）、gateway は `challenge`（nonce）、ホストは `proof`（purpose=`new`、K、署名。resume の場合は reception id も含む）、gateway は `reception`（id、12 桁コード、署名）を送ります。署名対象は `RescueTranscript` と `RescueResultTranscript` です。
+受付上限は upgrade 前に busy の 503（`Retry-After: 1`）、rate の 429（`Retry-After: 60`）で返します。拒否は reception frame を返さず close code 1008 で接続を閉じます。reception 後は双方とも追加 frame を送らず、相手の frame・close で受付を終えます。
 
 ### 接続コード
 
@@ -392,7 +398,6 @@ K を盗んだ者は、C を持たないので担当者として接続できま�
 - 担当者の多要素認証の強制（[#398](https://github.com/O2-CONNECTIVE/Tether/issues/398)）。#415 の `role_assurance` の `multi_factor` は #398 が入るまで指定できません。製品として有効にする前提です。
 - 送信者に結びついた token（relay の侵害で担当者の token をもう一度使われることへの対策）。
 - 身元の証明鍵の配布と差し替えの手順（配布の issue）。
-- 受付口の wire の正確な形（frame、subprotocol 名、tool の名前と待ち方）。実装の issue で、この文書の署名対象と不変条件を守って決めます。
 
 ## ADR 0005 で直した文書
 
