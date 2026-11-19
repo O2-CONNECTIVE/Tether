@@ -32,6 +32,7 @@
 - 延長と取り消し（待機 OFF）は、ホスト側の操作だけで行います。操作する側からは延長できません。
 - 開発用の常駐の 15 分の寿命は、この期限に置き換えます（[開発用の常駐](../development-resident.md)）。
 - 試験運転の gateway の 15 分（`pilotMaxLifetime`）と、1 コマンドの 240 秒の上限は据え置きます。
+- 期限の付け先は、許可ではなく待機 ON にしました（2026-11-19、[#406](https://github.com/O2-CONNECTIVE/Tether/issues/406) の実装時の決定）。許可だけに付けると、許可なしの待機が無期限になるためです。許可は待機が OFF になるまで続きます。期限の選択と延長の画面は [#410](https://github.com/O2-CONNECTIVE/Tether/issues/410)、MCP の残り時間は [#412](https://github.com/O2-CONNECTIVE/Tether/issues/412) です。
 
 ## レスキューと常駐を 1 つのホスト GUI で切り替える
 

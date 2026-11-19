@@ -114,6 +114,7 @@ gatewayとMCPの入口の実装（4c-1）では、次のとおりにしました
 - 延長は、今の契約のまま、ホスト側の操作だけで行います。
 - 開発用の常駐の15分の寿命も、この期限に置き換えます（[development-resident](development-resident.md)）。試験運転のgatewayの15分（`pilotMaxLifetime`）は据え置きます。
 - 1コマンドのtimeoutの上限240秒は据え置きます。切断後も作業を続ける契約の変更が要るためで、必要になったら別のIssueにします。
+- 期限の付け先は、許可ではなく待機ONにしました（2026-11-19、[#406](https://github.com/O2-CONNECTIVE/Tether/issues/406)の実装時の決定）。許可だけに付けると、許可なしの待機が無期限になるためです。許可は待機がOFFになるまで続きます。製品のJSONの入口のONには既定の2時間を当て、期限の選択と延長の画面は[#410](https://github.com/O2-CONNECTIVE/Tether/issues/410)、MCPの残り時間は[#412](https://github.com/O2-CONNECTIVE/Tether/issues/412)です。
 
 ## 安全上の変化
 
