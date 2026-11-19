@@ -207,7 +207,7 @@ snapshotが4096行を超える場合や生成時刻を取得できない場合�
 
 2026-11-19 の main `d168a6f` の debug 診断（[run 44442402074](https://github.com/O2-CONNECTIVE/Tether/actions/runs/44442402074)）は、同じ depth4・webview-name・子の逆順に加えて、子の親PIDが起動前と同じ（`childBaselineParentPidRelation: same`）ことを記録しました（[#365](https://github.com/O2-CONNECTIVE/Tether/issues/365)）。
 上の除外はこの形を扱います。
-#295 の debug は親PIDの関係を記録していませんが、子の身元がsameなので、同じ除外の対象になる形でした。
+#295 の debug は親PIDの関係を記録していません。子の身元はsameで、生きているprocessの親PIDは変わらないので、同じ除外の対象になる形だったと読めますが、記録からは確定できません。
 2回の release の失敗（#365 の1件目のコメント）は系譜の事実が無く、同じ形だったかは分かりません。
 
 ## session作成timeoutの原因と起動前のruntime読込
