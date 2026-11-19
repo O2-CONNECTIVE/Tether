@@ -10,6 +10,12 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 ENUMS = json.loads((ROOT / 'ci-producer/DIAGNOSTIC_ENUMS.json').read_text())
 BASE = {'stage': 'complete', 'failure_code': 'none'}
+FAILURE_GROUP = {
+    'failure_substep': 'timeout',
+    'failure_elapsed_ms': 37,
+    'failure_deadline_ms': 40000,
+    'failure_iteration': 2,
+}
 
 
 def validate(record):
@@ -42,7 +48,10 @@ class DiagnosticBoundaryTests(unittest.TestCase):
 
     def test_unknown_and_wrong_types_at_every_field(self):
         for field in MODULE.ALLOWED:
-            for value in ('SYNTHETIC-token', None, True, 3, [], {}):
+            values = (('SYNTHETIC-token', None, True, -1, 3.5, [], {})
+                      if field in MODULE.INTEGER_FIELDS
+                      else ('SYNTHETIC-token', None, True, 3, [], {}))
+            for value in values:
                 record = dict(BASE)
                 for group in MODULE.GROUPS:
                     if field in group:
@@ -56,6 +65,24 @@ class DiagnosticBoundaryTests(unittest.TestCase):
                 record = {**BASE, **dict.fromkeys(group, 'unavailable')}
                 del record[field]
                 self.assertEqual(validate(record)['reason'], 'incomplete-record')
+
+    def test_failure_group_accepts_integers_and_rejects_strings_or_unknown_values(self):
+        record = {**BASE, 'failure_code': 'work-cli-response', **FAILURE_GROUP}
+        self.assertEqual(validate(record)['validation'], 'record-valid')
+        for field, value in (
+            ('failure_substep', 'SYNTHETIC-token'),
+            ('failure_elapsed_ms', '37'),
+            ('failure_deadline_ms', True),
+            ('failure_iteration', 0),
+            ('failure_iteration', '2'),
+        ):
+            invalid = dict(record)
+            invalid[field] = value
+            self.assertEqual(validate(invalid)['validation'], 'unavailable')
+        for field in FAILURE_GROUP:
+            incomplete = dict(record)
+            del incomplete[field]
+            self.assertEqual(validate(incomplete)['reason'], 'incomplete-record')
 
     def test_malformed_inputs(self):
         for raw in (b'', b'{', b'null', b'[]', b'"SYNTHETIC"', b'\xff',

@@ -127,6 +127,14 @@ remain unchanged. Pure in-memory cases run within the existing exact-selected
 `TestCIProducerObservationValidation`. The workflow output boundary is tested
 separately with synthetic markers; it never starts a producer or native work.
 
+The failure marker also carries a fixed `failure_substep` for `run-allow`,
+`gateway-setup` and `work-cli-response`. Wait substeps include elapsed and
+deadline milliseconds; other steps use `unavailable`. Work CLI responses are
+classified as timeout, EOF, invalid JSON or shape mismatch; an unclassified
+read failure stays `unavailable`. List failures include the one-based list
+request number. All other failure codes use `unavailable` for the substep and
+integer fields. No payload, error text, path or host value is published.
+
 ## Compiler-only native cleanup diagnostics
 
 The generated process.go overlay preserves original return expressions and all

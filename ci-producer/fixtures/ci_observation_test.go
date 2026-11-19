@@ -131,6 +131,28 @@ func TestCIProducerObservationValidation(t *testing.T) {
 // Called inside the existing exact-selected pure test: no new live test or I/O.
 func ciCheckProducerDiagnostics(t *testing.T) {
 	t.Helper()
+	responseElapsed, responseDeadline, responseIteration := int64(37), int64(40000), 2
+	failure := &ciDiagnostic{toolOperation: "list"}
+	failure.noteAt("work-cli-response", "shape-mismatch", &responseElapsed, &responseDeadline, &responseIteration)
+	failure.note("gateway-setup")
+	failureOutcome := map[string]any{}
+	failure.annotate(failureOutcome)
+	if failureOutcome["failure_substep"] != "shape-mismatch" ||
+		failureOutcome["failure_elapsed_ms"] != int64(37) ||
+		failureOutcome["failure_deadline_ms"] != int64(40000) ||
+		failureOutcome["failure_iteration"] != 2 {
+		t.Fatal("first failure diagnostics lost or overwritten")
+	}
+	unrelated := &ciDiagnostic{toolOperation: "status"}
+	unrelated.noteAt("mcp-request", "listener-bind", &responseElapsed, &responseDeadline, &responseIteration)
+	unrelatedOutcome := map[string]any{}
+	unrelated.annotate(unrelatedOutcome)
+	if unrelatedOutcome["failure_substep"] != "unavailable" ||
+		unrelatedOutcome["failure_elapsed_ms"] != "unavailable" ||
+		unrelatedOutcome["failure_deadline_ms"] != "unavailable" ||
+		unrelatedOutcome["failure_iteration"] != "unavailable" {
+		t.Fatal("unrelated failure diagnostics escaped their fixed boundary")
+	}
 	now := time.Unix(100, 0)
 	d := &ciDiagnostic{}
 	p := &ciChild{receipts: make(map[uint64]Receipt), observed: now}

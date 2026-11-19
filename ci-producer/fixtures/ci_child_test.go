@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const ciAllowReceiptWait = 10 * time.Second
+
 type ciChild struct {
 	foreground                     bool
 	nativeEvidence                 *os.File
@@ -387,7 +389,7 @@ func (p *ciChild) applied(id uint64, intent string) error {
 // accepted waits for the same-ID receipt of the run allowance. The allowance
 // is not a standby transition, so no snapshot transition follows it.
 func (p *ciChild) accepted(id uint64, intent string) error {
-	until := time.Now().Add(10 * time.Second)
+	until := time.Now().Add(ciAllowReceiptWait)
 	for time.Now().Before(until) {
 		p.mu.Lock()
 		r, ok := p.receipts[id]

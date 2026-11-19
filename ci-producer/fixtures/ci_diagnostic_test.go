@@ -11,6 +11,10 @@ import (
 // The stage is set before an operation; failure records the first failing site.
 type ciDiagnostic struct {
 	stage, failure    string
+	failureSubstep    string
+	failureElapsedMS  *int64
+	failureDeadlineMS *int64
+	failureIteration  *int
 	toolOperation     string
 	commandID         string
 	toolResult        map[string]string
@@ -19,15 +23,89 @@ type ciDiagnostic struct {
 }
 
 func (d *ciDiagnostic) at(stage string) { d.stage = stage }
+
+var ciFailureSubsteps = map[string][]string{
+	"run-allow": {
+		"producer-state-wait", "allow-request", "allow-receipt-wait",
+		"extend-request", "extend-receipt-wait",
+	},
+	"gateway-setup": {
+		"root-stat", "ca-key-generate", "ca-certificate-create", "ca-certificate-parse",
+		"server-key-generate", "server-certificate-create", "host-key-generate", "host-signer-create",
+		"principal-key-generate", "principal-signer-create", "other-principal-key-generate",
+		"other-principal-signer-create", "jwt-key-generate", "listener-bind", "jwks-encode",
+		"verifier-create", "gateway-create", "handler-create", "hosts-configure", "resident-configure",
+		"host-key-encode", "host-key-file-write", "policy-encode", "policy-file-write",
+	},
+	"work-cli-response": {"timeout", "eof", "invalid-json", "shape-mismatch"},
+}
+
+var ciFailureWaitDeadlines = map[string]int64{
+	"producer-state-wait": 10000,
+	"allow-receipt-wait":  10000,
+	"extend-receipt-wait": 10000,
+	"timeout":             40000,
+	"eof":                 40000,
+	"invalid-json":        40000,
+	"shape-mismatch":      40000,
+}
+
+func ciFailureSubstepAllowed(code, substep string) bool {
+	if substep == "unavailable" {
+		return true
+	}
+	for _, allowed := range ciFailureSubsteps[code] {
+		if substep == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *ciDiagnostic) note(code string) {
+	d.noteAt(code, "unavailable", nil, nil, nil)
+}
+func (d *ciDiagnostic) noteAt(code, substep string, elapsedMS, deadlineMS *int64, iteration *int) {
 	if d.failure == "" {
 		d.failure = code
+		if !ciFailureSubstepAllowed(code, substep) {
+			substep, elapsedMS, deadlineMS, iteration = "unavailable", nil, nil, nil
+		}
+		if expected, timed := ciFailureWaitDeadlines[substep]; timed {
+			if elapsedMS == nil || deadlineMS == nil || *deadlineMS != expected {
+				substep, elapsedMS, deadlineMS = "unavailable", nil, nil
+			}
+		} else if elapsedMS != nil || deadlineMS != nil {
+			substep, elapsedMS, deadlineMS = "unavailable", nil, nil
+		}
+		if code != "work-cli-response" || d.toolOperation != "list" || iteration == nil || *iteration < 1 {
+			iteration = nil
+		}
+		d.failureSubstep = substep
+		d.failureElapsedMS = elapsedMS
+		d.failureDeadlineMS = deadlineMS
+		d.failureIteration = iteration
 	}
 }
 func (d *ciDiagnostic) fail(t *testing.T, code string) {
+	d.failAt(t, code, "unavailable", nil, nil, nil)
+}
+func (d *ciDiagnostic) failAt(t *testing.T, code, substep string, elapsedMS, deadlineMS *int64, iteration *int) {
 	t.Helper()
-	d.note(code)
+	d.noteAt(code, substep, elapsedMS, deadlineMS, iteration)
 	t.Fatal("fixture assertion failed; see fixed outcome codes")
+}
+func (d *ciDiagnostic) failWait(t *testing.T, code, substep string, started time.Time, deadline time.Duration) {
+	elapsedMS, deadlineMS := time.Since(started).Milliseconds(), deadline.Milliseconds()
+	d.failAt(t, code, substep, &elapsedMS, &deadlineMS, nil)
+}
+func (d *ciDiagnostic) failWorkResponse(t *testing.T, substep string, elapsed int64, iteration *int) {
+	var elapsedMS, deadlineMS *int64
+	if deadline, timed := ciFailureWaitDeadlines[substep]; timed {
+		elapsedMS = &elapsed
+		deadlineMS = &deadline
+	}
+	d.failAt(t, "work-cli-response", substep, elapsedMS, deadlineMS, iteration)
 }
 func (d *ciDiagnostic) fields() (string, string) {
 	failure := d.failure
@@ -111,7 +189,9 @@ func (d *ciDiagnostic) observeTool(result map[string]any) {
 	d.toolResult = make(map[string]string)
 	for output, input := range map[string]string{"result_error": "error", "result_phase": "phase", "command_phase": "command_phase", "result_stop": "stop", "command_cleanup": "command_cleanup", "owner_cleanup": "owner_cleanup", "gateway_cleanup": "gateway_cleanup"} {
 		candidate, ok := value[input].(string)
-		if output == "result_error" && !ok { candidate, ok = value["work_error"].(string) }
+		if output == "result_error" && !ok {
+			candidate, ok = value["work_error"].(string)
+		}
 		if !ok {
 			continue
 		}
@@ -127,6 +207,26 @@ func (d *ciDiagnostic) observeTool(result map[string]any) {
 	}
 }
 func (d *ciDiagnostic) annotate(outcome map[string]any) {
+	substep := d.failureSubstep
+	if !ciFailureSubstepAllowed(d.failure, substep) {
+		substep = "unavailable"
+	}
+	outcome["failure_substep"] = substep
+	if d.failureElapsedMS == nil {
+		outcome["failure_elapsed_ms"] = "unavailable"
+	} else {
+		outcome["failure_elapsed_ms"] = *d.failureElapsedMS
+	}
+	if d.failureDeadlineMS == nil {
+		outcome["failure_deadline_ms"] = "unavailable"
+	} else {
+		outcome["failure_deadline_ms"] = *d.failureDeadlineMS
+	}
+	if d.failureIteration == nil {
+		outcome["failure_iteration"] = "unavailable"
+	} else {
+		outcome["failure_iteration"] = *d.failureIteration
+	}
 	operation := d.toolOperation
 	if operation == "" {
 		operation = "unavailable"

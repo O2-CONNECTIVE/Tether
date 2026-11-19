@@ -21,6 +21,25 @@ FIELDS = {
     'producer_cleanup': ['unavailable', 'confirmed', 'pending', 'unknown'],
     'producer_transition': ['unavailable', 'missing', 'other-request', 'pending', 'applied', 'rejected', 'unknown'],
 }
+RUN_ALLOW_SUBSTEPS = [
+    'producer-state-wait', 'allow-request', 'allow-receipt-wait',
+    'extend-request', 'extend-receipt-wait',
+]
+GATEWAY_SETUP_SUBSTEPS = [
+    'root-stat', 'ca-key-generate', 'ca-certificate-create', 'ca-certificate-parse',
+    'server-key-generate', 'server-certificate-create', 'host-key-generate',
+    'host-signer-create', 'principal-key-generate', 'principal-signer-create',
+    'other-principal-key-generate', 'other-principal-signer-create', 'jwt-key-generate',
+    'listener-bind', 'jwks-encode', 'verifier-create', 'gateway-create', 'handler-create',
+    'hosts-configure', 'resident-configure', 'host-key-encode', 'host-key-file-write',
+    'policy-encode', 'policy-file-write',
+]
+WORK_RESPONSE_SUBSTEPS = ['timeout', 'eof', 'invalid-json', 'shape-mismatch']
+FAILURE_SUBSTEPS = ['unavailable', *RUN_ALLOW_SUBSTEPS, *GATEWAY_SETUP_SUBSTEPS,
+                    *WORK_RESPONSE_SUBSTEPS]
+FAILURE_DIAGNOSTIC_FIELDS = (
+    'failure_substep', 'failure_elapsed_ms', 'failure_deadline_ms', 'failure_iteration',
+)
 
 
 def project(changes=None, trigger='observer'):
@@ -100,6 +119,82 @@ class ProducerDiagnosticProjectionTests(unittest.TestCase):
             result = project(changes, trigger)
             for field in FIELDS:
                 self.assertEqual(result.get(field), 'unavailable')
+
+    def test_failure_substeps_and_integer_diagnostics_project_by_code(self):
+        cases = [('run-allow', substep, 'unavailable', 'unavailable', 'unavailable', 'unavailable')
+                 for substep in ('allow-request', 'extend-request')]
+        cases += [('gateway-setup', substep, 'unavailable', 'unavailable', 'unavailable', 'unavailable')
+                  for substep in GATEWAY_SETUP_SUBSTEPS]
+        cases += [('work-cli-response', substep, 37, 40000,
+                   3 if substep == 'shape-mismatch' else 'unavailable',
+                   'list' if substep == 'shape-mismatch' else 'get_execution')
+                  for substep in WORK_RESPONSE_SUBSTEPS]
+        cases += [('run-allow', 'producer-state-wait', 8, 10000, 'unavailable', 'unavailable'),
+                  ('run-allow', 'allow-receipt-wait', 9, 10000, 'unavailable', 'unavailable'),
+                  ('run-allow', 'extend-receipt-wait', 10, 10000, 'unavailable', 'unavailable'),
+                  ('producer-observation-deadline', 'unavailable', 'unavailable', 'unavailable',
+                   'unavailable', 'unavailable')]
+        for code, substep, elapsed, deadline, iteration, operation in cases:
+            with self.subTest(code=code, substep=substep):
+                changes = dict(failure_code=code, failure_substep=substep,
+                               failure_elapsed_ms=elapsed, failure_deadline_ms=deadline,
+                               failure_iteration=iteration, tool_operation=operation)
+                result = project(changes)
+                self.assertEqual(result['failure_code'], code)
+                self.assertEqual(tuple(result.get(field) for field in FAILURE_DIAGNOSTIC_FIELDS),
+                                 (substep, elapsed, deadline, iteration))
+
+    def test_failure_substeps_match_dictionary_and_go_fixture(self):
+        contract = json.loads((ROOT / 'ci-producer/DIAGNOSTIC_ENUMS.json').read_text())
+        self.assertEqual(set(contract.get('failure_fields', {}).get('failure_substep', [])),
+                         set(FAILURE_SUBSTEPS))
+        self.assertEqual(contract.get('integer_fields'), {
+            'failure_elapsed_ms': {'minimum': 0},
+            'failure_deadline_ms': {'minimum': 1},
+            'failure_iteration': {'minimum': 1},
+        })
+        source = (ROOT / 'ci-producer/fixtures/ci_diagnostic_test.go').read_text()
+        block = source.split('var ciFailureSubsteps = map[string][]string{', 1)[1].split('\n}', 1)[0]
+        go_groups = {
+            code: set(re.findall(r'"([^"]+)"', values))
+            for code, values in re.findall(r'"([^"]+)":\s*\{([^}]+)\}', block)
+        }
+        self.assertEqual(go_groups, {
+            'run-allow': set(RUN_ALLOW_SUBSTEPS),
+            'gateway-setup': set(GATEWAY_SETUP_SUBSTEPS),
+            'work-cli-response': set(WORK_RESPONSE_SUBSTEPS),
+        })
+
+    def test_failure_diagnostic_group_rejects_unknown_wrong_types_and_mismatched_codes(self):
+        valid = dict(failure_code='work-cli-response', failure_substep='shape-mismatch',
+                     failure_elapsed_ms=3, failure_deadline_ms=40000,
+                     failure_iteration=2, tool_operation='list')
+        invalid_cases = (
+            {'failure_substep': 'RAW_PRIVATE_SENTINEL'},
+            {'failure_elapsed_ms': '3'}, {'failure_deadline_ms': True},
+            {'failure_iteration': 0}, {'failure_iteration': '2'},
+            {'failure_substep': 'host-key-generate'},
+            {'failure_substep': 'shape-mismatch', 'failure_iteration': 2,
+             'tool_operation': 'get_execution'},
+        )
+        for changes in invalid_cases:
+            with self.subTest(changes=changes):
+                result = project({**valid, **changes})
+                self.assertEqual(tuple(result.get(field) for field in FAILURE_DIAGNOSTIC_FIELDS),
+                                 ('unavailable',) * 4)
+                self.assertNotIn('RAW_PRIVATE_SENTINEL', json.dumps(result))
+        incomplete = dict(valid)
+        del incomplete['failure_elapsed_ms']
+        result = project(incomplete)
+        self.assertEqual(tuple(result.get(field) for field in FAILURE_DIAGNOSTIC_FIELDS),
+                         ('unavailable',) * 4)
+
+    def test_failure_substeps_are_unavailable_for_other_failure_codes(self):
+        result = project(dict(failure_code='mcp-request', failure_substep='listener-bind',
+                              failure_elapsed_ms=8, failure_deadline_ms=10000,
+                              failure_iteration=1))
+        self.assertEqual(tuple(result.get(field) for field in FAILURE_DIAGNOSTIC_FIELDS),
+                         ('unavailable',) * 4)
 
 
 if __name__ == '__main__':

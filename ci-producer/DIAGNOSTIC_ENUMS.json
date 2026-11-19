@@ -142,6 +142,52 @@
     "work-start-uncertain"
   ],
   "semantics": "Producer outcome only; fixed phase and first failure-site classification. No raw errors or observed payload values. Passed outcome is stage complete and failure_code none. Missing enum fields before fixture acquisition remain absent, never inferred.",
+  "failure_fields": {
+    "failure_substep": [
+      "unavailable",
+      "allow-receipt-wait",
+      "allow-request",
+      "ca-certificate-create",
+      "ca-certificate-parse",
+      "ca-key-generate",
+      "eof",
+      "extend-receipt-wait",
+      "extend-request",
+      "gateway-create",
+      "handler-create",
+      "host-key-encode",
+      "host-key-file-write",
+      "host-key-generate",
+      "host-signer-create",
+      "hosts-configure",
+      "invalid-json",
+      "jwks-encode",
+      "jwt-key-generate",
+      "listener-bind",
+      "other-principal-key-generate",
+      "other-principal-signer-create",
+      "policy-encode",
+      "policy-file-write",
+      "principal-key-generate",
+      "principal-signer-create",
+      "producer-state-wait",
+      "root-stat",
+      "server-certificate-create",
+      "server-key-generate",
+      "shape-mismatch",
+      "timeout",
+      "verifier-create",
+      "resident-configure"
+    ],
+    "failure_elapsed_ms": ["unavailable"],
+    "failure_deadline_ms": ["unavailable"],
+    "failure_iteration": ["unavailable"]
+  },
+  "integer_fields": {
+    "failure_elapsed_ms": {"minimum": 0},
+    "failure_deadline_ms": {"minimum": 1},
+    "failure_iteration": {"minimum": 1}
+  },
   "result_fields": {
     "tool_operation": [
       "unavailable",
