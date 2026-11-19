@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -229,6 +230,46 @@ type protocolRaceConn struct {
 	closeOnce    sync.Once
 }
 
+type closeGateWireConn struct {
+	closed       chan struct{}
+	closeEntered chan struct{}
+	readStarted  chan struct{}
+	readReturned chan struct{}
+	releaseClose chan struct{}
+	readOnce     sync.Once
+	closeOnce    sync.Once
+	releaseOnce  sync.Once
+}
+
+func newCloseGateWireConn() *closeGateWireConn {
+	return &closeGateWireConn{
+		closed: make(chan struct{}), closeEntered: make(chan struct{}),
+		readStarted: make(chan struct{}), readReturned: make(chan struct{}), releaseClose: make(chan struct{}),
+	}
+}
+
+func (c *closeGateWireConn) Read([]byte) (int, error) {
+	c.readOnce.Do(func() {
+		close(c.readStarted)
+		<-c.closed
+	})
+	close(c.readReturned)
+	return 0, io.EOF
+}
+
+func (*closeGateWireConn) Write(p []byte) (int, error) { return len(p), nil }
+
+func (c *closeGateWireConn) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.closeEntered)
+		close(c.closed)
+		<-c.releaseClose
+	})
+	return nil
+}
+
+func (c *closeGateWireConn) release() { c.releaseOnce.Do(func() { close(c.releaseClose) }) }
+
 func (c *protocolRaceConn) Read(p []byte) (int, error) {
 	c.readOnce.Do(func() {
 		close(c.readStarted)
@@ -361,6 +402,179 @@ func TestStandaloneWireEOFWithoutReconnectOptInRevokesGrant(t *testing.T) {
 	}
 	if r.issuer.Snapshot().HasAuthority {
 		t.Fatal("standalone wire EOF preserved the grant without reconnect opt-in")
+	}
+}
+
+func TestStandaloneWireServeWaitsForRevocationMonitorAfterEOF(t *testing.T) {
+	r := newSessionRig(t, agentexec.ProfileWindowsGuest)
+	ctx, cancel := context.WithCancel(context.Background())
+	liveness := make(chan struct{})
+	cfg := r.config()
+	cfg.Liveness = liveness
+	server, err := agentwire.NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := newCloseGateWireConn()
+	served := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		served <- server.Serve(ctx, conn)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		conn.release()
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("Serve did not finish during cleanup")
+		}
+	})
+	select {
+	case <-conn.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not reach the gated read")
+	}
+	cancel()
+	select {
+	case <-conn.closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("the owner cancellation did not start closing the stream")
+	}
+	if r.issuer.Snapshot().HasAuthority {
+		t.Fatal("the stop monitor closed the stream before revoking the grant")
+	}
+	select {
+	case <-conn.readReturned:
+	case <-time.After(time.Second):
+		t.Fatal("the close gate did not release EOF to Serve")
+	}
+	select {
+	case err := <-served:
+		t.Fatalf("Serve returned before its stop monitor finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	conn.release()
+	select {
+	case err := <-served:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Serve after owner cancellation = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after the stop monitor finished")
+	}
+	if r.issuer.Snapshot().HasAuthority {
+		t.Fatal("Serve returned while the standalone grant remained live")
+	}
+}
+
+func TestReconnectableWireServeJoinsMonitorBeforeNextGeneration(t *testing.T) {
+	r := newSessionRig(t, agentexec.ProfileWindowsGuest)
+	liveness := make(chan struct{})
+	cfg := r.config()
+	cfg.Liveness, cfg.AllowReconnect = liveness, true
+	server, err := agentwire.NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	conn := newCloseGateWireConn()
+	served := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		served <- server.Serve(ctx, conn)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		conn.release()
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("Serve did not finish during cleanup")
+		}
+	})
+	select {
+	case <-conn.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not reach the gated read")
+	}
+	close(liveness)
+	select {
+	case <-conn.closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("liveness loss did not start closing the stream")
+	}
+	if !r.issuer.Snapshot().HasAuthority {
+		t.Fatal("opt-in transport loss revoked the grant")
+	}
+	select {
+	case <-conn.readReturned:
+	case <-time.After(time.Second):
+		t.Fatal("the close gate did not release EOF to Serve")
+	}
+	select {
+	case err := <-served:
+		t.Fatalf("Serve returned before its stop monitor finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	conn.release()
+	select {
+	case err := <-served:
+		if !errors.Is(err, agentwire.ErrPeerLost) {
+			t.Fatalf("Serve after liveness loss = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after the stop monitor finished")
+	}
+
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Second)
+	defer cleanupCancel()
+	if err := r.session.AwaitCleanup(cleanupCtx); err != nil {
+		t.Fatalf("generation 1 cleanup = %v", err)
+	}
+	if err := r.session.ClaimTransportGeneration(2); err != nil {
+		t.Fatalf("claim generation 2 = %v", err)
+	}
+	if err := r.session.ResumeTransport(2); err != nil {
+		t.Fatalf("resume generation 2 = %v", err)
+	}
+	cfg.ConnectionGeneration, cfg.Liveness = 2, make(chan struct{})
+	second, err := agentwire.NewServer(cfg)
+	if err != nil {
+		t.Fatalf("new generation 2 server = %v", err)
+	}
+	clientConn, serverConn := net.Pipe()
+	client, err := agentwire.NewClient(clientConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondServed := make(chan error, 1)
+	go func() { secondServed <- second.Serve(context.Background(), serverConn) }()
+	startCtx, startCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer startCancel()
+	started, err := client.Start(startCtx, "next-generation", []byte("whoami\n"), 60_000)
+	if err != nil {
+		t.Fatalf("generation 2 Start = %v", err)
+	}
+	r.proc()
+	_, err = client.Cancel(startCtx, started.CommandID)
+	if err != nil {
+		t.Fatalf("generation 2 Cancel = %v", err)
+	}
+	cancel()
+	if !r.issuer.Snapshot().HasAuthority || r.session.StopReason() != agentexec.StopNone {
+		t.Fatal("the returned generation 1 monitor changed the active generation 2 grant")
+	}
+	_ = client.Close()
+	select {
+	case err := <-secondServed:
+		if err != nil {
+			t.Fatalf("generation 2 Serve = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("generation 2 Serve did not return after client close")
 	}
 }
 

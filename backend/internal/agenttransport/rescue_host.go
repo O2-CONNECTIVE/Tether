@@ -461,7 +461,7 @@ func (c *RescueClient) disconnectAttempt(attempt uint64) {
 		c.end()
 		return
 	}
-	ws, link, cancel := c.ws, c.closer, c.cancel
+	link, cancel := c.closer, c.cancel
 	c.ws, c.closer, c.cancel, c.life = nil, nil, nil, nil
 	c.active, c.resumeAttempt = false, false
 	c.requested, c.answered, c.expired = false, false, false
@@ -473,9 +473,6 @@ func (c *RescueClient) disconnectAttempt(attempt uint64) {
 	c.mu.Unlock()
 	if cancel != nil {
 		cancel()
-	}
-	if ws != nil {
-		_ = ws.CloseNow()
 	}
 	if link != nil {
 		link.start()

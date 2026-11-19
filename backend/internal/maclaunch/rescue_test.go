@@ -85,15 +85,20 @@ type rescueReception struct {
 	onAllow  func(Dispatch, net.Conn)
 	// entered and gate, when set before the answer, hold Allow open as a slow
 	// write to the gateway would.
-	entered, gate chan struct{}
-	openEntered   chan struct{}
-	openGate      chan struct{}
-	openCanceled  chan error
-	acceptRead    chan struct{}
+	entered, gate  chan struct{}
+	openEntered    chan struct{}
+	openGate       chan struct{}
+	openCanceled   chan error
+	acceptRead     chan struct{}
+	requestEntered chan struct{}
+	requestGate    chan struct{}
+	requestCalls   chan struct{}
+	requestCount   int
+	requestGateAt  int
 }
 
 func newRescueReception() *rescueReception {
-	return &rescueReception{done: make(chan struct{}), requests: make(chan agenttransport.VerifiedRescueIdentity, 1), code: "123456789012", key: rescueK}
+	return &rescueReception{done: make(chan struct{}), requests: make(chan agenttransport.VerifiedRescueIdentity, 1), requestCalls: make(chan struct{}, 16), code: "123456789012", key: rescueK}
 }
 
 func freshRescueReception(seed byte, code string) *rescueReception {
@@ -129,7 +134,33 @@ func (r *rescueReception) Resume(context.Context) error {
 	}
 	return nil
 }
-func (r *rescueReception) Request() <-chan agenttransport.VerifiedRescueIdentity { return r.requests }
+func (r *rescueReception) Request() <-chan agenttransport.VerifiedRescueIdentity {
+	r.mu.Lock()
+	r.requestCount++
+	call := r.requestCount
+	select {
+	case r.requestCalls <- struct{}{}:
+	default:
+	}
+	var entered, gate chan struct{}
+	if call == r.requestGateAt {
+		entered, gate = r.requestEntered, r.requestGate
+		r.requestGateAt = 0
+	}
+	r.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		<-gate
+	}
+	return r.requests
+}
+
+func (r *rescueReception) gateNextRequest(entered, gate chan struct{}) {
+	r.mu.Lock()
+	r.requestEntered, r.requestGate = entered, gate
+	r.requestGateAt = r.requestCount + 1
+	r.mu.Unlock()
+}
 func (r *rescueReception) HostKey() ssh.Signer {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -348,7 +379,7 @@ type rescueReceptionResult struct {
 	err error
 }
 
-func (f *rescueFixture) makeReception() (RescueReception, error) {
+func (f *rescueFixture) makeReception(context.Context) (RescueReception, error) {
 	f.factoryMu.Lock()
 	defer f.factoryMu.Unlock()
 	f.factoryCalls++
@@ -1149,6 +1180,24 @@ func TestRescueReconnectionRechecksGraceBeforeAdmission(t *testing.T) {
 	f := newRescueFixture(t, 4*time.Hour)
 	next := freshRescueReception(0x4e, "987654321098")
 	f.queueReception(next, nil)
+	select {
+	case <-f.rec.requestCalls:
+	case <-time.After(time.Second):
+		t.Fatal("loop did not capture the initial reception")
+	}
+	requestEntered, requestGate := make(chan struct{}), make(chan struct{})
+	f.rec.gateNextRequest(requestEntered, requestGate)
+	var releaseRequestOnce sync.Once
+	releaseRequest := func() { releaseRequestOnce.Do(func() { close(requestGate) }) }
+	t.Cleanup(releaseRequest)
+	var doneOnce sync.Once
+	doneObserved := make(chan struct{})
+	f.rec.onClose = func() {
+		doneOnce.Do(func() {
+			f.rec.lose()
+			close(doneObserved)
+		})
+	}
 	offered := make(chan struct {
 		dispatch Dispatch
 		conn     net.Conn
@@ -1203,6 +1252,11 @@ func TestRescueReconnectionRechecksGraceBeforeAdmission(t *testing.T) {
 	if !handoff {
 		t.Fatal("resume handoff was not recorded")
 	}
+	select {
+	case <-requestEntered:
+	case <-time.After(time.Second):
+		t.Fatal("loop did not capture the old reception before waiting for its request")
+	}
 	opened := make(chan error, 1)
 	go func() {
 		hostKey, parseErr := ssh.ParsePublicKey(offer.dispatch.HostKey)
@@ -1219,6 +1273,12 @@ func TestRescueReconnectionRechecksGraceBeforeAdmission(t *testing.T) {
 		}
 		opened <- openErr
 	}()
+	select {
+	case <-doneObserved:
+	case <-time.After(3 * time.Second):
+		t.Fatal("grace expiry did not close the old reception")
+	}
+	releaseRequest()
 	var openedReception RescueEvent
 	deadlineTimer := time.NewTimer(3 * time.Second)
 	defer deadlineTimer.Stop()
@@ -1303,6 +1363,38 @@ func TestOldAfterServeCannotEndReplacementReception(t *testing.T) {
 	f.r.mu.Unlock()
 	if state != rescueAccepting || current != next {
 		t.Fatalf("old afterServe changed replacement: state=%v current=%p", state, current)
+	}
+}
+
+func TestRescueReclaimsGenerationTwoThatEndsBeforeConfirmation(t *testing.T) {
+	f, _, approved := rescueInGrace(t, 4*time.Hour)
+	dispatch, err := approved.NextGeneration()
+	if err != nil {
+		t.Fatalf("prepare generation 2: %v", err)
+	}
+	f.r.mu.Lock()
+	f.r.resumeHandoff, f.r.resumeReception = true, f.rec
+	f.r.resumeApproved, f.r.resumeGeneration = approved, dispatch.Binding.ConnectionGeneration
+	f.r.mu.Unlock()
+	if dispatch.Binding.ConnectionGeneration != 2 {
+		t.Fatalf("handoff generation = %d, want 2", dispatch.Binding.ConnectionGeneration)
+	}
+
+	host, peer := net.Pipe()
+	_ = peer.Close()
+	f.r.serveApproved(approved, dispatch.Binding.ConnectionGeneration, host)
+	_ = host.Close()
+	select {
+	case <-f.r.Done():
+	case <-time.After(time.Second):
+		t.Fatal("failed generation 2 handoff left Rescue and its reception active")
+	}
+	_, _, closes := f.rec.state()
+	if closes != 1 {
+		t.Fatalf("reception close count = %d, want 1 after failed handoff", closes)
+	}
+	if approved.issuer.Snapshot().HasAuthority {
+		t.Fatal("failed generation 2 handoff retained the grant")
 	}
 }
 
@@ -1402,6 +1494,70 @@ func TestStopCancelsInProgressReceptionOpen(t *testing.T) {
 	f.waitDone(t)
 	if next.opens != 0 {
 		t.Fatalf("canceled reception Open completed %d times", next.opens)
+	}
+}
+
+func TestOpenReceptionFactoryReturnsWhenContextIsCanceled(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unlock := func() { releaseOnce.Do(func() { close(release) }) }
+	f.r.cfg.ReceptionFactory = func(ctx context.Context) (RescueReception, error) {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+			return freshRescueReception(0x4e, "987654321098"), nil
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result, done := make(chan error, 1), make(chan struct{})
+	go func() {
+		_, _, _, err := f.r.openReception(ctx, nil)
+		result <- err
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		unlock()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("openReception did not finish during cleanup")
+		}
+	})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("factory did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("openReception after factory cancellation = %v", err)
+		}
+	case <-time.After(50 * time.Millisecond):
+		unlock()
+		select {
+		case <-result:
+		case <-time.After(time.Second):
+			t.Fatal("openReception remained blocked after releasing the factory")
+		}
+		t.Fatal("openReception factory did not return when its context was canceled")
+	}
+}
+
+func TestReceptionOpenedNotificationIsSuppressedAfterStop(t *testing.T) {
+	events := make(chan RescueEvent, 1)
+	r := &Rescue{cfg: RescueConfig{OnStateChange: func(event RescueEvent) { events <- event }}, stop: make(chan struct{})}
+	r.Stop()
+	r.emit(RescueEvent{Kind: RescueEventReceptionOpened, Code: "late-code"})
+	select {
+	case event := <-events:
+		t.Fatalf("notification after Stop = %+v", event)
+	default:
 	}
 }
 

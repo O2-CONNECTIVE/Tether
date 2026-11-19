@@ -137,7 +137,7 @@ type RescueConfig struct {
 	CleanupTimeout   time.Duration
 	Budgets          agentchannel.Budgets
 	Helper           RescueHelper
-	ReceptionFactory func() (RescueReception, error)
+	ReceptionFactory func(context.Context) (RescueReception, error)
 	OnStateChange    func(RescueEvent)
 }
 
@@ -282,7 +282,7 @@ func (r *Rescue) openReception(parent context.Context, previousKey []byte) (Resc
 	if parent == nil || parent.Err() != nil {
 		return nil, "", nil, context.Canceled
 	}
-	reception, err := r.cfg.ReceptionFactory()
+	reception, err := r.cfg.ReceptionFactory(parent)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -323,9 +323,18 @@ func (r *Rescue) openReception(parent context.Context, previousKey []byte) (Resc
 }
 
 func (r *Rescue) emit(event RescueEvent) {
-	if r != nil && r.cfg.OnStateChange != nil {
-		r.cfg.OnStateChange(event)
+	if r == nil || r.cfg.OnStateChange == nil {
+		return
 	}
+	if event.Kind == RescueEventReceptionOpened {
+		r.mu.Lock()
+		stopped := r.stopRequested
+		r.mu.Unlock()
+		if stopped {
+			return
+		}
+	}
+	r.cfg.OnStateChange(event)
 }
 
 func (r *Rescue) signal() {
@@ -536,11 +545,16 @@ func (r *Rescue) afterServe(a *Approved, generation uint64) {
 	r.step.Lock()
 	defer r.step.Unlock()
 	r.mu.Lock()
-	if r.state == rescueEnded || r.state == rescueNeedsCleanup || r.approved != a || r.serveGeneration != generation {
+	handoff := r.state == rescueGrace && r.resumeHandoff && r.resumeApproved == a &&
+		r.resumeReception != nil && r.resumeReception == r.reception && r.resumeGeneration == generation
+	if r.state == rescueEnded || r.state == rescueNeedsCleanup || r.approved != a ||
+		(r.serveGeneration != generation && !handoff) {
 		r.mu.Unlock()
 		return
 	}
 	r.resumeHandoff, r.resumeRunning = false, false
+	r.resumeReception, r.resumeApproved = nil, nil
+	r.resumeGeneration = 0
 	if a.CanResume() {
 		wall, mono := r.lastFrameWall, r.lastFrameMono
 		if wall.IsZero() {
@@ -727,8 +741,9 @@ func (r *Rescue) loop() {
 			r.finish(false, false, true)
 			return
 		case <-receptionDone:
-			r.finish(false, false, true)
-			return
+			if r.finishReception(reception) {
+				return
+			}
 		case v := <-requests:
 			r.handleVerified(v)
 		case <-r.wake:
@@ -743,6 +758,19 @@ func (r *Rescue) loop() {
 			return
 		}
 	}
+}
+
+func (r *Rescue) finishReception(reception RescueReception) bool {
+	r.step.Lock()
+	defer r.step.Unlock()
+	r.mu.Lock()
+	current := r.reception
+	r.mu.Unlock()
+	if current != reception {
+		return false
+	}
+	r.end(false, false, true)
+	return true
 }
 
 // recheck evaluates all deadlines under step. The grant deadline takes

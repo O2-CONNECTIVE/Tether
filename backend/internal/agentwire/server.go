@@ -214,7 +214,9 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		close(stop)
 		_ = conn.Close()
 	}
+	monitorDone := make(chan struct{})
 	go func() {
+		defer close(monitorDone)
 		select {
 		case <-ctx.Done():
 			halt(false)
@@ -281,6 +283,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		!errors.Is(err, ErrProtocol) && ctx.Err() == nil
 	halt(reconnectable)
 	handlers.Wait()
+	<-monitorDone
 	return err
 }
 

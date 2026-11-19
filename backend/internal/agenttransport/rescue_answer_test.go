@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -781,6 +782,84 @@ func TestRescueClientCloseBoundsWaitForWriteLock(t *testing.T) {
 		t.Fatal("Close did not apply its 250ms bound while waiting for the WebSocket write lock")
 	}
 	c.wsWriteMu.Unlock()
+}
+
+type deadlineCloseConn struct {
+	net.Conn
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *deadlineCloseConn) Close() error {
+	c.once.Do(func() {
+		close(c.started)
+		<-c.release
+	})
+	return c.Conn.Close()
+}
+
+func TestRescueStreamCloseStartsTheCloserBeforeItsDeadline(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	transport := newMemTransport(newRescueHandler(t, reg))
+	closeStarted, releaseClose := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, transport)
+	c.transport = func(own acquirer) http.RoundTripper {
+		transport.own = own
+		transport.track = func(conn net.Conn) (net.Conn, error) {
+			return own.attach(&deadlineCloseConn{Conn: conn, started: closeStarted, release: releaseClose})
+		}
+		return transport
+	}
+	t.Cleanup(release)
+	t.Cleanup(reg.end)
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	kWire := <-reg.key
+	sent := valuesFor(kWire)
+	reg.request <- sent.identity(sent.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	streamConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	reg.answer(t)
+	c.mu.Lock()
+	stream := c.stream
+	c.mu.Unlock()
+	if stream == nil {
+		t.Fatal("Allow did not retain the channel stream")
+	}
+	stream.cleanup = 40 * time.Millisecond
+	closed := make(chan error, 1)
+	go func() { closed <- streamConn.Close() }()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("stream close did not reach the blocked base connection Close")
+	}
+	select {
+	case err := <-closed:
+		if !errors.Is(err, ErrCleanupUnknown) {
+			t.Fatalf("stream Close = %v, want ErrCleanupUnknown while raw Close is blocked", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		release()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("stream Close remained blocked after releasing the base connection")
+		}
+		t.Fatal("stream Close blocked before starting its bounded cleanup wait")
+	}
+	release()
+	if err := streamConn.Close(); err != nil {
+		t.Fatalf("stream Close after releasing raw Close = %v", err)
+	}
 }
 
 // Between the request and the answer the gateway sends nothing; a frame there
