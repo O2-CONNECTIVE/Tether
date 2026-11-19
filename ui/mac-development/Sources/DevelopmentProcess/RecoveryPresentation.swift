@@ -73,9 +73,10 @@ extension RecoveryController {
             canExtend: !quitRequested && f.can("extend", at: now), canAllow: !quitRequested && f.can("allow", at: now), canDeny: !quitRequested && f.can("deny", at: now),
             canStop: launched && !quitRequested && !f.closing && !f.closed)
     }
+    // With the date: a 24-hour end would otherwise read as the current time.
     private static func clock(_ ms: UInt64) -> String {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "HH:mm"
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "M/d HH:mm"
         return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
 }

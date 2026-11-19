@@ -40,7 +40,7 @@ type standbyCycle struct {
 	result        error
 	initialUntil  time.Time
 	until         time.Time // guarded by Standby.mu: the end of standby (#399)
-	untilWall     time.Time // the same instant without the monotonic reading
+	untilWall     int64     // the same instant on the wall clock, Unix ns
 	runAllowed    bool      // guarded by Standby.mu: the local command-run allowance
 	authenticated bool
 }

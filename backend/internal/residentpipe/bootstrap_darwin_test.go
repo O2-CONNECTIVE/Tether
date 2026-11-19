@@ -185,7 +185,7 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 // The GUI reads exit 0 as one of its four collection proofs. Only a requested
 // close or input EOF, after a confirmed close whose terminal was written, may
 // end that way. No lifetime has a deadline any more (#399 replaced the
-// development host's own 15 minutes with the run allowance's end, which turns
+// development host's own 15 minutes with the end of standby, which turns
 // standby off without ending the process), so a deadline is never success.
 // A signal, an unknown close, a lost terminal or any other serve failure stays
 // non-zero and so remains unconfirmed in the GUI.

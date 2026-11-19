@@ -45,12 +45,15 @@ func (s *Standby) ExtendStandby(id, revision uint64, d time.Duration) StandbyRec
 //
 // The end is kept twice. The monotonic clock ignores wall-clock changes but may
 // stop while the Mac sleeps; the wall clock keeps counting through sleep but can
-// be set back. Standby has ended as soon as either says so.
+// be set back. Standby has ended as soon as either says so. The wall-clock end
+// is an integer: a time.Time from time.Now carries a monotonic reading that Sub
+// would prefer, which would quietly turn the wall-clock check into a second
+// monotonic one.
 func (s *Standby) endStandbyInLocked(d time.Duration) {
 	mono, wall := s.now()
 	s.cycle.until = mono.Add(d)
-	s.cycle.untilWall = wall.Round(0).Add(d)
-	s.observation.StandbyUntil = s.cycle.untilWall
+	s.cycle.untilWall = wall.UnixNano() + int64(d)
+	s.observation.StandbyUntil = time.Unix(0, s.cycle.untilWall)
 	s.observation.StandbyEndingSoon = false
 }
 
@@ -125,7 +128,7 @@ func (s *Standby) standbyLeftLocked() time.Duration {
 		return 0
 	}
 	mono, wall := s.now()
-	return min(s.cycle.until.Sub(mono), s.cycle.untilWall.Sub(wall.Round(0)))
+	return min(s.cycle.until.Sub(mono), time.Duration(s.cycle.untilWall-wall.UnixNano()))
 }
 
 // admittingLocked reports whether the current cycle admits new work. Every state

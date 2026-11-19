@@ -128,10 +128,14 @@ func TestStandbyTakesOnlyTheListedLengths(t *testing.T) {
 			t.Fatal("refused ON changed standby", d, o)
 		}
 	}
+	// Every accepted ON has an end, d from now: there is no standby without one.
 	for _, d := range listedStandbyLengths {
 		s, _, _ := idleStandby(t)
 		if r := s.RequestOn(1, s.Snapshot().Revision, d); r.Disposition != "accepted" || s.Snapshot().Standby != "on" {
 			t.Fatal("ON with a listed length refused", d, r)
+		}
+		if left := time.Until(s.Snapshot().StandbyUntil); left <= d-time.Minute || left > d {
+			t.Fatal("ON did not end after its length", d, left)
 		}
 	}
 	s, _ := standbyTurnedOn(t)

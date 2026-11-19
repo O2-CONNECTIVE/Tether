@@ -277,7 +277,7 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 		}
 		var body map[string]json.RawMessage
 		_ = json.Unmarshal(root["receipt"], &body)
-		if !exactKeys(body, "protocolVersion", "requestId", "intent", "disposition") || e.Receipt.RequestID == 0 || e.Receipt.RequestID > MaxInteger || !oneOf(e.Receipt.Intent, "on", "off", "allow-run") || !oneOf(e.Receipt.Disposition, "accepted", "rejected", "stale", "unknown") {
+		if !exactKeys(body, "protocolVersion", "requestId", "intent", "disposition") || e.Receipt.RequestID == 0 || e.Receipt.RequestID > MaxInteger || !oneOf(e.Receipt.Intent, "on", "off", "allow-run", "extend") || !oneOf(e.Receipt.Disposition, "accepted", "rejected", "stale", "unknown") {
 			return ErrProtocol
 		}
 		if _, ok := p.receipts[e.Receipt.RequestID]; ok {
@@ -353,9 +353,9 @@ func (p *ciChild) request(intent string) (uint64, error) {
 			verb = "allow" // The foreground dialect names the allowance by its verb.
 		}
 		line := fmt.Sprintf("%s %d %d", verb, id, s.Revision)
-		if intent == "on" {
-			// The foreground on names how long standby stays on: the shortest
-			// listed length, the one the GUI offers by default (#399).
+		if intent == "on" || intent == "extend" {
+			// The foreground on and extend name how long standby stays on: the
+			// shortest listed length, the one the GUI offers by default (#399).
 			line += " 2"
 		}
 		raw = []byte(line + "\n")

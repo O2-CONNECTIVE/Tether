@@ -205,6 +205,11 @@ func (g *ciGateway) runCommand(child *ciChild, root string) {
 	if allow, err := child.request("allow-run"); err != nil || child.accepted(allow, "allow-run") != nil {
 		diag.fail(t, "run-allow")
 	}
+	// Extending standby is the person's other local action on the same pipe:
+	// the real owner accepts it while standby is on, and it keeps the allowance.
+	if extend, err := child.request("extend"); err != nil || child.accepted(extend, "extend") != nil {
+		diag.fail(t, "run-allow")
+	}
 	diag.at("run-command")
 	id := fmt.Sprintf("%032x", 4)
 	expected := "TETHER_RUN_BEGIN\n" + dir + "\n"

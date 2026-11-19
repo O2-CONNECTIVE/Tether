@@ -15,7 +15,7 @@ sealed enrollment、publisher / image trust は未構成です。鍵・policy・
 
 ## 操作の分担
 
-- host CLI: `status`、`on`、`off`、`close`。待機の観測と切替、元ownerの終了。
+- host CLI: `status`、`on`、`extend`、`off`、`close`。待機の観測と切替（ONは期限付き）と延長、元ownerの終了。
 - MCP: 固定作業の実行、同じ作業の結果・出力照会、取消、確認済み結果の解放。
 - 認可: 既存の認証主体・登録host・control世代、有限の作業許可を維持。ONや接続成功が
   任意shellの許可になったり、CLIが別のgrantを発行したりすることはありません。
@@ -33,10 +33,17 @@ GUI用JSONL入口とCLI入力は `residentpipe` の同じread / mapper / serve /
 
 ```text
 status
-on <request_id> <expected_revision>
+on <request_id> <expected_revision> <hours>
+extend <request_id> <expected_revision> <hours>
 off <request_id> <expected_revision>
 close
 ```
+
+`<hours>` は `2`・`4`・`8`・`12`・`24` のどれかで、それ以外の値や綴り（`02`、`3`、時間なし）は
+拒否します。待機はその時間で、OFFと同じく新規受付を閉じて所有作業の停止と回収に進みます
+（[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399)）。`extend` は待機中の期限を
+その時点から選んだ時間に置き換えます。延長はこの入口（開発用の常駐と同じ方言）だけで、
+GUI用JSONL入口にはありません。延長は待機の遷移ではなく、結果は `receipt` だけで返ります。
 
 1. 起動後の `status` JSONLを読む。`sourceContinuousMs` は同じMacのsleepを含む時計、
    `snapshot.validForMs` は3000ms。古いstatusを現在の接続や受付可否として使わない。
@@ -52,7 +59,8 @@ close
    要求で、同じownerのCloseを1回だけ呼ぶ。close以降の同chunk / 次chunkは実行しない。
    OFF確認、close受付、closed-confirmed、実pipe EOF、元child Waitは別の事象。
 
-stdoutは既存の `status` / `receipt` / `closed` JSONL契約のままです。
+stdoutは既存の `status` / `receipt` / `closed` JSONL契約に、`status.snapshot` の `standbyUntil`・
+`standbyEndingSoon`・`standbyExpired`（[development-resident](development-resident.md)）を足した形です。
 JSONL入口でCLI行を受けたり、CLI入口で任意JSONを受けたりはしません。
 `close` に別receiptはなく、元ownerの結果に従うclosed frameで報告します。
 SIGINT / SIGTERM / SIGHUPも同じ回収経路へ入り、signal起因の終了は非0です。

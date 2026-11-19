@@ -182,12 +182,12 @@ func checkPresentation() {
         .replacingOccurrences(of: "\"revision\":1", with: "\"revision\":2")
     permissionOwner.feed.ingest(Data(standbyOn.utf8), at: 5000)
     let standing = permissionController.presentation(at: 5000)
-    check(standing.status.hasPrefix("待機中（") && standing.status.hasSuffix("まで）") && standing.run == permitted.run && standing.canExtend, "UI shows standby's end time and offers extend")
+    check(standing.status.hasPrefix("待機中（") && standing.status.contains("/") && standing.status.hasSuffix("まで）") && standing.run == permitted.run && standing.canExtend, "UI shows standby's end time and offers extend")
     let ending = Owner("ending"); ending.launched = true
     ending.feed.ingest(Data(standbyOn.replacingOccurrences(of: "\"standbyEndingSoon\":false", with: "\"standbyEndingSoon\":true").replacingOccurrences(of: "\"revision\":2", with: "\"revision\":1").utf8), at: 5000)
     let endingStatus = RecoveryController(owner: ending) { Owner("forbidden") }.presentation(at: 5000).status
     check(endingStatus.hasPrefix("まもなく期限（") && endingStatus.contains("まで）。延長するか作業を終えてください"), "UI ending soon says how to continue")
-    check(!endingStatus.contains("15"), "UI no fixed 15-minute wording remains")
+    check(!endingStatus.contains("15分"), "UI no fixed 15-minute wording remains")
     permissionOwner.feed.ingest(Data(String(decoding: recoveryStatus(), as: UTF8.self).replacingOccurrences(of: "\"revision\":1", with: "\"revision\":3").utf8), at: 5000)
     check(permissionController.presentation(at: 5000).run == "コマンド実行: 許可なし（待機 ON だけでは実行されません）", "UI standby no longer ON drops the permission")
     permissionOwner.feed.ingest(Data(String(decoding: recoveryStatus(standby: "on", canOn: false, until: "1800000000000"), as: UTF8.self).replacingOccurrences(of: "\"canRequestOff\":false", with: "\"canRequestOff\":true").replacingOccurrences(of: "\"revision\":1", with: "\"revision\":4").utf8), at: 5000)
