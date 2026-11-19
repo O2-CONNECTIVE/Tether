@@ -275,8 +275,15 @@ type stream struct {
 // expiry as context cancellation rather than os.ErrDeadlineExceeded. The
 // library limit is only a backstop here; msgConn enforces the bound itself.
 func newStream(ctx context.Context, ws *websocket.Conn, c *closer, cleanup time.Duration) *stream {
+	return newStreamObserved(ctx, ws, c, cleanup, nil, nil, nil)
+}
+
+func newStreamObserved(ctx context.Context, ws *websocket.Conn, c *closer, cleanup time.Duration, onFrame, onHostEnd func(), writeMu *sync.Mutex) *stream {
 	ws.SetReadLimit(MaxStreamMessage + 1)
-	m := &msgConn{ws: ws, fail: c.start, buf: make([]byte, MaxStreamMessage+1)}
+	if writeMu == nil {
+		writeMu = &sync.Mutex{}
+	}
+	m := &msgConn{ws: ws, fail: c.start, buf: make([]byte, MaxStreamMessage+1), onFrame: onFrame, onHostEnd: onHostEnd, writeMu: writeMu}
 	m.readCtx, m.read.cancel = context.WithCancel(ctx)
 	m.writeCtx, m.write.cancel = context.WithCancel(ctx)
 	return &stream{Conn: m, closer: c, cleanup: cleanup}
@@ -328,10 +335,12 @@ func (s *stream) Close() error {
 // library then ends the WebSocket, every later call too. Cancellation or loss
 // of the transport is reported as such, never as a timeout.
 type msgConn struct {
-	ws    *websocket.Conn
-	fail  func()
-	read  deadline
-	write deadline
+	ws        *websocket.Conn
+	fail      func()
+	onFrame   func()
+	onHostEnd func()
+	read      deadline
+	write     deadline
 
 	readCtx, writeCtx context.Context
 
@@ -340,7 +349,7 @@ type msgConn struct {
 	rest    []byte // undelivered part of the current message
 	readErr error  // sticky
 
-	writeMu sync.Mutex
+	writeMu *sync.Mutex
 }
 
 func (m *msgConn) Read(p []byte) (int, error) {
@@ -397,6 +406,38 @@ func (m *msgConn) next() ([]byte, error) {
 		return nil, err
 	}
 	if typ != websocket.MessageBinary {
+		if typ == websocket.MessageText && m.onHostEnd != nil {
+			n, idle := 0, 0
+			for {
+				k, readErr := r.Read(m.buf[n:])
+				if k < 0 || k > len(m.buf)-n {
+					m.fail()
+					return nil, errInvalidWrite
+				}
+				n += k
+				if n > MaxRegistrationMessage {
+					m.fail()
+					return nil, errMessageSize
+				}
+				if readErr == io.EOF {
+					if isRescueEndFrame(m.buf[:n]) {
+						m.onHostEnd()
+					}
+					m.fail()
+					return nil, errMessageType
+				}
+				if readErr != nil {
+					return nil, readErr
+				}
+				if k == 0 {
+					idle++
+					if idle > 100 {
+						m.fail()
+						return nil, errNoProgress
+					}
+				}
+			}
+		}
 		m.fail()
 		return nil, errMessageType
 	}
@@ -414,6 +455,9 @@ func (m *msgConn) next() ([]byte, error) {
 		}
 		switch {
 		case err == io.EOF:
+			if n != 0 && m.onFrame != nil {
+				m.onFrame()
+			}
 			return m.buf[:n], nil
 		case err != nil:
 			return nil, err

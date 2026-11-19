@@ -43,6 +43,7 @@ type RescueClient struct {
 	life                context.Context
 	done                chan struct{}
 	mu                  sync.Mutex
+	wsWriteMu           sync.Mutex
 	used, closed, ended bool
 	requested, answered bool
 	expired             bool
@@ -131,7 +132,10 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 		if e != nil || len(b) > MaxRegistrationMessage {
 			return ErrRefused
 		}
-		return ws.Write(life, websocket.MessageText, b)
+		c.wsWriteMu.Lock()
+		err := ws.Write(life, websocket.MessageText, b)
+		c.wsWriteMu.Unlock()
+		return err
 	}
 	hostNonce, e := newNonce()
 	if e != nil {
@@ -288,7 +292,7 @@ func (c *RescueClient) serve() {
 		c.end()
 		return
 	}
-	stream := newStream(life, ws, link, DefaultBudgets().Cleanup)
+	stream := newStreamObserved(life, ws, link, DefaultBudgets().Cleanup, nil, nil, &c.wsWriteMu)
 	c.mu.Lock()
 	if c.ended || c.expired {
 		c.mu.Unlock()
@@ -356,8 +360,20 @@ func (c *RescueClient) Close() error {
 		return ErrConfig
 	}
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
 	c.closed = true
+	ws, ended := c.ws, c.ended
 	c.mu.Unlock()
+	if ws != nil && !ended {
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		c.wsWriteMu.Lock()
+		_ = ws.Write(ctx, websocket.MessageText, encodeRescueEnd())
+		c.wsWriteMu.Unlock()
+		cancel()
+	}
 	c.end()
 	return nil
 }
@@ -477,7 +493,9 @@ func (c *RescueClient) answer(answer string, d agentgateway.Dispatch) (net.Conn,
 		return nil, ErrRefused
 	}
 	ctx, cancel := context.WithTimeout(life, DefaultBudgets().Registration)
+	c.wsWriteMu.Lock()
 	err := ws.Write(ctx, websocket.MessageText, msg)
+	c.wsWriteMu.Unlock()
 	cancel()
 	clear(msg)
 	if err != nil {

@@ -152,7 +152,7 @@ func rawEd25519(wire []byte) (ssh.PublicKey, error) {
 // complete binding. It is a shape and freshness check, not a credential.
 func checkDispatch(d agentgateway.Dispatch, now time.Time) error {
 	b := d.Binding
-	if b.Profile != agentexec.ProfileMacCurrentUser || b.Grant.Generation == 0 || !b.Grant.Identity.Valid() ||
+	if b.Profile != agentexec.ProfileMacCurrentUser || b.Grant.Generation == 0 || b.ConnectionGeneration == 0 || !b.Grant.Identity.Valid() ||
 		b.Grant.Identity.PolicyDigest != agentexec.MacCurrentUserPolicyDigest() || b.KeySetDigest == ([32]byte{}) {
 		return ErrRefused
 	}
@@ -181,6 +181,7 @@ func transcript(resource, host, principal string, d agentgateway.Dispatch, nonce
 	field([]byte(host))
 	field([]byte(principal))
 	field(binary.BigEndian.AppendUint64(nil, b.Grant.Generation))
+	field(binary.BigEndian.AppendUint64(nil, b.ConnectionGeneration))
 	field([]byte(b.Grant.Identity.LaunchID))
 	field([]byte(b.Grant.Identity.Epoch))
 	field([]byte(b.Grant.Identity.PolicyDigest))
@@ -265,12 +266,19 @@ func decodeChallenge(msg []byte) ([]byte, error) {
 
 func encodeAccepted() []byte { return []byte(`{"type":"accepted"}`) }
 
+func isRescueEndFrame(msg []byte) bool {
+	m, ok := stringFields(msg, "type")
+	return ok && m["type"] == "end"
+}
+
+func encodeRescueEnd() []byte { return []byte(`{"type":"end"}`) }
+
 func isAccepted(msg []byte) bool {
 	m, ok := stringFields(msg, "type")
 	return ok && m["type"] == typeAccepted
 }
 
-var registerFields = []string{"type", "host", "principal", "generation", "launch_id", "epoch", "policy_digest",
+var registerFields = []string{"type", "host", "principal", "generation", "connection_generation", "launch_id", "epoch", "policy_digest",
 	"key_set_digest", "profile", "deadline_unix_nano", "host_key", "signature"}
 
 type registration struct {
@@ -290,7 +298,7 @@ func encodeRegister(host, principal string, d agentgateway.Dispatch, sig []byte)
 func dispatchFields(d agentgateway.Dispatch) map[string]string {
 	b := d.Binding
 	return map[string]string{
-		"generation": strconv.FormatUint(b.Grant.Generation, 10), "launch_id": b.Grant.Identity.LaunchID,
+		"generation": strconv.FormatUint(b.Grant.Generation, 10), "connection_generation": strconv.FormatUint(b.ConnectionGeneration, 10), "launch_id": b.Grant.Identity.LaunchID,
 		"epoch": b.Grant.Identity.Epoch, "policy_digest": b.Grant.Identity.PolicyDigest,
 		"key_set_digest": hex.EncodeToString(b.KeySetDigest[:]), "profile": profileMac,
 		"deadline_unix_nano": strconv.FormatInt(d.Deadline.UnixNano(), 10), "host_key": b64.EncodeToString(d.HostKey),
@@ -311,6 +319,10 @@ func decodeRegister(msg []byte) (registration, error) {
 	if err != nil || strconv.FormatUint(gen, 10) != m["generation"] {
 		return registration{}, ErrRefused
 	}
+	connectionGeneration, err := strconv.ParseUint(m["connection_generation"], 10, 64)
+	if err != nil || connectionGeneration == 0 || strconv.FormatUint(connectionGeneration, 10) != m["connection_generation"] {
+		return registration{}, ErrRefused
+	}
 	deadline, err := strconv.ParseInt(m["deadline_unix_nano"], 10, 64)
 	if err != nil || deadline <= 0 || strconv.FormatInt(deadline, 10) != m["deadline_unix_nano"] {
 		return registration{}, ErrRefused
@@ -326,6 +338,7 @@ func decodeRegister(msg []byte) (registration, error) {
 	}
 	b := &r.dispatch.Binding
 	b.Grant.Generation = gen
+	b.ConnectionGeneration = connectionGeneration
 	b.Grant.Identity.LaunchID, b.Grant.Identity.Epoch, b.Grant.Identity.PolicyDigest = m["launch_id"], m["epoch"], m["policy_digest"]
 	copy(b.KeySetDigest[:], digest)
 	b.Profile = agentexec.ProfileMacCurrentUser
@@ -370,7 +383,7 @@ func encodeRescueAnswer(a agentgateway.RescueAnswer) []byte {
 }
 
 var rescueAnswerFields = []string{"type", "answer", "signature"}
-var rescueAllowFields = []string{"type", "answer", "generation", "launch_id", "epoch", "policy_digest",
+var rescueAllowFields = []string{"type", "answer", "generation", "connection_generation", "launch_id", "epoch", "policy_digest",
 	"key_set_digest", "profile", "deadline_unix_nano", "host_key", "signature"}
 
 func decodeRescueAnswer(msg []byte) (agentgateway.RescueAnswer, error) {
@@ -403,6 +416,10 @@ func decodeRescueAnswer(msg []byte) (agentgateway.RescueAnswer, error) {
 	if err != nil || strconv.FormatUint(gen, 10) != m["generation"] {
 		return agentgateway.RescueAnswer{}, ErrRefused
 	}
+	connectionGeneration, err := strconv.ParseUint(m["connection_generation"], 10, 64)
+	if err != nil || connectionGeneration == 0 || strconv.FormatUint(connectionGeneration, 10) != m["connection_generation"] {
+		return agentgateway.RescueAnswer{}, ErrRefused
+	}
 	deadline, err := strconv.ParseInt(m["deadline_unix_nano"], 10, 64)
 	if err != nil || deadline <= 0 || strconv.FormatInt(deadline, 10) != m["deadline_unix_nano"] {
 		return agentgateway.RescueAnswer{}, ErrRefused
@@ -417,6 +434,7 @@ func decodeRescueAnswer(msg []byte) (agentgateway.RescueAnswer, error) {
 	}
 	b := &a.Dispatch.Binding
 	b.Grant.Generation = gen
+	b.ConnectionGeneration = connectionGeneration
 	b.Grant.Identity.LaunchID, b.Grant.Identity.Epoch, b.Grant.Identity.PolicyDigest = m["launch_id"], m["epoch"], m["policy_digest"]
 	copy(b.KeySetDigest[:], digest)
 	b.Profile = agentexec.ProfileMacCurrentUser

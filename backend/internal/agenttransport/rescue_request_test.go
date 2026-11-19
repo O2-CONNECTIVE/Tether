@@ -62,6 +62,8 @@ func (r *requestRescueRegistry) EndRescue(id []byte) {
 	r.ended <- append([]byte(nil), id...)
 	r.endReception()
 }
+func (r *requestRescueRegistry) DisconnectRescue(id []byte) { r.EndRescue(id) }
+func (*requestRescueRegistry) TouchRescue([]byte)           {}
 
 func (r *requestRescueRegistry) endReception() {
 	r.once.Do(func() { close(r.done) })
@@ -234,7 +236,8 @@ func TestRescueHandlerForwardsIdentityAndSignedAnswer(t *testing.T) {
 	}
 	answer := map[string]any{"type": "answer", "answer": agentgateway.RescueAllow,
 		"signature":  base64.RawURLEncoding.EncodeToString(signature.Blob),
-		"generation": strconv.FormatUint(d.Binding.Grant.Generation, 10), "launch_id": d.Binding.Grant.Identity.LaunchID, "epoch": d.Binding.Grant.Identity.Epoch,
+		"generation": strconv.FormatUint(d.Binding.Grant.Generation, 10), "connection_generation": strconv.FormatUint(d.Binding.ConnectionGeneration, 10),
+		"launch_id": d.Binding.Grant.Identity.LaunchID, "epoch": d.Binding.Grant.Identity.Epoch,
 		"policy_digest": d.Binding.Grant.Identity.PolicyDigest, "key_set_digest": hex.EncodeToString(d.Binding.KeySetDigest[:]),
 		"profile": profileMac, "deadline_unix_nano": strconv.FormatInt(d.Deadline.UnixNano(), 10), "host_key": base64.RawURLEncoding.EncodeToString(d.HostKey)}
 	b, _ := json.Marshal(answer)
@@ -530,15 +533,16 @@ func TestRescueRequestRealGatewayBindsFreshRoute(t *testing.T) {
 		}
 	})
 	d := session.Grant()
-	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, KeySetDigest: d.KeySetDigest, Profile: session.Profile()}, Deadline: d.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}
+	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, ConnectionGeneration: 1, KeySetDigest: d.KeySetDigest, Profile: session.Profile()}, Deadline: d.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}
 	digestRequest := sha256.Sum256(transcript)
 	signature, err := hostKey.Sign(rand.Reader, agentgateway.RescueAnswerTranscript(receptionID, requestIdentity.Nonce, digestRequest[:], agentgateway.RescueAllow, dispatch))
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeFrame(map[string]any{"type": "answer", "answer": agentgateway.RescueAllow, "signature": base64.RawURLEncoding.EncodeToString(signature.Blob),
-		"generation": strconv.FormatUint(dispatch.Binding.Grant.Generation, 10), "launch_id": dispatch.Binding.Grant.Identity.LaunchID,
-		"epoch": dispatch.Binding.Grant.Identity.Epoch, "policy_digest": dispatch.Binding.Grant.Identity.PolicyDigest,
+		"generation": strconv.FormatUint(dispatch.Binding.Grant.Generation, 10), "connection_generation": strconv.FormatUint(dispatch.Binding.ConnectionGeneration, 10),
+		"launch_id": dispatch.Binding.Grant.Identity.LaunchID,
+		"epoch":     dispatch.Binding.Grant.Identity.Epoch, "policy_digest": dispatch.Binding.Grant.Identity.PolicyDigest,
 		"key_set_digest": hex.EncodeToString(dispatch.Binding.KeySetDigest[:]), "profile": profileMac,
 		"deadline_unix_nano": strconv.FormatInt(dispatch.Deadline.UnixNano(), 10), "host_key": base64.RawURLEncoding.EncodeToString(dispatch.HostKey)})
 	// The SSH server writes its version at once, so the channel starts only

@@ -434,7 +434,7 @@ func fixtureDispatch(host ssh.Signer, launch string, deadline time.Time) agentga
 			Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{
 				LaunchID: launch, Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest(),
 			}},
-			KeySetDigest: [32]byte{1}, Profile: agentexec.ProfileMacCurrentUser,
+			ConnectionGeneration: 1, KeySetDigest: [32]byte{1}, Profile: agentexec.ProfileMacCurrentUser,
 		},
 		Deadline: deadline, HostKey: host.PublicKey().Marshal(),
 	}
@@ -592,7 +592,7 @@ func newLinkOwner(t *testing.T, hostKey ssh.Signer, lifetime time.Duration, clie
 	}
 	g := session.Grant()
 	o := &linkOwner{issuer: issuer, session: session, host: host, d: agentchannel.Dispatch{
-		Binding:  agentchannel.Binding{Grant: g.Binding, KeySetDigest: g.KeySetDigest, Profile: session.Profile()},
+		Binding:  agentchannel.Binding{Grant: g.Binding, ConnectionGeneration: 1, KeySetDigest: g.KeySetDigest, Profile: session.Profile()},
 		Deadline: g.HardDeadline, HostKey: hostKey.PublicKey().Marshal(),
 	}}
 	t.Cleanup(func() {

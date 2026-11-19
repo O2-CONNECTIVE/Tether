@@ -60,7 +60,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	grant := cfg.Session.Grant()
 	profile := cfg.Session.Profile()
-	binding := Binding{Grant: grant.Binding, KeySetDigest: grant.KeySetDigest, Profile: profile}
+	binding := Binding{Grant: grant.Binding, ConnectionGeneration: 1, KeySetDigest: grant.KeySetDigest, Profile: profile}
 	if !binding.valid() || cfg.Session.Binding() != grant.Binding || grant.GuestBoundary != boundaryFor(profile) {
 		return nil, ErrConfig
 	}

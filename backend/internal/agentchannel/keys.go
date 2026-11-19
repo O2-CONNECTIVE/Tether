@@ -105,11 +105,13 @@ func commitment(b Binding, hostKey []byte) [32]byte {
 		h.Write(n[:])
 		h.Write(v)
 	}
-	var generation [8]byte
+	var generation, connectionGeneration [8]byte
 	binary.BigEndian.PutUint64(generation[:], b.Grant.Generation)
+	binary.BigEndian.PutUint64(connectionGeneration[:], b.ConnectionGeneration)
 	field([]byte(commitmentDomain))
 	field([]byte(ChannelType))
 	field(generation[:])
+	field(connectionGeneration[:])
 	field([]byte(b.Grant.Identity.LaunchID))
 	field([]byte(b.Grant.Identity.Epoch))
 	field([]byte(b.Grant.Identity.PolicyDigest))

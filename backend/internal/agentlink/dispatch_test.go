@@ -30,7 +30,7 @@ func TestHostDispatchComesFromSameCanonicalChannelAndIsNotLiveAuthority(t *testi
 	}
 	got := host.ChannelDispatch()
 	grant := authority.Grant()
-	want := agentchannel.Binding{Grant: grant.Binding, KeySetDigest: grant.KeySetDigest, Profile: session.Profile()}
+	want := agentchannel.Binding{Grant: grant.Binding, ConnectionGeneration: 1, KeySetDigest: grant.KeySetDigest, Profile: session.Profile()}
 	if got.Binding != want || got.Deadline != grant.HardDeadline || !bytes.Equal(got.HostKey, hostKey.PublicKey().Marshal()) {
 		t.Fatal("dispatch did not come from canonical channel")
 	}

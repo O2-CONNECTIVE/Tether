@@ -170,7 +170,7 @@ func residentLateFailedAcquisition(t *testing.T, residentOnly bool) {
 	b := s.entry.works[id].binding
 	g.mu.Unlock()
 	b.Sequence = 1
-	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "launch-1", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
+	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "launch-1", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, ConnectionGeneration: 1, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
 	// A registration that names a command run must not attach to work the
 	// gateway recorded as fixed, or it would spend that work's one registration.
 	run := b
@@ -323,7 +323,7 @@ func TestResidentPreOpenRefusalPreservesOriginalFailedStreamClose(t *testing.T) 
 	b := s.entry.works[id].binding
 	g.mu.Unlock()
 	b.Sequence = 1
-	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "other-launch", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
+	d := Dispatch{Binding: agentchannel.Binding{Grant: supervisor.Binding{Generation: 1, Identity: supervisor.Identity{LaunchID: "other-launch", Epoch: "epoch-1", PolicyDigest: agentexec.MacCurrentUserPolicyDigest()}}, ConnectionGeneration: 1, Profile: agentexec.ProfileMacCurrentUser, KeySetDigest: [32]byte{1}}, Deadline: time.UnixMilli(b.DeadlineMillis), HostKey: host.PublicKey().Marshal()}
 	other := make(chan error, 1)
 	rescue := d
 	rescue.HostKey = residentEvidenceDeskKey()

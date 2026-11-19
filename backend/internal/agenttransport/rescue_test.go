@@ -105,6 +105,21 @@ func (r *rescueRecorder) EndRescue(id []byte) {
 	r.ended <- append([]byte(nil), id...)
 }
 
+func (r *rescueRecorder) DisconnectRescue(id []byte) {
+	if registry, ok := r.RescueRegistry.(interface{ DisconnectRescue([]byte) }); ok {
+		registry.DisconnectRescue(id)
+	} else {
+		r.RescueRegistry.EndRescue(id)
+	}
+	r.ended <- append([]byte(nil), id...)
+}
+
+func (r *rescueRecorder) TouchRescue(id []byte) {
+	if registry, ok := r.RescueRegistry.(interface{ TouchRescue([]byte) }); ok {
+		registry.TouchRescue(id)
+	}
+}
+
 func (r *rescueRecorder) expectEnded(t *testing.T, id []byte) {
 	t.Helper()
 	select {
@@ -258,7 +273,9 @@ func TestRescueHostShowsOnlyAVerifiedCode(t *testing.T) {
 			now := time.Now()
 			reg := newRescueRecorder(newRescueGateway(t, &now))
 			if tc.tamper != nil {
-				reg.tamper = func(q agentgateway.RescueRequest, r agentgateway.RescueReception) agentgateway.RescueReception { return tc.tamper(t, q, r) }
+				reg.tamper = func(q agentgateway.RescueRequest, r agentgateway.RescueReception) agentgateway.RescueReception {
+					return tc.tamper(t, q, r)
+				}
 			}
 			c := newRescueClient(t, tc.pins, newMemTransport(newRescueHandler(t, reg)))
 			code, err := openRescue(t, c)

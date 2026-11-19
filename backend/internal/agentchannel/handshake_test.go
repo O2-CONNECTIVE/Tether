@@ -117,6 +117,7 @@ func TestBindingMismatchRejectsAgentChannel(t *testing.T) {
 	}{
 		{"epoch", func(b *Binding) { b.Grant.Identity.Epoch = "1" }},
 		{"generation", func(b *Binding) { b.Grant.Generation++ }},
+		{"connection generation", func(b *Binding) { b.ConnectionGeneration++ }},
 		{"policy", func(b *Binding) { b.Grant.Identity.PolicyDigest = agentexec.FullPolicyDigest() }},
 		{"key set digest", func(b *Binding) { b.KeySetDigest[0] ^= 1 }},
 		{"profile", func(b *Binding) { b.Profile = agentexec.ProfileWindowsGuest }},

@@ -35,17 +35,21 @@ var answerReception = bytes.Repeat([]byte{0x72}, agentgateway.RescueReceptionSiz
 // result. The test supplies the request; the host's answer and stream come
 // back to the test, which owns the stream.
 type answerRegistry struct {
-	key      chan []byte // K as the host proved it
-	request  chan agentgateway.RescueIdentity
-	done     chan struct{}
-	once     sync.Once
-	ended    chan []byte
-	answered chan rescueAnswerCall
+	key                  chan []byte // K as the host proved it
+	request              chan agentgateway.RescueIdentity
+	done                 chan struct{}
+	once                 sync.Once
+	ended                chan []byte
+	answered             chan rescueAnswerCall
+	disconnected         chan []byte
+	observeStream        bool
+	preserveOnDisconnect bool
+	streamRead           chan struct{}
 }
 
 func newAnswerRegistry() *answerRegistry {
 	return &answerRegistry{key: make(chan []byte, 1), request: make(chan agentgateway.RescueIdentity, 1), done: make(chan struct{}),
-		ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1)}
+		ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1), disconnected: make(chan []byte, 1), streamRead: make(chan struct{}, 1)}
 }
 
 func (*answerRegistry) AdmitRescue() error { return nil }
@@ -64,9 +68,26 @@ func (r *answerRegistry) EndRescue(id []byte) {
 	}
 	r.end()
 }
-func (r *answerRegistry) end() { r.once.Do(func() { close(r.done) }) }
+func (r *answerRegistry) DisconnectRescue(id []byte) {
+	if r.preserveOnDisconnect {
+		select {
+		case r.disconnected <- append([]byte(nil), id...):
+		default:
+		}
+		return
+	}
+	r.EndRescue(id)
+}
+func (*answerRegistry) TouchRescue([]byte) {}
+func (r *answerRegistry) end()             { r.once.Do(func() { close(r.done) }) }
 func (r *answerRegistry) AnswerRescue(id []byte, a agentgateway.RescueAnswer, conn net.Conn) error {
 	r.answered <- rescueAnswerCall{id: append([]byte(nil), id...), a: a, conn: conn}
+	if r.observeStream {
+		go func() {
+			r.streamRead <- struct{}{}
+			_, _ = io.Copy(io.Discard, conn)
+		}()
+	}
 	return nil
 }
 
@@ -446,6 +467,43 @@ func TestRescueHostKeyIsKUntilTheReceptionEnds(t *testing.T) {
 	}
 }
 
+func TestRescueClientCloseSendsEndFrameAfterAllow(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.observeStream = true
+	reg.preserveOnDisconnect = true
+	c, kWire, k := openAnswer(t, reg)
+	sent := valuesFor(kWire)
+	reg.request <- sent.identity(sent.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	reg.answer(t)
+	select {
+	case <-reg.streamRead:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not start reading the channel stream")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case id := <-reg.ended:
+		if !bytes.Equal(id, answerReception) {
+			t.Fatalf("ended reception %x, want %x", id, answerReception)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not send an end frame to the gateway")
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the WebSocket close")
+	}
+	expectDone(t, c)
+	expectDropped(t, k)
+}
+
 // Between the request and the answer the gateway sends nothing; a frame there
 // is not the channel's, so the reception ends rather than hand it to a grant.
 func TestRescueHostEndsWhenTheGatewaySpeaksBeforeTheAnswer(t *testing.T) {
@@ -563,7 +621,7 @@ func TestRescueHostAnswersTheRealGatewayOverItsReception(t *testing.T) {
 		}
 	})
 	d := session.Grant()
-	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, KeySetDigest: d.KeySetDigest, Profile: session.Profile()},
+	dispatch := agentgateway.Dispatch{Binding: agentchannel.Binding{Grant: d.Binding, ConnectionGeneration: 1, KeySetDigest: d.KeySetDigest, Profile: session.Profile()},
 		Deadline: d.HardDeadline, HostKey: hostKey.PublicKey().Marshal()}
 	conn, err := c.Allow(dispatch)
 	if err != nil {

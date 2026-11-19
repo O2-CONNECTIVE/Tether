@@ -118,6 +118,11 @@ type route struct {
 	cleanupErr  error
 }
 
+type launchGeneration struct {
+	launchID   string
+	generation uint64
+}
+
 type hostSlot struct {
 	key        []byte
 	principals map[string]bool
@@ -163,7 +168,7 @@ type Gateway struct {
 	mu          sync.Mutex
 	closed      bool
 	sessions    map[string]*session
-	launches    map[string]struct{} // every LaunchID registered in this process
+	launches    map[launchGeneration]struct{} // every LaunchID and connection generation registered in this process
 	unconfirmed []*agentchannel.Channel
 	watchers    sync.WaitGroup
 	joinOnce    sync.Once
@@ -206,7 +211,7 @@ func New(cfg Config) (*Gateway, error) {
 		residentOnly: cfg.ResidentOnly, discoveryOnly: cfg.DiscoveryOnly, organization: cfg.Organization, verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
 		bySubject: map[string]*principal{}, byLabel: map[string]*principal{},
 		budgets: cfg.Budgets, callTimeout: cfg.CallTimeout, clock: cfg.Clock, inflight: make(chan struct{}, MaxInflightRequests),
-		sessions: map[string]*session{}, launches: map[string]struct{}{}, joined: make(chan struct{}),
+		sessions: map[string]*session{}, launches: map[launchGeneration]struct{}{}, joined: make(chan struct{}),
 		rescueSigner: cfg.RescueSigner,
 	}
 	if g.clock == nil {
@@ -274,13 +279,14 @@ func validLabel(s string) bool {
 // the principal's enrolled signer and the pinned host key, and only then makes
 // it the principal's route. It refuses, closing conn, an unknown label, a
 // principal without a signer, a principal that already has or is acquiring a
-// route, a profile other than the Mac current user, and any LaunchID already
-// registered in this process (no resume). It is the rescue connection: it
+// route, a profile other than the Mac current user, and any (LaunchID,
+// ConnectionGeneration) already registered in this process. It admits only
+// generation 1; resume is bound to the same reception by AnswerRescue. It
 // also refuses a principal without RoleRescueOperator and a dispatch from a
 // resident host (a pair slot or an enrolled resident), whoever owns it. A
-// refused or failed registration
-// consumes that LaunchID only once opening was admitted. A pre-open refusal
-// closes the supplied stream; it never resumes the Mac approval.
+// refused or failed registration consumes that pair only once opening was
+// admitted. A pre-open refusal closes the supplied stream; it does not resume
+// the approval.
 // The gateway never issues or extends a grant.
 func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
 	// ConnectResident uses the private connect port only after correlation and
@@ -290,6 +296,28 @@ func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
 			_ = conn.Close()
 		}
 		return ErrRefused
+	}
+	if d.Binding.ConnectionGeneration != 1 {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return ErrRefused
+	}
+	if g != nil && g.rescue != nil {
+		g.mu.Lock()
+		principal := g.byLabel[label]
+		g.mu.Unlock()
+		g.rescue.mu.Lock()
+		for _, record := range g.rescue.records {
+			if record.principal != nil && record.dispatch.Binding.Grant.Identity.LaunchID == d.Binding.Grant.Identity.LaunchID && record.principal != principal {
+				g.rescue.mu.Unlock()
+				if conn != nil {
+					_ = conn.Close()
+				}
+				return ErrRefused
+			}
+		}
+		g.rescue.mu.Unlock()
 	}
 	_, e := g.connect(label, d, conn, true)
 	return e
@@ -307,19 +335,20 @@ func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, res
 		return nil, ErrConfig
 	}
 	launch := d.Binding.Grant.Identity.LaunchID
+	key := launchGeneration{launchID: launch, generation: d.Binding.ConnectionGeneration}
 	g.mu.Lock()
 	p := g.byLabel[label]
 	if signer == nil && p != nil {
 		signer = p.signer
 	}
-	_, reused := g.launches[launch]
+	_, reused := g.launches[key]
 	var refusal error
 	switch {
 	case g.closed:
 		refusal = ErrClosed
 	case g.discoveryOnly:
 		refusal = ErrRefused
-	case p == nil || signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "":
+	case p == nil || signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "" || key.generation == 0:
 		refusal = ErrConfig
 	case rescue && !p.rescue:
 		refusal = ErrRefused
@@ -329,7 +358,7 @@ func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, res
 		refusal = ErrRefused
 	default:
 		p.connecting = true
-		g.launches[launch] = struct{}{}
+		g.launches[key] = struct{}{}
 		g.watchers.Add(1) // own acquisition before Close can begin waiting
 	}
 	g.mu.Unlock()

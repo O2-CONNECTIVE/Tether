@@ -121,7 +121,7 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		// End the registry entry before waiting for transport close confirmation.
 		if id != nil {
-			h.reg.EndRescue(id)
+			h.disconnectRescue(id)
 		}
 		c.start()
 		cleanup, stop := context.WithTimeout(context.Background(), DefaultBudgets().Cleanup)
@@ -242,7 +242,9 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case rr := <-read:
 			// Until the identity is delivered, any host frame ends this reception.
-			if rr.err == nil || rr.typ == websocket.MessageText || len(rr.msg) > MaxRegistrationMessage {
+			if rr.err == nil && rr.typ == websocket.MessageText && isRescueEndFrame(rr.msg) {
+				h.reg.EndRescue(res.ID)
+			} else if rr.err == nil || rr.typ == websocket.MessageText || len(rr.msg) > MaxRegistrationMessage {
 				rescueClose(ws)
 			}
 			return
@@ -269,6 +271,11 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				rescueClose(ws)
 				return
 			}
+			if rr.typ == websocket.MessageText && isRescueEndFrame(rr.msg) {
+				h.reg.EndRescue(res.ID)
+				rescueClose(ws)
+				return
+			}
 			answer, err := decodeRescueAnswer(rr.msg)
 			if err != nil || rr.typ != websocket.MessageText || len(rr.msg) > MaxRegistrationMessage ||
 				(answer.Answer == agentgateway.RescueAllow && checkDispatch(answer.Dispatch, time.Now()) != nil) {
@@ -276,8 +283,11 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				// the empty answer never verifies, so the gateway records failed
 				// (timeout after RescueRequestLifetime) instead of ended.
 				answer = agentgateway.RescueAnswer{}
+			} else {
+				h.touchRescue(res.ID)
 			}
-			stream := newStream(life, ws, c, DefaultBudgets().Cleanup)
+			stream := newStreamObserved(life, ws, c, DefaultBudgets().Cleanup,
+				func() { h.touchRescue(res.ID) }, func() { h.reg.EndRescue(res.ID) }, nil)
 			_ = h.reg.AnswerRescue(res.ID, answer, stream)
 			select {
 			case <-res.Done:
@@ -289,6 +299,20 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case <-life.Done():
 			return
 		}
+	}
+}
+
+func (h *RescueHandler) disconnectRescue(id []byte) {
+	if registry, ok := h.reg.(interface{ DisconnectRescue([]byte) }); ok {
+		registry.DisconnectRescue(id)
+		return
+	}
+	h.reg.EndRescue(id)
+}
+
+func (h *RescueHandler) touchRescue(id []byte) {
+	if registry, ok := h.reg.(interface{ TouchRescue([]byte) }); ok {
+		registry.TouchRescue(id)
 	}
 }
 
