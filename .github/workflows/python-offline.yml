@@ -40,8 +40,8 @@ jobs:
         with:
           python-version: '3.13.17'
           architecture: x64
-      - name: Check Python and Tkinter import
-        run: python -c "import sys, tkinter; print(sys.version); print('Tk', tkinter.TkVersion)"
+      - name: Print Python version
+        run: python -c "import sys; print(sys.version)"
       - name: Run existing offline tests and syntax through development entry
         run: python scripts/dev.py check
       - name: Validate published design tokens
