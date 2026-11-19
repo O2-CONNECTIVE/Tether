@@ -2,6 +2,7 @@ package agentgateway
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -88,13 +89,28 @@ func rescueTranscript(parts [][]byte) []byte {
 	return out.Bytes()
 }
 
-type rescueReceptionRecord struct{ key []byte }
+type rescueReceptionRecord struct {
+	key       []byte
+	opened    time.Time
+	requested time.Time
+	principal *principal
+	clientKey ed25519.PrivateKey
+	nonce     []byte
+	request   chan RescueIdentity
+	done      chan struct{}
+	digest    []byte
+	answered  bool
+}
 
 type rescueReceptionState struct {
 	mu       sync.Mutex
 	endpoint string
-	records  map[string]rescueReceptionRecord
+	records  map[string]*rescueReceptionRecord
 	admits   []time.Time
+}
+
+func rescueClockTime(t time.Time) time.Time {
+	return time.Unix(0, t.UnixNano())
 }
 
 // RescueEndpoint is the public reception URL, built from the configured
@@ -181,14 +197,15 @@ func (g *Gateway) OpenRescue(r RescueRequest) (RescueReception, error) {
 	if err != nil {
 		return RescueReception{}, ErrRefused
 	}
-	g.rescue.records[string(id[:])] = rescueReceptionRecord{key: append([]byte(nil), r.Key...)}
+	record := &rescueReceptionRecord{key: append([]byte(nil), r.Key...), opened: rescueClockTime(g.clock()), request: make(chan RescueIdentity, 1), done: make(chan struct{})}
+	g.rescue.records[string(id[:])] = record
 	sig, err := g.rescueSigner.Sign(rand.Reader, RescueResultTranscript(g.rescue.endpoint, r.HostNonce, r.Key, id[:], code))
 	if err != nil || sig == nil || sig.Format != ssh.KeyAlgoED25519 {
 		delete(g.rescue.records, string(id[:]))
 		g.rescueCodes.end(idHex)
 		return RescueReception{}, ErrRefused
 	}
-	return RescueReception{ID: append([]byte(nil), id[:]...), Code: code, Signature: append([]byte(nil), sig.Blob...)}, nil
+	return RescueReception{ID: append([]byte(nil), id[:]...), Code: code, Signature: append([]byte(nil), sig.Blob...), Request: record.request, Done: record.done}, nil
 }
 
 // EndRescue drops the reception and its code at once.
@@ -198,11 +215,65 @@ func (g *Gateway) EndRescue(id []byte) {
 	}
 	g.rescue.mu.Lock()
 	defer g.rescue.mu.Unlock()
-	if _, ok := g.rescue.records[string(id)]; !ok {
+	if record := g.rescue.records[string(id)]; record == nil {
+		return
+	} else {
+		g.endRescueLocked(id, record)
+	}
+}
+
+func (g *Gateway) endRescueLocked(id []byte, record *rescueReceptionRecord) {
+	key := string(id)
+	if g.rescue.records[key] != record {
 		return
 	}
-	delete(g.rescue.records, string(id))
+	delete(g.rescue.records, key)
 	g.rescueCodes.end(hex.EncodeToString(id))
+	if record.principal != nil {
+		if record.principal.rescueState == "pending" {
+			g.setRescueStateLocked(record.principal, "ended")
+		}
+		g.mu.Lock()
+		record.principal.rescueBusy = false
+		g.mu.Unlock()
+	}
+	clear(record.clientKey)
+	record.clientKey = nil
+	close(record.done)
+}
+
+func (g *Gateway) setRescueStateLocked(p *principal, state string) {
+	if p.rescueState == state {
+		return
+	}
+	p.rescueState = state
+	close(p.rescueChanged)
+	p.rescueChanged = make(chan struct{})
+}
+
+func (g *Gateway) sweepRescue() {
+	defer g.watchers.Done()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-ticker.C:
+			g.rescue.mu.Lock()
+			now := rescueClockTime(g.clock())
+			for id, record := range g.rescue.records {
+				switch {
+				case record.principal == nil && now.UnixNano() >= record.opened.Add(RescueCodeLifetime).UnixNano():
+					g.endRescueLocked([]byte(id), record)
+				case record.principal != nil && !record.answered && now.UnixNano() >= record.requested.Add(RescueRequestLifetime).UnixNano():
+					g.setRescueStateLocked(record.principal, RescueTimeout)
+					g.endRescueLocked([]byte(id), record)
+				}
+			}
+			g.rescue.mu.Unlock()
+		}
+	}
 }
 
 func (g *Gateway) rescueCapacityLocked() error {

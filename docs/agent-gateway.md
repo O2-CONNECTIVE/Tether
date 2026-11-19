@@ -4,7 +4,7 @@
 
 [MCP adapterとagent wire](agent-mcp-adapter.md) / [agent専用channel](agent-channel.md) / [agent command契約](agent-command-contract.md) / [安全要件](security.md)
 
-dotsが、受け手が自分で起動して同意した一時的なMacの現在利用者へ、4つのtool（start/output/status/cancel）を送るための共有gatewayのsourceです（`backend/internal/agentgateway`、`backend/cmd/rescue-gateway`、`backend/internal/mcpadapter/http_bridge.go`）。
+dotsが、受け手が自分で起動して同意した一時的なMacの現在利用者へ、routeに束縛した4つのtool（start/output/status/cancel）と、routeの無いdiscovery session向けの2つのtool（rescue_request/rescue_request_status）を送るための共有gatewayのsourceです（`backend/internal/agentgateway`、`backend/cmd/rescue-gateway`、`backend/internal/mcpadapter/http_bridge.go`）。
 source/memory試験と限定native実演・HTTP discoveryは別の検証境界です。現在の固定実績と未達は[検証状態](tether-pilot-status.md)を参照してください。
 このsourceは実環境のtunnel、provider登録、account、鍵、routeを自動作成しません。限定実績と閉鎖済み入口、配布の残件は検証状態の正本に従います。
 人向けSSH互換は目的外です。
@@ -92,6 +92,7 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 - 1 principalにつき、live routeは最大1本です。routeは1つのgrant（LaunchID、epoch、generation、鍵集合digest、Mac profile）と、1本のchannel・wire clientに対応します。この対応は変わりません。
 - Connectは、未知のlabel、signerのないprincipal、`rescue_operator`のないprincipal、常駐のhost（paired枠と`resident`に載るhost）からのdispatch、route取得中・保持中のprincipal、Mac以外のprofile、このprocessで既に使ったLaunchIDを拒否し、渡されたconnを閉じます。open に進んだ Connect は失敗してもその LaunchID を消費します。open 前の拒否は LaunchID を記録せず、渡された stream を閉じます。その場合の Mac 承認失効は既存 host の接続喪失処理が担い、gateway による消費とは区別します。
 - `initialize`が成功したときだけ、128 bit乱数の`Mcp-Session-Id`を発行します。sessionはそのprincipalへ固定されます。その時点で有効なrouteがあれば同routeへ束縛し、なければ恒久的に未束縛のdiscovery専用sessionを作ります。後からgrantへattachしません。
+- `rescue_request`と`rescue_request_status`はrouteの無いdiscovery sessionにだけ表示し、呼び出せます。`rescue_request`は接続コードだけを受け取り、受付先や鍵を選ばせません。受付へ身元の証明を送ると`pending`を返します。`rescue_request_status`は状態が変わるまで待つ非同期の確認口です。WorkerがMCPの1往復を35秒で切るため、75秒待つ同期toolは使いません。状態は`none`、`pending`、`allow`、`deny`、`timeout`、`ended`、`failed`です。
 - 後続の各requestでは、毎回tokenを検証したうえで、次の条件をすべて確認します。いずれかが外れると404です。
   - sessionのprincipalが同じであること。他principalのsession IDは未知のものと同じに扱います
   - routeへ束縛されたsessionでは、そのrouteがprincipalの現在のrouteで、終了していないこと（discovery専用sessionにはrouteがない）
@@ -157,7 +158,8 @@ OAuth bearer方式：
   "token_types": ["JWT"],
   "leeway_seconds": 30,
   "jwks_url": "https://syiadkekkobdkplpnivl.supabase.co/auth/v1/.well-known/jwks.json",
-  "principals": [ { "label": "member-1", "subject": "<o2c-identity-sub>", "roles": ["rescue_operator"] } ],
+  "organization": "<organization>",
+  "principals": [ { "label": "member-1", "subject": "<o2c-identity-sub>", "display_name": "<display name>", "roles": ["rescue_operator"] } ],
   "allowed_origins": []
 }
 ```
@@ -179,7 +181,8 @@ Cloudflare Access assertion方式：
   "access_aud": "<access-application-aud-tag>",
   "access_keys": { "keys": [ { "kty": "RSA", "kid": "<team-kid>", "alg": "RS256", "use": "sig", "n": "<base64url>", "e": "AQAB" } ] },
   "leeway_seconds": 30,
-  "principals": [ { "label": "member-1", "subject": "<access-user-sub-of-member-1>", "roles": ["rescue_operator"] } ],
+  "organization": "<organization>",
+  "principals": [ { "label": "member-1", "subject": "<access-user-sub-of-member-1>", "display_name": "<display name>", "roles": ["rescue_operator"] } ],
   "allowed_origins": []
 }
 ```
@@ -197,6 +200,8 @@ Cloudflare Access assertion方式：
 | `access_aud` | Access applicationのAUD tag。英数字・`-`・`_`の1〜256文字（URLは書けません）。資源URLとは別の値 |
 | `access_keys` | teamのcerts文書（`https://<team-domain>/cdn-cgi/access/certs`）の`keys` memberをそのまま`{"keys":[…]}`として転記したもの。RSA（2048〜8192 bit）だけ、`alg`は省略可だが書くなら`RS256`、`use`は書くなら`sig`、1〜16鍵、kid重複・private member・`key_ops`などは拒否。`public_cert`/`public_certs`は含めません（top-levelの未知memberとして拒否） |
 | `access_key_source` | `"cloudflare_certs"` だけ。指定時は `access_keys` を省略必須。固定5秒取得・完了後60秒待機・開始から300秒の鍵寿命とCLI ownerは[詳細](access-key-rotation-candidate.md)を参照。省略時は従来の静的鍵を要求 |
+| `organization` | 任意。レスキュー要求に使う組織名で、1〜64文字です。制御文字と双方向制御文字は使えません。レスキュー要求には`display_name`と両方が必要です |
+| `principals[].display_name` | 任意。レスキュー要求に使う表示名で、1〜64文字です。制御文字と双方向制御文字は使えません。設定値を使い、tokenのclaimは使いません |
 | `principals[].subject` | Accessの`sub`（利用者ごと）。emailは書けません |
 | `principals[].roles` | 必須。`"rescue_operator"`・`"resident_owner"`の1つ以上を重複なく（[役割](#principalの役割)） |
 | `role_assurance` | 任意。`{"rescue_operator": "any", "resident_owner": "any"}`の形で、役割ごとにIdPへ求める強さ。値は`any`か`multi_factor`（現在は起動を拒否）。空のobject・知らない役割は拒否 |

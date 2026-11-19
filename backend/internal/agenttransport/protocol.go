@@ -332,6 +332,71 @@ func decodeRegister(msg []byte) (registration, error) {
 	return r, nil
 }
 
+func encodeRescueRequest(r agentgateway.RescueIdentity) []byte {
+	out, _ := json.Marshal(map[string]string{
+		"type": "request", "nonce": b64.EncodeToString(r.Nonce), "client": b64.EncodeToString(r.Client),
+		"display_name": r.DisplayName, "organization": r.Organization, "profile": r.Profile,
+		"signature": b64.EncodeToString(r.Signature),
+	})
+	return out
+}
+
+var rescueAnswerFields = []string{"type", "answer", "signature"}
+var rescueAllowFields = []string{"type", "answer", "generation", "launch_id", "epoch", "policy_digest",
+	"key_set_digest", "profile", "deadline_unix_nano", "host_key", "signature"}
+
+func decodeRescueAnswer(msg []byte) (agentgateway.RescueAnswer, error) {
+	fields := rescueAnswerFields
+	m, ok := stringFields(msg, fields...)
+	if !ok {
+		m, ok = stringFields(msg, rescueAllowFields...)
+		if !ok {
+			return agentgateway.RescueAnswer{}, ErrRefused
+		}
+	}
+	if m["type"] != "answer" {
+		return agentgateway.RescueAnswer{}, ErrRefused
+	}
+	sig, ok := decodeB64(m["signature"])
+	if !ok {
+		return agentgateway.RescueAnswer{}, ErrRefused
+	}
+	a := agentgateway.RescueAnswer{Answer: m["answer"], Signature: sig}
+	if a.Answer != agentgateway.RescueAllow {
+		if len(m) != len(rescueAnswerFields) {
+			return agentgateway.RescueAnswer{}, ErrRefused
+		}
+		return a, nil
+	}
+	if len(m) != len(rescueAllowFields) {
+		return agentgateway.RescueAnswer{}, ErrRefused
+	}
+	gen, err := strconv.ParseUint(m["generation"], 10, 64)
+	if err != nil || strconv.FormatUint(gen, 10) != m["generation"] {
+		return agentgateway.RescueAnswer{}, ErrRefused
+	}
+	deadline, err := strconv.ParseInt(m["deadline_unix_nano"], 10, 64)
+	if err != nil || deadline <= 0 || strconv.FormatInt(deadline, 10) != m["deadline_unix_nano"] {
+		return agentgateway.RescueAnswer{}, ErrRefused
+	}
+	digest, err := hex.DecodeString(m["key_set_digest"])
+	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != m["key_set_digest"] || m["profile"] != profileMac {
+		return agentgateway.RescueAnswer{}, ErrRefused
+	}
+	hostKey, ok := decodeB64(m["host_key"])
+	if !ok {
+		return agentgateway.RescueAnswer{}, ErrRefused
+	}
+	b := &a.Dispatch.Binding
+	b.Grant.Generation = gen
+	b.Grant.Identity.LaunchID, b.Grant.Identity.Epoch, b.Grant.Identity.PolicyDigest = m["launch_id"], m["epoch"], m["policy_digest"]
+	copy(b.KeySetDigest[:], digest)
+	b.Profile = agentexec.ProfileMacCurrentUser
+	a.Dispatch.Deadline = time.Unix(0, deadline)
+	a.Dispatch.HostKey = hostKey
+	return a, nil
+}
+
 func newNonce() ([]byte, error) {
 	n := make([]byte, NonceSize)
 	if _, err := io.ReadFull(rand.Reader, n); err != nil {

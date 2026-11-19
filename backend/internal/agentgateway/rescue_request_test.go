@@ -399,6 +399,12 @@ func TestRescueRequestRequiresConfiguredDisplayNameAndOrganization(t *testing.T)
 			if _, msg, failed := r.caller(0).rescueTool("rescue_request", map[string]any{"code": res.Code}); !failed || msg != rescueNameMessage {
 				t.Fatalf("missing identity setting response = %q, %v; want %q", msg, failed, rescueNameMessage)
 			}
+			// With no organization no principal may request, so only the display
+			// name case can show the code was not spent.
+			if tc.name == "missing organization" {
+				assertNoIdentity(t, res)
+				return
+			}
 			if _, msg, failed := r.caller(1).rescueTool("rescue_request", map[string]any{"code": res.Code}); failed {
 				t.Fatalf("rejected request consumed code: %q", msg)
 			}

@@ -48,7 +48,8 @@ var (
 // composition from protected storage; it is optional at New, and Connect
 // refuses a principal without one.
 type Principal struct {
-	Label       string
+	Label string
+	// DisplayName is shown to a host in a rescue request; see docs/rescue-connection-start.md, 名前と組織の出どころ.
 	DisplayName string
 	Subject     string
 	Roles       []Role
@@ -60,11 +61,12 @@ type Principal struct {
 type Config struct {
 	// DiscoveryOnly permanently disables all registration and execution.
 	// Signers are forbidden, rather than silently ignored in this mode.
-	ResidentOnly   bool // only correlated fixed work, never generic Connect or MCP binding
-	DiscoveryOnly  bool
-	Verifier       *Verifier       // OAuth bearer JWT mode
-	Access         *AccessVerifier // Cloudflare Access assertion mode
-	Resource       string          // public MCP resource URL; OAuth audience may differ
+	ResidentOnly  bool // only correlated fixed work, never generic Connect or MCP binding
+	DiscoveryOnly bool
+	Verifier      *Verifier       // OAuth bearer JWT mode
+	Access        *AccessVerifier // Cloudflare Access assertion mode
+	Resource      string          // public MCP resource URL; OAuth audience may differ
+	// Organization is shown to a host in a rescue request; see docs/rescue-connection-start.md, 名前と組織の出どころ.
 	Organization   string
 	Principals     []Principal
 	RoleAssurance  map[Role]Assurance   // IdP strength per role; a missing role requires AssuranceAny
@@ -90,11 +92,15 @@ type Dispatch = agentchannel.Dispatch
 
 type principal struct {
 	label, subject string
+	displayName    string
 	rescue         bool // RoleRescueOperator: the rescue connection (Connect)
 	resident       bool // RoleResidentOwner: a pair slot and resident work
 	signer         ssh.Signer
 	route          *route // the current live route, guarded by Gateway.mu
 	connecting     bool
+	rescueBusy     bool
+	rescueState    string
+	rescueChanged  chan struct{}
 	sessions       int
 }
 
@@ -135,6 +141,7 @@ type Gateway struct {
 	pairMu        sync.Mutex
 	residentOnly  bool // immutable, trusted composition only
 	discoveryOnly bool // immutable capability restriction, never request-selected
+	organization  string
 	ctx           context.Context
 	cancel        context.CancelFunc
 	verifier      *Verifier       // nil in Access mode
@@ -152,7 +159,6 @@ type Gateway struct {
 	rescueCodes   *rescueCodes // rescue connection codes; guarded by its own lock
 	rescueSigner  ssh.Signer
 	rescue        *rescueReceptionState
-	rescueWait    time.Duration
 
 	mu          sync.Mutex
 	closed      bool
@@ -193,8 +199,11 @@ func New(cfg Config) (*Gateway, error) {
 	if cfg.RescueSigner != nil && (cfg.DiscoveryOnly || cfg.RescueSigner.PublicKey().Type() != ssh.KeyAlgoED25519) {
 		return nil, ErrConfig
 	}
+	if !validRescueIdentity(cfg.Organization) {
+		return nil, ErrConfig
+	}
 	g := &Gateway{
-		residentOnly: cfg.ResidentOnly, discoveryOnly: cfg.DiscoveryOnly, verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
+		residentOnly: cfg.ResidentOnly, discoveryOnly: cfg.DiscoveryOnly, organization: cfg.Organization, verifier: cfg.Verifier, access: cfg.Access, path: resource.Path, origins: map[string]bool{},
 		bySubject: map[string]*principal{}, byLabel: map[string]*principal{},
 		budgets: cfg.Budgets, callTimeout: cfg.CallTimeout, clock: cfg.Clock, inflight: make(chan struct{}, MaxInflightRequests),
 		sessions: map[string]*session{}, launches: map[string]struct{}{}, joined: make(chan struct{}),
@@ -203,7 +212,7 @@ func New(cfg Config) (*Gateway, error) {
 	if g.clock == nil {
 		g.clock = time.Now
 	}
-	g.rescue = &rescueReceptionState{endpoint: "wss://" + resource.Host + RescuePath, records: make(map[string]rescueReceptionRecord)}
+	g.rescue = &rescueReceptionState{endpoint: "wss://" + resource.Host + RescuePath, records: make(map[string]*rescueReceptionRecord)}
 	g.rescueCodes = newRescueCodes(g.clock)
 	if err := checkAssurance(cfg.RoleAssurance); err != nil {
 		return nil, err
@@ -232,10 +241,17 @@ func New(cfg Config) (*Gateway, error) {
 		if !ok {
 			return nil, rolesError(i)
 		}
-		pr := &principal{label: p.Label, subject: p.Subject, rescue: rescue, resident: resident, signer: p.Signer}
+		if !validRescueIdentity(p.DisplayName) {
+			return nil, ErrConfig
+		}
+		pr := &principal{label: p.Label, subject: p.Subject, displayName: p.DisplayName, rescue: rescue, resident: resident, signer: p.Signer, rescueState: "none", rescueChanged: make(chan struct{})}
 		g.byLabel[p.Label], g.bySubject[p.Subject] = pr, pr
 	}
 	g.ctx, g.cancel = context.WithCancel(context.Background())
+	if g.rescueSigner != nil {
+		g.watchers.Add(1)
+		go g.sweepRescue()
+	}
 	return g, nil
 }
 
@@ -280,6 +296,10 @@ func (g *Gateway) Connect(label string, d Dispatch, conn net.Conn) error {
 }
 
 func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) (*route, error) {
+	return g.connectWithSigner(label, d, conn, rescue, nil, false)
+}
+
+func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool) (*route, error) {
 	if g == nil || conn == nil {
 		if conn != nil {
 			_ = conn.Close()
@@ -289,6 +309,9 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 	launch := d.Binding.Grant.Identity.LaunchID
 	g.mu.Lock()
 	p := g.byLabel[label]
+	if signer == nil && p != nil {
+		signer = p.signer
+	}
 	_, reused := g.launches[launch]
 	var refusal error
 	switch {
@@ -296,11 +319,11 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 		refusal = ErrClosed
 	case g.discoveryOnly:
 		refusal = ErrRefused
-	case p == nil || p.signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "":
+	case p == nil || signer == nil || d.Binding.Profile != agentexec.ProfileMacCurrentUser || launch == "":
 		refusal = ErrConfig
 	case rescue && !p.rescue:
 		refusal = ErrRefused
-	case !g.dispatchHostAllowedLocked(p, d.HostKey, rescue):
+	case !pinned && !g.dispatchHostAllowedLocked(p, d.HostKey, rescue):
 		refusal = ErrRefused
 	case reused || p.route != nil || p.connecting || len(g.launches) >= MaxAttachments:
 		refusal = ErrRefused
@@ -315,7 +338,7 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 		return nil, refusal
 	}
 	defer g.watchers.Done() // includes failed/late acquisition and retire
-	r, err := g.open(p, d, conn)
+	r, err := g.openWithSigner(p, d, conn, signer)
 	g.mu.Lock()
 	p.connecting = false
 	if err != nil {
@@ -327,7 +350,7 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 		g.retire(r)
 		return r, ErrClosed
 	}
-	if !g.dispatchHostAllowedLocked(p, d.HostKey, rescue) {
+	if !pinned && !g.dispatchHostAllowedLocked(p, d.HostKey, rescue) {
 		g.mu.Unlock()
 		g.retire(r)
 		return nil, ErrRefused
@@ -372,6 +395,10 @@ func (g *Gateway) residentHostLocked(name string, slot *hostSlot) bool {
 }
 
 func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) {
+	return g.openWithSigner(p, d, conn, p.signer)
+}
+
+func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer) (*route, error) {
 	host, err := ssh.ParsePublicKey(d.HostKey)
 	if err != nil {
 		_ = conn.Close()
@@ -380,7 +407,7 @@ func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) 
 	// The channel lives until the gateway closes or the channel ends; its own
 	// deadline is the dispatched grant deadline.
 	ch, err := agentchannel.Open(g.ctx, agentchannel.ClientConfig{
-		Binding: d.Binding, HostKey: host, Signer: p.signer, Deadline: d.Deadline, Budgets: g.budgets,
+		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline, Budgets: g.budgets,
 	}, conn)
 	if err != nil {
 		if ch != nil {
@@ -461,6 +488,11 @@ func (g *Gateway) Close(ctx context.Context) error {
 		delete(g.sessions, id)
 	}
 	g.mu.Unlock()
+	g.rescue.mu.Lock()
+	for id, record := range g.rescue.records {
+		g.endRescueLocked([]byte(id), record)
+	}
+	g.rescue.mu.Unlock()
 	g.cancel()
 	g.joinOnce.Do(func() {
 		go func() {

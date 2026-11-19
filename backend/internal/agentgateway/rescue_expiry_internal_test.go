@@ -54,6 +54,8 @@ func TestRescueExpiredUnrequestedReceptionIsEndedByGateway(t *testing.T) {
 	now := clock.Now()
 	cfg := rescueReceptionConfig(t, &now)
 	cfg.Clock = clock.Now
+	cfg.Organization = "O2 CONNECTIVE"
+	cfg.Principals[0].DisplayName = "山田（サポート）"
 	g, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -141,9 +143,7 @@ func TestRescueExpiryDoesNotEndRequestMatchedImmediatelyBeforeExpiry(t *testing.
 	}
 	conn, peer := net.Pipe()
 	defer peer.Close()
-	if err := g.AnswerRescue(res.ID, RescueAnswer{Answer: RescueDeny, Signature: signature.Blob}, conn); err != nil {
-		t.Fatalf("AnswerRescue(deny) after code expiry: %v", err)
-	}
+	_ = g.AnswerRescue(res.ID, RescueAnswer{Answer: RescueDeny, Signature: signature.Blob}, conn) // nil only when a channel opens
 	status = internalTool(t, g, bearer, sid, "rescue_request_status", map[string]any{})
 	if got := internalState(t, status); got != RescueDeny {
 		t.Fatalf("request status after deny = %q; want deny", got)

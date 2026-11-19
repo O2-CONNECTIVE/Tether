@@ -61,6 +61,7 @@ type HTTPReply struct {
 // and route it to the session bound to that caller's approved grant.
 type HTTPSession struct {
 	backend           *agentwire.Client
+	rescue            RescueBackend
 	resident          ResidentBackend
 	residentDiscovery bool // Immutable catalog-only mode, with no authority/backend.
 	timeout           time.Duration
@@ -236,6 +237,9 @@ func (s *HTTPSession) request(id *requestID, method string, params json.RawMessa
 		if s.residentDiscovery {
 			return response(id, map[string]any{"tools": residentCatalog(true, true, true, true, true, true)})
 		}
+		if s.rescue != nil {
+			return response(id, map[string]any{"tools": rescueToolList()})
+		}
 		return response(id, map[string]any{"tools": toolList()})
 	case "tools/call":
 		if state != stateReady {
@@ -258,6 +262,9 @@ func (s *HTTPSession) toolCall(id *requestID, params json.RawMessage) HTTPReply 
 	}
 	if s.resident != nil {
 		return s.residentToolCall(id, params)
+	}
+	if s.rescue != nil {
+		return s.rescueToolCall(id, params)
 	}
 	m, err := agentwire.Fields(params, "name", "arguments", "_meta")
 	var name string

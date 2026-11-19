@@ -1,9 +1,20 @@
 package agentgateway
 
 import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"errors"
 	"net"
 	"time"
+
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/runbackend"
+	"golang.org/x/crypto/ssh"
 )
 
 // See docs/rescue-connection-start.md, 2. 身元の渡し方 and 3. 許可と拒否.
@@ -62,9 +73,205 @@ func RescueAnswerTranscript(reception, nonce, digest []byte, answer string, d Di
 	return rescueTranscript(parts)
 }
 
+// AnswerRescue verifies a host answer and opens its approved channel; see
+// docs/rescue-connection-start.md, 3. 許可と拒否.
 func (g *Gateway) AnswerRescue(id []byte, a RescueAnswer, conn net.Conn) error {
-	if conn != nil {
-		_ = conn.Close()
+	if conn == nil {
+		return ErrRefused
 	}
-	return ErrRefused
+	taken := false
+	defer func() {
+		if !taken {
+			_ = conn.Close()
+		}
+	}()
+	if g == nil || g.rescue == nil {
+		return ErrRefused
+	}
+	g.rescue.mu.Lock()
+	record := g.rescue.records[string(id)]
+	if record == nil || record.principal == nil || record.answered {
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	if rescueClockTime(g.clock()).UnixNano() >= record.requested.Add(RescueRequestLifetime).UnixNano() {
+		g.setRescueStateLocked(record.principal, RescueTimeout)
+		g.endRescueLocked(id, record)
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	key, err := ssh.ParsePublicKey(record.key)
+	if err != nil || key.Verify(RescueAnswerTranscript(id, record.nonce, record.digest, a.Answer, a.Dispatch), &ssh.Signature{Format: ssh.KeyAlgoED25519, Blob: a.Signature}) != nil {
+		g.setRescueStateLocked(record.principal, "failed")
+		g.endRescueLocked(id, record)
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	if a.Answer != RescueAllow && a.Answer != RescueDeny && a.Answer != RescueTimeout {
+		g.setRescueStateLocked(record.principal, "failed")
+		g.endRescueLocked(id, record)
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	if a.Answer == RescueDeny || a.Answer == RescueTimeout {
+		g.setRescueStateLocked(record.principal, a.Answer)
+		g.endRescueLocked(id, record)
+		g.rescue.mu.Unlock()
+		return ErrRefused // nil only when a channel opens
+	}
+	clientSigner, err := ssh.NewSignerFromKey(ed25519.PrivateKey(record.clientKey))
+	var keyDigest [32]byte
+	if err == nil {
+		keyDigest, err = runbackend.KeySetDigest([]ssh.PublicKey{clientSigner.PublicKey()})
+	}
+	if err != nil || !bytes.Equal(a.Dispatch.HostKey, record.key) || a.Dispatch.Binding.KeySetDigest != keyDigest || a.Dispatch.Binding.Profile != agentexec.ProfileMacCurrentUser {
+		g.setRescueStateLocked(record.principal, "failed")
+		g.endRescueLocked(id, record)
+		g.rescue.mu.Unlock()
+		return ErrRefused
+	}
+	record.answered = true
+	principal := record.principal
+	g.rescue.mu.Unlock()
+	taken = true
+	_, err = g.connectWithSigner(principal.label, a.Dispatch, conn, true, clientSigner, true)
+	g.rescue.mu.Lock()
+	if g.rescue.records[string(id)] == record {
+		if err != nil {
+			g.setRescueStateLocked(principal, "failed")
+			g.endRescueLocked(id, record)
+		} else {
+			g.setRescueStateLocked(principal, RescueAllow)
+		}
+	}
+	g.rescue.mu.Unlock()
+	return err
+}
+
+func (g *Gateway) rescueRequest(ctx context.Context, p *principal, code string) map[string]any {
+	const (
+		invalidCode     = "the rescue code is not valid"
+		busyMessage     = "a rescue request or connection is already active for this principal"
+		roleMessage     = "this principal may not request a rescue"
+		identityMessage = "the gateway has no display_name or organization for this principal"
+		unavailable     = "rescue is not available"
+	)
+	if ctx.Err() != nil || g == nil || p == nil || g.rescue == nil {
+		return map[string]any{"error": unavailable}
+	}
+	g.rescue.mu.Lock()
+	g.mu.Lock()
+	switch {
+	case g.closed || g.rescueSigner == nil || g.discoveryOnly || g.residentOnly:
+		g.mu.Unlock()
+		g.rescue.mu.Unlock()
+		return map[string]any{"error": unavailable}
+	case !p.rescue:
+		g.mu.Unlock()
+		g.rescue.mu.Unlock()
+		return map[string]any{"error": roleMessage}
+	case p.displayName == "" || g.organization == "":
+		g.mu.Unlock()
+		g.rescue.mu.Unlock()
+		return map[string]any{"error": identityMessage}
+	case p.rescueBusy || p.route != nil || p.connecting:
+		g.mu.Unlock()
+		g.rescue.mu.Unlock()
+		return map[string]any{"error": busyMessage}
+	default:
+		p.rescueBusy = true
+	}
+	g.mu.Unlock()
+	receptionHex, err := g.rescueCodes.redeem(p, code)
+	if err != nil {
+		g.clearRescueBusyLocked(p)
+		g.rescue.mu.Unlock()
+		if errors.Is(err, errRescueLocked) {
+			return map[string]any{"error": "too many invalid rescue codes; try again in 10 minutes"}
+		}
+		return map[string]any{"error": invalidCode}
+	}
+	id, err := hex.DecodeString(receptionHex)
+	record := g.rescue.records[string(id)]
+	if err != nil || record == nil {
+		g.clearRescueBusyLocked(p)
+		g.rescue.mu.Unlock()
+		return map[string]any{"error": invalidCode}
+	}
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err == nil {
+		var nonce [RescueNonceSize]byte
+		_, err = rand.Read(nonce[:])
+		if err == nil {
+			signer, signerErr := ssh.NewSignerFromKey(private)
+			err = signerErr
+			if err == nil {
+				client := signer.PublicKey().Marshal()
+				transcript := RescueRequestTranscript(g.RescueEndpoint(), id, record.key, nonce[:], client, p.displayName, g.organization, RescueProfile)
+				signature, signErr := g.rescueSigner.Sign(rand.Reader, transcript)
+				err = signErr
+				if err == nil && signature != nil && signature.Format == ssh.KeyAlgoED25519 {
+					digest := sha256.Sum256(transcript)
+					record.principal, record.clientKey, record.nonce = p, private, append([]byte(nil), nonce[:]...)
+					record.digest, record.requested = append([]byte(nil), digest[:]...), rescueClockTime(g.clock())
+					payload := RescueIdentity{Nonce: append([]byte(nil), nonce[:]...), Client: append([]byte(nil), client...), DisplayName: p.displayName,
+						Organization: g.organization, Profile: RescueProfile, Signature: append([]byte(nil), signature.Blob...)}
+					select {
+					case record.request <- payload:
+						g.setRescueStateLocked(p, "pending")
+						g.rescue.mu.Unlock()
+						return map[string]any{"state": "pending"}
+					default:
+						err = ErrRefused
+					}
+				} else if err == nil {
+					err = ErrRefused
+				}
+			}
+		}
+	}
+	clear(private)
+	g.clearRescueBusyLocked(p)
+	g.setRescueStateLocked(p, "failed")
+	g.endRescueLocked(id, record)
+	g.rescue.mu.Unlock()
+	return map[string]any{"error": unavailable}
+}
+
+func (g *Gateway) clearRescueBusyLocked(p *principal) {
+	g.mu.Lock()
+	p.rescueBusy = false
+	g.mu.Unlock()
+}
+
+func (g *Gateway) rescueRequestStatus(ctx context.Context, p *principal) map[string]any {
+	if g == nil || p == nil || g.rescue == nil {
+		return map[string]any{"state": "none"}
+	}
+	for {
+		g.rescue.mu.Lock()
+		state, changed := p.rescueState, p.rescueChanged
+		g.rescue.mu.Unlock()
+		if state != "pending" {
+			return map[string]any{"state": state}
+		}
+		select {
+		case <-ctx.Done():
+			return map[string]any{"state": "pending"}
+		case <-changed:
+		}
+	}
+}
+
+type rescueMCPBackend struct {
+	gateway   *Gateway
+	principal *principal
+}
+
+func (b rescueMCPBackend) RescueRequest(ctx context.Context, code string) map[string]any {
+	return b.gateway.rescueRequest(ctx, b.principal, code)
+}
+
+func (b rescueMCPBackend) RescueRequestStatus(ctx context.Context) map[string]any {
+	return b.gateway.rescueRequestStatus(ctx, b.principal)
 }

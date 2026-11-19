@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -384,15 +385,35 @@ func TestRescueRequestRealGatewayBindsFreshRoute(t *testing.T) {
 	wsEndpoint := "wss" + strings.TrimPrefix(srv.URL, "https") + agentgateway.RescuePath
 	wsCtx, wsCancel := context.WithCancel(context.Background())
 	t.Cleanup(wsCancel)
+	link := newCloser(wsCancel)
+	baseTransport, ok := srv.Client().Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("TLS test server client has no HTTP transport")
+	}
+	transport := baseTransport.Clone()
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if !link.begin() {
+			return nil, ErrRefused
+		}
+		defer link.end()
+		conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return link.attach(conn)
+	}
+	hostHTTP := &http.Client{Transport: transport}
+	t.Cleanup(hostHTTP.CloseIdleConnections)
 	dialCtx, dialCancel := context.WithTimeout(wsCtx, 5*time.Second)
-	ws, _, err := websocket.Dial(dialCtx, wsEndpoint, &websocket.DialOptions{HTTPClient: srv.Client(), Subprotocols: []string{RescueSubprotocol}})
+	ws, _, err := websocket.Dial(dialCtx, wsEndpoint, &websocket.DialOptions{HTTPClient: hostHTTP, Subprotocols: []string{RescueSubprotocol}})
 	dialCancel()
 	if err != nil {
 		t.Fatalf("dial rescue websocket: %v", err)
 	}
-	link := newCloser(func() { _ = ws.Close(websocket.StatusNormalClosure, "host stream ended") })
 	link.setWS(ws)
-	link.settle()
+	if !link.settle() {
+		t.Fatal("host WSS transport was not owned")
+	}
 	t.Cleanup(func() { link.start() })
 	writeFrame := func(v any) {
 		t.Helper()
@@ -547,12 +568,16 @@ func TestRescueRequestRealGatewayBindsFreshRoute(t *testing.T) {
 	if terminal := fresh.terminal(commandID); terminal["phase"] != "exited" {
 		t.Fatalf("route command terminal state = %v; want exited", terminal)
 	}
+	// The route lives until its deadline; closing the gateway ends it, and the
+	// host's channel on the reception stream ends with it.
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer closeCancel()
+	if err := gateway.Close(closeCtx); err != nil {
+		t.Fatalf("gateway Close: %v", err)
+	}
 	select {
-	case err := <-served:
-		if err != nil {
-			t.Fatalf("agentlink.Host.Serve: %v", err)
-		}
+	case <-served:
 	case <-time.After(5 * time.Second):
-		t.Fatal("agentlink.Host.Serve did not end within 5s")
+		t.Fatal("agentlink.Host.Serve did not end within 5s of the gateway closing")
 	}
 }

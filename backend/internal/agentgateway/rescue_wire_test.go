@@ -39,7 +39,7 @@ func TestRescueRequestTranscriptLayout(t *testing.T) {
 // the gateway connects with exactly that Binding, deadline and host key.
 func TestRescueAnswerTranscriptLayout(t *testing.T) {
 	d := agentgateway.Dispatch{
-		Binding: agentchannel.Binding{KeySetDigest: [32]byte{1, 2}, Profile: agentexec.ProfileMacCurrentUser},
+		Binding:  agentchannel.Binding{KeySetDigest: [32]byte{1, 2}, Profile: agentexec.ProfileMacCurrentUser},
 		Deadline: time.Unix(0, 1_700_000_000_123_456_789), HostKey: []byte("K"),
 	}
 	d.Binding.Grant.Generation = 7
