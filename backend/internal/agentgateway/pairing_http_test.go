@@ -48,6 +48,28 @@ func TestConfigurePairingRejectsInvalidRegistrationEndpoint(t *testing.T) {
 	}
 }
 
+// Principal subjects are configured in the MCP issuer's namespace. A pairing
+// verifier that trusts another issuer would let that issuer's token with the
+// same subject take over the owner's pair slot (#417), so it never configures.
+func TestConfigurePairingRejectsVerifierOfAnotherIssuer(t *testing.T) {
+	other, err := agentgateway.NewVerifier(agentgateway.VerifierConfig{Issuer: "https://other.example.invalid/", Audience: pairingAudience, Types: []string{"at+jwt"}, JWKS: jwks(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := agentgateway.New(agentgateway.Config{Verifier: verifier(t), Resource: testResource, Principals: []agentgateway.Principal{{Label: label(0), Subject: subjects[0], Roles: bothRoles, Signer: fixtureSigner(t, 0x52)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close(context.Background())
+	if err := g.ConfigureHosts([]agentgateway.HostEntry{{Label: "host-1", Principals: []string{label(0)}, Paired: true}}); err != nil {
+		t.Fatal(err)
+	}
+	err = g.ConfigurePairing(agentgateway.PairingConfig{Verifier: other, Endpoint: "https://gateway.example.invalid" + agentgateway.PairPath, RegistrationEndpoint: "wss://gateway.example.invalid/register"})
+	if !errors.Is(err, agentgateway.ErrConfig) {
+		t.Fatalf("pairing verifier of another issuer: err=%v, want ErrConfig", err)
+	}
+}
+
 func pairSetupWithRecords(t *testing.T, subject string, hosts []agentgateway.HostEntry, records []agentgateway.PairRecord, save func([]agentgateway.PairRecord) error) (*agentgateway.Gateway, ssh.Signer) {
 	t.Helper()
 	v, err := agentgateway.NewVerifier(agentgateway.VerifierConfig{Issuer: testIssuer, Audience: pairingAudience, Types: []string{"at+jwt"}, JWKS: jwks(t)})
