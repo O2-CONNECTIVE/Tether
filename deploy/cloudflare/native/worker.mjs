@@ -48,6 +48,16 @@ export const LIMITS = Object.freeze({
   message: 32 * 1024, frames: 4096, lifetimeMs: 300_000,
 });
 
+// The rescue reception and its channel share one WSS, so its relay must
+// outlast the longest session: the reception handshake (10 s), a code's
+// lifetime (5 min), the gateway's request expiry (75 s) and the longest grant
+// (24 h), plus slack. The frame budget keeps the rate of LIMITS. The host and
+// the gateway still end the session at its expiry; this is the outer bound.
+const RESCUE_LIFETIME_MS = 24 * 3_600_000 + 10 * 60_000;
+const RESCUE_LIMITS = Object.freeze({
+  ...LIMITS, lifetimeMs: RESCUE_LIFETIME_MS, frames: LIMITS.frames * (RESCUE_LIFETIME_MS / LIMITS.lifetimeMs),
+});
+
 // Request headers forwarded to MCP, per method, with their length bound.
 // Credentials are added separately for the selected mode; other identity and
 // forwarding headers are dropped. The Go gateway still validates each value.
@@ -354,7 +364,7 @@ async function forwardRescue(request, binding, rt) {
     return deny(rt, 502, "rescue upstream subprotocol mismatch");
   }
   const [client, server] = rt.newPair();
-  relay(server, upstream, rt, LIMITS);
+  relay(server, upstream, rt, RESCUE_LIMITS);
   return new rt.Response(null, { status: 101, webSocket: client, headers: { "Sec-WebSocket-Protocol": protocol } });
 }
 

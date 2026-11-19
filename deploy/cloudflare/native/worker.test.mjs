@@ -987,3 +987,72 @@ test("the rescue reception relays the gateway's 429 and 503; other answers stay 
   assert.equal(rt.pairs.length, 0);
   assert.equal(rt.timers.size, 0);
 });
+
+// #433: the reception and its channel share one WSS (docs/rescue-connection-start.md
+// 流れ), so the rescue relay must outlast the longest session it carries: the
+// reception handshake (agenttransport Registration, 10 s), a code's lifetime
+// (5 min), the gateway's request expiry (75 s) and the longest grant (24 h).
+const RESCUE_SPAN_MS = 10_000 + 5 * 60_000 + 75_000 + 24 * 3_600_000;
+const RESCUE_LIFETIME_MS = 24 * 3_600_000 + 10 * 60_000;
+
+async function relayedRescue(rt = fakeRuntime()) {
+  const { upstream, respond } = upgraded(native.RESCUE_SUBPROTOCOL);
+  const binding = fakeBinding(respond);
+  const r = await createNativeWorker(rt).fetch(request(native.RESCUE_PATH, { method: "GET", headers: rescueHeaders() }), rescueEnv(binding));
+  assert.equal(r.status, 101);
+  return { rt, binding, server: rt.pairs.at(-1)[1], upstream };
+}
+
+test("the rescue relay outlasts the longest session with one absolute 24 h 10 min timer; registration and resident stay at 5 min", async () => {
+  assert.ok(RESCUE_LIFETIME_MS > RESCUE_SPAN_MS);
+  const { rt, binding, server, upstream } = await relayedRescue();
+  assert.deepEqual([...rt.timers.values()].map((t) => t.ms), [RESCUE_LIFETIME_MS]);
+
+  // The same Worker still gives registration and resident control 5 min.
+  const env = { ...rescueEnv(fakeBinding(upgraded().respond)), TETHER_RESIDENT_GATE: native.RESIDENT_GATE_VALUE };
+  const worker = createNativeWorker(rt);
+  assert.equal((await worker.fetch(request(REGISTER_PATH, { method: "GET", headers: regHeaders }), env)).status, 101);
+  env.TETHER_NATIVE_VPC = fakeBinding(upgraded(native.RESIDENT_SUBPROTOCOL).respond);
+  assert.equal((await worker.fetch(request(REGISTER_PATH, { method: "GET", headers: { ...regHeaders, "Sec-WebSocket-Protocol": native.RESIDENT_SUBPROTOCOL } }), env)).status, 101);
+  assert.deepEqual([...rt.timers.values()].map((t) => t.ms), [RESCUE_LIFETIME_MS, 5 * 60 * 1000, 5 * 60 * 1000]);
+
+  // Ending the rescue lifetime closes both ends with 4000 and nothing reconnects.
+  const [id] = rt.timers.keys();
+  rt.timers.get(id).fn();
+  assert.equal(server.closed.code, 4000);
+  assert.equal(upstream.closed.code, 4000);
+  assert.ok(!rt.timers.has(id));
+  assert.equal(binding.calls.length, 1);
+  assert.equal(rt.pairs.length, 3);
+});
+
+test("the rescue relay keeps registration's frame rate over its lifetime: a day of heartbeats passes and the budget stays finite", async () => {
+  // Both channel ends beat every 10 s (agentgateway channel budgets) and answer
+  // the other's beat, so each direction carries two messages per 10 s at least.
+  const beats = 2 * Math.ceil(RESCUE_LIFETIME_MS / 10_000);
+  const budget = LIMITS.frames * (RESCUE_LIFETIME_MS / LIMITS.lifetimeMs);
+  assert.ok(Number.isInteger(budget) && beats < budget);
+  const { rt, server, upstream } = await relayedRescue();
+  let sent = 0;
+  server.send = () => { sent++; };
+  for (let i = 0; i < beats; i++) upstream.emit("message", { data: "f" });
+  assert.equal(server.closed, null);
+  for (let i = beats; i < budget; i++) upstream.emit("message", { data: "f" });
+  assert.equal(server.closed, null);
+  upstream.emit("message", { data: "f" });
+  assert.equal(sent, budget);
+  assert.equal(server.closed.code, 1008);
+  assert.equal(upstream.closed.code, 1008);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("the rescue relay keeps registration's 32 KiB message limit; only the lifetime and frame budget differ", async () => {
+  const { rt, server, upstream } = await relayedRescue();
+  server.emit("message", { data: new Uint8Array(LIMITS.message).buffer });
+  assert.equal(upstream.sent.length, 1);
+  server.emit("message", { data: new Uint8Array(LIMITS.message + 1).buffer });
+  assert.equal(upstream.sent.length, 1);
+  assert.equal(upstream.closed.code, 1009);
+  assert.equal(server.closed.code, 1009);
+  assert.equal(rt.timers.size, 0);
+});

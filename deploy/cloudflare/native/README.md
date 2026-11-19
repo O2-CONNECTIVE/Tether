@@ -47,8 +47,8 @@ MCP応答は、Goが返すstatus（200/202/204/400/403/404/405/406/413/415/429/5
 | MCP upstream | 35秒（応答本文の読取りを含む） | 既定call timeout 30秒 + 余裕 |
 | 登録upgrade | 10秒。期限後に届いたupgradeはacceptして即close（relayしない） | `DefaultBudgets().Registration` |
 | WebSocket message | 32 KiB | `agenttransport.MaxStreamMessage` |
-| frame | 片方向4096件 | 有限の試行用上限 |
-| WebSocket lifetime | upgradeから絶対5分。延長・再接続・復帰なし | 初期試行 |
+| frame | 片方向4096件（レスキュー受付口は1,187,840件） | 有限の試行用上限 |
+| WebSocket lifetime | upgradeから絶対5分（レスキュー受付口は24時間10分）。延長・再接続・復帰なし | 初期試行 |
 
 期限切れではreaderを実際にcancelし、bindingがabortを無視して後から応答してもHTTP本文はcancel、WebSocketはcloseします。例外・stream失敗は502で、timer・socket・readerを残しません。logは出しません。
 
@@ -111,7 +111,7 @@ The wrapper pins only the time window, not VPC binding identity. Deployment must
 
 `TETHER_NATIVE_PAIRING=open-native-tether-pairing` を明示した場合だけ、`POST /tether-agent/v1/pair` を `Authorization` 付きで転送します。既存のnative gateとVPC bindingは引き続き必須です。Workerは認証せず、gatewayがIdP tokenとhost鍵の証明を検証します。未設定・未知値では登録口は404になります。
 
-`TETHER_NATIVE_RESCUE=open-native-tether-rescue` を明示した場合だけ、`GET /tether-agent/v1/rescue` のWebSocket upgradeを `rescue-agent-reception.v1` だけで固定pathへ転送します。既存のnative gateとVPC bindingも必須です。登録口と同じくCookie・Authorization・Proxy-Authorization・Access assertionを拒否し、認証やrate limitはWorkerで行いません。未設定・未知値では404です。送信元IPごとの1分5件制限はCloudflare edgeのrate limiting ruleで配置してください（手順は[container配置のroute節](../linux-container.md#待受するroute-cmdrescue-gatewayのroutes)）。
+`TETHER_NATIVE_RESCUE=open-native-tether-rescue` を明示した場合だけ、`GET /tether-agent/v1/rescue` のWebSocket upgradeを `rescue-agent-reception.v1` だけで固定pathへ転送します。既存のnative gateとVPC bindingも必須です。登録口と同じくCookie・Authorization・Proxy-Authorization・Access assertionを拒否し、認証やrate limitはWorkerで行いません。未設定・未知値では404です。送信元IPごとの1分5件制限はCloudflare edgeのrate limiting ruleで配置してください（手順は[container配置のroute節](../linux-container.md#待受するroute-cmdrescue-gatewayのroutes)）。この中継だけ寿命とframeの予算が異なるのは、受付とchannelが同じWSSに載るためです（[中継の寿命](../../../docs/rescue-connection-start.md#中継の寿命)）。
 
 これはGoの既存常駐認証を通すsource候補です。本人の実行承認、host/principal署名、generation、同じ所有者の回収確認をWorkerが代行するものではありません。既存MCP認証、5分のrelay上限、frame/message上限とbounded pilotの絶対期限は維持します。Worker自身は再接続しません。Macの既存ResidentClientはcode4000による終了後、回収を確認して新しい接続を試みます。常駐制御の再接続は実行grantの更新・復帰を意味せず、制御断による進行中作業への影響はGo側の失効規則に従います。5分を超える単一接続や無中断実行は提供しません。
 
