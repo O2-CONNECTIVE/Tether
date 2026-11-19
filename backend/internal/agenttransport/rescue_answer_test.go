@@ -36,6 +36,7 @@ var answerReception = bytes.Repeat([]byte{0x72}, agentgateway.RescueReceptionSiz
 // back to the test, which owns the stream.
 type answerRegistry struct {
 	key                  chan []byte // K as the host proved it
+	opened               chan agentgateway.RescueRequest
 	request              chan agentgateway.RescueIdentity
 	done                 chan struct{}
 	once                 sync.Once
@@ -49,12 +50,14 @@ type answerRegistry struct {
 
 func newAnswerRegistry() *answerRegistry {
 	return &answerRegistry{key: make(chan []byte, 1), request: make(chan agentgateway.RescueIdentity, 1), done: make(chan struct{}),
-		ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1), disconnected: make(chan []byte, 1), streamRead: make(chan struct{}, 1)}
+		opened: make(chan agentgateway.RescueRequest, 4), ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1), disconnected: make(chan []byte, 1), streamRead: make(chan struct{}, 1)}
 }
 
 func (*answerRegistry) AdmitRescue() error { return nil }
 func (r *answerRegistry) OpenRescue(q agentgateway.RescueRequest) (agentgateway.RescueReception, error) {
 	r.key <- append([]byte(nil), q.Key...)
+	r.opened <- agentgateway.RescueRequest{Key: append([]byte(nil), q.Key...), HostNonce: append([]byte(nil), q.HostNonce...),
+		GatewayNonce: append([]byte(nil), q.GatewayNonce...), Purpose: q.Purpose, Reception: append([]byte(nil), q.Reception...), Proof: append([]byte(nil), q.Proof...)}
 	sig, err := rescueIdentity.Sign(rand.Reader, agentgateway.RescueResultTranscript(rescueEndpoint, q.HostNonce, q.Key, answerReception, "123456789012"))
 	if err != nil {
 		return agentgateway.RescueReception{}, err
@@ -503,6 +506,75 @@ func TestRescueClientCloseSendsEndFrameAfterAllow(t *testing.T) {
 	}
 	expectDone(t, c)
 	expectDropped(t, k)
+}
+
+func TestRescueClientKeepsTheReceptionKeyAfterChannelTransportLoss(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	c, kWire, _ := openAnswer(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	first := reg.answer(t)
+	if err := first.conn.Close(); err != nil {
+		t.Fatalf("close first channel: %v", err)
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the channel transport loss")
+	}
+	resumer, ok := any(c).(interface{ Resume(context.Context) error })
+	if !ok {
+		t.Fatal("RescueClient does not support resuming the same reception")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := resumer.Resume(ctx); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got := <-reg.key; !bytes.Equal(got, kWire) {
+		t.Fatal("resume proof used a different K")
+	}
+	firstOpen, resumedOpen := <-reg.opened, <-reg.opened
+	if firstOpen.Purpose != agentgateway.RescuePurposeNew || len(firstOpen.Reception) != 0 {
+		t.Fatalf("initial purpose/reception = %q/%x", firstOpen.Purpose, firstOpen.Reception)
+	}
+	if resumedOpen.Purpose != agentgateway.RescuePurposeResume || !bytes.Equal(resumedOpen.Reception, answerReception) || !bytes.Equal(resumedOpen.Key, kWire) {
+		t.Fatalf("resume proof did not bind the same K and reception: purpose=%q reception=%x", resumedOpen.Purpose, resumedOpen.Reception)
+	}
+	transcript := agentgateway.RescueTranscript(rescueEndpoint, resumedOpen.Key, resumedOpen.GatewayNonce, agentgateway.RescuePurposeResume, answerReception)
+	if err := c.HostKey().PublicKey().Verify(transcript, &ssh.Signature{Format: ssh.KeyAlgoED25519, Blob: resumedOpen.Proof}); err != nil {
+		t.Fatalf("resume proof: %v", err)
+	}
+	clear(transcript)
+	select {
+	case <-c.Done():
+		t.Fatal("the reception ended with the channel transport loss")
+	default:
+	}
+	host := c.HostKey()
+	if host == nil || !bytes.Equal(host.PublicKey().Marshal(), kWire) {
+		t.Fatal("the host key changed while the reception was in its reconnect grace")
+	}
+	sig, err := host.Sign(rand.Reader, []byte("resume"))
+	if err != nil || host.PublicKey().Verify([]byte("resume"), sig) != nil {
+		t.Fatalf("K was not retained during the reconnect grace: %v", err)
+	}
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	secondConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow after resume: %v", err)
+	}
+	second := reg.answer(t)
+	if !bytes.Equal(second.id, answerReception) || !bytes.Equal(second.a.Dispatch.HostKey, kWire) {
+		t.Fatal("resumed answer did not use the same reception and K")
+	}
+	_ = secondConn.Close()
 }
 
 func TestRescueClientCloseBoundsWaitForWriteLock(t *testing.T) {

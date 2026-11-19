@@ -42,11 +42,16 @@ type RescueClient struct {
 	stream              *stream
 	life                context.Context
 	done                chan struct{}
+	attemptDone         chan struct{}
 	mu                  sync.Mutex
 	wsWriteMu           sync.Mutex
 	used, closed, ended bool
+	active              bool
+	everAllowed         bool
+	resumeAttempt       bool
 	requested, answered bool
 	expired             bool
+	code                string
 	cancel              context.CancelFunc
 	ws                  *websocket.Conn
 	closer              *closer
@@ -77,12 +82,16 @@ func NewRescueClient(cfg RescueClientConfig) (*RescueClient, error) {
 		clear(key)
 		return nil, ErrConfig
 	}
+	attemptDone := make(chan struct{})
+	close(attemptDone)
 	return &RescueClient{endpoint: cfg.Endpoint, pins: pins, key: key, hostPublic: hostPublic,
-		done: make(chan struct{}), request: make(chan VerifiedRescueIdentity, 1), transport: nativeTransport}, nil
+		done: make(chan struct{}), attemptDone: attemptDone, request: make(chan VerifiedRescueIdentity, 1), transport: nativeTransport}, nil
 }
 
 // Open registers the reception and returns its code after verifying the signed result.
-// ctx bounds only the handshake; the established reception lasts until Close, code expiry, or peer closure.
+// ctx bounds only the handshake. The reception lasts until Close or code expiry
+// before its first request; after an allow, a transport loss leaves it available
+// for Resume.
 func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	if c == nil || ctx == nil {
 		return "", ErrConfig
@@ -97,11 +106,82 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 		return "", ErrUsed
 	}
 	c.used = true
+	c.mu.Unlock()
+	return c.openAttempt(ctx, agentgateway.RescuePurposeNew, nil)
+}
+
+// Resume opens the same reception with its K proof. It waits for an in-flight
+// attempt to finish, then verifies the gateway returned the same reception and
+// code before accepting another request.
+func (c *RescueClient) Resume(ctx context.Context) error {
+	if c == nil || ctx == nil {
+		return ErrConfig
+	}
+	for {
+		c.mu.Lock()
+		if c.ended || c.closed {
+			c.mu.Unlock()
+			return ErrClosed
+		}
+		if !c.used || !c.everAllowed {
+			c.mu.Unlock()
+			return ErrRefused
+		}
+		if c.active {
+			attemptDone := c.attemptDone
+			c.mu.Unlock()
+			select {
+			case <-attemptDone:
+				continue
+			case <-c.done:
+				return ErrClosed
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		reception := append([]byte(nil), c.reception...)
+		c.mu.Unlock()
+		_, err := c.openAttempt(ctx, agentgateway.RescuePurposeResume, reception)
+		clear(reception)
+		return err
+	}
+}
+
+func (c *RescueClient) openAttempt(ctx context.Context, purpose string, reception []byte) (string, error) {
+	resuming := purpose == agentgateway.RescuePurposeResume
+	c.mu.Lock()
+	if c.closed || c.ended {
+		c.mu.Unlock()
+		return "", ErrClosed
+	}
+	if c.active || (resuming && (!c.everAllowed || !bytes.Equal(reception, c.reception))) {
+		c.mu.Unlock()
+		return "", ErrRefused
+	}
 	// Keep the reception alive after Open returns; ctx is attached only for the handshake.
 	life, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
 	c.life = life
+	c.active = true
+	c.resumeAttempt = resuming
+	c.requested, c.answered, c.expired = false, false, false
+	c.stream = nil
+	c.attemptDone = make(chan struct{})
 	c.mu.Unlock()
+	fail := func() (string, error) {
+		if resuming {
+			c.disconnectAttempt()
+		} else {
+			c.end()
+		}
+		c.mu.Lock()
+		closed := c.closed
+		c.mu.Unlock()
+		if closed {
+			return "", ErrClosed
+		}
+		return "", ErrRefused
+	}
 	link := newCloser(cancel)
 	c.mu.Lock()
 	c.closer = link
@@ -121,8 +201,7 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	c.ws = ws
 	c.mu.Unlock()
 	if err != nil || !transported || ws.Subprotocol() != RescueSubprotocol {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	reg := time.AfterFunc(DefaultBudgets().Registration, cancel)
 	defer reg.Stop()
@@ -139,92 +218,95 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	}
 	hostNonce, e := newNonce()
 	if e != nil {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	defer clear(hostNonce)
 	if e = write(map[string]string{"type": "hello", "nonce": b64.EncodeToString(hostNonce)}); e != nil {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	typ, msg, e := ws.Read(life)
 	if e != nil || typ != websocket.MessageText || len(msg) > MaxRegistrationMessage {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	m, ok := stringFields(msg, "type", "nonce")
 	if !ok || m["type"] != "challenge" {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	gatewayNonce, ok := decodeB64(m["nonce"])
 	if !ok || len(gatewayNonce) != NonceSize {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	defer clear(gatewayNonce)
 	c.mu.Lock()
 	if c.ended {
 		c.mu.Unlock()
-		c.end()
-		return "", ErrClosed
+		return fail()
 	}
 	pub := c.key.Public().(ed25519.PublicKey)
 	keyWire, err := ssh.NewPublicKey(pub)
 	if err != nil {
 		c.mu.Unlock()
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	key := keyWire.Marshal()
-	transcript := agentgateway.RescueTranscript(c.endpoint, key, gatewayNonce, agentgateway.RescuePurposeNew, nil)
+	transcript := agentgateway.RescueTranscript(c.endpoint, key, gatewayNonce, purpose, reception)
 	sig := ed25519.Sign(c.key, transcript)
 	c.mu.Unlock()
 	clear(transcript)
-	if e = write(map[string]string{"type": "proof", "purpose": agentgateway.RescuePurposeNew, "key": b64.EncodeToString(key), "signature": b64.EncodeToString(sig)}); e != nil {
+	proof := map[string]string{"type": "proof", "purpose": purpose, "key": b64.EncodeToString(key), "signature": b64.EncodeToString(sig)}
+	if resuming {
+		proof["reception"] = b64.EncodeToString(reception)
+	}
+	if e = write(proof); e != nil {
 		clear(sig)
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	clear(sig)
-	expiry := c.after
-	if expiry == nil {
-		expiry = time.After
-	}
-	expires := expiry(agentgateway.RescueCodeLifetime)
-	go func() {
-		select {
-		case <-expires:
-			c.mu.Lock()
-			requested := c.requested
-			c.expired = !requested // serve passes on no request after this
-			c.mu.Unlock()
-			if !requested {
-				c.end()
-			}
-		case <-c.done:
+	if !resuming {
+		expiry := c.after
+		if expiry == nil {
+			expiry = time.After
 		}
-	}()
+		expires := expiry(agentgateway.RescueCodeLifetime)
+		go func() {
+			select {
+			case <-expires:
+				c.mu.Lock()
+				requested := c.requested
+				c.expired = !requested // serve passes on no request after this
+				c.mu.Unlock()
+				if !requested {
+					c.end()
+				}
+			case <-c.done:
+			}
+		}()
+	}
 	typ, msg, e = ws.Read(life)
 	if e != nil || typ != websocket.MessageText || len(msg) > MaxRegistrationMessage {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	m, ok = stringFields(msg, "type", "reception", "code", "signature")
 	if !ok || m["type"] != "reception" {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	id, iok := decodeB64(m["reception"])
 	signature, sok := decodeB64(m["signature"])
 	if !iok || len(id) != 16 || !sok || len(signature) != ed25519.SignatureSize || len(m["code"]) != 12 {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	for _, r := range m["code"] {
 		if r < '0' || r > '9' {
-			c.end()
-			return "", ErrRefused
+			return fail()
+		}
+	}
+	if resuming {
+		c.mu.Lock()
+		same := bytes.Equal(id, c.reception) && m["code"] == c.code && bytes.Equal(key, c.hostKey)
+		c.mu.Unlock()
+		if !same {
+			clear(signature)
+			return fail()
 		}
 	}
 	data := agentgateway.RescueResultTranscript(c.endpoint, hostNonce, key, id, m["code"])
@@ -242,23 +324,21 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	clear(data)
 	clear(signature)
 	if !valid {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	if !stopHandshake() || !reg.Stop() {
-		c.end()
-		return "", ErrRefused
+		return fail()
 	}
 	c.mu.Lock()
 	off := c.ended || c.closed
-	if !off {
+	if !off && !resuming {
 		c.reception = append([]byte(nil), id...)
 		c.hostKey = append([]byte(nil), key...)
+		c.code = m["code"]
 	}
 	c.mu.Unlock()
 	if off { // 受付 OFF came, or began, while the result was verified
-		c.end()
-		return "", ErrClosed
+		return fail()
 	}
 	go c.serve()
 	return m["code"], nil
@@ -276,7 +356,7 @@ func (c *RescueClient) serve() {
 
 	typ, msg, err := ws.Read(life)
 	if err != nil || typ != websocket.MessageText || len(msg) > MaxRegistrationMessage {
-		c.end()
+		c.disconnectAttempt()
 		return
 	}
 	id, err := decodeRescueRequest(msg)
@@ -306,14 +386,14 @@ func (c *RescueClient) serve() {
 	c.mu.Unlock()
 
 	if err := stream.Conn.(*msgConn).fill(); err != nil {
-		c.end()
+		c.disconnectAttempt()
 		return
 	}
 	c.mu.Lock()
 	answered := c.answered
 	c.mu.Unlock()
 	if !answered {
-		c.end()
+		c.disconnectAttempt()
 	}
 }
 
@@ -332,6 +412,10 @@ func (c *RescueClient) end() {
 	ws := c.ws
 	link := c.closer
 	cancel := c.cancel
+	if c.active {
+		c.active = false
+		close(c.attemptDone)
+	}
 	clear(c.key)
 	c.key = nil
 	clear(c.reception)
@@ -341,6 +425,7 @@ func (c *RescueClient) end() {
 	clear(c.nonce)
 	c.nonce = nil
 	clear(c.digest[:])
+	c.code = ""
 	close(c.done)
 	c.mu.Unlock()
 	if cancel != nil {
@@ -354,7 +439,45 @@ func (c *RescueClient) end() {
 	}
 }
 
-// Close turns reception OFF and ends the connection.
+// disconnectAttempt ends one WSS while retaining K and the reception id after
+// an allowed channel or a resume attempt. A reception that never reached an
+// allowed channel remains one-shot and is ended on transport loss.
+func (c *RescueClient) disconnectAttempt() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.ended {
+		c.mu.Unlock()
+		return
+	}
+	if c.closed || (!c.everAllowed && !c.resumeAttempt) {
+		c.mu.Unlock()
+		c.end()
+		return
+	}
+	ws, link, cancel := c.ws, c.closer, c.cancel
+	c.ws, c.closer, c.cancel, c.life = nil, nil, nil, nil
+	c.active, c.resumeAttempt = false, false
+	c.requested, c.answered, c.expired = false, false, false
+	c.stream = nil
+	clear(c.nonce)
+	c.nonce = nil
+	clear(c.digest[:])
+	close(c.attemptDone)
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if ws != nil {
+		_ = ws.CloseNow()
+	}
+	if link != nil {
+		link.start()
+	}
+}
+
+// Close turns reception OFF, sending end on an active WSS before dropping K.
 func (c *RescueClient) Close() error {
 	if c == nil {
 		return ErrConfig
@@ -476,8 +599,8 @@ func (c *RescueClient) Allow(d agentgateway.Dispatch) (net.Conn, error) {
 	return c.answer(agentgateway.RescueAllow, d)
 }
 
-// HostKey signs with K until the reception ends. The grant answered by Allow
-// uses it as its host key, so K and the grant end together.
+// HostKey signs with K until the local reception ends, including while its
+// channel is disconnected and waiting for Resume.
 func (c *RescueClient) HostKey() ssh.Signer {
 	if c == nil {
 		return nil
@@ -490,7 +613,7 @@ func (c *RescueClient) answer(answer string, d agentgateway.Dispatch) (net.Conn,
 		return nil, ErrClosed
 	}
 	c.mu.Lock()
-	if c.ended {
+	if c.ended || c.closed {
 		c.mu.Unlock()
 		return nil, ErrClosed
 	}
@@ -499,6 +622,9 @@ func (c *RescueClient) answer(answer string, d agentgateway.Dispatch) (net.Conn,
 		return nil, ErrRefused
 	}
 	c.answered = true
+	if answer == agentgateway.RescueAllow {
+		c.everAllowed = true
+	}
 	transcript := agentgateway.RescueAnswerTranscript(c.reception, c.nonce, c.digest[:], answer, d)
 	signature := ed25519.Sign(c.key, transcript)
 	clear(transcript)
