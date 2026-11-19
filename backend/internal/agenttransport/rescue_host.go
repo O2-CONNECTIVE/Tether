@@ -1,10 +1,14 @@
 package agenttransport
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -30,9 +34,18 @@ type RescueClient struct {
 	endpoint            string
 	pins                []ssh.PublicKey
 	key                 ed25519.PrivateKey
+	hostPublic          ssh.PublicKey
+	reception, hostKey  []byte
+	nonce               []byte
+	digest              [32]byte
+	request             chan VerifiedRescueIdentity
+	stream              *stream
+	life                context.Context
 	done                chan struct{}
 	mu                  sync.Mutex
 	used, closed, ended bool
+	requested, answered bool
+	expired             bool
 	cancel              context.CancelFunc
 	ws                  *websocket.Conn
 	closer              *closer
@@ -58,8 +71,13 @@ func NewRescueClient(cfg RescueClientConfig) (*RescueClient, error) {
 	if err != nil {
 		return nil, ErrConfig
 	}
-	_ = pub
-	return &RescueClient{endpoint: cfg.Endpoint, pins: pins, key: key, done: make(chan struct{}), transport: nativeTransport}, nil
+	hostPublic, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		clear(key)
+		return nil, ErrConfig
+	}
+	return &RescueClient{endpoint: cfg.Endpoint, pins: pins, key: key, hostPublic: hostPublic,
+		done: make(chan struct{}), request: make(chan VerifiedRescueIdentity, 1), transport: nativeTransport}, nil
 }
 
 // Open registers the reception and returns its code after verifying the signed result.
@@ -81,6 +99,7 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	// Keep the reception alive after Open returns; ctx is attached only for the handshake.
 	life, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
+	c.life = life
 	c.mu.Unlock()
 	link := newCloser(cancel)
 	c.mu.Lock()
@@ -172,7 +191,13 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	go func() {
 		select {
 		case <-expires:
-			c.end()
+			c.mu.Lock()
+			requested := c.requested
+			c.expired = !requested // serve passes on no request after this
+			c.mu.Unlock()
+			if !requested {
+				c.end()
+			}
 		case <-c.done:
 		}
 	}()
@@ -222,13 +247,70 @@ func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	}
 	c.mu.Lock()
 	off := c.ended || c.closed
+	if !off {
+		c.reception = append([]byte(nil), id...)
+		c.hostKey = append([]byte(nil), key...)
+	}
 	c.mu.Unlock()
 	if off { // 受付 OFF came, or began, while the result was verified
 		c.end()
 		return "", ErrClosed
 	}
-	go func() { _, _, _ = ws.Read(life); c.end() }()
+	go c.serve()
 	return m["code"], nil
+}
+
+func (c *RescueClient) serve() {
+	c.mu.Lock()
+	if c.ended {
+		c.mu.Unlock()
+		return
+	}
+	life, ws, link := c.life, c.ws, c.closer
+	reception, hostKey := append([]byte(nil), c.reception...), append([]byte(nil), c.hostKey...)
+	c.mu.Unlock()
+
+	typ, msg, err := ws.Read(life)
+	if err != nil || typ != websocket.MessageText || len(msg) > MaxRegistrationMessage {
+		c.end()
+		return
+	}
+	id, err := decodeRescueRequest(msg)
+	if err != nil {
+		c.end()
+		return
+	}
+	defer clear(id.Nonce)
+	defer clear(id.Client)
+	defer clear(id.Signature)
+	verified, digest, err := verifyRescueRequest(c.endpoint, reception, hostKey, c.pins, id)
+	if err != nil {
+		c.end()
+		return
+	}
+	stream := newStream(life, ws, link, DefaultBudgets().Cleanup)
+	c.mu.Lock()
+	if c.ended || c.expired {
+		c.mu.Unlock()
+		return
+	}
+	c.requested = true
+	c.nonce = append([]byte(nil), id.Nonce...)
+	c.digest = digest
+	c.stream = stream
+	c.request <- verified
+	c.mu.Unlock()
+
+	if err := stream.Conn.(*msgConn).fill(); err != nil {
+		c.end()
+		return
+	}
+	c.mu.Lock()
+	answered := c.answered
+	c.mu.Unlock()
+	if !answered {
+		c.end()
+	}
 }
 
 // Done closes when the reception ends and its private key is discarded.
@@ -248,6 +330,13 @@ func (c *RescueClient) end() {
 	cancel := c.cancel
 	clear(c.key)
 	c.key = nil
+	clear(c.reception)
+	c.reception = nil
+	clear(c.hostKey)
+	c.hostKey = nil
+	clear(c.nonce)
+	c.nonce = nil
+	clear(c.digest[:])
 	close(c.done)
 	c.mu.Unlock()
 	if cancel != nil {
@@ -271,4 +360,151 @@ func (c *RescueClient) Close() error {
 	c.mu.Unlock()
 	c.end()
 	return nil
+}
+
+// VerifiedRescueIdentity is an identity proof VerifyRescueRequest verified
+// for one reception. Its zero value is not verified and has no Client.
+type VerifiedRescueIdentity struct {
+	client                             ssh.PublicKey
+	displayName, organization, profile string
+	hostKey                            []byte
+}
+
+func (v VerifiedRescueIdentity) Client() ssh.PublicKey { return v.client }
+func (v VerifiedRescueIdentity) DisplayName() string   { return v.displayName }
+func (v VerifiedRescueIdentity) Organization() string  { return v.organization }
+func (v VerifiedRescueIdentity) Profile() string       { return v.profile }
+
+// HostKey is K (SSH wire form) of the reception that verified the request.
+func (v VerifiedRescueIdentity) HostKey() []byte { return append([]byte(nil), v.hostKey...) }
+
+// VerifyRescueRequest verifies the identity proof of a request on reception
+// id at endpoint, whose host key is K (hostKey, SSH wire form): one of pins
+// signed RescueRequestTranscript over exactly these values, the nonce is
+// RescueNonceSize bytes, C is an Ed25519 key and the profile is RescueProfile.
+// See docs/rescue-connection-start.md, 受付口の wire.
+func VerifyRescueRequest(endpoint string, reception, hostKey []byte, pins []ssh.PublicKey, id agentgateway.RescueIdentity) (VerifiedRescueIdentity, error) {
+	verified, _, err := verifyRescueRequest(endpoint, reception, hostKey, pins, id)
+	return verified, err
+}
+
+func verifyRescueRequest(endpoint string, reception, hostKey []byte, pins []ssh.PublicKey, id agentgateway.RescueIdentity) (VerifiedRescueIdentity, [32]byte, error) {
+	if id.Profile != agentgateway.RescueProfile || len(id.Nonce) != agentgateway.RescueNonceSize || len(id.Signature) != ed25519.SignatureSize {
+		return VerifiedRescueIdentity{}, [32]byte{}, ErrRefused
+	}
+	client, err := ssh.ParsePublicKey(append([]byte(nil), id.Client...)) // the key aliases its input; the caller may clear id
+	if err != nil || client.Type() != ssh.KeyAlgoED25519 || !bytes.Equal(client.Marshal(), id.Client) {
+		return VerifiedRescueIdentity{}, [32]byte{}, ErrRefused
+	}
+	transcript := agentgateway.RescueRequestTranscript(endpoint, reception, hostKey, id.Nonce, id.Client, id.DisplayName, id.Organization, id.Profile)
+	defer clear(transcript)
+	valid := false
+	for _, pin := range pins {
+		cryptoKey, ok := pin.(ssh.CryptoPublicKey)
+		if !ok {
+			continue
+		}
+		publicKey, ok := cryptoKey.CryptoPublicKey().(ed25519.PublicKey)
+		if ok && ed25519.Verify(publicKey, transcript, id.Signature) {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return VerifiedRescueIdentity{}, [32]byte{}, ErrRefused
+	}
+	return VerifiedRescueIdentity{client: client, displayName: id.DisplayName, organization: id.Organization, profile: id.Profile, hostKey: append([]byte(nil), hostKey...)}, sha256.Sum256(transcript), nil
+}
+
+// Request delivers the reception's one request once it verifies; a request
+// that does not verify ends the reception instead.
+func (c *RescueClient) Request() <-chan VerifiedRescueIdentity {
+	if c == nil {
+		return nil
+	}
+	return c.request
+}
+
+// Refuse answers the request with a K-signed deny, or timeout when timedOut.
+func (c *RescueClient) Refuse(timedOut bool) error {
+	answer := agentgateway.RescueDeny
+	if timedOut {
+		answer = agentgateway.RescueTimeout
+	}
+	_, err := c.answer(answer, agentgateway.Dispatch{})
+	return err
+}
+
+// Allow answers the request with a K-signed allow carrying d and returns the
+// reception's stream, which now carries the channel.
+func (c *RescueClient) Allow(d agentgateway.Dispatch) (net.Conn, error) {
+	return c.answer(agentgateway.RescueAllow, d)
+}
+
+// HostKey signs with K until the reception ends. The grant answered by Allow
+// uses it as its host key, so K and the grant end together.
+func (c *RescueClient) HostKey() ssh.Signer {
+	if c == nil {
+		return nil
+	}
+	return &rescueSigner{client: c, public: c.hostPublic}
+}
+
+func (c *RescueClient) answer(answer string, d agentgateway.Dispatch) (net.Conn, error) {
+	if c == nil {
+		return nil, ErrClosed
+	}
+	c.mu.Lock()
+	if c.ended {
+		c.mu.Unlock()
+		return nil, ErrClosed
+	}
+	if !c.requested || c.answered {
+		c.mu.Unlock()
+		return nil, ErrRefused
+	}
+	c.answered = true
+	transcript := agentgateway.RescueAnswerTranscript(c.reception, c.nonce, c.digest[:], answer, d)
+	signature := ed25519.Sign(c.key, transcript)
+	clear(transcript)
+	msg := encodeRescueAnswer(agentgateway.RescueAnswer{Answer: answer, Dispatch: d, Signature: signature})
+	clear(signature)
+	ws, life, stream := c.ws, c.life, c.stream
+	c.mu.Unlock()
+	if len(msg) > MaxRegistrationMessage {
+		clear(msg)
+		c.end()
+		return nil, ErrRefused
+	}
+	ctx, cancel := context.WithTimeout(life, DefaultBudgets().Registration)
+	err := ws.Write(ctx, websocket.MessageText, msg)
+	cancel()
+	clear(msg)
+	if err != nil {
+		c.end()
+		return nil, err
+	}
+	if answer == agentgateway.RescueAllow {
+		return stream, nil
+	}
+	return nil, nil
+}
+
+type rescueSigner struct {
+	client *RescueClient
+	public ssh.PublicKey
+}
+
+func (s *rescueSigner) PublicKey() ssh.PublicKey { return s.public }
+
+func (s *rescueSigner) Sign(_ io.Reader, data []byte) (*ssh.Signature, error) {
+	if s == nil || s.client == nil {
+		return nil, ErrClosed
+	}
+	s.client.mu.Lock()
+	defer s.client.mu.Unlock()
+	if s.client.key == nil {
+		return nil, ErrClosed
+	}
+	return &ssh.Signature{Format: ssh.KeyAlgoED25519, Blob: ed25519.Sign(s.client.key, data)}, nil
 }

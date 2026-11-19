@@ -65,3 +65,21 @@ are explicitly not private keys. The original deadline is not extended while
 reading the explanation. Expiry/cancellation/EOF diagnostics are fixed text;
 raw errors and typed input are never printed. The CLI still needs a foreground
 controlling terminal and exact human confirmation for an actual session.
+
+## Rescue state machine
+
+`rescue.go` is the host side of the rescue connection start
+([design](../../../docs/rescue-connection-start.md), #424): 受付中 → 確認中 →
+セッション中 → 終了. A verified request shows a prompt through the native helper;
+only that helper's reply, for the current request id and prompt digest, within
+60 seconds on both the monotonic and the wall clock, issues a grant. The grant
+uses the same issuance as the terminal path, allows C alone, pins K as the host
+key and lasts the chosen 2, 4, 8, 12 or 24 hours from the time of approval. Any
+end revokes and reclaims the grant, closes the reception (discarding K) and never
+restarts it. Tests drive it with a fake helper, a fake reception and fake clocks.
+On the wire the reception is `agenttransport.RescueClient`: it verifies the
+identity proof against its pins, URL, reception id and K, hands the one verified
+request to `ReceiveFrom`, signs the answer with K, and its `HostKey` (K itself)
+is the grant's host key. The helper's authenticated path (#410) and the grace
+period (#425) are not here. It is not enabled as a product: the Mac guest
+account is not designed yet.

@@ -3,6 +3,8 @@
 // that path: MCP, relay frames,
 // stdin, environment variables and saved approval booleans are not inputs.
 // It does not enroll keys, dial, listen, install or start a command on approval.
+// The rescue state machine (rescue.go) is a separate path approved only by the
+// native helper's reply to its own prompt; it is not enabled as a product.
 package maclaunch
 
 import (
@@ -97,17 +99,10 @@ func prepare(cfg Config, runtime agentexec.ProfiledRuntime) (*Pending, error) {
 	if runtime == nil || runtime.AgentProfile() != agentexec.ProfileMacCurrentUser || cfg.HostKey == nil || !now.Add(time.Second).Before(cfg.Deadline) || cfg.Deadline.Sub(now) > agentchannel.MaxClientLifetime || cfg.CleanupTimeout <= 0 || cfg.CleanupTimeout > time.Minute {
 		return nil, ErrConfig
 	}
-	for _, p := range []string{cfg.Runtime.WorkDir, cfg.Runtime.Home} {
-		if p == "/" || !path.IsAbs(p) || path.Clean(p) != p || strings.ContainsAny(p, "\x00\r\n") {
-			return nil, ErrConfig
-		}
-	}
-	// Reject bad channel timing before asking for consent. NewHost validates it
-	// again; this is a local presentation check, not a replacement for that check.
-	b := cfg.Budgets
-	if b.Handshake <= 0 || b.Handshake > agentchannel.MaxHandshake || b.HeartbeatInterval < agentchannel.MinHeartbeatInterval || b.HeartbeatInterval > agentchannel.MaxHeartbeatInterval || b.HeartbeatTimeout <= 0 || b.HeartbeatTimeout > agentchannel.MaxHeartbeatTimeout || b.ReadStall <= b.HeartbeatInterval+b.HeartbeatTimeout || b.ReadStall > agentchannel.MaxReadStall || b.WriteStall <= 0 || b.WriteStall > agentchannel.MaxWriteStall || b.Cleanup <= 0 || b.Cleanup > agentchannel.MaxCleanup {
+	if !validLocal(cfg.Runtime, cfg.Budgets) {
 		return nil, ErrConfig
 	}
+	b := cfg.Budgets
 	keys, err := agentchannel.CanonicalKeys(cfg.AllowedKeys)
 	if err != nil {
 		return nil, ErrConfig
@@ -131,6 +126,18 @@ func prepare(cfg Config, runtime agentexec.ProfiledRuntime) (*Pending, error) {
 	}
 	sum := sha256.Sum256([]byte(challenge.Binding().Identity.LaunchID))
 	return &Pending{fixedStart: fixed, issuer: issuer, challenge: challenge, hostKey: cfg.HostKey, hostPublic: host[0], keys: keys, runtime: runtime, runtimeConfig: cfg.Runtime, deadline: cfg.Deadline, cleanup: cfg.CleanupTimeout, budgets: b, phrase: fmt.Sprintf("approve %x", sum[:8]), clock: time.Now, preparedAt: now, initialBudget: cfg.Deadline.Sub(now)}, nil
+}
+
+// validLocal checks the local paths and the channel timing before asking for
+// consent. NewHost validates the timing again; this is a local presentation
+// check, not a replacement for that check.
+func validLocal(rt macagent.Config, b agentchannel.Budgets) bool {
+	for _, p := range []string{rt.WorkDir, rt.Home} {
+		if p == "/" || !path.IsAbs(p) || path.Clean(p) != p || strings.ContainsAny(p, "\x00\r\n") {
+			return false
+		}
+	}
+	return !(b.Handshake <= 0 || b.Handshake > agentchannel.MaxHandshake || b.HeartbeatInterval < agentchannel.MinHeartbeatInterval || b.HeartbeatInterval > agentchannel.MaxHeartbeatInterval || b.HeartbeatTimeout <= 0 || b.HeartbeatTimeout > agentchannel.MaxHeartbeatTimeout || b.ReadStall <= b.HeartbeatInterval+b.HeartbeatTimeout || b.ReadStall > agentchannel.MaxReadStall || b.WriteStall <= 0 || b.WriteStall > agentchannel.MaxWriteStall || b.Cleanup <= 0 || b.Cleanup > agentchannel.MaxCleanup)
 }
 
 func (p *Pending) take() error {
