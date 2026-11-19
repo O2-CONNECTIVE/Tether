@@ -72,6 +72,7 @@ type rescueReception struct {
 	allows  []Dispatch
 	client  net.Conn
 	closes  int
+	onClose func()
 	// entered and gate, when set before the answer, hold Allow open as a slow
 	// write to the gateway would.
 	entered, gate chan struct{}
@@ -103,8 +104,12 @@ func (r *rescueReception) Allow(d Dispatch) (net.Conn, error) {
 
 func (r *rescueReception) Close() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.closes++
+	onClose := r.onClose
+	r.mu.Unlock()
+	if onClose != nil {
+		onClose()
+	}
 	return nil
 }
 
@@ -822,6 +827,34 @@ func TestRescueEndRevokesGrant(t *testing.T) {
 				t.Fatal("C with the old Binding opened a channel after the end")
 			}
 		})
+	}
+}
+
+func TestRescueEndsReceptionBeforeClosingApprovedChannel(t *testing.T) {
+	f := newRescueFixture(t, 2*time.Hour)
+	f.allow(t, f.prompt(t))
+	a := f.r.approved
+	cleanupReporter, ok := any(f.r).(interface{ CleanupResult() (error, bool) })
+	if !ok {
+		t.Fatal("Rescue does not expose its approved cleanup result")
+	}
+	cleanupObservedAtReceptionClose := make(chan bool, 1)
+	f.rec.onClose = func() {
+		_, observed := a.CleanupResult()
+		cleanupObservedAtReceptionClose <- observed
+	}
+	f.r.Stop()
+	f.waitDone(t)
+	if observed := <-cleanupObservedAtReceptionClose; observed {
+		t.Fatal("Approved channel cleanup ran before the reception sent end and closed")
+	}
+	approvedErr, observed := a.CleanupResult()
+	if !observed || !errors.Is(approvedErr, agentchannel.ErrCleanupUnknown) {
+		t.Fatalf("Approved cleanup result = (%v, %v), want ErrCleanupUnknown and observed", approvedErr, observed)
+	}
+	rescueErr, observed := cleanupReporter.CleanupResult()
+	if !observed || !errors.Is(rescueErr, agentchannel.ErrCleanupUnknown) {
+		t.Fatalf("Rescue cleanup result = (%v, %v), want ErrCleanupUnknown and observed", rescueErr, observed)
 	}
 }
 

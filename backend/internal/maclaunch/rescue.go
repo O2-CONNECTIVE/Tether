@@ -144,27 +144,29 @@ type Rescue struct {
 	// step serializes the transitions that call the helper or the reception
 	// (Show, the grant's issuance and hand-over) with the end, so the end
 	// withdraws only a shown prompt and revokes every issued grant before Done.
-	step         sync.Mutex
-	mu           sync.Mutex
-	state        rescueState
-	cfg          RescueConfig
-	runtime      agentexec.ProfiledRuntime
-	helper       RescueHelper
-	reception    RescueReception
-	clock        rescueClock
-	prompt       RescuePrompt
-	client       ssh.PublicKey
-	shownWall    time.Time
-	shownMono    time.Duration
-	approvedWall time.Time
-	approvedMono time.Duration
-	approved     *Approved
-	life         context.Context
-	cancel       context.CancelFunc
-	done         chan struct{}
-	stop         chan struct{}
-	stopOnce     sync.Once
-	ticker       *time.Ticker
+	step            sync.Mutex
+	mu              sync.Mutex
+	state           rescueState
+	cfg             RescueConfig
+	runtime         agentexec.ProfiledRuntime
+	helper          RescueHelper
+	reception       RescueReception
+	clock           rescueClock
+	prompt          RescuePrompt
+	client          ssh.PublicKey
+	shownWall       time.Time
+	shownMono       time.Duration
+	approvedWall    time.Time
+	approvedMono    time.Duration
+	approved        *Approved
+	cleanupErr      error
+	cleanupObserved bool
+	life            context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	stop            chan struct{}
+	stopOnce        sync.Once
+	ticker          *time.Ticker
 }
 
 // NewRescue validates the configuration and the local Mac runtime in 受付中.
@@ -359,8 +361,19 @@ func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, n
 func (r *Rescue) Stop() { r.stopOnce.Do(func() { close(r.stop) }) }
 
 // Done closes after the end: the grant revoked, its cleanup run within
-// CleanupTimeout (the result is not reported here), K discarded.
+// CleanupTimeout, K discarded.
 func (r *Rescue) Done() <-chan struct{} { return r.done }
+
+// CleanupResult observes the approved session's last explicit cleanup.
+// observed=false means no approved session cleanup result is available.
+func (r *Rescue) CleanupResult() (err error, observed bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cleanupErr, r.cleanupObserved
+}
 
 func (r *Rescue) loop() {
 	for {
@@ -425,12 +438,16 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	if refuse {
 		_ = r.reception.Refuse(timedOut)
 	}
+	_ = r.reception.Close()
 	if a != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
-		_ = a.Close(ctx)
+		cleanupErr := a.Close(ctx)
 		cancel()
+		_, observed := a.CleanupResult()
+		r.mu.Lock()
+		r.cleanupErr, r.cleanupObserved = cleanupErr, observed
+		r.mu.Unlock()
 	}
 	r.cancel()
-	_ = r.reception.Close()
 	close(r.done)
 }

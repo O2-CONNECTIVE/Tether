@@ -369,13 +369,32 @@ func (c *RescueClient) Close() error {
 	c.mu.Unlock()
 	if ws != nil && !ended {
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		c.wsWriteMu.Lock()
-		_ = ws.Write(ctx, websocket.MessageText, encodeRescueEnd())
-		c.wsWriteMu.Unlock()
+		if c.lockWrite(ctx) {
+			_ = ws.Write(ctx, websocket.MessageText, encodeRescueEnd())
+			c.wsWriteMu.Unlock()
+		}
 		cancel()
 	}
 	c.end()
 	return nil
+}
+
+func (c *RescueClient) lockWrite(ctx context.Context) bool {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		if c.wsWriteMu.TryLock() {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // VerifiedRescueIdentity is an identity proof VerifyRescueRequest verified

@@ -505,6 +505,40 @@ func TestRescueClientCloseSendsEndFrameAfterAllow(t *testing.T) {
 	expectDropped(t, k)
 }
 
+func TestRescueClientCloseBoundsWaitForWriteLock(t *testing.T) {
+	reg := newAnswerRegistry()
+	c, kWire, _ := openAnswer(t, reg)
+	sent := valuesFor(kWire)
+	reg.request <- sent.identity(sent.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+
+	c.wsWriteMu.Lock()
+	started := time.Now()
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if elapsed := time.Since(started); elapsed > 350*time.Millisecond {
+			t.Fatalf("Close took %v while the WebSocket write lock was held", elapsed)
+		}
+	case <-time.After(350 * time.Millisecond):
+		c.wsWriteMu.Unlock()
+		select {
+		case <-closed:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Close remained blocked after the WebSocket write lock was released")
+		}
+		t.Fatal("Close did not apply its 250ms bound while waiting for the WebSocket write lock")
+	}
+	c.wsWriteMu.Unlock()
+}
+
 // Between the request and the answer the gateway sends nothing; a frame there
 // is not the channel's, so the reception ends rather than hand it to a grant.
 func TestRescueHostEndsWhenTheGatewaySpeaksBeforeTheAnswer(t *testing.T) {
