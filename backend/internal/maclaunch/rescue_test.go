@@ -664,12 +664,18 @@ func TestRescueStopDuringReceptionFactoryCreationClosesGeneratedKey(t *testing.T
 
 func waitHostAuthenticated(t *testing.T, approved *Approved) {
 	t.Helper()
-	if approved == nil || approved.host == nil {
+	if approved == nil {
+		t.Fatal("approved Host is unavailable")
+	}
+	approved.hostMu.Lock()
+	host := approved.host
+	approved.hostMu.Unlock()
+	if host == nil {
 		t.Fatal("approved Host is unavailable")
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		connected, observed := approved.host.LocallyAuthenticated()
+		connected, observed := host.LocallyAuthenticated()
 		if connected && observed {
 			return
 		}
@@ -1992,6 +1998,7 @@ func TestRescueResumeNotifiesWithoutShowingNativePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generation 1 channel: %v", err)
 	}
+	waitHostAuthenticated(t, f.r.approved)
 	type openResult struct {
 		channel *agentchannel.Channel
 		err     error
@@ -2039,6 +2046,7 @@ func TestRescueResumeNotifiesWithoutShowingNativePrompt(t *testing.T) {
 	}
 	defer resumed.channel.Close()
 	_ = waitRescueEvent(t, f.events, RescueEventReconnected)
+	waitHostAuthenticated(t, f.r.approved)
 	if len(f.helper.shown()) != 1 {
 		t.Fatalf("reconnect showed %d native prompts, want only the original prompt", len(f.helper.shown()))
 	}
