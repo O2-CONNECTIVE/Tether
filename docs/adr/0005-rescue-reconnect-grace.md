@@ -5,7 +5,7 @@ status: accepted
 # レスキューの切断の後、短い猶予の間だけ同じ許可で再接続する
 
 2026-11-19、[#404 の追加の裁定](https://github.com/O2-CONNECTIVE/Tether/issues/404#issuecomment-6995182359)を受けて、[ADR 0003](0003-owned-guest-workload.md)の「切断後の新規承認」を、レスキューの遠隔接続について「猶予の間を除いて、切断後は新規承認」に改める。
-2026-11-19 に利用者が承認した（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)、[#404 の文言の読み替え](https://github.com/O2-CONNECTIVE/Tether/issues/404#issuecomment-6996862703)）。ADR 0003 のこの部分を置き換える。未実装である。
+2026-11-19 に利用者が承認した（[#409 の承認](https://github.com/O2-CONNECTIVE/Tether/issues/409#issuecomment-6996862378)、[#404 の文言の読み替え](https://github.com/O2-CONNECTIVE/Tether/issues/404#issuecomment-6996862703)）。ADR 0003 のこの部分を置き換える。接続世代と猶予の判定は 2026-11-20 に実装した（PR #443 が gateway、PR #444 がホスト。猶予に入るのはレスキューを選んだ経路だけ）。猶予の間のゲストの所有の記録（#448）と、Rescue の製品の入口は未実装である。
 流れと確かめ方の詳細は[レスキューの接続の開始](../rescue-connection-start.md)にある（[#409](https://github.com/O2-CONNECTIVE/Tether/issues/409)）。
 
 ## 改める内容
