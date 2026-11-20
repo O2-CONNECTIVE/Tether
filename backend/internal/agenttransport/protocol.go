@@ -60,8 +60,7 @@ const (
 	MaxCleanup      = time.Minute
 
 	// minRemaining is the shortest dispatch lifetime either end registers.
-	minRemaining                 = time.Second
-	rescueDeadlineClockAllowance = time.Minute
+	minRemaining = time.Second
 
 	transcriptDomain = "rescue-host.agenttransport.registration\x00v1\x00"
 	profileMac       = "mac_current_user"
@@ -152,20 +151,24 @@ func rawEd25519(wire []byte) (ssh.PublicKey, error) {
 // checkDispatch accepts only an unexpired Mac current-user dispatch with a
 // complete binding. It is a shape and freshness check, not a credential.
 func checkDispatch(d agentgateway.Dispatch, now time.Time) error {
-	return checkDispatchWithAllowance(d, now, 0)
+	return checkDispatchWithRescueClockSkew(d, now, false)
 }
 
 func checkRescueDispatch(d agentgateway.Dispatch, now time.Time) error {
-	return checkDispatchWithAllowance(d, now, rescueDeadlineClockAllowance)
+	return checkDispatchWithRescueClockSkew(d, now, true)
 }
 
-func checkDispatchWithAllowance(d agentgateway.Dispatch, now time.Time, allowance time.Duration) error {
+func checkDispatchWithRescueClockSkew(d agentgateway.Dispatch, now time.Time, allowRescueClockSkew bool) error {
 	b := d.Binding
 	if b.Profile != agentexec.ProfileMacCurrentUser || b.Grant.Generation == 0 || b.ConnectionGeneration == 0 || !b.Grant.Identity.Valid() ||
 		b.Grant.Identity.PolicyDigest != agentexec.MacCurrentUserPolicyDigest() || b.KeySetDigest == ([32]byte{}) {
 		return ErrRefused
 	}
-	if !now.Add(minRemaining).Before(d.Deadline) || d.Deadline.After(now.Add(agentchannel.MaxClientLifetime+allowance)) ||
+	maxLifetime := agentchannel.MaxClientLifetime
+	if allowRescueClockSkew {
+		maxLifetime += agentchannel.RescueClockSkewAllowance
+	}
+	if !now.Add(minRemaining).Before(d.Deadline) || d.Deadline.After(now.Add(maxLifetime)) ||
 		!time.Unix(0, d.Deadline.UnixNano()).Equal(d.Deadline) {
 		return ErrRefused
 	}

@@ -290,7 +290,7 @@ func TestRescueHandlerForwardsIdentityAndSignedAnswer(t *testing.T) {
 	}
 	select {
 	case call := <-registry.answered:
-		if !bytes.Equal(call.id, id) || call.a.Answer != agentgateway.RescueAllow || call.conn == nil || !sameDispatch(call.a.Dispatch, d) || call.a.MaxLifetimeAllowance != time.Minute {
+		if !bytes.Equal(call.id, id) || call.a.Answer != agentgateway.RescueAllow || call.conn == nil || !sameDispatch(call.a.Dispatch, d) {
 			t.Fatalf("AnswerRescue call = id %x, answer %q, conn %v", call.id, call.a.Answer, call.conn)
 		}
 		answerTranscript := agentgateway.RescueAnswerTranscript(id, identity.Nonce, digest[:], agentgateway.RescueAllow, d)
@@ -726,14 +726,9 @@ func TestRescueHandlerHandsUnacceptableAnswerToGatewayAsUnverifiable(t *testing.
 	}{
 		"not json":     {websocket.MessageText, []byte("{")},
 		"binary frame": {websocket.MessageBinary, []byte(`{"type":"answer","answer":"deny","signature":"AA"}`)},
-		"expired allow": {websocket.MessageText, func() []byte {
-			b, _ := json.Marshal(map[string]any{"type": "answer", "answer": agentgateway.RescueAllow,
-				"signature":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x01}, ed25519.SignatureSize)),
-				"generation": strconv.FormatUint(expired.Binding.Grant.Generation, 10), "launch_id": expired.Binding.Grant.Identity.LaunchID, "epoch": expired.Binding.Grant.Identity.Epoch,
-				"policy_digest": expired.Binding.Grant.Identity.PolicyDigest, "key_set_digest": hex.EncodeToString(expired.Binding.KeySetDigest[:]),
-				"profile": profileMac, "deadline_unix_nano": strconv.FormatInt(expired.Deadline.UnixNano(), 10), "host_key": base64.RawURLEncoding.EncodeToString(expired.HostKey)})
-			return b
-		}()},
+		"expired allow": {websocket.MessageText, encodeRescueAnswer(agentgateway.RescueAnswer{
+			Answer: agentgateway.RescueAllow, Dispatch: expired, Signature: bytes.Repeat([]byte{0x01}, ed25519.SignatureSize),
+		})},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

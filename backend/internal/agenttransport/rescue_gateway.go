@@ -341,11 +341,9 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err != nil || rr.typ != websocket.MessageText || len(rr.msg) > MaxRegistrationMessage ||
 				(answer.Answer == agentgateway.RescueAllow && checkRescueDispatch(answer.Dispatch, h.clock()) != nil) {
 				// A frame the transport cannot accept is still the host's answer.
-				// The empty answer fails signature verification immediately while
-				// the request is live; after expiry, timeout is recorded first.
+				// The empty answer fails signature verification while the request is
+				// live; only initial-request expiry records timeout.
 				answer = agentgateway.RescueAnswer{}
-			} else if answer.Answer == agentgateway.RescueAllow {
-				answer.MaxLifetimeAllowance = rescueDeadlineClockAllowance
 			}
 			stream := newStreamObserved(life, ws, c, DefaultBudgets().Cleanup,
 				nil, func() { h.reg.EndRescueAttempt(res.ID, res.AttemptID) }, nil)

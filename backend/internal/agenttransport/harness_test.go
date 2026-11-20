@@ -507,6 +507,10 @@ func newHandler(t *testing.T, reg Registrar, budgets Budgets, hosts ...EnrolledH
 // ---- real gateway ----
 
 func newGateway(t *testing.T, members map[string]ssh.Signer) *agentgateway.Gateway {
+	return newGatewayWithClock(t, members, nil)
+}
+
+func newGatewayWithClock(t *testing.T, members map[string]ssh.Signer, clock func() time.Time) *agentgateway.Gateway {
 	t.Helper()
 	pub := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	set, _ := json.Marshal(map[string]any{"keys": []any{map[string]any{
@@ -525,7 +529,7 @@ func newGateway(t *testing.T, members map[string]ssh.Signer) *agentgateway.Gatew
 			principals = append(principals, agentgateway.Principal{Label: label, Subject: fmt.Sprintf("synthetic-subject-%d", i+1), Roles: []agentgateway.Role{agentgateway.RoleRescueOperator, agentgateway.RoleResidentOwner}, Signer: s})
 		}
 	}
-	g, err := agentgateway.New(agentgateway.Config{Verifier: v, Principals: principals, Budgets: chanBudgets()})
+	g, err := agentgateway.New(agentgateway.Config{Verifier: v, Principals: principals, Budgets: chanBudgets(), Clock: clock})
 	if err != nil {
 		t.Fatal(err)
 	}

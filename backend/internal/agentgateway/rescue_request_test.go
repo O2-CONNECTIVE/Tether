@@ -147,7 +147,6 @@ func TestRescueRequestAllowUsesOnlyPerRequestClientKey(t *testing.T) {
 	}
 	r.clock.Set(m.dispatch.Deadline.Add(-24*time.Hour - 30*time.Second))
 	answer := signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch)
-	answer.MaxLifetimeAllowance = time.Minute
 	if err := r.gw.AnswerRescue(res.ID, res.AttemptID, answer, stream, nil); err != nil {
 		t.Fatalf("AnswerRescue(allow) = %v", err)
 	}

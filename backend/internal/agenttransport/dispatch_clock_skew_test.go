@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 )
 
 func TestCheckRescueDispatchAllowsThirtySecondSkewAndOneMinuteBoundary(t *testing.T) {
@@ -25,12 +26,46 @@ func TestCheckRescueDispatchAllowsThirtySecondSkewAndOneMinuteBoundary(t *testin
 		extra   time.Duration
 		wantErr bool
 	}{
-		{name: "at allowance", extra: time.Minute},
-		{name: "above allowance", extra: time.Minute + time.Nanosecond, wantErr: true},
+		{name: "at allowance", extra: agentchannel.RescueClockSkewAllowance},
+		{name: "above allowance", extra: agentchannel.RescueClockSkewAllowance + time.Nanosecond, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := fixtureDispatch(rescueKey(0x67), "rescue-launch", gatewayNow.Add(agentchannel.MaxClientLifetime+tc.extra))
 			err := checkRescueDispatch(d, gatewayNow)
+			if tc.wantErr && !errors.Is(err, ErrRefused) {
+				t.Fatalf("checkRescueDispatch = %v, want ErrRefused", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("checkRescueDispatch = %v, want accepted", err)
+			}
+		})
+	}
+}
+
+func TestCheckRescueDispatchMinimumRemainingBoundaryUsesEncodedAnswer(t *testing.T) {
+	hostTime := time.Date(2040, time.January, 2, 3, 4, 5, 0, time.UTC)
+	gatewayNow := hostTime.Add(30 * time.Second)
+	for _, tc := range []struct {
+		name    string
+		extra   time.Duration
+		wantErr bool
+	}{
+		{name: "exact minimum", extra: 0, wantErr: true},
+		{name: "one nanosecond above minimum", extra: time.Nanosecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := fixtureDispatch(rescueKey(0x69), "rescue-launch", gatewayNow.Add(time.Second+tc.extra))
+			frame := encodeRescueAnswer(agentgateway.RescueAnswer{
+				Answer: agentgateway.RescueAllow, Dispatch: d, Signature: []byte{1},
+			})
+			answer, err := decodeRescueAnswer(frame)
+			if err != nil {
+				t.Fatalf("decode encoded answer: %v", err)
+			}
+			if answer.Dispatch.Binding.ConnectionGeneration == 0 {
+				t.Fatal("encoded dispatch lost required connection_generation")
+			}
+			err = checkRescueDispatch(answer.Dispatch, gatewayNow)
 			if tc.wantErr && !errors.Is(err, ErrRefused) {
 				t.Fatalf("checkRescueDispatch = %v, want ErrRefused", err)
 			}

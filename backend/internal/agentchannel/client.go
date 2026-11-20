@@ -19,7 +19,7 @@ type ClientConfig struct {
 	HostKey              ssh.PublicKey
 	Signer               ssh.Signer
 	Deadline             time.Time
-	MaxLifetimeAllowance time.Duration    // additional upper-bound allowance for a trusted caller; never changes Deadline
+	AllowRescueClockSkew bool             // uses the fixed rescue allowance without changing Deadline
 	Clock                func() time.Time // admission-time clock; nil uses time.Now
 	Budgets              Budgets
 	OnActivity           func() // called after authenticated channel data or a valid heartbeat reply
@@ -46,8 +46,12 @@ func Open(ctx context.Context, cfg ClientConfig, conn net.Conn) (*Channel, error
 		clock = time.Now
 	}
 	now := clock()
+	maxLifetime := MaxClientLifetime
+	if cfg.AllowRescueClockSkew {
+		maxLifetime += RescueClockSkewAllowance
+	}
 	if ctx == nil || hostErr != nil || signerErr != nil || !binding.valid() || !cfg.Budgets.valid() ||
-		!now.Before(cfg.Deadline) || cfg.Deadline.After(now.Add(MaxClientLifetime+cfg.MaxLifetimeAllowance)) {
+		!now.Before(cfg.Deadline) || cfg.Deadline.After(now.Add(maxLifetime)) {
 		_ = conn.Close()
 		return nil, ErrConfig
 	}

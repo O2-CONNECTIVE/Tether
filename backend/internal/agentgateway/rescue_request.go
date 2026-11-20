@@ -42,10 +42,9 @@ type RescueIdentity struct {
 // RescueAnswer is the host's answer as the reception route read it. Dispatch
 // is read only for RescueAllow.
 type RescueAnswer struct {
-	Answer               string
-	Dispatch             Dispatch
-	MaxLifetimeAllowance time.Duration // trusted transport policy; not encoded or signed
-	Signature            []byte        // raw ssh-ed25519 signature by K over RescueAnswerTranscript
+	Answer    string
+	Dispatch  Dispatch
+	Signature []byte // raw ssh-ed25519 signature by K over RescueAnswerTranscript
 }
 
 // RescueRequestTranscript is what the identity key signs for one request:
@@ -99,8 +98,8 @@ func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn
 		g.rescue.mu.Unlock()
 		return ErrRefused
 	}
-	// A transport-rejected answer is empty. Expiry takes precedence and records
-	// timeout; while live, signature verification below records failed at once.
+	// A transport-rejected answer is empty. Expiry takes precedence: only an
+	// initial attempt records timeout; resume expiry closes only that attempt.
 	if rescueClockTime(g.clock()).UnixNano() >= record.requested.Add(RescueRequestLifetime).UnixNano() {
 		if record.resuming {
 			record.awaitingAnswer = false
@@ -178,7 +177,7 @@ func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn
 	g.rescue.mu.Unlock()
 	taken = true
 	newRoute, err := g.connectWithSignerForRescue(principal.label, a.Dispatch, conn, true, clientSigner, true,
-		&rescueRoutePublication{id: string(id), attemptID: attemptID, record: record}, onActivity, a.MaxLifetimeAllowance)
+		&rescueRoutePublication{id: string(id), attemptID: attemptID, record: record}, onActivity, true)
 	g.rescue.mu.Lock()
 	if g.rescue.records[string(id)] == record {
 		if err != nil {
