@@ -5,14 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/workerowner"
 )
@@ -26,17 +24,46 @@ type fakeSleepAssertion struct {
 	takeErr         error
 	releaseErr      error
 	releaseFailures int
+	takeStarted     chan struct{}
+	takeGate        <-chan struct{}
 	releaseStarted  chan struct{}
 	releaseGate     <-chan struct{}
+	takeOnce        sync.Once
 	releaseOnce     sync.Once
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(value)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 func (f *fakeSleepAssertion) Take() error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.takes++
-	if f.takeErr != nil {
-		return f.takeErr
+	err, gate, started := f.takeErr, f.takeGate, f.takeStarted
+	f.mu.Unlock()
+	if started != nil {
+		f.takeOnce.Do(func() { close(started) })
+	}
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err != nil {
+		return err
 	}
 	f.held++
 	if f.held > f.peak {
@@ -44,15 +71,17 @@ func (f *fakeSleepAssertion) Take() error {
 	}
 	return nil
 }
+
 func (f *fakeSleepAssertion) Release() error {
 	f.mu.Lock()
 	f.releases++
+	gate, started := f.releaseGate, f.releaseStarted
 	f.mu.Unlock()
-	if f.releaseStarted != nil {
-		f.releaseOnce.Do(func() { close(f.releaseStarted) })
+	if started != nil {
+		f.releaseOnce.Do(func() { close(started) })
 	}
-	if f.releaseGate != nil {
-		<-f.releaseGate
+	if gate != nil {
+		<-gate
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -65,57 +94,26 @@ func (f *fakeSleepAssertion) Release() error {
 	}
 	return nil
 }
+
 func (f *fakeSleepAssertion) counts() (takes, releases, held, peak int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.takes, f.releases, f.held, f.peak
 }
 
-type sleepProofLease struct {
-	entered chan struct{}
-	gate    <-chan struct{}
-	err     error
-	once    sync.Once
-	mu      sync.Mutex
-	calls   int
-	result  error
-}
-
-func (l *sleepProofLease) Collected(_ agentgateway.ResidentWorkBinding, errorResult error) error {
-	l.mu.Lock()
-	l.calls++
-	l.result = errorResult
-	l.mu.Unlock()
-	if l.entered != nil {
-		l.once.Do(func() { close(l.entered) })
-	}
-	if l.gate != nil {
-		<-l.gate
-	}
-	return l.err
-}
-func (l *sleepProofLease) Unsent() []byte { return []byte("signed-test-proof") }
-func (l *sleepProofLease) stats() (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.calls, l.result
-}
-
 type sleepTestSession struct {
 	started      chan struct{}
 	finish       chan struct{}
-	closeStarted chan struct{}
-	closeGate    <-chan struct{}
-	cancelSource context.CancelFunc
-	startOnce    sync.Once
-	closeOnce    sync.Once
+	once         sync.Once
+	sourceCancel context.CancelFunc
 }
 
 func newSleepTestSession() *sleepTestSession {
 	return &sleepTestSession{started: make(chan struct{}), finish: make(chan struct{})}
 }
+
 func (s *sleepTestSession) Run(ctx context.Context) error {
-	s.startOnce.Do(func() { close(s.started) })
+	s.once.Do(func() { close(s.started) })
 	select {
 	case <-s.finish:
 		return nil
@@ -123,73 +121,78 @@ func (s *sleepTestSession) Run(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-func (s *sleepTestSession) Close(ctx context.Context) error {
-	if s.cancelSource != nil {
-		defer s.cancelSource()
+
+func (s *sleepTestSession) setSourceCancel(cancel context.CancelFunc) { s.sourceCancel = cancel }
+func (s *sleepTestSession) Close(context.Context) error {
+	if s.sourceCancel != nil {
+		s.sourceCancel()
 	}
-	if s.closeStarted != nil {
-		s.closeOnce.Do(func() { close(s.closeStarted) })
+	return nil
+}
+
+type unknownSleepSession struct {
+	started      chan struct{}
+	sourceCancel context.CancelFunc
+}
+
+func (s *unknownSleepSession) Run(ctx context.Context) error {
+	close(s.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (s *unknownSleepSession) setSourceCancel(cancel context.CancelFunc) { s.sourceCancel = cancel }
+func (s *unknownSleepSession) Close(context.Context) error {
+	if s.sourceCancel != nil {
+		s.sourceCancel()
 	}
-	if s.closeGate == nil {
-		return nil
-	}
-	select {
-	case <-s.closeGate:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return errors.New("synthetic cleanup unknown")
 }
 
 type sleepHarness struct {
-	standby      *Standby
-	cycle        *standbyCycle
-	source       context.Context
-	requests     chan *workerowner.Request
-	cancelSource context.CancelFunc
-	done         chan struct{}
-	mu           sync.Mutex
-	err          error
+	standby  *Standby
+	cycle    *standbyCycle
+	source   context.Context
+	requests chan *workerowner.Request
+	cancel   context.CancelFunc
+	done     chan struct{}
+	waitErr  error
 }
 
-func newSleepHarness(t *testing.T, config StandbyConfig) *sleepHarness {
+func newSleepHarness(t *testing.T, config StandbyConfig, assertion sleepAssertion) *sleepHarness {
 	t.Helper()
 	host, cancelHost := context.WithCancel(context.Background())
 	source, cancelSource := context.WithCancel(context.Background())
-	h := &sleepHarness{
-		standby: newStandbyWithConfig(config),
-		cycle:   &standbyCycle{ctx: host, cancel: cancelHost, owner: workerowner.New(2 * time.Second), done: make(chan struct{})},
-		source:  source, requests: make(chan *workerowner.Request), cancelSource: cancelSource, done: make(chan struct{}),
-	}
-	go func() {
-		err := h.cycle.waitSource(source, h.requests)
-		h.mu.Lock()
-		h.err = err
-		h.mu.Unlock()
-		close(h.done)
-	}()
+	standby := newStandbyWithConfig(config)
+	standby.sleep = assertion
+	cycle := &standbyCycle{ctx: host, cancel: cancelHost, owner: workerowner.New(2 * time.Second), done: make(chan struct{})}
+	requests := make(chan *workerowner.Request)
+	h := &sleepHarness{standby: standby, cycle: cycle, source: source, requests: requests, cancel: cancelSource, done: make(chan struct{})}
+	go func() { h.waitErr = cycle.waitSource(source, requests); close(h.done) }()
 	t.Cleanup(func() {
 		cancelSource()
 		cancelHost()
-		ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
-		defer stop()
-		_ = h.cycle.owner.Stop(ctx)
 		select {
 		case <-h.done:
-		case <-ctx.Done():
+		case <-time.After(3 * time.Second):
+			t.Error("Owner source did not stop")
 		}
+		ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+		defer stop()
+		_ = cycle.owner.Stop(ctx)
+		standby.reconcileSleep(cycle.owner, true)
 	})
 	return h
 }
 
-func sleepBinding(id int) agentgateway.ResidentWorkBinding {
-	return agentgateway.ResidentWorkBinding{RequestID: fmt.Sprintf("%032x", id)}
+type sleepCancelSession interface {
+	workerowner.Session
+	setSourceCancel(context.CancelFunc)
 }
 
-func sleepRequest(session *sleepTestSession, source context.Context) *workerowner.Request {
-	deadline := time.Now().Add(time.Minute)
-	requestSource, cancelSource := context.WithDeadline(source, deadline)
-	session.cancelSource = cancelSource
+func sleepRequest(session sleepCancelSession, source context.Context, timeout time.Duration) *workerowner.Request {
+	deadline := time.Now().Add(timeout)
+	requestSource, cancel := context.WithDeadline(source, deadline)
+	session.setSourceCancel(cancel)
 	return &workerowner.Request{
 		SourceContext: requestSource,
 		Deadline:      deadline,
@@ -200,635 +203,317 @@ func sleepRequest(session *sleepTestSession, source context.Context) *workerowne
 	}
 }
 
-func submitSleepWork(t *testing.T, s *Standby, c *standbyCycle, requests chan *workerowner.Request, session *sleepTestSession, id int, leaseCtx, sourceCtx context.Context) *ownedWorkSleep {
+func submitSleepWork(t *testing.T, h *sleepHarness, session sleepCancelSession) error {
 	t.Helper()
-	sent, replied, err := s.submitOwnedRequest(c, sleepRequest(session, sourceCtx), sleepBinding(id), requests, leaseCtx, sourceCtx)
-	if !sent || !replied || err != nil {
+	sent, replied, err := h.standby.submitOwnedRequest(h.cycle, sleepRequest(session, h.source, time.Minute), h.requests, h.cycle.ctx, h.source)
+	if !sent || !replied {
 		t.Fatalf("request admission sent=%v replied=%v error=%v", sent, replied, err)
 	}
-	c.mu.Lock()
-	workSleep := c.workSleep
-	valid := c.work != nil && workSleep != nil
-	c.mu.Unlock()
-	if !valid {
-		t.Fatal("accepted request was not tied to its work lease")
-	}
-	c.markWorkReady(workSleep) // model lease.Pending succeeding after Owner admission
-	return workSleep
+	return err
 }
 
-func waitSleepOwner(t *testing.T, h *sleepHarness) error {
+func eventuallySleep(t *testing.T, condition func() bool) {
 	t.Helper()
-	select {
-	case <-h.done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("owner did not finish")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.err
+	t.Fatal("sleep condition did not become true")
 }
 
-func waitOwnedCount(t *testing.T, s *Standby, want int) {
+func waitSleepOperation(t *testing.T, s *Standby, fake *fakeSleepAssertion, releases int, held int) {
 	t.Helper()
-	eventually(t, func() bool {
+	eventuallySleep(t, func() bool {
+		_, count, actual, _ := fake.counts()
 		s.sleepMu.Lock()
 		defer s.sleepMu.Unlock()
-		return s.sleepOwners == want
+		return count == releases && actual == held && !s.sleepReleasing
 	})
 }
 
-func waitSleepProofAttempt(t *testing.T, workSleep *ownedWorkSleep) {
-	t.Helper()
-	if workSleep == nil {
-		t.Fatal("missing work sleep record")
-	}
-	select {
-	case <-workSleep.proofDone:
-	case <-time.After(time.Second):
-		t.Fatal("collection proof attempt did not finish")
-	}
-}
-
-func waitSleepReleases(t *testing.T, s *Standby, fake *fakeSleepAssertion, want int) {
-	t.Helper()
-	eventually(t, func() bool {
-		_, releases, _, _ := fake.counts()
-		s.sleepMu.Lock()
-		defer s.sleepMu.Unlock()
-		return releases == want && !s.sleepReleasing
-	})
-}
-
-func silenceSleepDiagnostics(t *testing.T) {
-	t.Helper()
-	previous := log.Writer()
-	log.SetOutput(io.Discard)
-	t.Cleanup(func() { log.SetOutput(previous) })
-}
-
-func TestStandbySleepAssertionFailureRefusesAndNextWorkProceeds(t *testing.T) {
-	var diagnostics bytes.Buffer
+func TestSleepTakeFailureRefusesAfterOwnerAttemptAndNextWorkCanStart(t *testing.T) {
+	failure := errors.New("synthetic assertion take failure")
+	fake := &fakeSleepAssertion{takeErr: failure}
+	h := newSleepHarness(t, StandbyConfig{}, fake)
+	var diagnostics synchronizedBuffer
 	previous := log.Writer()
 	log.SetOutput(&diagnostics)
 	t.Cleanup(func() { log.SetOutput(previous) })
-	h := newSleepHarness(t, StandbyConfig{})
-	failure := errors.New("synthetic sleep assertion failure")
-	fake := &fakeSleepAssertion{takeErr: failure}
-	h.standby.sleep = fake
 	first := newSleepTestSession()
-	ownerAttemptEntered := make(chan struct{})
-	ownerAttemptGate := make(chan struct{})
-	var releaseOwnerAttempt sync.Once
-	allowOwnerAttemptReturn := func() { releaseOwnerAttempt.Do(func() { close(ownerAttemptGate) }) }
-	t.Cleanup(allowOwnerAttemptReturn)
-	h.standby.afterSleepAssertionResult = func(error) {
-		close(ownerAttemptEntered)
-		<-ownerAttemptGate
+	if err := submitSleepWork(t, h, first); !errors.Is(err, agenttransport.ErrWorkUnconfigured) {
+		t.Fatalf("failed Take was not refused: %v", err)
 	}
-	type submitResult struct {
-		sent, replied bool
-		err           error
-	}
-	firstResult := make(chan submitResult, 1)
-	go func() {
-		sent, replied, err := h.standby.submitOwnedRequest(h.cycle, sleepRequest(first, h.source), sleepBinding(8), h.requests, h.cycle.ctx, h.source)
-		firstResult <- submitResult{sent: sent, replied: replied, err: err}
-	}()
-	select {
-	case <-ownerAttemptEntered:
-	case <-time.After(time.Second):
-		t.Fatal("failed Owner approval did not reach the completion gate")
-	}
-	if snapshot := h.cycle.owner.Snapshot(); snapshot.Owned != 1 || !snapshot.Pending {
-		t.Fatalf("Owner attempt was not held at the failed approval: %+v", snapshot)
-	}
-	select {
-	case result := <-firstResult:
-		t.Fatalf("refusal returned before the Owner attempt completed: %+v", result)
-	case <-time.After(20 * time.Millisecond):
-	}
-	allowOwnerAttemptReturn()
-	var sent, replied bool
-	var result error
-	select {
-	case first := <-firstResult:
-		sent, replied, result = first.sent, first.replied, first.err
-	case <-time.After(time.Second):
-		t.Fatal("refusal did not follow Owner attempt completion")
-	}
-	refused := sent && replied && errors.Is(result, agenttransport.ErrWorkUnconfigured)
 	select {
 	case <-first.started:
 		t.Fatal("work started after assertion acquisition failed")
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
-	if !refused {
-		t.Fatalf("assertion failure was not refused: sent=%v replied=%v result=%v", sent, replied, result)
-	}
-	h.standby.sleepMu.Lock()
-	recorded := h.standby.sleepErr
-	h.standby.sleepMu.Unlock()
-	if !errors.Is(recorded, failure) || !strings.Contains(diagnostics.String(), failure.Error()) {
-		t.Fatalf("assertion failure reason was not retained in diagnostics: error=%v log=%q", recorded, diagnostics.String())
-	}
-	if observation := h.standby.Snapshot(); observation.Cleanup != "confirmed" {
-		t.Fatalf("failed acquisition changed cleanup observation: %+v", observation)
+	eventuallySleep(t, func() bool { return strings.Contains(diagnostics.String(), failure.Error()) })
+	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 0 || held != 0 {
+		t.Fatalf("failed Take state: takes=%d releases=%d held=%d", takes, releases, held)
 	}
 
 	fake.mu.Lock()
 	fake.takeErr = nil
 	fake.mu.Unlock()
 	second := newSleepTestSession()
-	workSleep := submitSleepWork(t, h.standby, h.cycle, h.requests, second, 9, h.cycle.ctx, h.source)
+	if err := submitSleepWork(t, h, second); err != nil {
+		t.Fatalf("next request was incorrectly rejected: %v", err)
+	}
 	select {
 	case <-second.started:
 	case <-time.After(time.Second):
 		t.Fatal("next work did not start")
 	}
-	if takes, releases, held, _ := fake.counts(); takes != 2 || releases != 0 || held != 1 {
-		t.Fatalf("next work did not acquire assertion: takes=%d releases=%d held=%d", takes, releases, held)
-	}
 	close(second.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-	h.standby.collect(&sleepProofLease{}, sleepBinding(9), nil, workSleep)
-	waitSleepProofAttempt(t, workSleep)
-	waitSleepReleases(t, h.standby, fake, 1)
-	if takes, releases, held, _ := fake.counts(); takes != 2 || releases != 1 || held != 0 {
-		t.Fatalf("next work collection mismatch: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
-	}
+	eventuallySleep(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
+	h.standby.reconcileSleep(h.cycle.owner, false)
+	waitSleepOperation(t, h.standby, fake, 1, 0)
 }
 
-func TestStandbySleepPreventionFollowsOwnedRequestAndCollection(t *testing.T) {
-	h := newSleepHarness(t, StandbyConfig{})
+func TestBusyBDoesNotReplaceAAndACollectionReleases(t *testing.T) {
 	fake := &fakeSleepAssertion{}
-	h.standby.sleep = fake
-	session := newSleepTestSession()
-	binding := sleepBinding(1)
-	workSleep := submitSleepWork(t, h.standby, h.cycle, h.requests, session, 1, h.cycle.ctx, h.source)
+	h := newSleepHarness(t, StandbyConfig{}, fake)
+	a := newSleepTestSession()
+	if err := submitSleepWork(t, h, a); err != nil {
+		t.Fatal(err)
+	}
+	<-a.started
+	b := newSleepTestSession()
+	if err := submitSleepWork(t, h, b); !errors.Is(err, workerowner.ErrBusy) {
+		t.Fatalf("B did not receive ErrBusy: %v", err)
+	}
 	select {
-	case <-session.started:
+	case <-b.started:
+		t.Fatal("busy B started")
+	default:
+	}
+	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 0 || held != 1 {
+		t.Fatalf("B refusal disturbed A assertion: takes=%d releases=%d held=%d", takes, releases, held)
+	}
+	close(a.finish)
+	eventuallySleep(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
+	h.standby.reconcileSleep(h.cycle.owner, false)
+	waitSleepOperation(t, h.standby, fake, 1, 0)
+}
+
+func TestPendingBPreventsACollectionReconcileFromReleasing(t *testing.T) {
+	fake := &fakeSleepAssertion{}
+	h := newSleepHarness(t, StandbyConfig{}, fake)
+	a := newSleepTestSession()
+	if err := submitSleepWork(t, h, a); err != nil {
+		t.Fatal(err)
+	}
+	<-a.started
+	h.standby.beginSleepAdmission() // B is counted before its Owner handoff.
+	close(a.finish)
+	eventuallySleep(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
+	h.standby.reconcileSleep(h.cycle.owner, false)
+	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 0 || held != 1 {
+		t.Fatalf("A reconciliation released during B admission: takes=%d releases=%d held=%d", takes, releases, held)
+	}
+	h.standby.sleepMu.Lock()
+	releasing := h.standby.sleepReleasing
+	h.standby.sleepMu.Unlock()
+	if releasing {
+		t.Fatal("release was reserved while B was being admitted")
+	}
+
+	b := newSleepTestSession()
+	request := sleepRequest(b, h.source, time.Minute)
+	ready := make(chan error, 1)
+	approve := request.Approve
+	request.Approve = func(ctx context.Context) (*workerowner.Worker, error) {
+		err := h.standby.acquireSleep(ctx)
+		ready <- err
+		if err != nil {
+			return nil, err
+		}
+		return approve(ctx)
+	}
+	h.requests <- request
+	if err := <-request.Reply; err != nil {
+		t.Fatalf("B admission failed: %v", err)
+	}
+	if err := <-ready; err != nil {
+		t.Fatalf("B could not confirm assertion: %v", err)
+	}
+	h.standby.finishSleepAdmission(h.cycle.owner)
+	select {
+	case <-b.started:
 	case <-time.After(time.Second):
-		t.Fatal("owned work did not start")
+		t.Fatal("B did not start")
 	}
-	if takes, releases, held, peak := fake.counts(); takes != 1 || releases != 0 || held != 1 || peak != 1 {
-		t.Fatalf("owned work assertion counts: takes=%d releases=%d held=%d peak=%d", takes, releases, held, peak)
+	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 0 || held != 1 {
+		t.Fatalf("B ran without continuous assertion ownership: takes=%d releases=%d held=%d", takes, releases, held)
 	}
-	close(session.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-	proof := &sleepProofLease{}
-	h.standby.collect(proof, binding, nil, workSleep)
-	waitSleepProofAttempt(t, workSleep)
-	waitSleepReleases(t, h.standby, fake, 1)
-	if takes, releases, held, peak := fake.counts(); takes != 1 || releases != 1 || held != 0 || peak != 1 {
-		t.Fatalf("confirmed collection did not release exactly once: takes=%d releases=%d held=%d peak=%d", takes, releases, held, peak)
-	}
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
-	}
+	close(b.finish)
+	eventuallySleep(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
+	h.standby.reconcileSleep(h.cycle.owner, false)
+	waitSleepOperation(t, h.standby, fake, 1, 0)
 }
 
-func TestStandbyUnknownCollectionRetainsAssertionUntilBudget(t *testing.T) {
-	h := newSleepHarness(t, StandbyConfig{})
-	fake := &fakeSleepAssertion{}
-	h.standby.sleep = fake
-	workSleep := &ownedWorkSleep{proofDone: make(chan struct{}), releaseNow: make(chan struct{})}
-	if err := h.standby.acquireOwnedWork(context.Background(), workSleep); err != nil {
-		t.Fatal(err)
-	}
-	workSleep.proofMu.Lock()
-	deadline := time.Now().Add(200 * time.Millisecond)
-	workSleep.collectionEnd = deadline
-	workSleep.proofMu.Unlock()
-	proof := &sleepProofLease{}
-	h.standby.collect(proof, sleepBinding(10), ErrStandbyUnknown, workSleep)
-	waitSleepProofAttempt(t, workSleep)
-	if calls, result := proof.stats(); calls != 1 || !errors.Is(result, ErrStandbyUnknown) {
-		t.Fatalf("Unknown collection proof changed: calls=%d result=%v", calls, result)
-	}
-	if _, releases, held, _ := fake.counts(); releases != 0 || held != 1 {
-		t.Fatalf("Unknown released before the original budget: releases=%d held=%d", releases, held)
-	}
-	time.Sleep(time.Until(deadline) / 2)
-	if _, releases, held, _ := fake.counts(); releases != 0 || held != 1 {
-		t.Fatalf("Unknown released before budget expiry: releases=%d held=%d", releases, held)
-	}
-	waitSleepReleases(t, h.standby, fake, 1)
-	if _, _, held, _ := fake.counts(); held != 0 {
-		t.Fatalf("Unknown did not release at budget expiry: held=%d", held)
-	}
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStandbyDuplicateCollectionDoesNotReleaseDuringOriginalProof(t *testing.T) {
-	h := newSleepHarness(t, StandbyConfig{})
-	fake := &fakeSleepAssertion{}
-	h.standby.sleep = fake
-	workSleep := &ownedWorkSleep{proofDone: make(chan struct{}), releaseNow: make(chan struct{})}
-	if err := h.standby.acquireOwnedWork(context.Background(), workSleep); err != nil {
-		t.Fatal(err)
-	}
+func TestRequestContextBoundsWaitForTake(t *testing.T) {
 	gate := make(chan struct{})
-	entered := make(chan struct{})
-	original := &sleepProofLease{entered: entered, gate: gate}
-	proved := make(chan struct{})
+	fake := &fakeSleepAssertion{takeStarted: make(chan struct{}), takeGate: gate}
+	h := newSleepHarness(t, StandbyConfig{}, fake)
+	session := newSleepTestSession()
+	result := make(chan error, 1)
 	go func() {
-		h.standby.collect(original, sleepBinding(11), nil, workSleep)
-		h.standby.waitForCollectionProof(workSleep)
-		close(proved)
+		sent, replied, err := h.standby.submitOwnedRequest(h.cycle, sleepRequest(session, h.source, 50*time.Millisecond), h.requests, h.cycle.ctx, h.source)
+		if !sent || !replied {
+			result <- fmt.Errorf("request sent=%v replied=%v: %w", sent, replied, err)
+			return
+		}
+		result <- err
 	}()
 	select {
-	case <-entered:
+	case <-fake.takeStarted:
 	case <-time.After(time.Second):
-		t.Fatal("original collection proof did not start")
+		t.Fatal("Take did not start")
 	}
-	duplicate := &sleepProofLease{err: agenttransport.ErrRefused}
-	h.standby.collect(duplicate, sleepBinding(11), nil, workSleep)
 	select {
-	case <-proved:
-		t.Fatal("proof completion was reported while the original write was blocked")
-	case <-time.After(20 * time.Millisecond):
+	case err := <-result:
+		if !errors.Is(err, agenttransport.ErrWorkUnconfigured) {
+			t.Fatalf("expired Take wait did not refuse work: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request did not honor its deadline while Take was blocked")
 	}
-	if calls, _ := duplicate.stats(); calls != 0 {
-		t.Fatalf("duplicate collection proof was attempted: calls=%d", calls)
-	}
-	if _, releases, held, _ := fake.counts(); releases != 0 || held != 1 {
-		t.Fatalf("duplicate path released during original proof: releases=%d held=%d", releases, held)
+	select {
+	case <-session.started:
+		t.Fatal("work started after its Take deadline")
+	default:
 	}
 	close(gate)
-	select {
-	case <-proved:
-	case <-time.After(time.Second):
-		t.Fatal("proof completion did not follow the original write")
-	}
-	waitSleepReleases(t, h.standby, fake, 1)
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
+	h.cancel()
+	eventuallySleep(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
+	waitSleepOperation(t, h.standby, fake, 1, 0)
+}
+
+func TestUnknownOwnedKeepsAssertionUntilForcedOffReconcile(t *testing.T) {
+	fake := &fakeSleepAssertion{}
+	h := newSleepHarness(t, StandbyConfig{}, fake)
+	session := &unknownSleepSession{started: make(chan struct{})}
+	if err := submitSleepWork(t, h, session); err != nil {
 		t.Fatal(err)
+	}
+	<-session.started
+	h.cancel()
+	eventuallySleep(t, func() bool { return h.cycle.owner.Snapshot().Unknown })
+	owned := h.cycle.owner.Snapshot()
+	if owned.Owned != 1 || !owned.Unknown {
+		t.Fatalf("test did not establish unknown ownership: %+v", owned)
+	}
+	h.standby.reconcileSleep(h.cycle.owner, false)
+	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 0 || held != 1 {
+		t.Fatalf("Unknown released while standby remained active: takes=%d releases=%d held=%d", takes, releases, held)
+	}
+	h.standby.reconcileSleep(h.cycle.owner, true) // OFF/stop ignores Unknown after its wait budget.
+	waitSleepOperation(t, h.standby, fake, 1, 0)
+}
+
+func TestReleaseFailureRetainsStateAndNextReconcileRetries(t *testing.T) {
+	failure := errors.New("synthetic assertion release failure")
+	fake := &fakeSleepAssertion{releaseErr: failure, releaseFailures: 100}
+	h := newSleepHarness(t, StandbyConfig{}, fake)
+	h.standby.beginSleepAdmission()
+	if err := h.standby.acquireSleep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.standby.reconcileSleep(h.cycle.owner, true)
+	eventuallySleep(t, func() bool {
+		_, releases, _, _ := fake.counts()
+		h.standby.sleepMu.Lock()
+		defer h.standby.sleepMu.Unlock()
+		return releases == 1 && !h.standby.sleepReleasing
+	})
+	time.Sleep(20 * time.Millisecond)
+	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 1 || held != 1 {
+		t.Fatalf("release failure was not retained for the next reconciliation: takes=%d releases=%d held=%d", takes, releases, held)
+	}
+	h.standby.sleepMu.Lock()
+	recorded := h.standby.sleepErr
+	h.standby.sleepMu.Unlock()
+	if !errors.Is(recorded, failure) {
+		t.Fatalf("release failure was not retained: %v", recorded)
+	}
+	fake.mu.Lock()
+	fake.releaseFailures = 0
+	fake.mu.Unlock()
+	h.standby.reconcileSleep(h.cycle.owner, false)
+	waitSleepOperation(t, h.standby, fake, 2, 0)
+}
+
+func TestIdleStandbyAndAllowSleepDoNotAcquire(t *testing.T) {
+	standby, connector, _ := idleStandby(t)
+	fake := &fakeSleepAssertion{}
+	standby.sleep = fake
+	if receipt := standby.RequestOn(1, standby.Snapshot().Revision, 2*time.Hour); receipt.Disposition != "accepted" {
+		t.Fatal(receipt)
+	}
+	if takes, releases, held, _ := fake.counts(); takes != 0 || releases != 0 || held != 0 {
+		t.Fatalf("idle standby acquired assertion: takes=%d releases=%d held=%d", takes, releases, held)
+	}
+	close(connector.gate)
+
+	allowed := newSleepHarness(t, StandbyConfig{AllowSleepDuringWork: true}, fake)
+	session := newSleepTestSession()
+	if err := submitSleepWork(t, allowed, session); err != nil {
+		t.Fatal(err)
+	}
+	<-session.started
+	close(session.finish)
+	eventuallySleep(t, func() bool { return allowed.cycle.owner.Snapshot().Owned == 0 })
+	allowed.standby.reconcileSleep(allowed.cycle.owner, false)
+	if takes, releases, held, _ := fake.counts(); takes != 0 || releases != 0 || held != 0 {
+		t.Fatalf("AllowSleepDuringWork acquired assertion: takes=%d releases=%d held=%d", takes, releases, held)
 	}
 }
 
-func TestStandbyBlockedReleaseDoesNotDelayOFFOrCloseDeadline(t *testing.T) {
+func TestCloseReturnsCollectionResultWhileReleaseIsBlocked(t *testing.T) {
 	gate := make(chan struct{})
 	fake := &fakeSleepAssertion{releaseStarted: make(chan struct{}), releaseGate: gate}
-	s, connector, _ := idleStandby(t)
-	s.sleep = fake
-	if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
-		t.Fatal(r)
+	standby, connector, _ := idleStandby(t)
+	standby.sleep = fake
+	if receipt := standby.RequestOn(1, standby.Snapshot().Revision, 2*time.Hour); receipt.Disposition != "accepted" {
+		t.Fatal(receipt)
 	}
-	s.sleepMu.Lock()
-	s.sleepHeld = true
-	s.sleepMu.Unlock()
-	offStarted := time.Now()
-	if r := s.RequestOff(2, s.Snapshot().Revision); r.Disposition != "accepted" {
-		t.Fatal(r)
+	cycle := standby.cycle
+	source, cancelSource := context.WithCancel(context.Background())
+	defer cancelSource()
+	requests := make(chan *workerowner.Request)
+	ownerDone := make(chan error, 1)
+	go func() { ownerDone <- cycle.waitSource(source, requests) }()
+	session := newSleepTestSession()
+	if sent, replied, err := standby.submitOwnedRequest(cycle, sleepRequest(session, source, time.Minute), requests, cycle.ctx, source); !sent || !replied || err != nil {
+		t.Fatalf("work admission sent=%v replied=%v error=%v", sent, replied, err)
 	}
-	if time.Since(offStarted) > 100*time.Millisecond {
-		t.Fatal("OFF waited for the OS release")
+	<-session.started
+	close(connector.gate)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := standby.Close(ctx)
+	if err != nil || time.Since(started) >= 150*time.Millisecond {
+		t.Fatalf("Close included blocked release in its result: elapsed=%s error=%v", time.Since(started), err)
 	}
 	select {
 	case <-fake.releaseStarted:
 	case <-time.After(time.Second):
-		t.Fatal("OS release was not started asynchronously")
+		t.Fatal("Close did not schedule the release")
 	}
-	close(connector.gate)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	closeStarted := time.Now()
-	err := s.Close(ctx)
-	if time.Since(closeStarted) > 250*time.Millisecond || !errors.Is(err, ErrStandbyUnknown) || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Close did not honor its deadline while release was blocked: elapsed=%s error=%v", time.Since(closeStarted), err)
-	}
-	if connector.closes.Load() != 1 {
-		t.Fatalf("transport stop waited for OS release: closes=%d", connector.closes.Load())
-	}
-	close(gate)
-	eventually(t, func() bool {
-		s.sleepMu.Lock()
-		defer s.sleepMu.Unlock()
-		return !s.sleepHeld && !s.sleepReleasing
-	})
-}
-
-func TestStandbySleepPreventionKeepsAssertionAcrossSuccessiveWorks(t *testing.T) {
-	h := newSleepHarness(t, StandbyConfig{})
-	fake := &fakeSleepAssertion{}
-	h.standby.sleep = fake
-	first := newSleepTestSession()
-	firstLease := submitSleepWork(t, h.standby, h.cycle, h.requests, first, 1, h.cycle.ctx, h.source)
-	<-first.started
-	close(first.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-
-	proofGate := make(chan struct{})
-	proofEntered := make(chan struct{})
-	collected := make(chan struct{})
-	go func() {
-		h.standby.collect(&sleepProofLease{entered: proofEntered, gate: proofGate}, sleepBinding(1), nil, firstLease)
-		close(collected)
-	}()
-	select {
-	case <-proofEntered:
-	case <-time.After(time.Second):
-		t.Fatal("first collection proof did not pause")
-	}
-
-	second := newSleepTestSession()
-	secondLease := submitSleepWork(t, h.standby, h.cycle, h.requests, second, 2, h.cycle.ctx, h.source)
-	<-second.started
-	waitOwnedCount(t, h.standby, 2)
-	if takes, releases, held, peak := fake.counts(); takes != 1 || releases != 0 || held != 1 || peak != 1 {
-		t.Fatalf("second work lost first work's assertion: takes=%d releases=%d held=%d peak=%d", takes, releases, held, peak)
-	}
-	close(proofGate)
-	<-collected
-	waitSleepProofAttempt(t, firstLease)
-	waitOwnedCount(t, h.standby, 1)
-	if takes, releases, held, peak := fake.counts(); takes != 1 || releases != 0 || held != 1 || peak != 1 {
-		t.Fatalf("first release dropped assertion held by second work: takes=%d releases=%d held=%d peak=%d", takes, releases, held, peak)
-	}
-	close(second.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-	h.standby.collect(&sleepProofLease{}, sleepBinding(2), nil, secondLease)
-	waitSleepProofAttempt(t, secondLease)
-	waitSleepReleases(t, h.standby, fake, 1)
-	if takes, releases, held, peak := fake.counts(); takes != 1 || releases != 1 || held != 0 || peak != 1 {
-		t.Fatalf("last work did not release assertion: takes=%d releases=%d held=%d peak=%d", takes, releases, held, peak)
-	}
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStandbySleepPreventionRetainsWorkBeforeReplyOnDisconnect(t *testing.T) {
-	h := newSleepHarness(t, StandbyConfig{})
-	fake := &fakeSleepAssertion{}
-	h.standby.sleep = fake
-	session := newSleepTestSession()
-	binding := sleepBinding(3)
-	request := sleepRequest(session, h.source)
-	workSleep, sent, err := h.standby.queueOwnedRequest(h.cycle, request, binding, h.requests, h.cycle.ctx, context.Background())
-	if err != nil || !sent {
-		t.Fatalf("request queue sent=%v error=%v", sent, err)
-	}
-	<-session.started
-	h.cycle.mu.Lock()
-	if h.cycle.work == nil || h.cycle.workSleep != workSleep {
-		h.cycle.mu.Unlock()
-		t.Fatal("work lease was not recorded before the reply")
-	}
-	h.cycle.mu.Unlock()
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
-	}
-	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 0 || held != 1 {
-		t.Fatalf("disconnect before reply did not retain assertion: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-	if err := h.standby.collectLastWork(h.cycle, &sleepProofLease{}, nil); err != nil {
-		t.Fatal(err)
-	}
-	waitSleepProofAttempt(t, workSleep)
-	waitSleepReleases(t, h.standby, fake, 1)
-	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 1 || held != 0 {
-		t.Fatalf("disconnect collection did not release assertion: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-}
-
-func TestStandbySleepPreventionOFFWaitsForCollectionProof(t *testing.T) {
-	s, connector, _ := idleStandby(t)
-	fake := &fakeSleepAssertion{}
-	s.sleep = fake
-	if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
-		t.Fatal(r)
-	}
-	cycle := s.cycle
-	proved := make(chan struct{})
-	cycle.mu.Lock()
-	cycle.proved = proved
-	cycle.mu.Unlock()
-	source, cancelSource := context.WithCancel(context.Background())
-	defer cancelSource()
-	requests := make(chan *workerowner.Request)
-	ownerDone := make(chan error, 1)
-	go func() { ownerDone <- cycle.waitSource(source, requests) }()
-	gate := make(chan struct{})
-	session := newSleepTestSession()
-	session.closeStarted = make(chan struct{})
-	session.closeGate = gate
-	binding := sleepBinding(4)
-	workSleep := submitSleepWork(t, s, cycle, requests, session, 4, cycle.ctx, source)
-	<-session.started
-	if r := s.RequestOff(2, s.Snapshot().Revision); r.Disposition != "accepted" {
-		t.Fatal(r)
-	}
-	cancelSource()
-	select {
-	case <-session.closeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("work cleanup did not start")
-	}
-	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 0 || held != 1 {
-		t.Fatalf("OFF released during cleanup: takes=%d releases=%d held=%d", takes, releases, held)
+	if observation := standby.Snapshot(); observation.Cleanup != "confirmed" {
+		t.Fatalf("confirmed collection became Unknown: %+v", observation)
 	}
 	close(gate)
 	select {
-	case err := <-ownerDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("owner did not confirm collection")
-	}
-	proofGate := make(chan struct{})
-	proofEntered := make(chan struct{})
-	collected := make(chan struct{})
-	go func() {
-		s.collect(&sleepProofLease{entered: proofEntered, gate: proofGate}, binding, nil, workSleep)
-		close(collected)
-	}()
-	<-proofEntered
-	if _, releases, held, _ := fake.counts(); releases != 0 || held != 1 {
-		t.Fatalf("assertion released before proof attempt ended: releases=%d held=%d", releases, held)
-	}
-	close(proofGate)
-	<-collected
-	waitSleepProofAttempt(t, workSleep)
-	waitSleepReleases(t, s, fake, 1)
-	if _, releases, held, _ := fake.counts(); releases != 1 || held != 0 {
-		t.Fatalf("assertion not released after proof: releases=%d held=%d", releases, held)
-	}
-	close(proved)
-	close(connector.gate)
-	eventually(t, func() bool { return s.Snapshot().Standby == "off" })
-}
-
-func TestStandbySleepPreventionCloseWaitsForOwnerCollection(t *testing.T) {
-	s, connector, _ := idleStandby(t)
-	fake := &fakeSleepAssertion{}
-	s.sleep = fake
-	if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
-		t.Fatal(r)
-	}
-	cycle := s.cycle
-	source, cancelSource := context.WithCancel(context.Background())
-	defer cancelSource()
-	requests := make(chan *workerowner.Request)
-	ownerDone := make(chan error, 1)
-	go func() { ownerDone <- cycle.waitSource(source, requests) }()
-	gate := make(chan struct{})
-	session := newSleepTestSession()
-	session.closeStarted = make(chan struct{})
-	session.closeGate = gate
-	workSleep := submitSleepWork(t, s, cycle, requests, session, 5, cycle.ctx, source)
-	<-session.started
-	closeResult := make(chan error, 1)
-	closeCtx, cancelClose := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelClose()
-	go func() { closeResult <- s.Close(closeCtx) }()
-	select {
-	case <-session.closeStarted:
+	case <-ownerDone:
 	case <-time.After(time.Second):
-		t.Fatal("Close did not start owner cleanup")
+		t.Fatal("Owner source did not stop")
 	}
-	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 0 || held != 1 {
-		t.Fatalf("Close released during cleanup: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-	close(gate)
-	select {
-	case err := <-ownerDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("owner did not finish")
-	}
-	waitSleepProofAttempt(t, workSleep)
-	eventually(t, func() bool { _, releases, _, _ := fake.counts(); return releases == 1 })
-	close(connector.gate)
-	select {
-	case err := <-closeResult:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Close did not join cycle")
-	}
-}
-
-func TestStandbySleepReleaseFailureIsDiagnosticAndRetriesAtNextWorkEnd(t *testing.T) {
-	silenceSleepDiagnostics(t)
-	h := newSleepHarness(t, StandbyConfig{})
-	failure := errors.New("synthetic release failure")
-	fake := &fakeSleepAssertion{releaseErr: failure, releaseFailures: 1}
-	h.standby.sleep = fake
-	first := newSleepTestSession()
-	firstLease := submitSleepWork(t, h.standby, h.cycle, h.requests, first, 6, h.cycle.ctx, h.source)
-	<-first.started
-	close(first.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-	firstProof := &sleepProofLease{err: failure}
-	h.standby.collect(firstProof, sleepBinding(6), nil, firstLease)
-	waitSleepProofAttempt(t, firstLease)
-	waitSleepReleases(t, h.standby, fake, 1)
-	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 1 || held != 1 {
-		t.Fatalf("release failure state: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-	h.standby.sleepMu.Lock()
-	recorded := h.standby.sleepErr
-	owners := h.standby.sleepOwners
-	h.standby.sleepMu.Unlock()
-	if !errors.Is(recorded, failure) || owners != 0 {
-		t.Fatalf("release diagnostic/count not retained: error=%v owners=%d", recorded, owners)
-	}
-	second := newSleepTestSession()
-	secondLease := submitSleepWork(t, h.standby, h.cycle, h.requests, second, 7, h.cycle.ctx, h.source)
-	<-second.started
-	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 1 || held != 1 {
-		t.Fatalf("next work duplicated a held OS assertion: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-	close(second.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-	h.standby.collect(&sleepProofLease{}, sleepBinding(7), nil, secondLease)
-	waitSleepProofAttempt(t, secondLease)
-	waitSleepReleases(t, h.standby, fake, 2)
-	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 2 || held != 0 {
-		t.Fatalf("next work end did not retry release: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-	h.standby.sleepMu.Lock()
-	recorded = h.standby.sleepErr
-	h.standby.sleepMu.Unlock()
-	if recorded != nil || h.standby.Snapshot().Cleanup != "confirmed" {
-		t.Fatalf("release retry changed cleanup result: error=%v observation=%+v", recorded, h.standby.Snapshot())
-	}
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStandbySleepAllowedWorkAndIdleStandbyDoNotTakeAssertion(t *testing.T) {
-	s, _, _ := idleStandby(t)
-	fake := &fakeSleepAssertion{}
-	s.sleep = fake
-	if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
-		t.Fatal(r)
-	}
-	eventually(t, func() bool { return s.Snapshot().Standby == "on" })
-	if takes, releases, held, _ := fake.counts(); takes != 0 || releases != 0 || held != 0 {
-		t.Fatalf("idle standby took assertion: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-
-	h := newSleepHarness(t, StandbyConfig{AllowSleepDuringWork: true})
-	h.standby.sleep = fake
-	session := newSleepTestSession()
-	lease := submitSleepWork(t, h.standby, h.cycle, h.requests, session, 8, h.cycle.ctx, h.source)
-	<-session.started
-	close(session.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-	h.standby.collect(&sleepProofLease{}, sleepBinding(8), nil, lease)
-	if takes, releases, held, _ := fake.counts(); takes != 0 || releases != 0 || held != 0 {
-		t.Fatalf("allowed-sleep work took assertion: takes=%d releases=%d held=%d", takes, releases, held)
-	}
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStandbySleepCloseRetriesFailedReleaseWithoutChangingResult(t *testing.T) {
-	silenceSleepDiagnostics(t)
-	h := newSleepHarness(t, StandbyConfig{})
-	failure := errors.New("synthetic release failure")
-	fake := &fakeSleepAssertion{releaseErr: failure, releaseFailures: 1}
-	h.standby.sleep = fake
-	session := newSleepTestSession()
-	lease := submitSleepWork(t, h.standby, h.cycle, h.requests, session, 9, h.cycle.ctx, h.source)
-	<-session.started
-	close(session.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-	h.standby.collect(&sleepProofLease{err: failure}, sleepBinding(9), nil, lease)
-	waitSleepProofAttempt(t, lease)
-	waitSleepReleases(t, h.standby, fake, 1)
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := h.standby.Close(ctx); err != nil {
-		t.Fatalf("release failure changed Close result: %v", err)
-	}
-	if takes, releases, held, _ := fake.counts(); takes != 1 || releases != 2 || held != 0 {
-		t.Fatalf("Close did not retry the failed release: takes=%d releases=%d held=%d", takes, releases, held)
-	}
+	waitSleepOperation(t, standby, fake, 1, 0)
 }

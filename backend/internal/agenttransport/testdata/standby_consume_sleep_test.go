@@ -188,6 +188,12 @@ func TestStandbyConsumeSleepFailureRefusesAndMonitorCollects(t *testing.T) {
 	if takes, releases, held := sleep.counts(); takes != 2 || releases != 0 || held != 1 {
 		t.Fatalf("active work assertion mismatch: takes=%d releases=%d held=%d", takes, releases, held)
 	}
+	if err := propose(3); !errors.Is(err, agenttransport.ErrWorkUnconfigured) || errors.Is(err, agentgateway.ErrResidentPending) {
+		t.Fatalf("second work did not receive the signed refusal: %v", err)
+	}
+	if transport.calls.Load() != 1 {
+		t.Fatalf("busy work created another client: %d", transport.calls.Load())
+	}
 	close(workClient.finish)
 	select {
 	case proof := <-registrar.proofs:

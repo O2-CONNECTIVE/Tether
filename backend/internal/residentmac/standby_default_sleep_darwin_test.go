@@ -3,51 +3,62 @@
 package residentmac
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestDefaultStandbyCanAdmitOwnedWorkWithSystemSleepPrevention(t *testing.T) {
-	h := newSleepHarness(t, StandbyConfig{})
-	s := newStandby()
-	h.standby = s
+func TestDefaultSleepAssertionAppearsInPmsetOnlyDuringOwnedWork(t *testing.T) {
+	h := newSleepHarness(t, StandbyConfig{}, nil)
 	session := newSleepTestSession()
-	workSleep := submitSleepWork(t, s, h.cycle, h.requests, session, 1, h.cycle.ctx, h.source)
-	defer func() {
-		if err := s.releaseOwnedWork(workSleep); err != nil {
-			t.Errorf("release system sleep assertion: %v", err)
-		}
-	}()
-
+	if err := submitSleepWork(t, h, session); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-session.started:
 	case <-time.After(time.Second):
-		t.Fatal("owned work did not start after acquiring system sleep assertion")
+		t.Fatal("owned work did not start")
 	}
-	s.sleepMu.Lock()
-	held := s.sleepHeld && s.sleepOwners == 1
-	s.sleepMu.Unlock()
-	if !held {
-		t.Fatal("owned work started without holding its system sleep assertion")
-	}
+	waitForPmsetAssertion(t, true)
 
 	close(session.finish)
-	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
-	s.collect(&sleepProofLease{}, sleepBinding(1), nil, workSleep)
-	waitSleepProofAttempt(t, workSleep)
-	eventually(t, func() bool {
-		s.sleepMu.Lock()
-		defer s.sleepMu.Unlock()
-		return !s.sleepHeld && s.sleepOwners == 0
+	eventuallySleep(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
+	h.standby.reconcileSleep(h.cycle.owner, false)
+	eventuallySleep(t, func() bool {
+		h.standby.sleepMu.Lock()
+		defer h.standby.sleepMu.Unlock()
+		return !h.standby.sleepHeld
 	})
-	s.sleepMu.Lock()
-	held = s.sleepHeld || s.sleepOwners != 0
-	s.sleepMu.Unlock()
-	if held {
-		t.Fatal("confirmed collection did not release the system sleep assertion")
+	waitForPmsetAssertion(t, false)
+}
+
+func waitForPmsetAssertion(t *testing.T, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		output, err := exec.Command("pmset", "-g", "assertions").CombinedOutput()
+		if err != nil {
+			t.Fatalf("pmset -g assertions failed: %v: %s", err, output)
+		}
+		found := false
+		for _, line := range strings.Split(string(output), "\n") {
+			if strings.Contains(line, fmt.Sprintf("pid %d(", os.Getpid())) &&
+				strings.Contains(line, "PreventUserIdleSystemSleep") &&
+				strings.Contains(line, "Tether resident work") {
+				found = true
+				break
+			}
+		}
+		if found == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	h.cancelSource()
-	if err := waitSleepOwner(t, h); err != nil {
-		t.Fatal(err)
+	if want {
+		t.Fatal("pmset did not show this PID's PreventUserIdleSystemSleep assertion")
 	}
+	t.Fatal("pmset still showed this PID's PreventUserIdleSystemSleep assertion after collection")
 }

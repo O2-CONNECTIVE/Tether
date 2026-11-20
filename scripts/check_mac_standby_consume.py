@@ -12,8 +12,6 @@ from check_mac_enrollment_lookup import command
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport'
-GOCACHE = '/Users/ryouta/Library/Caches/go-build'
-GOMODCACHE = '/Users/ryouta/go/pkg/mod'
 TEST = 'TestStandbyConsumeEndsOriginalSource'
 SLEEP_TEST = 'TestStandbyConsumeSleepFailureRefusesAndMonitorCollects'
 TEST_NAMES = (TEST, TEST + '/close', TEST + '/policy-drift', SLEEP_TEST)
@@ -53,8 +51,7 @@ def run():
     if arch is None:
         raise ValueError('unsupported consume architecture')
     env = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'GOMODCACHE')}
-    env.update(GOCACHE=GOCACHE, GOMODCACHE=GOMODCACHE,
-               GOTOOLCHAIN='local', GOENV='off', GOWORK='off', GOPROXY='off',
+    env.update(GOTOOLCHAIN='local', GOENV='off', GOWORK='off', GOPROXY='off',
                GOSUMDB='off', GOFLAGS='', GOOS='darwin', GOARCH=arch, CGO_ENABLED='1')
     go = shutil.which('go', path=env.get('PATH'))
     if go is None or command([go, 'env', 'GOVERSION'], env).strip() != 'go1.27.3':
@@ -64,6 +61,7 @@ def run():
         directory = Path(temporary)
         overlay = directory / 'overlay.json'
         overlay.write_text(json.dumps(overlay_files()))
+        env['GOCACHE'] = str(directory / 'cache')
         for race in (False, True):
             args = [go, 'test', '-mod=readonly', '-p=1', '-count=' + str(ITERATIONS),
                     '-timeout=30s', '-json', '-overlay', str(overlay), '-run', RUN_PATTERN]
@@ -72,7 +70,7 @@ def run():
             output = command(args + ['./internal/agenttransport'], env, ROOT / 'backend')
             reports.append({'race': race, 'passed': validate_output(output)})
     print(json.dumps({'fixture': 'standby-consume-source', 'reports': reports,
-                      'cases': 3, 'iterations': ITERATIONS, 'producerLaunches': 0,
+                      'cases': 4, 'iterations': ITERATIONS, 'producerLaunches': 0,
                       'scope': 'real memory consume/lease and sleep assertion failure/collection; no native work or live GUI proof'}))
 
 

@@ -36,9 +36,12 @@ protocol error です。`extend <request_id> <expected_revision> <hours>` は、
 止まったことを示す `standbyExpired`（次の ON で `false`。回収が unknown になっても残ります）を
 持ちます。JSON の方言の `status` は変えていません。
 
-所有作業の開始から回収確認、または回収予算の満了までは、macOS のシステム idle sleep を
-防ぎます。待機 OFF と常駐停止は先に受付と source を閉じ、回収後に assertion を解放します。
-解放 API の失敗は回収結果に影響せず診断へ記録し、次の作業終了・待機 OFF・Close で再試行します。
+所有作業の受付中または Owner が作業を保持している間、macOS のシステム idle sleep を防ぎます。
+回収確認後に assertion を解放します。待機 ON だけでは取得せず、`AllowSleepDuringWork: true`
+なら取得しません。待機 OFF・期限切れ・Close は先に受付と source を閉じ、既存の回収予算後に
+Unknown の結果にかかわらず解放を予約します。待機 ON 中は回収が Unknown でも Owner が作業を
+保持している間は assertion を保ちます。
+解放 API の失敗は回収結果に影響せず診断へ記録し、次の照合・OFF・Close で再試行します。
 取得 API の操作名と戻り値は標準エラーに記録されますが、署名済み GUI 起動では子標準エラーが破棄されるため製品から参照できません。
 その作業は `work_unconfigured` で拒否し、process を開始せず、回収確認済みとして次の作業を受け付けます。
 待機 ON や `allow` だけでは防止を開始しません。

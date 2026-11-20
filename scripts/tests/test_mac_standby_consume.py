@@ -1,5 +1,8 @@
 import importlib.util
+import contextlib
+import io
 import json
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -37,6 +40,30 @@ class ConsumeReplayCheckerTests(unittest.TestCase):
         self.assertEqual(len(overlay), 4)
         self.assertTrue(all(not Path(target).exists() for target in overlay))
         self.assertTrue(all('testdata' in Path(source).parts and Path(source).is_file() for source in overlay.values()))
+
+    def test_cache_paths_use_temporary_and_inherited_values(self):
+        seen = []
+        report = self.report(self.events())
+
+        def command(args, env, cwd=None):
+            seen.append(dict(env))
+            return 'go1.27.3' if args[-2:] == ['env', 'GOVERSION'] else report
+
+        with patch.object(tool.sys, 'platform', 'darwin'), \
+             patch.object(tool.platform, 'machine', return_value='arm64'), \
+             patch.object(tool.sys, 'argv', ['check_mac_standby_consume.py']), \
+             patch.object(tool.shutil, 'which', return_value='/fixture/go'), \
+             patch.dict(tool.os.environ, {'GOMODCACHE': '/fixture/module-cache'}, clear=False), \
+             patch.object(tool, 'command', side_effect=command), \
+             contextlib.redirect_stdout(io.StringIO()):
+            tool.run()
+
+        self.assertEqual(len(seen), 3)
+        self.assertTrue(all(env['GOMODCACHE'] == '/fixture/module-cache' for env in seen))
+        self.assertTrue(all(Path(env['GOCACHE']).name == 'cache' for env in seen[1:]))
+        self.assertTrue(all('standby-consume-replay-' in env['GOCACHE'] for env in seen[1:]))
+        self.assertFalse(hasattr(tool, 'GOCACHE'))
+        self.assertFalse(hasattr(tool, 'GOMODCACHE'))
 
     def test_non_mac_refuses_before_compiler(self):
         with patch.object(tool.sys, 'platform', 'linux'), patch.object(tool, 'command') as start:
