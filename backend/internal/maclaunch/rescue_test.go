@@ -97,6 +97,8 @@ type rescueReception struct {
 	openGate         chan struct{}
 	openCanceled     chan error
 	openReturned     chan struct{}
+	prepareEntered   chan struct{}
+	prepareGate      chan struct{}
 	ignoreOpenCancel bool
 	acceptRead       chan struct{}
 	requestEntered   chan struct{}
@@ -114,6 +116,29 @@ func freshRescueReception(seed byte, code string) *rescueReception {
 	r := newRescueReception()
 	r.code, r.key = code, rescueSigner(seed)
 	return r
+}
+
+func (r *rescueReception) Prepare() error {
+	r.mu.Lock()
+	if r.logicallyClosed {
+		r.mu.Unlock()
+		return agentchannel.ErrClosed
+	}
+	if r.key == nil {
+		r.key = rescueK
+	}
+	entered, gate := r.prepareEntered, r.prepareGate
+	r.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		<-gate
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.logicallyClosed || r.key == nil {
+		return agentchannel.ErrClosed
+	}
+	return nil
 }
 
 func (r *rescueReception) Open(ctx context.Context) (string, error) {
@@ -271,6 +296,12 @@ func (r *rescueReception) state() (refuses []bool, allows []Dispatch, closes int
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]bool(nil), r.refuses...), append([]Dispatch(nil), r.allows...), r.closes
+}
+
+func (r *rescueReception) hasKey() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.key != nil
 }
 
 func (r *rescueReception) clientConn() net.Conn {
@@ -559,6 +590,76 @@ func rescueInGrace(t *testing.T, duration time.Duration) (*rescueFixture, Dispat
 	}
 	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
 	return f, d, approved
+}
+
+func TestRescueStopDuringReceptionKeyPreparationClosesGeneratedKey(t *testing.T) {
+	f, _, _ := rescueInGrace(t, 4*time.Hour)
+	next := newRescueReception()
+	next.key = nil
+	next.prepareEntered, next.prepareGate = make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releasePrepare := func() { releaseOnce.Do(func() { close(next.prepareGate) }) }
+	t.Cleanup(releasePrepare)
+	f.queueReception(next, nil)
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	f.r.recheck()
+	select {
+	case <-next.prepareEntered:
+	case <-time.After(time.Second):
+		t.Fatal("replacement reception key preparation did not start")
+	}
+	f.r.Stop()
+	f.waitDone(t)
+	_, _, closes := next.state()
+	if closes != 1 || next.hasKey() {
+		t.Fatalf("Done closed with reception closes = %d and K retained = %v", closes, next.hasKey())
+	}
+	releasePrepare()
+	select {
+	case <-next.closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("reception close did not finish after key preparation returned")
+	}
+}
+
+func TestRescueStopDuringReceptionFactoryCreationClosesGeneratedKey(t *testing.T) {
+	f, _, _ := rescueInGrace(t, 4*time.Hour)
+	factoryEntered, factoryGate := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFactory := func() { releaseOnce.Do(func() { close(factoryGate) }) }
+	t.Cleanup(releaseFactory)
+	var client *agenttransport.RescueClient
+	f.r.cfg.ReceptionFactory = func(context.Context) (RescueReception, error) {
+		var err error
+		client, err = agenttransport.NewRescueClient(agenttransport.RescueClientConfig{
+			Endpoint: "wss://gateway.example.invalid" + agentgateway.RescuePath,
+			Pins:     []ssh.PublicKey{rescueK.PublicKey()},
+		})
+		if err != nil {
+			return nil, err
+		}
+		close(factoryEntered)
+		<-factoryGate
+		return client, nil
+	}
+	f.clocks.advance(5*time.Minute+time.Second, 5*time.Minute+time.Second)
+	f.r.recheck()
+	select {
+	case <-factoryEntered:
+	case <-time.After(time.Second):
+		t.Fatal("replacement reception factory did not start")
+	}
+	f.r.Stop()
+	f.waitDone(t)
+	if client.HostKey() != nil {
+		t.Fatal("Done closed while a factory-owned K remained available")
+	}
+	releaseFactory()
+	select {
+	case <-client.Done():
+	case <-time.After(time.Second):
+		t.Fatal("late reception was not closed after its factory returned")
+	}
 }
 
 func waitHostAuthenticated(t *testing.T, approved *Approved) {
@@ -1783,6 +1884,8 @@ func TestRescueStopStartsDetachedReceptionCloseBeforeReturning(t *testing.T) {
 
 func TestRescueStopBoundsStalledReceptionAndReportsCleanup(t *testing.T) {
 	f := newRescueFixture(t, 4*time.Hour)
+	f.allow(t, f.prompt(t))
+	approved := f.r.approved
 	f.r.cfg.CleanupTimeout = 40 * time.Millisecond
 	pending := newRescueReception()
 	pending.closeStarted, pending.closeReturned = make(chan struct{}), make(chan struct{})
@@ -1806,6 +1909,9 @@ func TestRescueStopBoundsStalledReceptionAndReportsCleanup(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Stop did not synchronously start the pending reception Close")
 	}
+	if approved.issuer.Snapshot().HasAuthority {
+		t.Fatal("the grant remained live after the stalled reception Close started")
+	}
 	select {
 	case <-stopDone:
 	case <-time.After(time.Second):
@@ -1815,6 +1921,9 @@ func TestRescueStopBoundsStalledReceptionAndReportsCleanup(t *testing.T) {
 	case <-f.r.Done():
 	case <-time.After(time.Second):
 		t.Fatal("Done did not finish within the cleanup budget")
+	}
+	if approved.issuer.Snapshot().HasAuthority {
+		t.Fatal("Done closed while the grant was still live")
 	}
 	_ = waitRescueEvent(t, f.events, RescueEventCleanupRequired)
 	releaseClose()
@@ -1851,6 +1960,9 @@ func TestRescueDoneBoundsWaitingForApprovedCloseLock(t *testing.T) {
 	case <-f.r.Done():
 	case <-time.After(time.Second):
 		t.Fatal("Done waited beyond CleanupTimeout for Approved.Close's lock")
+	}
+	if approved.issuer.Snapshot().HasAuthority {
+		t.Fatal("Done closed while the grant was still live")
 	}
 	_ = waitRescueEvent(t, f.events, RescueEventCleanupRequired)
 	approved.closeMu.Unlock()
@@ -2036,6 +2148,35 @@ func TestRescueDeadlineCancelsOfflineReceptionReopen(t *testing.T) {
 	}
 	if f.factoryCallCount() != 2 {
 		t.Fatalf("expired grant retried reception factory %d times", f.factoryCallCount())
+	}
+}
+
+func TestRescueStopRevokesPendingIssuingGrantBeforeDone(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	cfg := config(t)
+	cfg.HostKey = f.rec.HostKey()
+	cfg.AllowedKeys = []ssh.PublicKey{rescueC.PublicKey()}
+	cfg.Runtime = f.r.cfg.Runtime
+	cfg.Deadline = time.Now().Add(time.Hour)
+	cfg.CleanupTimeout = f.r.cfg.CleanupTimeout
+	cfg.Budgets = f.r.cfg.Budgets
+	pending, err := prepare(cfg, f.r.runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pending.issuer.Launch(context.Background(), pending.challenge, pending.clock, func(context.Context, *supervisor.Authority) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !pending.issuer.Snapshot().HasAuthority {
+		t.Fatal("test setup did not create an issuing grant")
+	}
+	f.r.mu.Lock()
+	f.r.state, f.r.issuing = rescueIssuing, pending
+	f.r.mu.Unlock()
+	f.r.Stop()
+	f.waitDone(t)
+	if pending.issuer.Snapshot().HasAuthority {
+		t.Fatal("Done closed while the pending issuing grant was still live")
 	}
 }
 

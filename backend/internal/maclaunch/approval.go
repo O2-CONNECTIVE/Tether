@@ -330,8 +330,10 @@ type Approved struct {
 	failed          bool
 	closeMu         sync.Mutex
 	resultMu        sync.Mutex
+	rescueMu        sync.Mutex
 	cleanupErr      error
 	cleanupObserved bool
+	rescueHostOpen  bool
 	issuer          *ephemeral.Issuer
 	session         *agentexec.Session
 	hostMu          sync.Mutex
@@ -448,8 +450,11 @@ func (a *Approved) close(ctx context.Context, requireServeCleanup bool) error {
 			// Host.Close may see accepting=false after issuer.Close ends Accept.
 			hostAccepting = host.Accepting()
 		}
+		a.rescueMu.Lock()
+		hostAccepting = hostAccepting || a.rescueHostOpen
+		a.rescueMu.Unlock()
 	}
-	closed := a.issuer.Close()
+	closed := a.revokeGrant()
 	if !requireServeCleanup {
 		a.hostMu.Lock()
 		host = a.host
@@ -470,6 +475,28 @@ func (a *Approved) close(ctx context.Context, requireServeCleanup bool) error {
 	a.cleanupErr, a.cleanupObserved = closed, true
 	a.resultMu.Unlock()
 	return closed
+}
+
+func (a *Approved) revokeGrant() error {
+	if a == nil || a.issuer == nil {
+		return ErrConfig
+	}
+	return a.issuer.Close()
+}
+
+func (a *Approved) revokeForRescue() error {
+	if a == nil || a.issuer == nil {
+		return ErrConfig
+	}
+	a.hostMu.Lock()
+	host := a.host
+	a.hostMu.Unlock()
+	if host != nil && host.Accepting() {
+		a.rescueMu.Lock()
+		a.rescueHostOpen = true
+		a.rescueMu.Unlock()
+	}
+	return a.revokeGrant()
 }
 
 // CleanupResult observes the last completed explicit cleanup without revoking,

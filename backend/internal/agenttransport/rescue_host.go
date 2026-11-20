@@ -45,6 +45,9 @@ type RescueClient struct {
 	done                chan struct{}
 	attemptDone         chan struct{}
 	mu                  sync.Mutex
+	prepareMu           sync.Mutex
+	prepareDone         chan struct{}
+	generateKey         func() (ed25519.PublicKey, ed25519.PrivateKey, error)
 	wsWriteMu           sync.Mutex
 	closeOnce           sync.Once
 	closeFrameDone      chan struct{}
@@ -64,7 +67,7 @@ type RescueClient struct {
 	cleanup             time.Duration
 }
 
-// NewRescueClient validates the endpoint and pins and creates a fresh reception key.
+// NewRescueClient validates the endpoint and pins. Prepare creates its fresh reception key.
 // See docs/rescue-connection-start.md, 受付の登録.
 func NewRescueClient(cfg RescueClientConfig) (*RescueClient, error) {
 	u, endpointErr := parseEndpoint(cfg.Endpoint)
@@ -80,20 +83,64 @@ func NewRescueClient(cfg RescueClientConfig) (*RescueClient, error) {
 		seen[string(p.Marshal())] = true
 		pins = append(pins, p)
 	}
-	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	attemptDone := make(chan struct{})
+	close(attemptDone)
+	return &RescueClient{endpoint: cfg.Endpoint, pins: pins,
+		done: make(chan struct{}), closeFrameDone: make(chan struct{}), attemptDone: attemptDone, request: make(chan VerifiedRescueIdentity, 1), transport: nativeTransport,
+		cleanup: DefaultBudgets().Cleanup, generateKey: func() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+			return ed25519.GenerateKey(rand.Reader)
+		}}, nil
+}
+
+// Prepare creates K once, after the host has registered this owner for cleanup.
+func (c *RescueClient) Prepare() error {
+	if c == nil {
+		return ErrConfig
+	}
+	c.prepareMu.Lock()
+	defer c.prepareMu.Unlock()
+	c.mu.Lock()
+	if c.closed || c.ended {
+		c.mu.Unlock()
+		return ErrClosed
+	}
+	if c.key != nil && c.hostPublic != nil {
+		c.mu.Unlock()
+		return nil
+	}
+	done := make(chan struct{})
+	c.prepareDone = done
+	generateKey := c.generateKey
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.prepareDone == done {
+			c.prepareDone = nil
+		}
+		close(done)
+		c.mu.Unlock()
+	}()
+	if generateKey == nil {
+		return ErrConfig
+	}
+	pub, key, err := generateKey()
 	if err != nil {
-		return nil, ErrConfig
+		clear(key)
+		return ErrConfig
 	}
 	hostPublic, err := ssh.NewPublicKey(pub)
 	if err != nil {
 		clear(key)
-		return nil, ErrConfig
+		return ErrConfig
 	}
-	attemptDone := make(chan struct{})
-	close(attemptDone)
-	return &RescueClient{endpoint: cfg.Endpoint, pins: pins, key: key, hostPublic: hostPublic,
-		done: make(chan struct{}), closeFrameDone: make(chan struct{}), attemptDone: attemptDone, request: make(chan VerifiedRescueIdentity, 1), transport: nativeTransport,
-		cleanup: DefaultBudgets().Cleanup}, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.ended {
+		clear(key)
+		return ErrClosed
+	}
+	c.key, c.hostPublic = key, hostPublic
+	return nil
 }
 
 // Open registers the reception and returns its code after verifying the signed result.
@@ -103,6 +150,9 @@ func NewRescueClient(cfg RescueClientConfig) (*RescueClient, error) {
 func (c *RescueClient) Open(ctx context.Context) (string, error) {
 	if c == nil || ctx == nil {
 		return "", ErrConfig
+	}
+	if err := c.Prepare(); err != nil {
+		return "", err
 	}
 	c.mu.Lock()
 	if c.used || c.closed {
@@ -579,6 +629,14 @@ func (c *RescueClient) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	c.StartClose()
+	c.mu.Lock()
+	prepareDone := c.prepareDone
+	c.mu.Unlock()
+	if prepareDone != nil {
+		if err := waitFor(ctx, prepareDone); err != nil {
+			return err
+		}
+	}
 	if err := waitFor(ctx, c.closeFrameDone); err != nil {
 		return err
 	}
@@ -698,6 +756,11 @@ func (c *RescueClient) Allow(d agentgateway.Dispatch) (net.Conn, error) {
 // channel is disconnected and waiting for Resume.
 func (c *RescueClient) HostKey() ssh.Signer {
 	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hostPublic == nil {
 		return nil
 	}
 	return &rescueSigner{client: c, public: c.hostPublic}

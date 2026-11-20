@@ -96,6 +96,8 @@ type RescueReply struct {
 
 // RescueReception is the host end of the reception connection, owner of K.
 type RescueReception interface {
+	// Prepare creates K after Rescue has registered the reception candidate.
+	Prepare() error
 	Open(context.Context) (string, error)
 	Resume(context.Context) error
 	Request() <-chan agenttransport.VerifiedRescueIdentity
@@ -260,6 +262,7 @@ type Rescue struct {
 	reopenSequence     uint64
 	reopenActive       uint64
 	stopRequested      bool
+	issuing            *Pending
 	approved           *Approved
 	cleanupErr         error
 	cleanupObserved    bool
@@ -374,6 +377,9 @@ func (r *Rescue) openReceptionCandidate(parent context.Context, previousKey []by
 		return nil, "", nil, candidate, errors.Join(context.Canceled, r.closeCandidate(candidate))
 	}
 	if err := parent.Err(); err != nil {
+		return nil, "", nil, candidate, errors.Join(err, r.closeCandidate(candidate))
+	}
+	if err := reception.Prepare(); err != nil {
 		return nil, "", nil, candidate, errors.Join(err, r.closeCandidate(candidate))
 	}
 	hostKey := reception.HostKey()
@@ -759,6 +765,14 @@ func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, n
 		return nil, nil, err
 	}
 	p.onActivity, p.onConnected, p.allowReconnect = r.noteActivity, r.markReconnected, true
+	r.mu.Lock()
+	if r.state != rescueIssuing || r.stopRequested {
+		r.mu.Unlock()
+		_ = p.issuer.Close()
+		return nil, nil, agentchannel.ErrClosed
+	}
+	r.issuing = p
+	r.mu.Unlock()
 	a, err := p.completeApproved(r.life)
 	if a == nil {
 		_ = p.issuer.Close()
@@ -770,6 +784,9 @@ func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, n
 		return nil, nil, errors.Join(err, a.Close(ctx))
 	}
 	r.mu.Lock()
+	if r.issuing == p {
+		r.issuing = nil
+	}
 	registered := r.state == rescueIssuing && !r.stopRequested
 	if registered {
 		r.approved = a
@@ -925,7 +942,7 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 		r.mu.Unlock()
 		return
 	}
-	confirming, id, a := r.state == rescueConfirming, r.prompt.RequestID, r.approved
+	confirming, id, issuing, a := r.state == rescueConfirming, r.prompt.RequestID, r.issuing, r.approved
 	current := r.receptionCandidate
 	if current == nil && r.reception != nil {
 		current = newRescueReceptionCandidate(r.reception)
@@ -942,7 +959,6 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 			continue
 		}
 		seen[candidate] = struct{}{}
-		candidate.startClose()
 		unique = append(unique, candidate)
 	}
 	candidates = unique
@@ -961,7 +977,18 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	r.resumeReception, r.resumeApproved = nil, nil
 	r.resumeGeneration = 0
 	r.state = rescueEnded
+	r.issuing = nil
 	lifeCancel := r.cancel
+	var revokeErr error
+	if issuing != nil {
+		revokeErr = issuing.issuer.Close()
+	}
+	if a != nil {
+		revokeErr = errors.Join(revokeErr, a.revokeForRescue())
+	}
+	for _, candidate := range candidates {
+		candidate.startClose()
+	}
 	r.mu.Unlock()
 	if reopenCancel != nil {
 		reopenCancel()
@@ -972,7 +999,8 @@ func (r *Rescue) end(timedOut, refuse, withdraw bool) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
 		defer cancel()
-		var cleanupErr, approvedErr error
+		cleanupErr := revokeErr
+		var approvedErr error
 		cleanupNotified := false
 		if confirming && withdraw && r.helper != nil {
 			r.helper.Withdraw(id)
@@ -1075,7 +1103,6 @@ func (r *Rescue) expireGrace() {
 	approved := r.approved
 	if candidate != nil {
 		r.closingReceptions = append(r.closingReceptions, candidate)
-		candidate.startClose()
 	}
 	r.reception = nil
 	r.receptionCandidate = nil
@@ -1083,11 +1110,18 @@ func (r *Rescue) expireGrace() {
 	r.resumeRunning, r.resumeHandoff = false, false
 	r.resumeReception, r.resumeApproved = nil, nil
 	r.resumeGeneration = 0
+	var cleanupErr error
+	if approved != nil {
+		cleanupErr = approved.revokeForRescue()
+	}
+	if candidate != nil {
+		candidate.startClose()
+	}
 	r.mu.Unlock()
 	r.emit(RescueEvent{Kind: RescueEventNewReception})
 	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
 	defer cancel()
-	var cleanupErr, approvedErr error
+	var approvedErr error
 	if candidate != nil {
 		cleanupErr = errors.Join(cleanupErr, candidate.wait(ctx))
 	}
