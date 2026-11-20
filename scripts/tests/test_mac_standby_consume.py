@@ -16,14 +16,14 @@ sys.path.pop(0)
 class ConsumeReplayCheckerTests(unittest.TestCase):
     def events(self):
         events = [{'Action': 'pass', 'Test': name} for _ in range(tool.ITERATIONS)
-                  for name in (tool.TEST, tool.TEST + '/close', tool.TEST + '/policy-drift')]
+                  for name in tool.TEST_NAMES]
         return events + [{'Action': 'pass', 'Package': tool.PACKAGE}]
 
     def report(self, events):
         return '\n'.join(json.dumps(event) for event in events)
 
     def test_complete_replay_has_positive_exact_counts(self):
-        self.assertEqual(tool.validate_output(self.report(self.events())), 3 * tool.ITERATIONS)
+        self.assertEqual(tool.validate_output(self.report(self.events())), 4 * tool.ITERATIONS)
 
     def test_failure_skip_missing_wrong_or_zero_tests_refuse(self):
         events = self.events()
@@ -34,7 +34,7 @@ class ConsumeReplayCheckerTests(unittest.TestCase):
 
     def test_overlay_composition_never_normal_go_source(self):
         overlay = tool.overlay_files()['Replace']
-        self.assertEqual(len(overlay), 3)
+        self.assertEqual(len(overlay), 4)
         self.assertTrue(all(not Path(target).exists() for target in overlay))
         self.assertTrue(all('testdata' in Path(source).parts and Path(source).is_file() for source in overlay.values()))
 

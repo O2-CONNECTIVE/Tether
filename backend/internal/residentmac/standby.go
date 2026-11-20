@@ -16,7 +16,9 @@ import (
 
 const maxStandbyInteger = uint64(9007199254740991)
 const standbyCleanup = 40 * time.Second
-const standbyProofWait = 25 * time.Second      // collection (15s) and proof write (5s) before OFF ends the control
+const standbyCollectionWait = 15 * time.Second
+const standbyProofSendWait = 5 * time.Second
+const standbyProofWait = 25 * time.Second      // collection and proof write before OFF ends the control
 const initialAuthentication = 30 * time.Second // ON result only, not service lifetime
 
 // Private lifecycle-only fake seam; it cannot mint authority or native work.
@@ -35,6 +37,16 @@ type ownedWorkSleep struct {
 	acquired       bool // guarded by Standby.sleepMu
 	released       bool // guarded by Standby.sleepMu
 	assertionReady chan error
+	proofMu        sync.Mutex
+	proofAttempted bool
+	proofDone      chan struct{}
+	proofDeadline  time.Time
+	proofRefused   bool
+	ownerConfirmed bool
+	collectionEnd  time.Time
+	releaseWait    bool
+	releaseNow     chan struct{}
+	releaseOnce    sync.Once
 }
 type standbyCycle struct {
 	ctx           context.Context
@@ -61,24 +73,30 @@ type standbyCycle struct {
 // Standby retains the same transport, native sources and common owner across
 // authenticated control generations. Unknown cleanup never releases ownership.
 type Standby struct {
-	mu            sync.Mutex
-	sleepMu       sync.Mutex
-	config        StandbyConfig
-	sleep         sleepAssertion
-	sleepOwners   int // guarded by sleepMu
-	sleepHeld     bool
-	sleepErr      error // last Take/Release failure, guarded by sleepMu
-	factory       *FixedFactory
-	makeConnector func(context.Context) (residentConnector, error)
-	clock         func() (mono, wall time.Time) // nil reads elapsedNow and time.Now; tests replace it
+	mu               sync.Mutex
+	sleepMu          sync.Mutex
+	sleepOpMu        sync.Mutex
+	config           StandbyConfig
+	sleep            sleepAssertion
+	sleepOwners      int // guarded by sleepMu
+	sleepHeld        bool
+	sleepErr         error // last Take/Release failure, guarded by sleepMu
+	sleepTaking      bool
+	sleepTakeDone    chan struct{}
+	sleepReleasing   bool
+	sleepReleaseDone chan struct{}
+	factory          *FixedFactory
+	makeConnector    func(context.Context) (residentConnector, error)
+	clock            func() (mono, wall time.Time) // nil reads elapsedNow and time.Now; tests replace it
 	// reportStandby sends one standby report over the control; nil sends it
 	// with lease.ReportStandby. Tests replace it: they cannot hold a real lease.
-	reportStandby func(*agenttransport.ResidentSourceLease, agentgateway.ResidentStandby)
-	updates       chan struct{}
-	observation   StandbyObservation
-	lastRequest   uint64
-	cycle         *standbyCycle
-	closed        bool
+	reportStandby             func(*agenttransport.ResidentSourceLease, agentgateway.ResidentStandby)
+	afterSleepAssertionResult func(error) // tests pause the failed Owner approval before it returns
+	updates                   chan struct{}
+	observation               StandbyObservation
+	lastRequest               uint64
+	cycle                     *standbyCycle
+	closed                    bool
 	// unsent is the one signed cleanup proof a closed control could not carry.
 	// It outlives the cycle and is lost with the process.
 	unsent struct {
@@ -96,20 +114,73 @@ type cleanupProofLease interface {
 }
 
 func (s *Standby) collect(lease cleanupProofLease, w agentgateway.ResidentWorkBinding, result error, workSleep *ownedWorkSleep) {
-	// Only a confirmed cleanup frees the gateway's slot, and only a failed
-	// write (not a refused repeat) leaves a proof worth sending again.
-	if lease != nil {
-		if e := lease.Collected(w, result); e != nil && result == nil && !errors.Is(e, agenttransport.ErrRefused) {
-			if proof := lease.Unsent(); proof != nil {
-				s.unsent.Lock()
-				s.unsent.proof = proof
-				s.unsent.Unlock()
+	if workSleep == nil {
+		return
+	}
+	workSleep.proofMu.Lock()
+	if workSleep.proofDone == nil {
+		workSleep.proofDone = make(chan struct{})
+	}
+	if workSleep.releaseNow == nil {
+		workSleep.releaseNow = make(chan struct{})
+	}
+	if workSleep.collectionEnd.IsZero() {
+		workSleep.collectionEnd = time.Now().Add(standbyCollectionWait)
+	}
+	if result == nil {
+		workSleep.ownerConfirmed = true
+	}
+	done := workSleep.proofDone
+	first := !workSleep.proofAttempted
+	if first {
+		workSleep.proofAttempted = true
+		workSleep.proofDeadline = time.Now().Add(standbyProofSendWait)
+	}
+	startWait := !workSleep.releaseWait
+	workSleep.releaseWait = true
+	deadline := workSleep.collectionEnd
+	releaseNow := workSleep.releaseNow
+	workSleep.proofMu.Unlock()
+
+	if startWait {
+		go s.releaseAfterCollectionBudget(workSleep, releaseNow, deadline)
+	}
+	if !first {
+		workSleep.proofMu.Lock()
+		var attemptDone bool
+		select {
+		case <-done:
+			attemptDone = true
+		default:
+		}
+		confirmed := workSleep.ownerConfirmed && !workSleep.proofRefused && attemptDone
+		workSleep.proofMu.Unlock()
+		if confirmed {
+			workSleep.releaseOnce.Do(func() { close(releaseNow) })
+		}
+		return
+	}
+	go func() {
+		var proofErr error
+		if lease != nil {
+			proofErr = lease.Collected(w, result)
+			if proofErr != nil && result == nil && !errors.Is(proofErr, agenttransport.ErrRefused) {
+				if proof := lease.Unsent(); proof != nil {
+					s.unsent.Lock()
+					s.unsent.proof = proof
+					s.unsent.Unlock()
+				}
 			}
 		}
-	}
-	// Assertion release failure is diagnostic only; it cannot change the
-	// collection result or stop the monitor.
-	_ = s.releaseOwnedWork(workSleep)
+		workSleep.proofMu.Lock()
+		workSleep.proofRefused = errors.Is(proofErr, agenttransport.ErrRefused)
+		confirmed := workSleep.ownerConfirmed && !workSleep.proofRefused
+		close(done)
+		workSleep.proofMu.Unlock()
+		if confirmed {
+			workSleep.releaseOnce.Do(func() { close(releaseNow) })
+		}
+	}()
 }
 func (s *Standby) collectLastWork(c *standbyCycle, lease cleanupProofLease, result error) error {
 	if c == nil {
@@ -124,6 +195,47 @@ func (s *Standby) collectLastWork(c *standbyCycle, lease cleanupProofLease, resu
 	}
 	s.collect(lease, *last, result, lastSleep)
 	return result
+}
+
+func (s *Standby) releaseAfterCollectionBudget(workSleep *ownedWorkSleep, releaseNow <-chan struct{}, deadline time.Time) {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-releaseNow:
+	case <-timer.C:
+	}
+	_ = s.releaseOwnedWork(workSleep)
+}
+
+func (s *Standby) setCollectionEnd(workSleep *ownedWorkSleep) time.Time {
+	if workSleep == nil {
+		return time.Now().Add(standbyCollectionWait)
+	}
+	workSleep.proofMu.Lock()
+	if workSleep.collectionEnd.IsZero() {
+		workSleep.collectionEnd = time.Now().Add(standbyCollectionWait)
+	}
+	deadline := workSleep.collectionEnd
+	workSleep.proofMu.Unlock()
+	return deadline
+}
+
+func (s *Standby) waitForCollectionProof(workSleep *ownedWorkSleep) {
+	if workSleep == nil {
+		return
+	}
+	workSleep.proofMu.Lock()
+	done, deadline := workSleep.proofDone, workSleep.proofDeadline
+	workSleep.proofMu.Unlock()
+	if done == nil || deadline.IsZero() {
+		return
+	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
 }
 
 // LoadStandby loads a resident with the zero-value config unless one config is passed.
@@ -172,8 +284,11 @@ func (s *Standby) prepareOwnedRequest(request *workerowner.Request, workSleep *o
 	approve := request.Approve
 	workSleep.assertionReady = make(chan error, 1)
 	request.Approve = func(ctx context.Context) (*workerowner.Worker, error) {
-		err := s.acquireOwnedWork(workSleep)
+		err := s.acquireOwnedWork(ctx, workSleep)
 		workSleep.assertionReady <- err
+		if err != nil && s.afterSleepAssertionResult != nil {
+			s.afterSleepAssertionResult(err)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -192,7 +307,7 @@ func (s *Standby) queueOwnedRequest(c *standbyCycle, request *workerowner.Reques
 	if c == nil || request == nil || leaseCtx == nil || sourceCtx == nil {
 		return nil, false, ErrStandbyUnavailable
 	}
-	workSleep := &ownedWorkSleep{}
+	workSleep := &ownedWorkSleep{proofDone: make(chan struct{}), releaseNow: make(chan struct{})}
 	s.prepareOwnedRequest(request, workSleep)
 	c.mu.Lock()
 	c.work = &work
@@ -226,7 +341,11 @@ func (s *Standby) awaitOwnedRequest(c *standbyCycle, request *workerowner.Reques
 		select {
 		case err := <-workSleep.assertionReady:
 			if err != nil {
-				reply = agenttransport.ErrWorkUnconfigured
+				if s.waitOwnerAttemptEnd(c, c.ctx, leaseCtx, sourceCtx) {
+					reply = agenttransport.ErrWorkUnconfigured
+				} else {
+					replied = false
+				}
 			}
 		case <-c.ctx.Done():
 			replied = false
@@ -241,6 +360,25 @@ func (s *Standby) awaitOwnedRequest(c *standbyCycle, request *workerowner.Reques
 		_ = s.releaseOwnedWork(workSleep)
 	}
 	return replied, reply
+}
+
+func (s *Standby) waitOwnerAttemptEnd(c *standbyCycle, host, lease, source context.Context) bool {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if c == nil || c.owner == nil || c.owner.Snapshot().Owned == 0 {
+			return true
+		}
+		select {
+		case <-ticker.C:
+		case <-host.Done():
+			return false
+		case <-lease.Done():
+			return false
+		case <-source.Done():
+			return false
+		}
+	}
 }
 func (c *standbyCycle) clearWorkSleep(workSleep *ownedWorkSleep) {
 	c.mu.Lock()
@@ -258,39 +396,89 @@ func (c *standbyCycle) markWorkReady(workSleep *ownedWorkSleep) {
 		c.workReady = true
 	}
 }
-func (s *Standby) acquireOwnedWork(workSleep *ownedWorkSleep) error {
+func (s *Standby) acquireOwnedWork(ctx context.Context, workSleep *ownedWorkSleep) error {
 	if s == nil || s.config.AllowSleepDuringWork {
 		return nil
 	}
-	s.sleepMu.Lock()
-	defer s.sleepMu.Unlock()
-	if workSleep == nil || workSleep.released {
-		return ErrStandbyUnavailable
-	}
-	if workSleep.acquired {
-		return nil
-	}
-	if s.sleepOwners == 0 && !s.sleepHeld {
+	for {
+		s.sleepMu.Lock()
+		if workSleep == nil || workSleep.released {
+			s.sleepMu.Unlock()
+			return ErrStandbyUnavailable
+		}
+		if workSleep.acquired {
+			s.sleepMu.Unlock()
+			return nil
+		}
+		if s.sleepTaking {
+			done := s.sleepTakeDone
+			s.sleepMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if s.sleepReleasing {
+			done := s.sleepReleaseDone
+			s.sleepMu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if s.sleepOwners != 0 || s.sleepHeld {
+			workSleep.acquired = true
+			s.sleepOwners++
+			s.sleepMu.Unlock()
+			return nil
+		}
 		if s.sleep == nil {
 			assertion, err := newSleepAssertion()
 			if err != nil {
 				s.sleepErr = err
+				s.sleepMu.Unlock()
 				log.Printf("residentmac: sleep assertion take failed: %v", err)
 				return err
 			}
 			s.sleep = assertion
 		}
-		if err := s.sleep.Take(); err != nil {
+		assertion := s.sleep
+		s.sleepTaking = true
+		takeDone := make(chan struct{})
+		s.sleepTakeDone = takeDone
+		s.sleepMu.Unlock()
+
+		s.sleepOpMu.Lock()
+		err := assertion.Take()
+		s.sleepOpMu.Unlock()
+
+		s.sleepMu.Lock()
+		s.sleepTaking = false
+		if err != nil {
 			s.sleepErr = err
+			close(takeDone)
+			s.sleepMu.Unlock()
 			log.Printf("residentmac: sleep assertion take failed: %v", err)
 			return err
 		}
 		s.sleepHeld = true
 		s.sleepErr = nil
+		if workSleep.released {
+			close(takeDone)
+			s.scheduleSleepReleaseLocked()
+			s.sleepMu.Unlock()
+			return ErrStandbyUnavailable
+		}
+		workSleep.acquired = true
+		s.sleepOwners++
+		close(takeDone)
+		s.sleepMu.Unlock()
+		return nil
 	}
-	workSleep.acquired = true
-	s.sleepOwners++
-	return nil
 }
 func (s *Standby) releaseOwnedWork(workSleep *ownedWorkSleep) error {
 	if s == nil {
@@ -310,31 +498,101 @@ func (s *Standby) releaseOwnedWork(workSleep *ownedWorkSleep) error {
 	if s.sleepOwners != 0 {
 		return nil
 	}
-	return s.releaseSleepLocked()
+	s.scheduleSleepReleaseLocked()
+	return nil
 }
-func (s *Standby) releaseIdleSleep() error {
+func (s *Standby) releaseIdleSleep() <-chan struct{} {
 	if s == nil {
 		return nil
 	}
 	s.sleepMu.Lock()
 	defer s.sleepMu.Unlock()
-	if s.sleepOwners != 0 {
-		return nil
+	if s.sleepOwners == 0 {
+		if s.sleepReleasing {
+			return s.sleepReleaseDone
+		}
+		if s.sleepTaking {
+			return s.sleepTakeDone
+		}
+		return s.scheduleSleepReleaseLocked()
 	}
-	return s.releaseSleepLocked()
-}
-func (s *Standby) releaseSleepLocked() error {
-	if !s.sleepHeld {
-		return nil
-	}
-	if err := s.sleep.Release(); err != nil {
-		s.sleepErr = err
-		log.Printf("residentmac: sleep assertion release failed: %v", err)
-		return err
-	}
-	s.sleepHeld = false
-	s.sleepErr = nil
 	return nil
+}
+
+// scheduleSleepReleaseLocked queues the OS release without holding sleepMu
+// across it. Acquisitions wait for this operation before starting their work.
+func (s *Standby) scheduleSleepReleaseLocked() <-chan struct{} {
+	if s.sleepOwners != 0 || !s.sleepHeld || s.sleepTaking {
+		return nil
+	}
+	if s.sleepReleasing {
+		return s.sleepReleaseDone
+	}
+	done := make(chan struct{})
+	assertion := s.sleep
+	s.sleepReleasing = true
+	s.sleepReleaseDone = done
+	go func() {
+		s.sleepOpMu.Lock()
+		err := assertion.Release()
+		s.sleepOpMu.Unlock()
+		s.sleepMu.Lock()
+		if err != nil {
+			s.sleepErr = err
+		} else {
+			s.sleepHeld = false
+			s.sleepErr = nil
+		}
+		s.sleepReleasing = false
+		close(done)
+		s.sleepMu.Unlock()
+		if err != nil {
+			log.Printf("residentmac: sleep assertion release failed: %v", err)
+		}
+	}()
+	return done
+}
+
+func (s *Standby) closeSleep(ctx context.Context) error {
+	for {
+		s.sleepMu.Lock()
+		if s.sleepOwners != 0 {
+			s.sleepMu.Unlock()
+			return nil
+		}
+		if s.sleepReleasing {
+			done := s.sleepReleaseDone
+			s.sleepMu.Unlock()
+			return waitSleepOperation(ctx, done)
+		}
+		if s.sleepTaking {
+			done := s.sleepTakeDone
+			s.sleepMu.Unlock()
+			if err := waitSleepOperation(ctx, done); err != nil {
+				return err
+			}
+			continue
+		}
+		if s.sleepHeld {
+			done := s.scheduleSleepReleaseLocked()
+			s.sleepMu.Unlock()
+			return waitSleepOperation(ctx, done)
+		}
+		s.sleepMu.Unlock()
+		return nil
+	}
+}
+
+func waitSleepOperation(ctx context.Context, done <-chan struct{}) error {
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return errors.Join(ErrStandbyUnknown, ctx.Err())
+	}
 }
 func cloneObservation(o StandbyObservation) StandbyObservation {
 	if o.Caller != nil {
@@ -487,8 +745,7 @@ func (s *Standby) Close(ctx context.Context) error {
 	if c == nil {
 		s.changedLocked()
 		s.mu.Unlock()
-		_ = s.releaseIdleSleep()
-		return nil
+		return s.closeSleep(ctx)
 	}
 	if s.observation.Standby == "on" {
 		s.observation.Standby = "stopping"
@@ -497,7 +754,7 @@ func (s *Standby) Close(ctx context.Context) error {
 	}
 	s.changedLocked()
 	s.sealSourceLocked()
-	c.cancel()
+	c.cancelAfterProof()
 	s.mu.Unlock()
 	_ = s.releaseIdleSleep()
 	select {
@@ -505,7 +762,7 @@ func (s *Standby) Close(ctx context.Context) error {
 		c.mu.Lock()
 		e := c.result
 		c.mu.Unlock()
-		return e
+		return errors.Join(e, s.closeSleep(ctx))
 	case <-ctx.Done():
 		return errors.Join(ErrStandbyUnknown, ctx.Err())
 	}
@@ -609,9 +866,13 @@ func (s *Standby) run(c *standbyCycle) {
 	defer cancel()
 	ownerErr := c.owner.Stop(cleanup)
 	c.mu.Lock()
-	workSleep := c.workSleep
+	lease := c.lease
 	c.mu.Unlock()
-	_ = s.releaseOwnedWork(workSleep)
+	var proofLease cleanupProofLease
+	if lease != nil {
+		proofLease = lease
+	}
+	s.collectLastWork(c, proofLease, ownerErr)
 	var transportErr error
 	if connector != nil {
 		connector.Stop()
@@ -739,7 +1000,11 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 	var collected error
 	prove := sync.OnceFunc(func() {
 		defer close(proved)
-		wait, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		c.mu.Lock()
+		workSleep := c.workSleep
+		c.mu.Unlock()
+		collectionEnd := s.setCollectionEnd(workSleep)
+		wait, stop := context.WithDeadline(context.Background(), collectionEnd)
 		defer stop()
 		select {
 		case collected = <-waitDone:
@@ -747,6 +1012,7 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 			collected = workerowner.ErrUnknown
 		}
 		collected = s.collectLastWork(c, lease, collected)
+		s.waitForCollectionProof(workSleep)
 	})
 	readStopped := make(chan struct{})
 	stopRead := context.AfterFunc(source.Context(), func() {
@@ -944,11 +1210,8 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 			}
 			reportedLease, reported, hasReported = lease, report, true
 		}
-		if work != nil && workReady && lease != nil && (owned.Unknown || owned.Owned == 0) {
+		if work != nil && workReady && lease != nil && owned.Owned == 0 {
 			var collection error
-			if owned.Unknown {
-				collection = ErrStandbyUnknown
-			}
 			if w != nil {
 				v := w.Observation()
 				if !v.CleanupObserved || v.CleanupUnknown {

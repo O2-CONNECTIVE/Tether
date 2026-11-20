@@ -34,6 +34,12 @@ func TestDefaultStandbyCanAdmitOwnedWorkWithSystemSleepPrevention(t *testing.T) 
 	close(session.finish)
 	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
 	s.collect(&sleepProofLease{}, sleepBinding(1), nil, workSleep)
+	waitSleepProofAttempt(t, workSleep)
+	eventually(t, func() bool {
+		s.sleepMu.Lock()
+		defer s.sleepMu.Unlock()
+		return !s.sleepHeld && s.sleepOwners == 0
+	})
 	s.sleepMu.Lock()
 	held = s.sleepHeld || s.sleepOwners != 0
 	s.sleepMu.Unlock()

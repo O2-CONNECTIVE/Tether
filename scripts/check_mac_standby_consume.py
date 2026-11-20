@@ -12,7 +12,12 @@ from check_mac_enrollment_lookup import command
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport'
+GOCACHE = '/Users/ryouta/Library/Caches/go-build'
+GOMODCACHE = '/Users/ryouta/go/pkg/mod'
 TEST = 'TestStandbyConsumeEndsOriginalSource'
+SLEEP_TEST = 'TestStandbyConsumeSleepFailureRefusesAndMonitorCollects'
+TEST_NAMES = (TEST, TEST + '/close', TEST + '/policy-drift', SLEEP_TEST)
+RUN_PATTERN = '^(' + TEST + '|' + SLEEP_TEST + ')$'
 ITERATIONS = 20
 
 
@@ -21,7 +26,7 @@ def validate_output(output):
     if any(e.get('Action') in ('fail', 'skip') for e in events):
         raise ValueError('consume replay failed or skipped')
     passes = Counter(e['Test'] for e in events if e.get('Action') == 'pass' and 'Test' in e)
-    expected = Counter({name: ITERATIONS for name in (TEST, TEST + '/close', TEST + '/policy-drift')})
+    expected = Counter({name: ITERATIONS for name in TEST_NAMES})
     packages = [e for e in events if e.get('Action') == 'pass' and 'Test' not in e]
     if passes != expected or len(packages) != 1 or packages[0].get('Package') != PACKAGE:
         raise ValueError('consume replay incomplete or wrong tests')
@@ -33,6 +38,7 @@ def overlay_files():
         'residentmac/standby_consume_replay.go': 'residentmac/testdata/standby_consume_overlay.go',
         'agenttransport/standby_consume_replay_export_test.go': 'agenttransport/testdata/standby_consume_export_test.go',
         'agenttransport/standby_consume_replay_test.go': 'agenttransport/testdata/standby_consume_probe_test.go',
+        'agenttransport/standby_consume_sleep_test.go': 'agenttransport/testdata/standby_consume_sleep_test.go',
     }
     base = ROOT / 'backend/internal'
     if any((base / name).exists() for name in replacements):
@@ -47,7 +53,8 @@ def run():
     if arch is None:
         raise ValueError('unsupported consume architecture')
     env = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR', 'GOMODCACHE')}
-    env.update(GOTOOLCHAIN='local', GOENV='off', GOWORK='off', GOPROXY='off',
+    env.update(GOCACHE=GOCACHE, GOMODCACHE=GOMODCACHE,
+               GOTOOLCHAIN='local', GOENV='off', GOWORK='off', GOPROXY='off',
                GOSUMDB='off', GOFLAGS='', GOOS='darwin', GOARCH=arch, CGO_ENABLED='1')
     go = shutil.which('go', path=env.get('PATH'))
     if go is None or command([go, 'env', 'GOVERSION'], env).strip() != 'go1.27.3':
@@ -57,17 +64,16 @@ def run():
         directory = Path(temporary)
         overlay = directory / 'overlay.json'
         overlay.write_text(json.dumps(overlay_files()))
-        env['GOCACHE'] = str(directory / 'cache')
         for race in (False, True):
             args = [go, 'test', '-mod=readonly', '-p=1', '-count=' + str(ITERATIONS),
-                    '-timeout=30s', '-json', '-overlay', str(overlay), '-run', '^' + TEST + '$']
+                    '-timeout=30s', '-json', '-overlay', str(overlay), '-run', RUN_PATTERN]
             if race:
                 args += ['-race']
             output = command(args + ['./internal/agenttransport'], env, ROOT / 'backend')
             reports.append({'race': race, 'passed': validate_output(output)})
     print(json.dumps({'fixture': 'standby-consume-source', 'reports': reports,
-                      'cases': 2, 'iterations': ITERATIONS, 'producerLaunches': 0,
-                      'scope': 'real memory handshake and same consume/lease; no native work or live GUI proof'}))
+                      'cases': 3, 'iterations': ITERATIONS, 'producerLaunches': 0,
+                      'scope': 'real memory consume/lease and sleep assertion failure/collection; no native work or live GUI proof'}))
 
 
 if __name__ == '__main__':

@@ -18,6 +18,15 @@ func ReplayStandby(factory *maclaunch.ResidentFactory, connector *agenttransport
 	return s
 }
 
+func ReplayStandbyWithSleep(factory *maclaunch.ResidentFactory, connector *agenttransport.ResidentClient, assertion interface {
+	Take() error
+	Release() error
+}) *Standby {
+	s := ReplayStandby(factory, connector)
+	s.sleep = assertion
+	return s
+}
+
 func ReplayStandbyOriginal(s *Standby) (*FixedSource, *agenttransport.ResidentSourceLease, *workerowner.Owner, <-chan struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

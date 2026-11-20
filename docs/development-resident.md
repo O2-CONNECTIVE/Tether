@@ -39,8 +39,8 @@ protocol error です。`extend <request_id> <expected_revision> <hours>` は、
 所有作業の開始から回収確認、または回収予算の満了までは、macOS のシステム idle sleep を
 防ぎます。待機 OFF と常駐停止は先に受付と source を閉じ、回収後に assertion を解放します。
 解放 API の失敗は回収結果に影響せず診断へ記録し、次の作業終了・待機 OFF・Close で再試行します。
-取得 API が失敗した作業は理由をホスト診断へ残して `work_unconfigured` で拒否し、process を開始せず、
-回収確認済みとして次の作業を受け付けます。
+取得 API の操作名と戻り値は標準エラーに記録されますが、署名済み GUI 起動では子標準エラーが破棄されるため製品から参照できません。
+その作業は `work_unconfigured` で拒否し、process を開始せず、回収確認済みとして次の作業を受け付けます。
 待機 ON や `allow` だけでは防止を開始しません。
 画面の idle sleep と蓋を閉じたときのスリープは防ぎません。Go の `StandbyConfig` は
 ゼロ値で防止 ON、`AllowSleepDuringWork: true` で OFF です。設定の保存先と GUI の
