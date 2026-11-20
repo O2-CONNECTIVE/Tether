@@ -107,15 +107,19 @@ type principal struct {
 // route is one approved grant reachable through one authenticated channel.
 // Its binding never changes; a new approval is a new route.
 type route struct {
-	owner       *principal
-	binding     agentchannel.Binding
-	channel     *agentchannel.Channel
-	client      *agentwire.Client
-	slots       chan struct{}
-	rescue      bool          // opened by Connect; only such a route binds generic MCP sessions
-	ended       chan struct{} // closed once the route is no longer routable
-	cleanupDone chan struct{}
-	cleanupErr  error
+	owner         *principal
+	binding       agentchannel.Binding
+	channel       *agentchannel.Channel
+	channelReason func() agentchannel.Reason // the channel's Reason; tests replace it for the Reason-before-Done interval
+	client        *agentwire.Client
+	deadline      time.Time
+	channelDone   <-chan struct{}
+	clientDone    <-chan struct{}
+	slots         chan struct{}
+	rescue        bool          // opened by Connect; only such a route binds generic MCP sessions
+	ended         chan struct{} // closed once the route is no longer routable
+	cleanupDone   chan struct{}
+	cleanupErr    error
 }
 
 type launchGeneration struct {
@@ -550,7 +554,8 @@ func (g *Gateway) openWithSignerUsing(p *principal, d Dispatch, conn net.Conn, s
 		return nil, errors.Join(err, g.closeChannel(ch))
 	}
 	return &route{
-		owner: p, binding: d.Binding, channel: ch, client: client, slots: make(chan struct{}, mcpadapter.MaxConcurrent),
+		owner: p, binding: d.Binding, channel: ch, channelReason: ch.Reason, client: client, deadline: d.Deadline,
+		channelDone: ch.Done(), clientDone: client.Done(), slots: make(chan struct{}, mcpadapter.MaxConcurrent),
 		ended: make(chan struct{}), cleanupDone: make(chan struct{}),
 	}, nil
 }

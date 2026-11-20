@@ -155,11 +155,11 @@ Windows の保護方式と同じ保証を持つとは扱わず、停止できる
 以下は #189 の製品方向の合意だけでは確定しません。
 各実装の着手時に必要な項目を解決し、[Decision #36](https://github.com/O2-CONNECTIVE/Tether/issues/36) と詳細設計へ対応づけます。
 
-- 初回登録、同意導線、認証情報の保存、更新、失効。
+- 初回登録と同意導線。ペア登録の鍵の保存、更新、失効は 2026-11-20 に決まりました（[#36 DEC-03](https://github.com/O2-CONNECTIVE/Tether/issues/36#issuecomment-7032790398)、[#453](https://github.com/O2-CONNECTIVE/Tether/issues/453)）。鍵は Mac の helper が Keychain に保存し、期限を付けず自動でも回しません。更新は利用者の明示の再登録だけで、解除は手元の鍵と gateway の登録の両方を消します（gateway の側は [#457](https://github.com/O2-CONNECTIVE/Tether/issues/457)）。
 - 作業許可と常駐制御接続との関係、ファイル操作の許可範囲。許可の単位（時間で切る）と寿命は [#399](https://github.com/O2-CONNECTIVE/Tether/issues/399) で決まりました（上の「許可の期限」）。
 - 切断、再接続、再起動、sleep/wake 時の許可と所有作業の扱い。
-- OFF 後の具体的な失効処理、停止保証の範囲と時間、回収責任。
-- ウィンドウを閉じる操作と待機 OFF の関係。
+- OFF 後の具体的な失効処理、停止保証の範囲と時間。起動と停止の統括と回収責任の引き取り先は、Go の 1 つの lifecycle coordinator と決まりました（[#36 DEC-01](https://github.com/O2-CONNECTIVE/Tether/issues/36#issuecomment-7032790398)、実装は [#456](https://github.com/O2-CONNECTIVE/Tether/issues/456)）。
+- ウィンドウを閉じる操作と待機 OFF の関係は 2026-11-20 に決まりました（[#451](https://github.com/O2-CONNECTIVE/Tether/issues/451#issuecomment-7032790909)）。閉じてもアプリはメニューバーに残り、待機と受付を続けます。終了は明示の操作だけで、停止の手順（回収の確認）を通します。
 - 状態と schema の正本、結果と診断の保持期間、対応 OS と architecture、配布方式。
 
 未決項目を新しい許可や実装済み機能として補いません。

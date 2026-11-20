@@ -247,7 +247,9 @@ tool は非同期の 2 つです（#423 で決定）。Worker が MCP の 1 往�
 2 つの tool は、route に束縛していない session（discovery session）にだけ出します。
 今の MCP は、tool の引数で host や signer を指定させません（[呼出し経路](agent-gateway.md#呼出し経路)）。
 この tool は route を選ぶものではなく、ホストに許可を求めるだけです。route は、ホストが許可した後に gateway が作ります。
-session を後から grant に束縛しない今の規則は変えません。許可の後、担当者の client は新しい `initialize` で route に束縛します。
+session を後から grant に束縛しない今の規則は変えません。許可の後、担当者の client は新しい `initialize` で route に束縛します。live rescue routeは、常駐がオンラインでも新しい`initialize`で優先されます。route sessionにはrescue toolsとそのrouteのbackendだけが入り、常駐tools/backendは入りません。既存の常駐sessionは続きますが、routeが生きている間、そのprincipalの新しい常駐sessionは作られません。routeが終わった後の新しい`initialize`は、常駐がオンラインなら常駐を選びます。
+
+routeが無い間のpending・denyは常駐sessionの選択を変えず、ホストが許可する前にrouteを公開しません。`initialize`で選んだrouteがsessionを確定する前に終わった場合、その`initialize`は失敗します。別routeや常駐へ黙って切り替えないため、状態が変わった後は新しい`initialize`を送ります。
 
 1 人の principal が持てる、確認中・セッション中・猶予中の受付は 1 つです（live route は 1 principal に 1 本という今の規則と同じ）。
 その間の新しい要求は拒否します。

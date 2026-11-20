@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -670,5 +671,248 @@ func TestRescueRequestSecondAnswerAfterAllowIsRefused(t *testing.T) {
 	}
 	if status, _, failed := c.rescueTool("rescue_request_status", map[string]any{}); failed || status != agentgateway.RescueAllow {
 		t.Fatalf("status after replayed answer = %q, %v; want allow", status, failed)
+	}
+}
+
+type requestResidentControl struct {
+	mu         sync.Mutex
+	generation string
+	starts     int
+}
+
+func (c *requestResidentControl) ResidentGeneration(string, string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
+}
+
+func (c *requestResidentControl) BeginResidentFixed(context.Context, string, string, string, string, time.Time) error {
+	c.mu.Lock()
+	c.starts++
+	c.mu.Unlock()
+	return errors.New("unexpected resident work")
+}
+
+func (*requestResidentControl) BeginResidentRun(context.Context, string, string, string, string, time.Time, agentgateway.ResidentRunScope) error {
+	return errors.New("unexpected resident run")
+}
+
+func (c *requestResidentControl) setGeneration(generation string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.generation = generation
+}
+
+func (c *requestResidentControl) startCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.starts
+}
+
+func configureRequestResident(t *testing.T, r *requestRig, control *requestResidentControl, principal int) {
+	t.Helper()
+	hostLabel := fmt.Sprintf("resident-host-%d", principal)
+	host := fixtureSigner(t, byte(0x90+principal))
+	if err := r.gw.ConfigureHosts([]agentgateway.HostEntry{{Label: hostLabel, Key: host.PublicKey().Marshal(), Principals: []string{label(principal)}}}); err != nil {
+		t.Fatalf("ConfigureHosts: %v", err)
+	}
+	if err := r.gw.ConfigureResident("wss://example.test/register", control, []agentgateway.ResidentEnrollment{{HostLabel: hostLabel, PrincipalLabel: label(principal)}}); err != nil {
+		t.Fatalf("ConfigureResident: %v", err)
+	}
+}
+
+func beginRescueRequest(t *testing.T, r *requestRig, principal, codeSeed int) (*caller, agentgateway.RescueReception, ssh.Signer, agentgateway.RescueIdentity) {
+	t.Helper()
+	reception, host := openRequestCode(t, r, codeSeed)
+	requester := r.caller(principal)
+	requirePending(t, requester, reception.Code)
+	return requester, reception, host, receiveIdentity(t, reception)
+}
+
+func answerRescueRequest(t *testing.T, r *requestRig, principal int, reception agentgateway.RescueReception, host ssh.Signer, identity agentgateway.RescueIdentity, answer string) (*mac, *memConn, error) {
+	t.Helper()
+	client, err := ssh.ParsePublicKey(identity.Client)
+	if err != nil {
+		t.Fatalf("parse request client key: %v", err)
+	}
+	m, stream, err := r.prepareApprovedHost(principal, time.Minute, []ssh.PublicKey{client}, host, 5*time.Second)
+	if err != nil {
+		t.Fatalf("prepare approved host: %v", err)
+	}
+	err = r.gw.AnswerRescue(reception.ID, reception.AttemptID,
+		signAnswer(t, host, r.gw.RescueEndpoint(), reception.ID, identity, answer, m.dispatch), stream, nil)
+	return m, stream, err
+}
+
+func expectRescueRouteTools(t *testing.T, c *caller) {
+	t.Helper()
+	names := rescueToolNames(t, c)
+	want := map[string]bool{"rescue_start": true, "rescue_status": true, "rescue_output": true, "rescue_cancel": true}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("approved route tools = %v, want rescue tools only %v", names, want)
+	}
+}
+
+func expectResidentToolsOnly(t *testing.T, c *caller) {
+	t.Helper()
+	names := rescueToolNames(t, c)
+	if !names["tether_fixed_start"] || names["rescue_start"] || names["rescue_request"] || names["rescue_request_status"] {
+		t.Fatalf("resident tools = %v, want resident catalog only", names)
+	}
+}
+
+func initializeRequestCaller(t *testing.T, r *requestRig, principal int) (*caller, reply) {
+	t.Helper()
+	bearer := token(t, subjects[principal])
+	response := r.do("POST", bearer, "", rpc(0, "initialize", initParams()), nil)
+	if response.status != 200 || response.header.Get(agentgateway.HeaderSession) == "" {
+		return nil, response
+	}
+	sid := response.header.Get(agentgateway.HeaderSession)
+	if n := r.do("POST", bearer, sid, rpc(nil, "notifications/initialized", nil), nil); n.status != 202 {
+		t.Fatalf("initialized notification = %d %s", n.status, n.body)
+	}
+	return &caller{r: r.rig, bearer: bearer, sid: sid, next: 100}, response
+}
+
+func TestInitializeSelectsApprovedRescueRouteBeforeOnlineResident(t *testing.T) {
+	r := newRequestRig(t, nil)
+	control := &requestResidentControl{}
+	configureRequestResident(t, r, control, 0)
+	_, reception, host, identity := beginRescueRequest(t, r, 0, 20)
+	m, stream, err := answerRescueRequest(t, r, 0, reception, host, identity, agentgateway.RescueAllow)
+	if err != nil || stream.isClosed() {
+		t.Fatalf("allow = %v, stream closed %v", err, stream.isClosed())
+	}
+	control.setGeneration("resident-online")
+	bound, initialized := initializeRequestCaller(t, r, 0)
+	if initialized.status != 200 || bound == nil {
+		t.Fatalf("initialize with approved rescue route = %d %s; want route session", initialized.status, initialized.body)
+	}
+	expectRescueRouteTools(t, bound)
+	state, failed := bound.start("route-priority", "printf route-ready\\n")
+	if failed {
+		t.Fatalf("rescue_start on selected route = %v", state)
+	}
+	id := commandID(t, state)
+	proc := m.proc(t)
+	emit(t, proc, "route-ready\\n")
+	close(proc.events)
+	close(proc.exited)
+	if final := bound.awaitTerminal(id); final["phase"] != "exited" {
+		t.Fatalf("route command terminal state = %v", final)
+	}
+}
+
+func TestInitializePendingOrDeniedRescueKeepsResidentTools(t *testing.T) {
+	for _, answer := range []string{"pending", agentgateway.RescueDeny} {
+		t.Run(answer, func(t *testing.T) {
+			r := newRequestRig(t, nil)
+			control := &requestResidentControl{}
+			configureRequestResident(t, r, control, 0)
+			_, reception, host, identity := beginRescueRequest(t, r, 0, 21)
+			if answer == agentgateway.RescueDeny {
+				m, stream, err := answerRescueRequest(t, r, 0, reception, host, identity, answer)
+				if err == nil || !stream.isClosed() {
+					t.Fatalf("deny = %v, stream closed %v; want refusal and close", err, stream.isClosed())
+				}
+				m.waitHostWithin(t, 5*time.Second)
+			}
+			control.setGeneration("resident-online")
+			bound, initialized := initializeRequestCaller(t, r, 0)
+			if initialized.status != 200 || bound == nil {
+				t.Fatalf("initialize while rescue request is %s = %d %s; want resident session", answer, initialized.status, initialized.body)
+			}
+			expectResidentToolsOnly(t, bound)
+		})
+	}
+}
+
+func TestInitializeWithoutRescueRouteKeepsResidentSession(t *testing.T) {
+	r := newRequestRig(t, nil)
+	control := &requestResidentControl{}
+	configureRequestResident(t, r, control, 0)
+	control.setGeneration("resident-online")
+	bound, initialized := initializeRequestCaller(t, r, 0)
+	if initialized.status != 200 || bound == nil {
+		t.Fatalf("initialize without rescue route = %d %s; want resident session", initialized.status, initialized.body)
+	}
+	expectResidentToolsOnly(t, bound)
+}
+
+func TestInitializeKeepsRescueRoutesBoundToTheirPrincipals(t *testing.T) {
+	r := newRequestRig(t, nil)
+	_, reception0, host0, identity0 := beginRescueRequest(t, r, 0, 22)
+	m0, stream0, err := answerRescueRequest(t, r, 0, reception0, host0, identity0, agentgateway.RescueAllow)
+	if err != nil || stream0.isClosed() {
+		t.Fatalf("principal 0 allow = %v, stream closed %v", err, stream0.isClosed())
+	}
+	_, reception1, host1, identity1 := beginRescueRequest(t, r, 1, 23)
+	m1, stream1, err := answerRescueRequest(t, r, 1, reception1, host1, identity1, agentgateway.RescueAllow)
+	if err != nil || stream1.isClosed() {
+		t.Fatalf("principal 1 allow = %v, stream closed %v", err, stream1.isClosed())
+	}
+	bound0, initialized0 := initializeRequestCaller(t, r, 0)
+	bound1, initialized1 := initializeRequestCaller(t, r, 1)
+	if initialized0.status != 200 || initialized1.status != 200 || bound0 == nil || bound1 == nil {
+		t.Fatalf("route initialize statuses = %d / %d; want both principals' own routes", initialized0.status, initialized1.status)
+	}
+	expectRescueRouteTools(t, bound0)
+	expectRescueRouteTools(t, bound1)
+	state0, failed0 := bound0.start("principal-zero", "printf zero\\n")
+	state1, failed1 := bound1.start("principal-one", "printf one\\n")
+	if failed0 || failed1 {
+		t.Fatalf("route starts = %v / %v; errors %v / %v", state0, state1, failed0, failed1)
+	}
+	id0, id1 := commandID(t, state0), commandID(t, state1)
+	proc0, proc1 := m0.proc(t), m1.proc(t)
+	emit(t, proc0, "principal-zero\\n")
+	emit(t, proc1, "principal-one\\n")
+	close(proc0.events)
+	close(proc0.exited)
+	close(proc1.events)
+	close(proc1.exited)
+	if final := bound0.awaitTerminal(id0); final["phase"] != "exited" {
+		t.Fatalf("principal 0 route result = %v", final)
+	}
+	if final := bound1.awaitTerminal(id1); final["phase"] != "exited" {
+		t.Fatalf("principal 1 route result = %v", final)
+	}
+	output0, output0Error := bound0.tool("rescue_output", map[string]any{"command_id": id0, "cursor": 0, "max_bytes": 1024})
+	chunks0, _ := output0["chunks"].([]any)
+	if output0Error || len(chunks0) != 1 || chunks0[0].(map[string]any)["data"] != "principal-zero\\n" {
+		t.Fatalf("principal 0 rescue output = %v, want its host's output", output0)
+	}
+	output1, output1Error := bound1.tool("rescue_output", map[string]any{"command_id": id1, "cursor": 0, "max_bytes": 1024})
+	chunks1, _ := output1["chunks"].([]any)
+	if output1Error || len(chunks1) != 1 || chunks1[0].(map[string]any)["data"] != "principal-one\\n" {
+		t.Fatalf("principal 1 rescue output = %v, want its host's output", output1)
+	}
+}
+
+func TestInitializeRescueRouteExcludesResidentToolsAndBackend(t *testing.T) {
+	r := newRequestRig(t, nil)
+	control := &requestResidentControl{}
+	configureRequestResident(t, r, control, 0)
+	_, reception, host, identity := beginRescueRequest(t, r, 0, 24)
+	_, stream, err := answerRescueRequest(t, r, 0, reception, host, identity, agentgateway.RescueAllow)
+	if err != nil || stream.isClosed() {
+		t.Fatalf("allow = %v, stream closed %v", err, stream.isClosed())
+	}
+	control.setGeneration("resident-online")
+	bound, initialized := initializeRequestCaller(t, r, 0)
+	if initialized.status != 200 || bound == nil {
+		t.Fatalf("initialize with approved rescue route = %d %s; want route session", initialized.status, initialized.body)
+	}
+	expectRescueRouteTools(t, bound)
+	bound.next++
+	rejected := r.do("POST", bound.bearer, bound.sid, rpc(bound.next, "tools/call", map[string]any{
+		"name": "tether_fixed_start", "arguments": map[string]any{"request_id": strings.Repeat("0", 32)},
+	}), nil)
+	if rejected.status != 200 || rejected.message["error"] == nil {
+		t.Fatalf("resident tool on rescue route = %d %s; want unknown-tool error", rejected.status, rejected.body)
+	}
+	if calls := control.startCount(); calls != 0 {
+		t.Fatalf("resident backend received %d calls from a rescue route", calls)
 	}
 }

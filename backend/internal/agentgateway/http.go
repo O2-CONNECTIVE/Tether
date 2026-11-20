@@ -11,7 +11,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter"
 )
 
@@ -242,32 +244,31 @@ func (g *Gateway) challenge(w http.ResponseWriter, status int, code string) {
 	plain(w, status, http.StatusText(status))
 }
 
-// initialize binds a new session to the current route when one is present.
-// Otherwise it creates a permanently unbound, authenticated discovery session.
-// No later request can bind that session to a grant.
+// initialize binds a new session to a live rescue route before considering an
+// enrolled resident. Otherwise it creates the resident or permanently unbound,
+// authenticated discovery session selected for this principal.
 func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	g.mu.Lock()
 	g.expireLocked()
+	now := g.clock()
 	rt, full, closed := p.route, p.sessions >= MaxSessionsPerPrincipal, g.closed
+	// A resident work route is never a target for generic rescue tools. A
+	// rescue route is selectable only while its grant and both transports live.
+	if !liveRescueRoute(rt, now) {
+		rt = nil
+	}
 	var resident *residentSession
 	var entry *residentEntry
 	gen := ""
 	residentDiscovery := false
-	if g.resident != nil {
+	if rt == nil && g.resident != nil {
 		if entry = g.resident.entries[p]; entry != nil {
 			if gen = g.resident.control.ResidentGeneration(entry.enrollment.HostLabel, p.label); gen != "" {
 				resident = &residentSession{gateway: g, principal: p, entry: entry, generation: gen}
-				rt = nil
 			} else if g.residentOnly {
 				residentDiscovery = true
-				rt = nil
 			}
 		}
-	}
-	// A route that ConnectResident opened carries one resident work and is
-	// never a target for the generic tools.
-	if rt != nil && (ended(rt) || !rt.rescue) {
-		rt = nil
 	}
 	// A resident session, or the catalog session of an enrolled principal whose
 	// resident is away, may take the slot of one of that principal's resident
@@ -325,7 +326,11 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	}
 	id := hex.EncodeToString(raw)
 	g.mu.Lock()
-	ok := !g.closed && (rt == nil || (p.route == rt && !ended(rt))) && g.sessions[id] == nil
+	commitNow := g.clock()
+	currentRoute := p.route
+	routeChanged := (rt == nil && liveRescueRoute(currentRoute, commitNow)) ||
+		(rt != nil && (currentRoute != rt || !liveRescueRoute(rt, commitNow)))
+	ok := !g.closed && !routeChanged && g.sessions[id] == nil
 	moved := false
 	if ok && mayReplace {
 		// The resident connected, reconnected or left during initialize: the
@@ -354,6 +359,10 @@ func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 		}
 		if moved {
 			writeJSON(w, http.StatusServiceUnavailable, rpcError("resident control changed during initialize; initialize again"))
+			return
+		}
+		if routeChanged {
+			writeJSON(w, http.StatusServiceUnavailable, rpcError("approved route changed during initialize; initialize again"))
 			return
 		}
 		writeJSON(w, http.StatusServiceUnavailable, rpcError("the approved grant ended during initialize"))
@@ -468,6 +477,26 @@ func ended(r *route) bool {
 	default:
 		return false
 	}
+}
+
+func liveRescueRoute(r *route, now time.Time) bool {
+	if r == nil || !r.rescue || ended(r) || !now.Before(r.deadline) {
+		return false
+	}
+	if r.channelReason != nil && r.channelReason() != agentchannel.ReasonNone {
+		return false
+	}
+	select {
+	case <-r.channelDone:
+		return false
+	default:
+	}
+	select {
+	case <-r.clientDone:
+		return false
+	default:
+	}
+	return true
 }
 
 func token68(s string) bool {
