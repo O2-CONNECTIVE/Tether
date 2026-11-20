@@ -355,4 +355,4 @@ Linux/Windowsは非対応の拒否・root handle消費と共通permission契約�
 
 `internal/maclaunch` に、ホストの許可の状態機械 `rescue.go` を共通の1fileとして追加します（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）。ネイティブの補助・受付の接続・時計は試験の fake だけで、製品の入口からは使いません。
 
-現inventoryは53 packageです。cgo有効時のfile数はLinux403 / Darwin408 / Windows434、Darwinのcgo無効時は405です。
+現inventoryは53 packageです。cgo有効時のfile数はLinux404 / Darwin409 / Windows435、Darwinのcgo無効時は406です。

@@ -7,6 +7,14 @@ import (
 
 var ErrStandbyUnavailable = errors.New("residentmac: standby unavailable or stale intent")
 var ErrStandbyUnknown = errors.New("residentmac: original shutdown unconfirmed")
+var ErrSleepPreventionUnsupported = errors.New("residentmac: sleep prevention is not implemented on this platform")
+
+// StandbyConfig controls resident behavior. Its zero value prevents system
+// idle sleep while owned work is being collected.
+type StandbyConfig struct {
+	// AllowSleepDuringWork disables that prevention when true.
+	AllowSleepDuringWork bool
+}
 
 // These are observations, never authentication or execution authority.
 type StandbyReceipt struct {

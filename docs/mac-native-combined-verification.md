@@ -59,7 +59,7 @@ combined review で、native source の終了が健全な receiver の `Next()` 
 修正は native revoke 後の source context 取消を元 receiver へ伝え、intake / send / reply でも同じ source を監視します。取消 callback 自体を join してから、同じ WaitSource の結果、同じ lease の Finish を既存順序で確認します。receiver の取消を native collection の証拠にはしません。
 
 `check_mac_standby_consume.py` は Go compiler overlay だけで具体的な protected factory / memory connector / Standby を結びます。`testdata` の bridge は通常 Go source に存在せず、認証 marker・receiver・grant を偽造しません。既存の public fixed-seed fixture と実 protected reader の自己所有文書だけを使い、実 policy / 鍵 / socket / producer / native Session は使いません。
-`testing/synctest` で実 Next が健全な control 上で待機した点を固定し、source 終了後、OFF を送る前に元 lease の Finish を要求します。normal / race の各20回で同じ判定と元 Standby / handler / memory streams の終了を確認し、不完全・skip・失敗は非0終了です。診断だけの receiver 取消 probe は回帰 fixture に残しません。
+`testing/synctest` で実 Next が健全な control 上で待機した点を固定し、source 終了後、OFF を送る前に元 lease の Finish を要求します。さらに sleep assertion の取得失敗で署名付き拒否を返して次の要求を受け付けること、ブロックした取得の早期期限で署名付き拒否を wire に返し、遅れて成功した取得を解放すること、A の実行中に B を拒否しても A の回収証明と assertion 解放が続くことを実際の consume / lease で確認します。5ケースを normal / race の各20回で実行し、同じ判定と元 Standby / handler / memory streams の終了を確認します。不完全・skip・失敗は非0終了です。診断だけの receiver 取消 probe は回帰 fixture に残しません。
 
 
 CI checkout record は workflow 自体の SHA / ref も別欄へ保持します。[GitHub の変数仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)に従い、source checkout と実行定義の revision を同一視しません。

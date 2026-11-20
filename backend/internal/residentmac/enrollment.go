@@ -48,10 +48,10 @@ func selectEnrolledPolicy(ctx context.Context, a enrollmentAccount) (string, err
 // This internal-package composition accepts no caller-selected path or trust.
 // Selection still needs the existing protected read, fixed scope, key and digest
 // checks, and does not start a connection. Normal startup remains unbound.
-func LoadEnrolledStandby(ctx context.Context) (*Standby, error) {
+func LoadEnrolledStandby(ctx context.Context, options ...StandbyConfig) (*Standby, error) {
 	selected, err := currentEnrolledPolicy(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return LoadStandby(ctx, selected)
+	return LoadStandby(ctx, selected, options...)
 }
