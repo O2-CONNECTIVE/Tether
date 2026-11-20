@@ -59,10 +59,10 @@
 - admission後にSSHライブラリが自らconnを閉じた場合は、失効の前に`transport`を理由として記録します。そのため、自分の失効を外部の`revoked`と取り違えません。handshake中は、AcceptとOpenが分類した理由（`handshake`、`rejected`、`violation`など）を記録します。
 - hard deadlineは単調時計のtimerに加え、`WallRecheck`（1秒）ごとに壁時計を読み直して判定します。sleepや壁時計の前進の後でも、要求なしに1秒以内に終わります。
 - Sessionは経過予算（単調時計）でもgrantを終えるため、壁時計がまだ期限前でも`StopHardDeadline`で失効させることがあります（`ElapsedDeadline`、壁時計の遅れ）。serverはその失効を、`Session.StopReason()`が`StopHardDeadline`なら`hard-deadline`とし、外部の`revoked`と取り違えません。
-- 再接続・再試行・再開はありません。次のcommandには新しい承認・Authority・Session・channelが必要です。
+- 通常の経路は1 grantにつき接続1回です。通信の終わりにgrantを失効させ、同じSessionは再開しません。次の接続には新しい承認・Authority・Sessionが必要です。
 - Accept前の認証失敗でもgrantを失効させます（fail closed）。relayへ届いた未認証の接続1本で、そのgrantが使えなくなることは既知の制約です。
 
-> **ADR 0005による改訂（2026-11-19、未実装）:** レスキューの遠隔接続では、切断から猶予（5分）の間だけ、同じgrantの次の接続世代として再接続すると決まりました（[ADR 0005](adr/0005-rescue-reconnect-grace.md)、[接続世代](rescue-connection-start.md#接続世代)）。猶予に入るのは確立したchannelの通信の切断だけで、取消・書込み失敗・正規stop・期限・相手の違反・Accept前の認証失敗は今のとおりすぐ失効させます。上の「再接続・再試行・再開はありません」は今のsourceの契約です。接続世代の実装（[#425](https://github.com/O2-CONNECTIVE/Tether/issues/425)）と同じPRで改めます。
+> **接続世代（#425、source実装済み）:** `AllowReconnect`を明示したレスキュー経路だけは、Accept後の`transport`・`heartbeat`・`read-stall`・`write-stall`による切断で、最後に受けた正しいframeから5分以内に、回収を確認した後、同じgrantの次の接続世代で再接続します（[ADR 0005](adr/0005-rescue-reconnect-grace.md)、[接続世代](rescue-connection-start.md#接続世代)、gatewayの[PR #443](https://github.com/O2-CONNECTIVE/Tether/pull/443)、hostの[PR #444](https://github.com/O2-CONNECTIVE/Tether/pull/444)）。期限・鍵集合・操作範囲は変えません。取消・期限・相手の違反・Accept前の認証失敗などは、今までどおり失効させます。常駐・単独のwire・Windowsはopt-inせず、1 grantに接続1回です。製品の入口には未接続です。
 
 ## 生存確認と停滞
 
@@ -100,7 +100,7 @@ workerは、admission監視1、transport待ち1、global request 1、channel ope
   - `Accept`で認証済み`*Channel`を得る。
   - `agentwire.NewServer`を作る。入力は、handshakeで証明した`Peer.Key()`、同じ正規の承認鍵`ApprovedKeys()`、心拍喪失の`ch.Done()`（Liveness）で、ここでSessionのadapter専有を取る。
   - `Serve(ctx, ch)`で処理する。
-  - 終了時は`TransportLost` → 同じchannelの`Close`（合流の確認）→ `Session.Close`（guestの回収待ち）の順で行い、未確認があればerrorに含めて返す。2回目のServe、再接続、再開はありません。
+  - 通常の終了時は`TransportLost` → 同じchannelの`Close`（合流の確認）→ `Session.Close`（Sessionの回収）の順で行い、未確認があればerrorに含めて返す。レスキューのopt-in経路は対象の通信切断に限ってchannelを閉じ、回収を確認できたときだけgrantとSessionを保って次世代へ進みます。回収未確認なら失効・回収へ進みます。
 - **端末側**：`agentlink.Connector(ClientConfig, conn)`は単回の`connector`を返します。`agentchannel.Open`が返す`*Channel`を`cmd/rescue-mcp`が`agentwire.NewClient`→`mcpadapter.Serve`へ渡し、終了時はClientを閉じた後に同じstreamの`Close`で合流結果を確認します。
 - どちらも、渡された`net.Conn`、登録済みsigner、pinしたhost公開鍵だけを使います。dial・listen・鍵の生成・登録・grantの発行はしません。`cmd/rescue-mcp`の既定のconnectorはnilのままです。
 - **未実装**：
@@ -112,7 +112,7 @@ workerは、admission監視1、transport待ち1、global request 1、channel ope
 ## 検証の範囲
 
 - 試験は`backend/internal/agentchannel`の`_test.go`だけで、buffer付きmemory conn（期限・半開・読取り停止・close遅延/失敗を注入できる）、既存の`ephemeral.Issuer`と実`agentexec.Session`、起動しないMac profileのfake runtime、合成の決定的Ed25519 seed fixtureを使います。network bind、dial、process、shell、OS signal、実鍵は使いません。SSHのhandshakeは実ライブラリをmemory上で動かします。
-- 対象：pin済みhostと登録済みclientでの双方向data、誤ったpin・未登録鍵・LaunchID・epoch・generation・policy・鍵集合digest・profileの拒否、設定の拒否、Acceptの単回性、非対応channel・2本目・global/channel request・拡張dataの拒否、取消・期限切れ・部分handshake、心拍が通る無出力期間の継続、半開relayと読取り停止での失効後close、hard deadline・外部失効・ctx取消、心拍の拒否と過多、close遅延時の未確認保持と後からの合流、close失敗の同じconnでの再試行。
+- 対象：pin済みhostと登録済みclientでの双方向data、誤ったpin・未登録鍵・LaunchID・epoch・generation・policy・鍵集合digest・profileの拒否、設定の拒否、Acceptの単回性、非対応channel・2本目・global/channel request・拡張dataの拒否、取消・期限切れ・部分handshake、心拍が通る無出力期間の継続、opt-inの有無による切断後の失効・再接続の区別、次の接続世代での同じSessionとhard deadlineの維持、別のclient鍵の拒否、半開relayと読取り停止での失効後close、外部失効・ctx取消、心拍の拒否と過多、close遅延時の未確認保持と後からの合流、close失敗の同じconnでの再試行。
 - 合成の試験は`backend/internal/agentlink`の`_test.go`です。MCP stdio→実agentwire client→暗号化した実SSH agent channel（buffer付きmemory conn）→同じgrantのSession→fake Mac runtimeの全経路を通します。内容は、固定出力とrequest_idの冪等・不一致、明示cancel、所有channelの喪失（半開）、要求なしの短いhard deadline、誤pin・未登録鍵・epoch・generation・鍵集合・profile・policyの拒否、session・direct-tcpipへのfallbackがないことです。2本目のagent channelの拒否はagentchannelの試験で確認します。
 - 試験は時間に依存する部分があり（10ミリ秒〜数秒）、遅い環境での揺れは統合担当の実行で確認が必要です。
 - これらの合格は、実relay、実通信、native起動、実鍵登録、同意、配置の成功を示しません。

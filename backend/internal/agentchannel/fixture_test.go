@@ -109,13 +109,17 @@ func newEnvElapsed(t *testing.T, lifetime, elapsed time.Duration) *grantEnv {
 	}
 }
 
-func (e *grantEnv) serverConfig(b Budgets) ServerConfig {
-	return ServerConfig{Session: e.session, AllowedKeys: e.keys, HostKey: e.host, Budgets: b}
+func (e *grantEnv) serverConfig(b Budgets, allowReconnect ...bool) ServerConfig {
+	var reconnect bool
+	if len(allowReconnect) != 0 {
+		reconnect = allowReconnect[0]
+	}
+	return ServerConfig{Session: e.session, AllowedKeys: e.keys, HostKey: e.host, Budgets: b, AllowReconnect: reconnect}
 }
 
-func (e *grantEnv) newServer(t *testing.T, b Budgets) *Server {
+func (e *grantEnv) newServer(t *testing.T, b Budgets, allowReconnect ...bool) *Server {
 	t.Helper()
-	s, err := NewServer(e.serverConfig(b))
+	s, err := NewServer(e.serverConfig(b, allowReconnect...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,10 +216,10 @@ type pair struct {
 	sConn, cConn   *memConn
 }
 
-func connect(t *testing.T, env *grantEnv, ctx context.Context, sb, cb Budgets) pair {
+func connect(t *testing.T, env *grantEnv, ctx context.Context, sb, cb Budgets, allowReconnect ...bool) pair {
 	t.Helper()
 	sConn, cConn := memPair()
-	srv := env.newServer(t, sb)
+	srv := env.newServer(t, sb, allowReconnect...)
 	res := acceptAsync(ctx, srv, sConn)
 	client, err := Open(context.Background(), env.clientConfig(cb), cConn)
 	if err != nil {
@@ -265,11 +269,12 @@ type rawPair struct {
 }
 
 // rawAdmitted opens the correct agent channel from a raw peer.
-func rawAdmitted(t *testing.T, env *grantEnv, b Budgets, answer bool) rawPair {
+func rawAdmitted(t *testing.T, env *grantEnv, b Budgets, answer bool, allowReconnect ...bool) rawPair {
 	t.Helper()
 	sConn, cConn := memPair()
 	early := env.closedBeforeRevoke(sConn)
-	res := acceptAsync(context.Background(), env.newServer(t, b), sConn)
+	srv := env.newServer(t, b, allowReconnect...)
+	res := acceptAsync(context.Background(), srv, sConn)
 	raw := rawClient(t, env, cConn, answer)
 	ch, reqs, err := raw.OpenChannel(ChannelType, env.extra())
 	if err != nil {
@@ -295,8 +300,9 @@ func endsWith(t *testing.T, env *grantEnv, p rawPair, want Reason) {
 	if err := p.server.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if !env.revoked() || p.early.Load() || !p.sConn.isClosed() {
-		t.Fatal("grant not revoked before the owned conn closed")
+	grace := p.server.allowReconnect && (want == ReasonTransport || want == ReasonHeartbeat || want == ReasonReadStall || want == ReasonWriteStall)
+	if env.revoked() == grace || p.early.Load() != grace || !p.sConn.isClosed() {
+		t.Fatalf("reason %v: revoked=%v early=%v", want, env.revoked(), p.early.Load())
 	}
 }
 

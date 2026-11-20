@@ -12,6 +12,56 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestPinnedHostAndEnrolledClientCarryAgentBytesForReconnect(t *testing.T) {
+	env := newEnv(t, 30*time.Second)
+	p := connect(t, env, context.Background(), quickBudgets(), quickBudgets(), true)
+	early := env.closedBeforeRevoke(p.sConn)
+
+	clientKey := env.client.PublicKey().Marshal()
+	if got := p.server.Peer().PublicKey(); !bytes.Equal(got, clientKey) {
+		t.Fatal("server peer is not the enrolled client key")
+	}
+	if key, err := p.server.Peer().Key(); err != nil || !bytes.Equal(key.Marshal(), clientKey) {
+		t.Fatalf("verified key for composition: %v", err)
+	}
+	if got := p.client.Peer().PublicKey(); !bytes.Equal(got, env.host.PublicKey().Marshal()) {
+		t.Fatal("client peer is not the pinned host key")
+	}
+	copied := p.server.Peer().PublicKey()
+	copied[0] ^= 0xff
+	if !bytes.Equal(p.server.Peer().PublicKey(), clientKey) {
+		t.Fatal("peer key is not an immutable copy")
+	}
+	if p.server.Binding() != env.binding || p.client.Binding() != env.binding {
+		t.Fatal("binding metadata differs from the grant")
+	}
+
+	roundTrip(t, p.client, p.server, "agent frame from the client")
+	roundTrip(t, p.server, p.client, "agent frame from the host")
+	if env.revoked() || p.server.Reason() != ReasonNone {
+		t.Fatal("live channel revoked its grant")
+	}
+
+	if err := p.client.Close(); err != nil {
+		t.Fatalf("client close: %v", err)
+	}
+	if p.client.Reason() != ReasonClosed {
+		t.Fatalf("local close reason %v", p.client.Reason())
+	}
+	// The server learns of it through its transport. An admitted transport loss
+	// pauses admission and preserves the grant for the next generation.
+	waitDone(t, p.server.Done(), 3*time.Second, "server teardown after the client left")
+	if p.server.Reason() != ReasonTransport || env.revoked() {
+		t.Fatalf("reason %v revoked %v", p.server.Reason(), env.revoked())
+	}
+	if err := p.server.Close(); err != nil {
+		t.Fatalf("server close: %v", err)
+	}
+	if !early.Load() || !p.sConn.isClosed() {
+		t.Fatal("grace transport was not closed while preserving the grant")
+	}
+}
+
 func TestPinnedHostAndEnrolledClientCarryAgentBytes(t *testing.T) {
 	env := newEnv(t, 30*time.Second)
 	p := connect(t, env, context.Background(), quickBudgets(), quickBudgets())

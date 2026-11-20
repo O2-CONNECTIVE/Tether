@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +37,7 @@ var answerReception = bytes.Repeat([]byte{0x72}, agentgateway.RescueReceptionSiz
 // back to the test, which owns the stream.
 type answerRegistry struct {
 	key                  chan []byte // K as the host proved it
+	opened               chan agentgateway.RescueRequest
 	request              chan agentgateway.RescueIdentity
 	done                 chan struct{}
 	once                 sync.Once
@@ -49,12 +51,14 @@ type answerRegistry struct {
 
 func newAnswerRegistry() *answerRegistry {
 	return &answerRegistry{key: make(chan []byte, 1), request: make(chan agentgateway.RescueIdentity, 1), done: make(chan struct{}),
-		ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1), disconnected: make(chan []byte, 1), streamRead: make(chan struct{}, 1)}
+		opened: make(chan agentgateway.RescueRequest, 4), ended: make(chan []byte, 1), answered: make(chan rescueAnswerCall, 1), disconnected: make(chan []byte, 1), streamRead: make(chan struct{}, 1)}
 }
 
 func (*answerRegistry) AdmitRescue() error { return nil }
 func (r *answerRegistry) OpenRescue(q agentgateway.RescueRequest) (agentgateway.RescueReception, error) {
 	r.key <- append([]byte(nil), q.Key...)
+	r.opened <- agentgateway.RescueRequest{Key: append([]byte(nil), q.Key...), HostNonce: append([]byte(nil), q.HostNonce...),
+		GatewayNonce: append([]byte(nil), q.GatewayNonce...), Purpose: q.Purpose, Reception: append([]byte(nil), q.Reception...), Proof: append([]byte(nil), q.Proof...)}
 	sig, err := rescueIdentity.Sign(rand.Reader, agentgateway.RescueResultTranscript(rescueEndpoint, q.HostNonce, q.Key, answerReception, "123456789012"))
 	if err != nil {
 		return agentgateway.RescueReception{}, err
@@ -124,6 +128,22 @@ func openAnswer(t *testing.T, reg *answerRegistry) (*RescueClient, []byte, ed255
 	}
 	t.Cleanup(reg.end)
 	return c, <-reg.key, k
+}
+
+func openAnswerWithCodeExpiry(t *testing.T, reg *answerRegistry) (*RescueClient, []byte, chan time.Time) {
+	t.Helper()
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, newMemTransport(newRescueHandler(t, reg)))
+	expires := make(chan time.Time)
+	c.after = func(time.Duration) <-chan time.Time { return expires }
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(reg.end)
+	k := <-reg.key
+	if opened := <-reg.opened; opened.Purpose != agentgateway.RescuePurposeNew {
+		t.Fatalf("initial purpose = %q", opened.Purpose)
+	}
+	return c, k, expires
 }
 
 // identityValues are the values one identity proof binds.
@@ -447,6 +467,93 @@ func TestRescueRequestOutlivesTheCodeExpiry(t *testing.T) {
 	reg.answer(t)
 }
 
+func TestAcceptedRescueRequestOutlivesCodeExpiryDuringDisconnect(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	c, kWire, expires := openAnswerWithCodeExpiry(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	hostConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	first := reg.answer(t)
+	if err := first.conn.Close(); err != nil {
+		t.Fatalf("close stream before SSH bytes: %v", err)
+	}
+	if _, err := hostConn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("host stream read after transport close succeeded")
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the channel transport loss")
+	}
+	expires <- time.Now()
+	select {
+	case <-c.Done():
+		t.Fatal("the first accepted request did not outlive code expiry while disconnected")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := c.HostKey().Sign(rand.Reader, []byte("still live")); err != nil {
+		t.Fatalf("K was discarded during the reconnect grace: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.Resume(ctx); err != nil {
+		t.Fatalf("Resume after code expiry: %v", err)
+	}
+}
+
+func TestAcceptedRescueRequestOutlivesCodeExpiryBeforeResumeIdentity(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	c, kWire, expires := openAnswerWithCodeExpiry(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	hostConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	first := reg.answer(t)
+	if err := first.conn.Close(); err != nil {
+		t.Fatalf("close stream before SSH bytes: %v", err)
+	}
+	if _, err := hostConn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("host stream read after transport close succeeded")
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the channel transport loss")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.Resume(ctx); err != nil {
+		t.Fatalf("Resume before the next identity request: %v", err)
+	}
+	if attempt := <-reg.opened; attempt.Purpose != agentgateway.RescuePurposeResume {
+		t.Fatalf("resume purpose = %q", attempt.Purpose)
+	}
+	expires <- time.Now()
+	select {
+	case <-c.Done():
+		t.Fatal("the first accepted request did not outlive code expiry before the resumed identity")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := c.HostKey().Sign(rand.Reader, []byte("still live")); err != nil {
+		t.Fatalf("K was discarded before the resumed identity: %v", err)
+	}
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow after resume: %v", err)
+	}
+	reg.answer(t)
+}
+
 // The grant's host key is K itself, so the channel's host key dies with the
 // reception.
 func TestRescueHostKeyIsKUntilTheReceptionEnds(t *testing.T) {
@@ -503,6 +610,425 @@ func TestRescueClientCloseSendsEndFrameAfterAllow(t *testing.T) {
 	}
 	expectDone(t, c)
 	expectDropped(t, k)
+}
+
+func TestRescueClientKeepsTheReceptionKeyAfterChannelTransportLoss(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	c, kWire, _ := openAnswer(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	first := reg.answer(t)
+	if err := first.conn.Close(); err != nil {
+		t.Fatalf("close first channel: %v", err)
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the channel transport loss")
+	}
+	resumer, ok := any(c).(interface{ Resume(context.Context) error })
+	if !ok {
+		t.Fatal("RescueClient does not support resuming the same reception")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := resumer.Resume(ctx); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got := <-reg.key; !bytes.Equal(got, kWire) {
+		t.Fatal("resume proof used a different K")
+	}
+	firstOpen, resumedOpen := <-reg.opened, <-reg.opened
+	if firstOpen.Purpose != agentgateway.RescuePurposeNew || len(firstOpen.Reception) != 0 {
+		t.Fatalf("initial purpose/reception = %q/%x", firstOpen.Purpose, firstOpen.Reception)
+	}
+	if resumedOpen.Purpose != agentgateway.RescuePurposeResume || !bytes.Equal(resumedOpen.Reception, answerReception) || !bytes.Equal(resumedOpen.Key, kWire) {
+		t.Fatalf("resume proof did not bind the same K and reception: purpose=%q reception=%x", resumedOpen.Purpose, resumedOpen.Reception)
+	}
+	transcript := agentgateway.RescueTranscript(rescueEndpoint, resumedOpen.Key, resumedOpen.GatewayNonce, agentgateway.RescuePurposeResume, answerReception)
+	if err := c.HostKey().PublicKey().Verify(transcript, &ssh.Signature{Format: ssh.KeyAlgoED25519, Blob: resumedOpen.Proof}); err != nil {
+		t.Fatalf("resume proof: %v", err)
+	}
+	clear(transcript)
+	select {
+	case <-c.Done():
+		t.Fatal("the reception ended with the channel transport loss")
+	default:
+	}
+	host := c.HostKey()
+	if host == nil || !bytes.Equal(host.PublicKey().Marshal(), kWire) {
+		t.Fatal("the host key changed while the reception was in its reconnect grace")
+	}
+	sig, err := host.Sign(rand.Reader, []byte("resume"))
+	if err != nil || host.PublicKey().Verify([]byte("resume"), sig) != nil {
+		t.Fatalf("K was not retained during the reconnect grace: %v", err)
+	}
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	secondConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow after resume: %v", err)
+	}
+	second := reg.answer(t)
+	if !bytes.Equal(second.id, answerReception) || !bytes.Equal(second.a.Dispatch.HostKey, kWire) {
+		t.Fatal("resumed answer did not use the same reception and K")
+	}
+	_ = secondConn.Close()
+}
+
+func TestRescueClientResumesWhenStreamEndsAfterInitialSSHData(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	c, kWire, _ := openAnswer(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	hostConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	first := reg.answer(t)
+	initial := []byte("initial SSH transport bytes")
+	if _, err := first.conn.Write(initial); err != nil {
+		t.Fatalf("write initial SSH bytes: %v", err)
+	}
+	got := make([]byte, len(initial))
+	if _, err := io.ReadFull(hostConn, got); err != nil || !bytes.Equal(got, initial) {
+		t.Fatalf("initial SSH bytes = %q, %v", got, err)
+	}
+	if err := first.conn.Close(); err != nil {
+		t.Fatalf("close stream after initial SSH bytes: %v", err)
+	}
+	if _, err := hostConn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("host stream read after transport close succeeded")
+	}
+	select {
+	case <-reg.disconnected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gateway did not observe the channel transport loss")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.Resume(ctx); err != nil {
+		t.Fatalf("Resume after the established stream ended: %v", err)
+	}
+	if got := <-reg.key; !bytes.Equal(got, kWire) {
+		t.Fatal("resume proof used a different K")
+	}
+	initialOpen, resumedOpen := <-reg.opened, <-reg.opened
+	if initialOpen.Purpose != agentgateway.RescuePurposeNew ||
+		resumedOpen.Purpose != agentgateway.RescuePurposeResume ||
+		!bytes.Equal(resumedOpen.Reception, answerReception) || !bytes.Equal(resumedOpen.Key, kWire) {
+		t.Fatalf("open attempts = %q/%q, resumed reception/key = %x/%x", initialOpen.Purpose, resumedOpen.Purpose, resumedOpen.Reception, resumedOpen.Key)
+	}
+}
+
+func TestRescueClientRefusesResumeAfterReceptionClose(t *testing.T) {
+	reg := newAnswerRegistry()
+	c, kWire, _ := openAnswer(t, reg)
+	values := valuesFor(kWire)
+	reg.request <- values.identity(values.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := c.Resume(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Resume after close = %v, want ErrClosed", err)
+	}
+	if _, err := c.HostKey().Sign(rand.Reader, []byte("resume")); err == nil {
+		t.Fatal("the reception key signed after Close")
+	}
+}
+
+func TestRescueClientCloseBoundsWaitForWriteLock(t *testing.T) {
+	reg := newAnswerRegistry()
+	c, kWire, _ := openAnswer(t, reg)
+	sent := valuesFor(kWire)
+	reg.request <- sent.identity(sent.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	if _, err := c.Allow(dispatchFor(kWire)); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+
+	c.wsWriteMu.Lock()
+	started := time.Now()
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if elapsed := time.Since(started); elapsed > 350*time.Millisecond {
+			t.Fatalf("Close took %v while the WebSocket write lock was held", elapsed)
+		}
+	case <-time.After(350 * time.Millisecond):
+		c.wsWriteMu.Unlock()
+		select {
+		case <-closed:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Close remained blocked after the WebSocket write lock was released")
+		}
+		t.Fatal("Close did not apply its 250ms bound while waiting for the WebSocket write lock")
+	}
+	c.wsWriteMu.Unlock()
+}
+
+type deadlineCloseConn struct {
+	net.Conn
+	started  chan struct{}
+	release  chan struct{}
+	returned chan struct{}
+	once     sync.Once
+}
+
+func (c *deadlineCloseConn) Close() error {
+	c.once.Do(func() {
+		close(c.started)
+		<-c.release
+	})
+	err := c.Conn.Close()
+	if c.returned != nil {
+		close(c.returned)
+	}
+	return err
+}
+
+func TestRawConnConcurrentCloseDoesNotWaitInsideOnce(t *testing.T) {
+	base, peer := net.Pipe()
+	defer peer.Close()
+	closeStarted, releaseClose, closeReturned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+	t.Cleanup(release)
+	raw := &rawConn{Conn: &deadlineCloseConn{Conn: base, started: closeStarted, release: releaseClose, returned: closeReturned}, asyncClose: true}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- raw.Close() }()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first Close did not enter the base connection")
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- raw.Close() }()
+	select {
+	case <-secondDone:
+	case <-time.After(100 * time.Millisecond):
+		release()
+		<-firstDone
+		t.Fatal("concurrent Close waited inside sync.Once for the blocked base Close")
+	}
+	release()
+	select {
+	case <-closeReturned:
+	case <-time.After(time.Second):
+		t.Fatal("base Close did not finish after release")
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first Close caller did not return")
+	}
+}
+
+func TestRescueClientCloseReportsUnknownWhenEndFrameAndBaseCloseBlock(t *testing.T) {
+	reg := newAnswerRegistry()
+	transport := newMemTransport(newRescueHandler(t, reg))
+	closeStarted, releaseClose := make(chan struct{}), make(chan struct{})
+	writeStarted, releaseWrite := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseWrite); close(releaseClose) }) }
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, transport)
+	var raw *memConn
+	c.transport = func(own acquirer) http.RoundTripper {
+		transport.own = own
+		transport.track = func(conn net.Conn) (net.Conn, error) {
+			raw = conn.(*memConn)
+			return own.attach(&deadlineCloseConn{Conn: conn, started: closeStarted, release: releaseClose})
+		}
+		return transport
+	}
+	t.Cleanup(reg.end)
+	t.Cleanup(release)
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c.cleanup = 100 * time.Millisecond
+	raw.blockNextWrite(writeStarted, releaseWrite)
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	select {
+	case <-writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("end frame did not enter the blocked WebSocket write")
+	}
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		release()
+		<-closed
+		t.Fatal("base connection Close did not start after the bounded frame-write attempt")
+	}
+	select {
+	case err := <-closed:
+		if !errors.Is(err, ErrCleanupUnknown) {
+			t.Fatalf("explicit RescueClient.Close = %v, want ErrCleanupUnknown", err)
+		}
+	case <-time.After(time.Second):
+		release()
+		<-closed
+		t.Fatal("explicit RescueClient.Close did not return within its cleanup budget")
+	}
+	c.mu.Lock()
+	keyDiscarded := len(c.key) == 0 && c.key == nil
+	c.mu.Unlock()
+	if !keyDiscarded {
+		t.Fatal("explicit Close returned before discarding K")
+	}
+	release()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := c.closer.wait(ctx); err != nil {
+		t.Fatalf("same close attempt after release = %v", err)
+	}
+}
+
+func TestRescueStreamCloseStartsTheCloserBeforeItsDeadline(t *testing.T) {
+	reg := newAnswerRegistry()
+	reg.preserveOnDisconnect = true
+	transport := newMemTransport(newRescueHandler(t, reg))
+	closeStarted, releaseClose := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, transport)
+	c.transport = func(own acquirer) http.RoundTripper {
+		transport.own = own
+		transport.track = func(conn net.Conn) (net.Conn, error) {
+			return own.attach(&deadlineCloseConn{Conn: conn, started: closeStarted, release: releaseClose})
+		}
+		return transport
+	}
+	t.Cleanup(release)
+	t.Cleanup(reg.end)
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	kWire := <-reg.key
+	sent := valuesFor(kWire)
+	reg.request <- sent.identity(sent.sign(t, rescueIdentity))
+	receiveRequest(t, c)
+	streamConn, err := c.Allow(dispatchFor(kWire))
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	reg.answer(t)
+	c.mu.Lock()
+	stream := c.stream
+	c.mu.Unlock()
+	if stream == nil {
+		t.Fatal("Allow did not retain the channel stream")
+	}
+	stream.cleanup = 40 * time.Millisecond
+	closed := make(chan error, 1)
+	go func() { closed <- streamConn.Close() }()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("stream close did not reach the blocked base connection Close")
+	}
+	select {
+	case err := <-closed:
+		if !errors.Is(err, ErrCleanupUnknown) {
+			t.Fatalf("stream Close = %v, want ErrCleanupUnknown while raw Close is blocked", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		release()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("stream Close remained blocked after releasing the base connection")
+		}
+		t.Fatal("stream Close blocked before starting its bounded cleanup wait")
+	}
+	release()
+	if err := streamConn.Close(); err != nil {
+		t.Fatalf("stream Close after releasing raw Close = %v", err)
+	}
+}
+
+func TestRescueDisconnectStartsBoundedCloserBeforeReturning(t *testing.T) {
+	reg := newAnswerRegistry()
+	transport := newMemTransport(newRescueHandler(t, reg))
+	closeStarted, releaseClose := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+	c := newRescueClient(t, []ssh.PublicKey{rescueIdentity.PublicKey()}, transport)
+	c.transport = func(own acquirer) http.RoundTripper {
+		transport.own = own
+		transport.track = func(conn net.Conn) (net.Conn, error) {
+			return own.attach(&deadlineCloseConn{Conn: conn, started: closeStarted, release: releaseClose})
+		}
+		return transport
+	}
+	t.Cleanup(reg.end)
+	t.Cleanup(release)
+	if _, err := openRescue(t, c); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c.mu.Lock()
+	attempt, link := c.attempt, c.closer
+	c.closed = true
+	c.mu.Unlock()
+	if link == nil {
+		t.Fatal("Open did not retain its closer")
+	}
+	notificationDone := make(chan struct{})
+	go func() {
+		c.disconnectAttempt(attempt)
+		close(notificationDone)
+	}()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect did not start closing the base connection")
+	}
+	returned := false
+	select {
+	case <-notificationDone:
+		returned = true
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	cleanupErr := link.wait(ctx)
+	cancel()
+	release()
+	select {
+	case <-notificationDone:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect notification remained blocked after the base Close was released")
+	}
+	if !errors.Is(cleanupErr, ErrCleanupUnknown) {
+		t.Fatalf("bounded closer wait = %v, want ErrCleanupUnknown while Close is blocked", cleanupErr)
+	}
+	if !returned {
+		t.Fatal("disconnect notification blocked in synchronous WebSocket CloseNow")
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := link.wait(ctx); err != nil {
+		t.Fatalf("closer wait after releasing the same connection = %v", err)
+	}
 }
 
 // Between the request and the answer the gateway sends nothing; a frame there

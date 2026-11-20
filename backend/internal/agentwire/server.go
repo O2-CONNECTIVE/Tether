@@ -24,25 +24,30 @@ import (
 // the Session grant's KeySetDigest, and Peer must be one of them.
 //
 // Liveness is closed by the channel owner when its heartbeat or lease declares
-// the peer gone (a half-open stream). Serve then revokes the grant before it
-// closes the stream. agentwire has no idle timer of its own and does not stop
-// valid long-running commands; producing the signal is the owner's duty.
+// the peer gone (a half-open stream). An eligible live transport end pauses
+// admission and cancels current work; owner cancellation and protocol errors
+// revoke the grant. agentwire has no idle timer of its own.
 type ServerConfig struct {
-	Session      *agentexec.Session
-	Peer         ssh.PublicKey
-	ApprovedKeys []ssh.PublicKey
-	Liveness     <-chan struct{}
+	Session              *agentexec.Session
+	Peer                 ssh.PublicKey
+	ApprovedKeys         []ssh.PublicKey
+	Liveness             <-chan struct{}
+	ConnectionGeneration uint64
+	AllowReconnect       bool
+	OnActivity           func()
 }
 
 // Server serves one stream for one Session. NewServer takes the Session's
 // single adapter claim, so no second Server can serve the same grant. The
 // Server owns only the command IDs that its own Start replies returned.
 type Server struct {
-	session  *agentexec.Session
-	binding  supervisor.Binding
-	mode     agentexec.Mode
-	profile  agentexec.Profile
-	liveness <-chan struct{}
+	session        *agentexec.Session
+	binding        supervisor.Binding
+	mode           agentexec.Mode
+	profile        agentexec.Profile
+	liveness       <-chan struct{}
+	onActivity     func()
+	allowReconnect bool
 	// prefix namespaces core request IDs, so a Start issued directly by the
 	// local owner can never be replayed into and adopted through the wire.
 	prefix string
@@ -71,12 +76,16 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, ErrUnconfigured
 	}
 	prefix := hex.EncodeToString(raw[:]) + "."
-	if err := s.ClaimWithRequestPrefix(prefix); err != nil {
+	generation := cfg.ConnectionGeneration
+	if generation == 0 {
+		generation = 1
+	}
+	if err := s.ClaimWithRequestPrefixGeneration(generation, prefix); err != nil {
 		return nil, errors.Join(ErrUnconfigured, err)
 	}
 	return &Server{
 		session: s, binding: binding, mode: s.Mode(), profile: s.Profile(), liveness: cfg.Liveness,
-		prefix: prefix, owned: map[string]struct{}{},
+		prefix: prefix, owned: map[string]struct{}{}, onActivity: cfg.OnActivity, allowReconnect: cfg.AllowReconnect,
 	}, nil
 }
 
@@ -129,15 +138,13 @@ func canonical(key ssh.PublicKey) (ssh.PublicKey, bool) {
 
 // Serve reads requests from conn until the stream ends, ctx is done, the
 // Liveness signal closes or the peer violates the protocol, and takes ownership
-// of conn. Every return revokes the grant through Session.TransportLost before
-// conn is closed, which also unblocks a stalled Read or Write: there is no
-// reconnect or resume. The protected owner still confirms guest cleanup with
-// Session.Close; Serve does not claim it. A clean end of stream returns nil.
+// of conn. An eligible transport end pauses admission and stops current work;
+// owner cancellation and protocol errors revoke the grant before conn is
+// closed. The owner confirms guest cleanup. A clean end of stream returns nil.
 //
 // An early refusal with a held Session (nil ctx or conn) also revokes the
-// grant before closing the given conn, because no other stream can serve the
-// claimed Session. A second Serve only closes its own conn: the first Serve
-// owns the revoke. An owner that never calls Serve must close the Session.
+// grant before closing the given conn. A second Serve only closes its own conn;
+// an owner that does not resume the Session must close it explicitly.
 func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	held := s != nil && s.session != nil
 	if held {
@@ -164,23 +171,58 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	}
 
 	stop := make(chan struct{})
-	var once sync.Once
+	var stopMu sync.Mutex
+	stopped, revoked := false, false
 	var lost atomic.Bool
-	halt := func() {
-		once.Do(func() {
+	halt := func(reconnectable bool) {
+		reconnectable = reconnectable && s.allowReconnect
+		stopMu.Lock()
+		if stopped {
+			escalate := !reconnectable && !revoked
+			if escalate {
+				revoked = true
+			}
+			stopMu.Unlock()
+			if escalate {
+				s.session.TransportLost()
+			}
+			return
+		}
+		stopped = true
+		revoked = !reconnectable
+		stopMu.Unlock()
+		if reconnectable {
+			s.session.ObserveDeadline()
+			live := false
+			select {
+			case <-s.session.Done():
+			default:
+				live = s.session.StopReason() == agentexec.StopNone
+			}
+			if live {
+				s.session.InterruptTransport()
+			} else {
+				stopMu.Lock()
+				revoked = true
+				stopMu.Unlock()
+				s.session.TransportLost()
+			}
+		} else {
 			s.session.ObserveDeadline()
 			s.session.TransportLost()
-			close(stop)
-			_ = conn.Close()
-		})
+		}
+		close(stop)
+		_ = conn.Close()
 	}
+	monitorDone := make(chan struct{})
 	go func() {
+		defer close(monitorDone)
 		select {
 		case <-ctx.Done():
-			halt()
+			halt(false)
 		case <-s.liveness:
 			lost.Store(true)
-			halt()
+			halt(true)
 		case <-stop:
 		}
 	}()
@@ -215,6 +257,9 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			if err != nil {
 				return ErrProtocol
 			}
+			if s.onActivity != nil {
+				s.onActivity()
+			}
 			select {
 			case slots <- struct{}{}:
 			case <-stop:
@@ -229,13 +274,16 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				werr := writeFrame(conn, reply)
 				writeMu.Unlock()
 				if werr != nil {
-					halt()
+					halt(true)
 				}
 			}()
 		}
 	}()
-	halt()
+	reconnectable := (lost.Load() || err == nil || errors.Is(err, ErrClosed)) &&
+		!errors.Is(err, ErrProtocol) && ctx.Err() == nil
+	halt(reconnectable)
 	handlers.Wait()
+	<-monitorDone
 	return err
 }
 

@@ -3,6 +3,7 @@ package agentchannel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"time"
@@ -20,22 +21,27 @@ import (
 // Authority input, so an equal-looking Authority cannot be substituted.
 // HostKey is the existing host signer, which this package never generates.
 type ServerConfig struct {
-	Session     *agentexec.Session
-	AllowedKeys []ssh.PublicKey // the approved raw Ed25519 set; its KeySetDigest must equal the grant's
-	HostKey     ssh.Signer
-	Budgets     Budgets
+	Session              *agentexec.Session
+	AllowedKeys          []ssh.PublicKey // the approved raw Ed25519 set; its KeySetDigest must equal the grant's
+	HostKey              ssh.Signer
+	Budgets              Budgets
+	ConnectionGeneration uint64 // the next connection for this grant; zero selects generation 1
+	AllowReconnect       bool   // only an explicitly opted-in owner may preserve the grant on transport loss
+	OnActivity           func()
 }
 
-// Server serves one grant on exactly one supplied connection.
+// Server serves one grant on exactly one supplied connection generation.
 type Server struct {
-	session  *agentexec.Session
-	binding  Binding
-	deadline time.Time
-	host     *fixedSigner
-	keys     []ssh.PublicKey // canonical copies, parsed once
-	allowed  map[string]struct{}
-	expect   [32]byte
-	budgets  Budgets
+	session        *agentexec.Session
+	binding        Binding
+	deadline       time.Time
+	host           *fixedSigner
+	keys           []ssh.PublicKey // canonical copies, parsed once
+	allowed        map[string]struct{}
+	expect         [32]byte
+	budgets        Budgets
+	onActivity     func()
+	allowReconnect bool
 
 	mu   sync.Mutex
 	used bool
@@ -51,16 +57,20 @@ func (s *Server) Dispatch() Dispatch {
 	return Dispatch{Binding: s.binding, Deadline: s.deadline, HostKey: append([]byte(nil), s.host.public.Marshal()...)}
 }
 
-// NewServer validates every input before it takes the Session's single
-// transport claim, so a refused configuration leaves the Session unclaimed. A
-// second Server for the same Session is refused: one channel per grant.
+// NewServer validates every input before it claims the Session's next
+// transport generation. A later generation requires an admitted eligible
+// loss and confirmed cleanup from the preceding generation.
 func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Session == nil || !cfg.Budgets.valid() {
 		return nil, ErrConfig
 	}
 	grant := cfg.Session.Grant()
 	profile := cfg.Session.Profile()
-	binding := Binding{Grant: grant.Binding, ConnectionGeneration: 1, KeySetDigest: grant.KeySetDigest, Profile: profile}
+	generation := cfg.ConnectionGeneration
+	if generation == 0 {
+		generation = 1
+	}
+	binding := Binding{Grant: grant.Binding, ConnectionGeneration: generation, KeySetDigest: grant.KeySetDigest, Profile: profile}
 	if !binding.valid() || cfg.Session.Binding() != grant.Binding || grant.GuestBoundary != boundaryFor(profile) {
 		return nil, ErrConfig
 	}
@@ -88,12 +98,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if !time.Now().Before(grant.HardDeadline) {
 		return nil, ErrConfig
 	}
-	if err := cfg.Session.ClaimTransport(); err != nil {
-		return nil, ErrConfig
+	if err := cfg.Session.ClaimTransportGeneration(generation); err != nil {
+		return nil, errors.Join(ErrConfig, err)
 	}
 	return &Server{
 		session: cfg.Session, binding: binding, deadline: grant.HardDeadline,
 		host: host, keys: keys, allowed: allowed, expect: commitment(binding, host.public.Marshal()), budgets: cfg.Budgets,
+		onActivity: cfg.OnActivity, allowReconnect: cfg.AllowReconnect,
 	}, nil
 }
 
@@ -126,9 +137,9 @@ func (s *Server) ApprovedKeys() []ssh.PublicKey {
 
 // Accept takes ownership of conn on every call with a non-nil conn, exactly
 // once. ctx bounds the whole channel: its end tears the channel down. The
-// first call binds the Session: every failure revokes it before closing conn,
-// and the returned channel revokes it before closing on any teardown. A later
-// call returns ErrUsed and closes only the conn it was given. A non-nil
+// first call binds this generation: every pre-admission failure revokes the
+// Session before closing conn; the returned channel pauses it only for an
+// eligible admitted transport loss. A later call returns ErrUsed and closes only the conn it was given. A non-nil
 // Channel with an error is the same owner whose cleanup is still unconfirmed;
 // call its Close to retry. Nothing is redialed or retried here.
 func (s *Server) Accept(ctx context.Context, conn net.Conn) (*Channel, error) {
@@ -148,6 +159,8 @@ func (s *Server) Accept(ctx context.Context, conn net.Conn) (*Channel, error) {
 		return nil, ErrUsed
 	}
 	c := newChannel(conn, s.budgets, s.deadline, s.binding, s.session)
+	c.onActivity = s.onActivity
+	c.allowReconnect = s.allowReconnect
 	if ctx == nil {
 		return c.fail(ReasonHandshake, ErrConfig)
 	}

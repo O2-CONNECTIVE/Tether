@@ -172,6 +172,9 @@ func newRescueClient(t *testing.T, pins []ssh.PublicKey, m *memTransport) *Rescu
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := c.Prepare(); err != nil {
+		t.Fatal(err)
+	}
 	c.transport = func(own acquirer) http.RoundTripper {
 		m.own = own
 		m.track = own.attach
@@ -346,10 +349,75 @@ func TestRescueClientPinsTheCurrentAndAtMostOneNextKey(t *testing.T) {
 			if !tc.ok && !errors.Is(err, ErrConfig) {
 				t.Fatalf("NewRescueClient = %v, want ErrConfig", err)
 			}
-			if tc.ok && len(c.key) != ed25519.PrivateKeySize {
-				t.Fatal("受付 ON made no K")
+			if tc.ok {
+				if err := c.Prepare(); err != nil {
+					t.Fatalf("Prepare = %v", err)
+				}
+				if len(c.key) != ed25519.PrivateKeySize {
+					t.Fatal("受付 ON made no K")
+				}
 			}
 		})
+	}
+}
+
+func TestNewRescueClientDefersKUntilPrepared(t *testing.T) {
+	c, err := NewRescueClient(RescueClientConfig{Endpoint: rescueEndpoint, Pins: []ssh.PublicKey{rescueIdentity.PublicKey()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if c.HostKey() != nil || c.key != nil {
+		t.Fatal("NewRescueClient created K before its owner was registered")
+	}
+	if err := c.Prepare(); err != nil {
+		t.Fatalf("Prepare = %v", err)
+	}
+	if c.HostKey() == nil || len(c.key) != ed25519.PrivateKeySize {
+		t.Fatal("Prepare did not create K")
+	}
+}
+
+func TestRescueClientDropsKWhenClosedDuringPreparation(t *testing.T) {
+	c, err := NewRescueClient(RescueClientConfig{Endpoint: rescueEndpoint, Pins: []ssh.PublicKey{rescueIdentity.PublicKey()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	entered, gate := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	generated := make(chan ed25519.PrivateKey, 1)
+	c.generateKey = func() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+		pub, key, err := ed25519.GenerateKey(rand.Reader)
+		if err == nil {
+			generated <- key
+		}
+		close(entered)
+		<-gate
+		return pub, key, err
+	}
+	prepared := make(chan error, 1)
+	go func() { prepared <- c.Prepare() }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("K preparation did not reach the synchronization point")
+	}
+	key := <-generated
+	c.StartClose()
+	release()
+	if err := <-prepared; !errors.Is(err, ErrClosed) {
+		t.Fatalf("Prepare after StartClose = %v, want ErrClosed", err)
+	}
+	for i, b := range key {
+		if b != 0 {
+			t.Fatalf("private K byte %d remained after StartClose", i)
+		}
+	}
+	if c.HostKey() != nil {
+		t.Fatal("closed client still offered a host key")
 	}
 }
 

@@ -114,7 +114,9 @@ func (c *Channel) serveGlobal(reqs <-chan *ssh.Request) {
 				continue
 			}
 			if c.admitPeerBeat() {
-				_ = req.Reply(true, nil)
+				if req.Reply(true, nil) == nil && c.onActivity != nil {
+					c.onActivity()
+				}
 				continue
 			}
 		}

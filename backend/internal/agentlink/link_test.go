@@ -130,6 +130,7 @@ type path struct {
 	issuer    *ephemeral.Issuer
 	authority *supervisor.Authority
 	session   *agentexec.Session
+	host      *agentlink.Host
 	runtime   *macRuntime
 	hostConn  *memConn
 	hostDone  chan error
@@ -182,16 +183,21 @@ func grant(t *testing.T, lifetime time.Duration, keys []ssh.PublicKey, runtime *
 
 // newPath composes both ends with the production composition package. mutate
 // alters only the client's dispatch to exercise rejections.
-func newPath(t *testing.T, lifetime time.Duration, mutate func(*agentchannel.ClientConfig)) *path {
+func newPath(t *testing.T, lifetime time.Duration, mutate func(*agentchannel.ClientConfig), allowReconnect ...bool) *path {
 	t.Helper()
 	host, client := fixtureSigner(t, 0x11), fixtureSigner(t, 0x22)
 	keys := []ssh.PublicKey{client.PublicKey()}
 	p := &path{t: t, runtime: &macRuntime{procs: make(chan *fakeProc, 4)}, hostDone: make(chan error, 1), lines: make(chan []byte, 64), mcpDone: make(chan error, 1)}
 	p.issuer, p.authority, p.session = grant(t, lifetime, keys, p.runtime)
-	h, err := agentlink.NewHost(agentlink.HostConfig{Session: p.session, AllowedKeys: keys, HostKey: host, Budgets: budgets()})
+	var reconnect bool
+	if len(allowReconnect) != 0 {
+		reconnect = allowReconnect[0]
+	}
+	h, err := agentlink.NewHost(agentlink.HostConfig{Session: p.session, AllowedKeys: keys, HostKey: host, Budgets: budgets(), AllowReconnect: reconnect})
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.host = h
 	sConn, cConn := memPair()
 	p.hostConn = sConn
 	go func() { p.hostDone <- h.Serve(context.Background(), sConn) }()
@@ -353,12 +359,46 @@ func (p *path) ownerStatus(id string) agentexec.Status {
 	}
 }
 
-func (p *path) revokedBeforeTerminate(proc *fakeProc) <-chan supervisor.State {
-	observed := make(chan supervisor.State, 1)
+type terminationObservation struct {
+	state      supervisor.State
+	reason     supervisor.Reason
+	stopReason agentexec.StopReason
+}
+
+func readTerminationObservation(authority *supervisor.Authority, stopReason agentexec.StopReason) terminationObservation {
+	state, reason := authority.Status()
+	return terminationObservation{state: state, reason: reason, stopReason: stopReason}
+}
+
+func (p *path) revokedBeforeTerminate(proc *fakeProc) <-chan terminationObservation {
+	observed := make(chan terminationObservation, 1)
 	proc.mu.Lock()
-	proc.onTerminate = func() { observed <- p.authority.Snapshot(time.Now()).State }
+	proc.onTerminate = func() {
+		observed <- readTerminationObservation(p.authority, p.session.StopReason())
+	}
 	proc.mu.Unlock()
 	return observed
+}
+
+func TestTerminationStateObservationDoesNotRevokeOnStaleTimestamp(t *testing.T) {
+	keys := []ssh.PublicKey{fixtureSigner(t, 0x33).PublicKey()}
+	_, authority, _ := grant(t, time.Minute, keys, &macRuntime{procs: make(chan *fakeProc, 1)})
+	stale := time.Now()
+	ready, continueObservation := make(chan struct{}), make(chan struct{})
+	observed := make(chan terminationObservation, 1)
+	go func() {
+		close(ready)
+		<-continueObservation
+		observed <- readTerminationObservation(authority, agentexec.StopNone)
+	}()
+	<-ready
+	if advanced := authority.Snapshot(stale.Add(time.Second)); advanced.State != supervisor.Granted {
+		t.Fatalf("grant before termination observation = %s (%s)", advanced.State, advanced.Reason)
+	}
+	close(continueObservation)
+	if got := <-observed; got.state != supervisor.Granted {
+		t.Fatalf("termination state observation revoked the grant: %s (%s)", got.state, got.reason)
+	}
 }
 
 func emit(t *testing.T, proc *fakeProc, s agentexec.Stream, data string) {
@@ -442,7 +482,40 @@ func TestExplicitCancelOverTheChannel(t *testing.T) {
 }
 
 // Scenario 3: the owned channel is lost (a half-open relay). Heartbeats end
-// both ends; the grant is revoked before the shell is stopped, the host joins
+// both ends; the command is stopped and cleaned while the grant remains live
+// for the reconnect grace, and the old MCP stream ends without restarting work.
+func TestOwnedChannelLossPreservesGrantAndCleansUpForReconnect(t *testing.T) {
+	p := newPath(t, 30*time.Second, nil, true)
+	st, _ := p.start("req-1", "sleep 60\n")
+	id := commandID(t, st)
+	proc := p.proc()
+	observed := p.revokedBeforeTerminate(proc)
+	p.hostConn.link.setBlackhole()
+	if err := p.waitHost(); errors.Is(err, agentchannel.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown) || err == nil {
+		t.Fatalf("host Serve after channel loss = %v", err)
+	}
+	if observation := <-observed; observation.state != supervisor.Granted {
+		t.Fatalf("shell stopped while the grant was %s (authority reason=%s, session stop=%v, host reconnectable=%t, serve=%v)", observation.state, observation.reason, observation.stopReason, p.host.Reconnectable(), p.hostErr)
+	}
+	final := p.ownerStatus(id)
+	if final.Stop != agentexec.StopTransportLost || final.Cleanup != agentexec.CleanupConfirmed {
+		t.Fatalf("owner status = %+v", final)
+	}
+	select {
+	case err := <-p.mcpDone:
+		p.mcpDone <- err
+		if !errors.Is(err, mcpadapter.ErrChannelClosed) {
+			t.Fatalf("MCP Serve = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("MCP kept serving a lost channel")
+	}
+	if !p.issuer.Snapshot().HasAuthority || p.runtime.startCount() != 1 || !p.hostConn.isClosed() {
+		t.Fatal("grace did not preserve the grant, or the old channel restarted work or kept the conn")
+	}
+}
+
+// The default path revokes the grant before stopping the shell, then joins
 // and confirms cleanup, MCP stops, and nothing reconnects or restarts.
 func TestOwnedChannelLossRevokesThenCleansUp(t *testing.T) {
 	p := newPath(t, 30*time.Second, nil)
@@ -454,8 +527,8 @@ func TestOwnedChannelLossRevokesThenCleansUp(t *testing.T) {
 	if err := p.waitHost(); errors.Is(err, agentchannel.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown) || err == nil {
 		t.Fatalf("host Serve after channel loss = %v", err)
 	}
-	if state := <-observed; state != supervisor.Revoked {
-		t.Fatalf("shell stopped while the grant was %s", state)
+	if observation := <-observed; observation.state != supervisor.Revoked {
+		t.Fatalf("shell stopped while the grant was %s (authority reason=%s, session stop=%v, host reconnectable=%t, serve=%v)", observation.state, observation.reason, observation.stopReason, p.host.Reconnectable(), p.hostErr)
 	}
 	final := p.ownerStatus(id)
 	if final.Stop != agentexec.StopTransportLost || final.Cleanup != agentexec.CleanupConfirmed {
@@ -486,8 +559,8 @@ func TestShortHardDeadlineWithoutRequests(t *testing.T) {
 	if err := p.waitHost(); errors.Is(err, agentchannel.ErrCleanupUnknown) || errors.Is(err, agentexec.ErrCleanupUnknown) || err == nil {
 		t.Fatalf("host Serve at the deadline = %v", err)
 	}
-	if state := <-observed; state != supervisor.Revoked {
-		t.Fatalf("shell stopped while the grant was %s", state)
+	if observation := <-observed; observation.state != supervisor.Revoked {
+		t.Fatalf("shell stopped while the grant was %s (authority reason=%s, session stop=%v, host reconnectable=%t, serve=%v)", observation.state, observation.reason, observation.stopReason, p.host.Reconnectable(), p.hostErr)
 	}
 	if final := p.ownerStatus(id); final.Stop != agentexec.StopHardDeadline || final.Cleanup != agentexec.CleanupConfirmed {
 		t.Fatalf("owner status = %+v", final)

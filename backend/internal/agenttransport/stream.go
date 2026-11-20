@@ -30,12 +30,39 @@ var (
 // unconfirmed instead of closing a reused descriptor.
 type rawConn struct {
 	net.Conn
-	once sync.Once
-	err  error
+	once       sync.Once
+	done       chan struct{}
+	err        error
+	asyncClose bool
+}
+
+func (r *rawConn) start() {
+	r.once.Do(func() {
+		r.done = make(chan struct{})
+		go func() {
+			r.err = r.Conn.Close()
+			close(r.done)
+		}()
+	})
 }
 
 func (r *rawConn) Close() error {
-	r.once.Do(func() { r.err = r.Conn.Close() })
+	r.start()
+	if r.asyncClose {
+		select {
+		case <-r.done:
+			return r.err
+		default:
+			return nil
+		}
+	}
+	<-r.done
+	return r.err
+}
+
+func (r *rawConn) wait() error {
+	r.start()
+	<-r.done
 	return r.err
 }
 
@@ -61,15 +88,16 @@ type acquirer interface {
 type closer struct {
 	cancel context.CancelFunc
 
-	mu      sync.Mutex
-	ws      *websocket.Conn
-	raw     *rawConn
-	busy    bool          // the upgrade may still attach a transport
-	sealed  bool          // the close attempt started; later attachments are closed at once
-	pending int           // dial attempts in flight plus late closes in progress
-	quiet   chan struct{} // closed when pending returns to zero
-	late    error         // close results of transports attached after sealing or in excess
-	err     error         // the attempt's result, written before done is closed
+	mu            sync.Mutex
+	ws            *websocket.Conn
+	raw           *rawConn
+	busy          bool          // the upgrade may still attach a transport
+	sealed        bool          // the close attempt started; later attachments are closed at once
+	pending       int           // dial attempts in flight plus late closes in progress
+	quiet         chan struct{} // closed when pending returns to zero
+	late          error         // close results of transports attached after sealing or in excess
+	err           error         // the attempt's result, written before done is closed
+	asyncRawClose bool
 
 	once sync.Once
 	done chan struct{}
@@ -78,6 +106,12 @@ type closer struct {
 // newCloser returns an owner that accepts one transport until settle.
 func newCloser(cancel context.CancelFunc) *closer {
 	return &closer{cancel: cancel, busy: true, done: make(chan struct{})}
+}
+
+func newRescueCloser(cancel context.CancelFunc) *closer {
+	c := newCloser(cancel)
+	c.asyncRawClose = true
+	return c
 }
 
 // addPending and donePending require c.mu.
@@ -117,7 +151,7 @@ func (c *closer) end() {
 // keeps its close result and refuses it; until that close returns the owner
 // counts as unconfirmed.
 func (c *closer) attach(conn net.Conn) (net.Conn, error) {
-	r := &rawConn{Conn: conn}
+	r := &rawConn{Conn: conn, asyncClose: c.asyncRawClose}
 	c.mu.Lock()
 	if !c.sealed && c.busy && c.raw == nil {
 		c.raw = r
@@ -129,7 +163,8 @@ func (c *closer) attach(conn net.Conn) (net.Conn, error) {
 	}
 	c.addPending()
 	c.mu.Unlock()
-	err := r.Close()
+	r.start()
+	err := r.wait()
 	c.mu.Lock()
 	if err != nil {
 		c.late = errors.Join(c.late, err)
@@ -177,7 +212,7 @@ func (c *closer) start() {
 			var err error
 			switch {
 			case raw != nil:
-				err = raw.Close()
+				err = raw.wait()
 			case ws != nil:
 				// A WebSocket whose transport was never observed: CloseNow
 				// returning proves nothing about the connection under it.
@@ -318,6 +353,9 @@ func (s *stream) Write(p []byte) (int, error) {
 // at most the cleanup budget. An unconfirmed result is ErrCleanupUnknown and a
 // later Close waits again on the same attempt.
 func (s *stream) Close() error {
+	if m, ok := s.Conn.(*msgConn); ok {
+		m.notifyEnd()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.cleanup)
 	defer cancel()
 	return s.closer.wait(ctx)
@@ -350,6 +388,14 @@ type msgConn struct {
 	readErr error  // sticky
 
 	writeMu *sync.Mutex
+	onEnd   func()
+	endOnce sync.Once
+}
+
+func (m *msgConn) notifyEnd() {
+	if m.onEnd != nil {
+		m.endOnce.Do(m.onEnd)
+	}
 }
 
 func (m *msgConn) Read(p []byte) (int, error) {
@@ -368,6 +414,7 @@ func (m *msgConn) Read(p []byte) (int, error) {
 		msg, err := m.next()
 		if err != nil {
 			m.readErr = m.read.finish(err)
+			m.notifyEnd()
 			return 0, m.readErr
 		}
 		m.rest = msg // an empty message delivers nothing; read the next one
@@ -393,6 +440,7 @@ func (m *msgConn) fill() error {
 	msg, err := m.next()
 	if err != nil {
 		m.readErr = m.read.finish(err)
+		m.notifyEnd()
 		return m.readErr
 	}
 	m.rest = msg
@@ -485,6 +533,7 @@ func (m *msgConn) Write(p []byte) (int, error) {
 // Close is not the owner's close; stream.Close is.
 func (m *msgConn) Close() error {
 	m.fail()
+	m.notifyEnd()
 	return errStreamClose
 }
 

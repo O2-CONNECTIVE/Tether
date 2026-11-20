@@ -811,6 +811,83 @@ func TestTransportLossRevokesWithoutReconnect(t *testing.T) {
 	}
 }
 
+func TestTransportInterruptionCancelsWorkPausesAdmissionAndReopensNextGeneration(t *testing.T) {
+	e := newEnv(t, Limits{})
+	if err := e.session.ClaimTransportGeneration(1); err != nil {
+		t.Fatalf("claim generation 1: %v", err)
+	}
+	first, err := e.session.Start(e.startReq("req-1", "dir\n"))
+	if err != nil {
+		t.Fatalf("Start generation 1: %v", err)
+	}
+	p := e.proc()
+	observed := make(chan supervisor.State, 2)
+	p.setTerminateHook(func() { observed <- e.authority.Snapshot(e.clock.Now()).State })
+	e.session.InterruptTransport()
+	p.awaitKilled(t)
+	if state := <-observed; state != supervisor.Granted {
+		t.Fatalf("guest terminated while grant was %s", state)
+	}
+	if err := e.session.AwaitCleanup(finite(t)); err != nil {
+		t.Fatalf("AwaitCleanup during grace: %v", err)
+	}
+	owned, err := e.session.Status(e.ref(first.CommandID))
+	if err != nil || !owned.Terminal || owned.Stop != StopTransportLost || owned.Cleanup != CleanupConfirmed {
+		t.Fatalf("owned command record during grace = %+v, %v", owned, err)
+	}
+	if !e.issuer.Snapshot().HasAuthority {
+		t.Fatal("transport interruption revoked the grant")
+	}
+	if _, err := e.session.Start(e.startReq("during-grace", "dir\n")); !errors.Is(err, ErrDenied) {
+		t.Fatalf("Start during grace = %v, want ErrDenied", err)
+	}
+	if err := e.session.ClaimTransportGeneration(2); err != nil {
+		t.Fatalf("claim generation 2: %v", err)
+	}
+	if err := e.session.ResumeTransport(2); err != nil {
+		t.Fatalf("ResumeTransport(2): %v", err)
+	}
+	if again, err := e.session.Status(e.ref(first.CommandID)); err != nil || again != owned {
+		t.Fatalf("owned command record changed after resume = %+v, %v; want %+v", again, err, owned)
+	}
+	second, err := e.session.Start(e.startReq("req-2", "dir\n"))
+	if err != nil || second.Phase != PhaseStarting {
+		t.Fatalf("Start generation 2 = %+v, %v", second, err)
+	}
+	_ = e.proc()
+	if first.CommandID == second.CommandID || !e.issuer.Snapshot().HasAuthority {
+		t.Fatal("reconnect reused the old command or grant")
+	}
+	if err := e.session.Close(finite(t)); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestUnknownCleanupBlocksTransportResume(t *testing.T) {
+	e := newEnv(t, Limits{})
+	e.runtime.configure = func(p *fakeProc) {
+		p.mu.Lock()
+		p.releaseErrs = []error{errors.New("release unconfirmed")}
+		p.mu.Unlock()
+	}
+	if err := e.session.ClaimTransportGeneration(1); err != nil {
+		t.Fatalf("claim generation 1: %v", err)
+	}
+	_, err := e.session.Start(e.startReq("req-1", "dir\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := e.proc()
+	e.session.InterruptTransport()
+	p.awaitKilled(t)
+	if err := e.session.AwaitCleanup(finite(t)); !errors.Is(err, ErrCleanupUnknown) {
+		t.Fatalf("AwaitCleanup = %v, want ErrCleanupUnknown", err)
+	}
+	if err := e.session.ClaimTransportGeneration(2); !errors.Is(err, ErrCleanupUnknown) {
+		t.Fatalf("claim generation 2 = %v, want ErrCleanupUnknown", err)
+	}
+}
+
 func TestCommandTimeoutStopsOnlyThatCommand(t *testing.T) {
 	e := newEnv(t, Limits{})
 	st := e.mustStart("req-1", "dir\n") // 60s, well before the 1h grant deadline

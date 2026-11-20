@@ -54,23 +54,26 @@ type Config struct {
 // Pending has no granted Authority. It cannot be serialized or resumed. Any
 // confirmation attempt consumes it, including rejection or terminal failure.
 type Pending struct {
-	mu            sync.Mutex
-	used          bool
-	issuer        *ephemeral.Issuer
-	challenge     ephemeral.Challenge
-	hostKey       ssh.Signer
-	hostPublic    ssh.PublicKey
-	keys          []ssh.PublicKey
-	runtime       agentexec.ProfiledRuntime
-	runtimeConfig macagent.Config
-	deadline      time.Time
-	cleanup       time.Duration
-	budgets       agentchannel.Budgets
-	phrase        string
-	preparedAt    time.Time
-	initialBudget time.Duration
-	fixedStart    *agentexec.FixedStartConstraint
-	clock         func() time.Time
+	mu             sync.Mutex
+	used           bool
+	issuer         *ephemeral.Issuer
+	challenge      ephemeral.Challenge
+	hostKey        ssh.Signer
+	hostPublic     ssh.PublicKey
+	keys           []ssh.PublicKey
+	runtime        agentexec.ProfiledRuntime
+	runtimeConfig  macagent.Config
+	deadline       time.Time
+	cleanup        time.Duration
+	budgets        agentchannel.Budgets
+	phrase         string
+	preparedAt     time.Time
+	initialBudget  time.Duration
+	fixedStart     *agentexec.FixedStartConstraint
+	clock          func() time.Time
+	onActivity     func()
+	onConnected    func(uint64, func() error) bool
+	allowReconnect bool
 }
 
 // Prepare validates the local Mac runtime without starting a process. Actual
@@ -269,8 +272,12 @@ func (p *Pending) completeApproved(ctx context.Context) (approved *Approved, err
 	if err != nil {
 		return nil, err
 	}
-	approved = &Approved{issuer: p.issuer, session: session}
-	host, err := agentlink.NewHost(agentlink.HostConfig{Session: session, AllowedKeys: p.keys, HostKey: fixed, Budgets: p.budgets})
+	hostConfig := agentlink.HostConfig{
+		Session: session, AllowedKeys: p.keys, HostKey: fixed, Budgets: p.budgets,
+		ConnectionGeneration: 1, AllowReconnect: p.allowReconnect, OnActivity: p.onActivity, OnConnected: p.onConnected,
+	}
+	approved = &Approved{issuer: p.issuer, session: session, hostConfig: hostConfig, generation: 1}
+	host, err := agentlink.NewHost(hostConfig)
 	if err != nil {
 		cleanup, cancel := context.WithTimeout(context.Background(), p.cleanup)
 		defer cancel()
@@ -323,54 +330,142 @@ type Approved struct {
 	failed          bool
 	closeMu         sync.Mutex
 	resultMu        sync.Mutex
+	rescueMu        sync.Mutex
 	cleanupErr      error
 	cleanupObserved bool
+	rescueHostOpen  bool
 	issuer          *ephemeral.Issuer
 	session         *agentexec.Session
+	hostMu          sync.Mutex
 	host            *agentlink.Host
+	hostConfig      agentlink.HostConfig
+	generation      uint64
 }
 
 func (a *Approved) Dispatch() Dispatch {
 	if a == nil || a.failed {
 		return Dispatch{}
 	}
-	if a.host == nil {
+	a.hostMu.Lock()
+	host := a.host
+	a.hostMu.Unlock()
+	if host == nil {
 		return Dispatch{}
 	}
-	return a.host.ChannelDispatch()
+	return host.ChannelDispatch()
 }
 
 // Serve transfers the already supplied opaque connection to the same Host.
 // No dial, listener, automatic retry or reconnect is performed.
 func (a *Approved) Serve(ctx context.Context, conn net.Conn) error {
-	if a == nil || a.failed || a.host == nil {
+	if a == nil || a.failed {
 		return ErrConfig
 	}
-	err := a.host.Serve(ctx, conn)
-	if !errors.Is(err, agentchannel.ErrUsed) {
+	a.hostMu.Lock()
+	host := a.host
+	a.hostMu.Unlock()
+	if host == nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return ErrConfig
+	}
+	err := host.Serve(ctx, conn)
+	if !host.Reconnectable() && !errors.Is(err, agentchannel.ErrUsed) {
 		_ = a.issuer.Close()
 	}
 	return err
+}
+
+// NextGeneration creates the next host channel over the same approved Session.
+// The previous generation must have reached an admitted, transport-lost end
+// with command cleanup confirmed; keys, K and the Session grant remain fixed.
+func (a *Approved) NextGeneration() (Dispatch, error) {
+	if a == nil || a.failed || a.session == nil {
+		return Dispatch{}, ErrConfig
+	}
+	a.hostMu.Lock()
+	defer a.hostMu.Unlock()
+	if a.host == nil || a.generation == ^uint64(0) {
+		return Dispatch{}, agentchannel.ErrConfig
+	}
+	if a.generation > 1 && a.host.Unused() {
+		return a.host.ChannelDispatch(), nil
+	}
+	if !a.host.Reconnectable() {
+		return Dispatch{}, agentchannel.ErrConfig
+	}
+	cfg := a.hostConfig
+	cfg.ConnectionGeneration = a.generation + 1
+	host, err := agentlink.NewHost(cfg)
+	if err != nil {
+		return Dispatch{}, err
+	}
+	a.host, a.generation = host, cfg.ConnectionGeneration
+	return host.ChannelDispatch(), nil
+}
+
+// CanResume reports whether the current Host completed an admitted transport
+// loss and confirmed cleanup. It does not observe or mutate the grant.
+func (a *Approved) CanResume() bool {
+	if a == nil || a.failed {
+		return false
+	}
+	a.hostMu.Lock()
+	host := a.host
+	a.hostMu.Unlock()
+	return host != nil && host.Reconnectable()
 }
 
 // Close revokes before waiting for bounded command cleanup. A failed partial
 // acquisition returns its completed cleanup result without retrying. Successful
 // owners retain explicit same-owner cleanup retry behavior, never replacement.
 func (a *Approved) Close(ctx context.Context) error {
+	return a.close(ctx, false)
+}
+
+func (a *Approved) closeForRescue(ctx context.Context) error {
+	// Rescue reports an active Host's Serve cleanup only after it is observed.
+	return a.close(ctx, true)
+}
+
+func (a *Approved) close(ctx context.Context, requireServeCleanup bool) error {
 	if a == nil || a.issuer == nil {
 		return ErrConfig
 	}
+	a.closeMu.Lock()
+	defer a.closeMu.Unlock()
 	if a.failed {
-		a.closeMu.Lock()
-		defer a.closeMu.Unlock()
 		if err, observed := a.CleanupResult(); observed {
 			return err
 		}
 	}
-	closed := a.issuer.Close()
+	var host *agentlink.Host
+	hostAccepting := false
+	if requireServeCleanup {
+		a.hostMu.Lock()
+		host = a.host
+		a.hostMu.Unlock()
+		if host != nil {
+			// Host.Close may see accepting=false after issuer.Close ends Accept.
+			hostAccepting = host.Accepting()
+		}
+		a.rescueMu.Lock()
+		hostAccepting = hostAccepting || a.rescueHostOpen
+		a.rescueMu.Unlock()
+	}
+	closed := a.revokeGrant()
+	if !requireServeCleanup {
+		a.hostMu.Lock()
+		host = a.host
+		a.hostMu.Unlock()
+	}
 	switch {
-	case a.host != nil:
-		closed = errors.Join(closed, a.host.Close(ctx))
+	case host != nil:
+		closed = errors.Join(closed, host.Close(ctx))
+		if requireServeCleanup && hostAccepting {
+			closed = errors.Join(closed, agentchannel.ErrCleanupUnknown)
+		}
 	case a.session != nil:
 		closed = errors.Join(closed, a.session.Close(ctx))
 	default:
@@ -380,6 +475,28 @@ func (a *Approved) Close(ctx context.Context) error {
 	a.cleanupErr, a.cleanupObserved = closed, true
 	a.resultMu.Unlock()
 	return closed
+}
+
+func (a *Approved) revokeGrant() error {
+	if a == nil || a.issuer == nil {
+		return ErrConfig
+	}
+	return a.issuer.Close()
+}
+
+func (a *Approved) revokeForRescue() error {
+	if a == nil || a.issuer == nil {
+		return ErrConfig
+	}
+	a.hostMu.Lock()
+	host := a.host
+	a.hostMu.Unlock()
+	if host != nil && host.Accepting() {
+		a.rescueMu.Lock()
+		a.rescueHostOpen = true
+		a.rescueMu.Unlock()
+	}
+	return a.revokeGrant()
 }
 
 // CleanupResult observes the last completed explicit cleanup without revoking,
@@ -404,13 +521,19 @@ func (a *Approved) RevokeTerminalUnknown() error {
 
 // LocalSummary exposes only local display state, never an authority or key.
 func (a *Approved) LocalSummary() (agentexec.LocalSummary, bool, bool) {
-	if a == nil || a.failed || a.session == nil || a.host == nil {
+	if a == nil || a.failed || a.session == nil {
+		return agentexec.LocalSummary{}, false, false
+	}
+	a.hostMu.Lock()
+	host := a.host
+	a.hostMu.Unlock()
+	if host == nil {
 		return agentexec.LocalSummary{}, false, false
 	}
 	v, ok := a.session.LocalSummary()
 	if !ok {
 		return v, false, false
 	}
-	connected, ok := a.host.LocallyAuthenticated()
+	connected, ok := host.LocallyAuthenticated()
 	return v, connected && !v.Revoked, ok
 }
