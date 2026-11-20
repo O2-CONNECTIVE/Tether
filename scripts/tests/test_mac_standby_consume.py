@@ -26,7 +26,7 @@ class ConsumeReplayCheckerTests(unittest.TestCase):
         return '\n'.join(json.dumps(event) for event in events)
 
     def test_complete_replay_has_positive_exact_counts(self):
-        self.assertEqual(tool.validate_output(self.report(self.events())), 4 * tool.ITERATIONS)
+        self.assertEqual(tool.validate_output(self.report(self.events())), len(tool.TEST_NAMES) * tool.ITERATIONS)
 
     def test_failure_skip_missing_wrong_or_zero_tests_refuse(self):
         events = self.events()
@@ -47,13 +47,14 @@ class ConsumeReplayCheckerTests(unittest.TestCase):
 
         def command(args, env, cwd=None):
             seen.append(dict(env))
-            return 'go1.27.3' if args[-2:] == ['env', 'GOVERSION'] else report
+            return 'go-test-fixture' if args[-2:] == ['env', 'GOVERSION'] else report
 
         with patch.object(tool.sys, 'platform', 'darwin'), \
              patch.object(tool.platform, 'machine', return_value='arm64'), \
              patch.object(tool.sys, 'argv', ['check_mac_standby_consume.py']), \
              patch.object(tool.shutil, 'which', return_value='/fixture/go'), \
-             patch.dict(tool.os.environ, {'GOMODCACHE': '/fixture/module-cache'}, clear=False), \
+         patch.dict(tool.os.environ, {'GOMODCACHE': '/fixture/module-cache'}, clear=False), \
+         patch.object(tool, 'GO_VERSION', 'go-test-fixture'), \
              patch.object(tool, 'command', side_effect=command), \
              contextlib.redirect_stdout(io.StringIO()):
             tool.run()

@@ -41,13 +41,14 @@ protocol error です。`extend <request_id> <expected_revision> <hours>` は、
 なら取得しません。待機 OFF・期限切れ・Close は先に受付と source を閉じ、既存の回収予算後に
 Unknown の結果にかかわらず解放を予約します。待機 ON 中は回収が Unknown でも Owner が作業を
 保持している間は assertion を保ちます。
-解放 API の失敗は回収結果に影響せず診断へ記録し、次の照合・OFF・Close で再試行します。
+解放 API の失敗は回収結果に影響せず診断へ記録し、desired state が「保持しない」の間、1秒から30秒の指数バックオフで再試行します。
+取得は最大5秒、作業期限の5秒前の早い方で待ち、残りが5秒以下なら取得しません。
 取得 API の操作名と戻り値は標準エラーに記録されますが、署名済み GUI 起動では子標準エラーが破棄されるため製品から参照できません。
 その作業は `work_unconfigured` で拒否し、process を開始せず、回収確認済みとして次の作業を受け付けます。
 待機 ON や `allow` だけでは防止を開始しません。
 画面の idle sleep と蓋を閉じたときのスリープは防ぎません。Go の `StandbyConfig` は
 ゼロ値で防止 ON、`AllowSleepDuringWork: true` で OFF です。設定の保存先と GUI の
-入力はまだ接続していません。プロセス終了時は macOS が assertion を解放します。
+入力はまだ接続していません。powerd 再起動などで OS が assertion を失った場合の検出・復旧は扱わず、プロセス終了時は macOS が assertion を解放します。
 
 `allow <request_id> <expected_revision>` は、署名付きの汎用コマンド
 （[run-command-design](run-command-design.md)）を現在の待機が OFF になるまで

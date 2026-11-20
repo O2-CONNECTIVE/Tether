@@ -3,6 +3,7 @@ package residentmac
 
 import (
 	"context"
+	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
@@ -24,6 +25,16 @@ func ReplayStandbyWithSleep(factory *maclaunch.ResidentFactory, connector *agent
 }) *Standby {
 	s := ReplayStandby(factory, connector)
 	s.sleep = assertion
+	return s
+}
+
+func ReplayStandbyWithSleepClock(factory *maclaunch.ResidentFactory, connector *agenttransport.ResidentClient, assertion interface {
+	Take() error
+	Release() error
+}, now func() time.Time, timer func(time.Duration) <-chan time.Time) *Standby {
+	s := ReplayStandbyWithSleep(factory, connector, assertion)
+	s.sleepNow = now
+	s.sleepTimer = timer
 	return s
 }
 

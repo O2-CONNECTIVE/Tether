@@ -21,19 +21,31 @@ import (
 )
 
 type standbySleepAssertion struct {
-	mu      sync.Mutex
-	takeErr error
-	takes   int
-	release int
-	held    int
+	mu          sync.Mutex
+	takeErr     error
+	takes       int
+	release     int
+	held        int
+	takeStarted chan struct{}
+	takeGate    <-chan struct{}
+	takeOnce    sync.Once
 }
 
 func (s *standbySleepAssertion) Take() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.takes++
-	if s.takeErr != nil {
-		return s.takeErr
+	err, started, gate := s.takeErr, s.takeStarted, s.takeGate
+	s.mu.Unlock()
+	if started != nil {
+		s.takeOnce.Do(func() { close(started) })
+	}
+	if gate != nil {
+		<-gate
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		return err
 	}
 	s.held++
 	return nil
@@ -53,6 +65,57 @@ func (s *standbySleepAssertion) counts() (takes, releases, held int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.takes, s.release, s.held
+}
+
+type standbyReplayClock struct {
+	mu      sync.Mutex
+	now     time.Time
+	timers  []*standbyReplayTimer
+	created chan time.Duration
+}
+
+type standbyReplayTimer struct {
+	at time.Time
+	ch chan time.Time
+}
+
+func newStandbyReplayClock(now time.Time) *standbyReplayClock {
+	return &standbyReplayClock{now: now, created: make(chan time.Duration, 16)}
+}
+
+func (c *standbyReplayClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *standbyReplayClock) After(delay time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	timer := &standbyReplayTimer{at: c.now.Add(delay), ch: make(chan time.Time, 1)}
+	c.timers = append(c.timers, timer)
+	c.mu.Unlock()
+	c.created <- delay
+	return timer.ch
+}
+
+func (c *standbyReplayClock) Advance(delay time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(delay)
+	now := c.now
+	due := make([]*standbyReplayTimer, 0, len(c.timers))
+	active := c.timers[:0]
+	for _, timer := range c.timers {
+		if !timer.at.After(now) {
+			due = append(due, timer)
+		} else {
+			active = append(active, timer)
+		}
+	}
+	c.timers = active
+	c.mu.Unlock()
+	for _, timer := range due {
+		timer.ch <- now
+	}
 }
 
 type standbyWorkClient struct {
@@ -135,7 +198,8 @@ func TestStandbyConsumeSleepFailureRefusesAndMonitorCollects(t *testing.T) {
 	}
 	memory := agenttransport.ExportBindResidentMemory(client, handler)
 	sleep := &standbySleepAssertion{takeErr: errors.New("synthetic assertion failure")}
-	standby := residentmac.ReplayStandbyWithSleep(factory, client, sleep)
+	clock := newStandbyReplayClock(time.Now())
+	standby := residentmac.ReplayStandbyWithSleepClock(factory, client, sleep, clock.Now, clock.After)
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
@@ -152,14 +216,17 @@ func TestStandbyConsumeSleepFailureRefusesAndMonitorCollects(t *testing.T) {
 	}
 	waitStandbySleepCondition(t, func() bool { return handler.ResidentConnected("host-one", "member-one") })
 
-	propose := func(n int) error {
+	propose := func(n int, deadline time.Time) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		id := fmt.Sprintf("%032x", n)
-		return handler.ProposeResidentFixed(ctx, "host-one", "member-one", id, time.Now().Add(7*time.Second).Truncate(time.Millisecond))
+		return handler.ProposeResidentFixed(ctx, "host-one", "member-one", id, deadline.Truncate(time.Millisecond))
 	}
-	if err := propose(1); !errors.Is(err, agenttransport.ErrWorkUnconfigured) || errors.Is(err, agentgateway.ErrResidentPending) {
+	if err := propose(1, time.Now().Add(14*time.Second)); !errors.Is(err, agenttransport.ErrWorkUnconfigured) || errors.Is(err, agentgateway.ErrResidentPending) {
 		t.Fatalf("failed Take did not produce a signed refusal: %v", err)
+	}
+	if delay := <-clock.created; delay <= 0 || delay >= time.Minute {
+		t.Fatalf("Take wait was not bounded: %s", delay)
 	}
 	if transport.calls.Load() != 0 {
 		t.Fatal("work client was created after assertion acquisition failed")
@@ -171,8 +238,11 @@ func TestStandbyConsumeSleepFailureRefusesAndMonitorCollects(t *testing.T) {
 	sleep.mu.Lock()
 	sleep.takeErr = nil
 	sleep.mu.Unlock()
-	if err := propose(2); !errors.Is(err, agenttransport.ErrWorkPending) {
+	if err := propose(2, time.Now().Add(14*time.Second)); !errors.Is(err, agenttransport.ErrWorkPending) {
 		t.Fatalf("next work did not receive the signed pending response: %v", err)
+	}
+	if delay := <-clock.created; delay <= 0 || delay >= time.Minute {
+		t.Fatalf("second Take wait was not bounded: %s", delay)
 	}
 	var workClient *standbyWorkClient
 	select {
@@ -188,7 +258,7 @@ func TestStandbyConsumeSleepFailureRefusesAndMonitorCollects(t *testing.T) {
 	if takes, releases, held := sleep.counts(); takes != 2 || releases != 0 || held != 1 {
 		t.Fatalf("active work assertion mismatch: takes=%d releases=%d held=%d", takes, releases, held)
 	}
-	if err := propose(3); !errors.Is(err, agenttransport.ErrWorkUnconfigured) || errors.Is(err, agentgateway.ErrResidentPending) {
+	if err := propose(3, time.Now().Add(14*time.Second)); !errors.Is(err, agenttransport.ErrWorkUnconfigured) || errors.Is(err, agentgateway.ErrResidentPending) {
 		t.Fatalf("second work did not receive the signed refusal: %v", err)
 	}
 	if transport.calls.Load() != 1 {
@@ -206,6 +276,50 @@ func TestStandbyConsumeSleepFailureRefusesAndMonitorCollects(t *testing.T) {
 	waitStandbySleepCondition(t, func() bool {
 		_, releases, held := sleep.counts()
 		return releases == 1 && held == 0
+	})
+
+	t.Run("blocked_take", func(t *testing.T) {
+		gate := make(chan struct{})
+		sleep.mu.Lock()
+		sleep.takeStarted = make(chan struct{})
+		sleep.takeGate = gate
+		takeStarted := sleep.takeStarted
+		sleep.mu.Unlock()
+		deadline := time.Now().Add(14 * time.Second)
+		result := make(chan error, 1)
+		go func() { result <- propose(4, deadline) }()
+		select {
+		case <-takeStarted:
+		case <-time.After(time.Second):
+			t.Fatal("blocked Take did not start")
+		}
+		wait := <-clock.created
+		if wait <= 0 || wait >= time.Minute {
+			t.Fatalf("blocked Take wait was not early: %s", wait)
+		}
+		clock.Advance(wait)
+		select {
+		case err := <-result:
+			if !errors.Is(err, agenttransport.ErrWorkUnconfigured) || errors.Is(err, agentgateway.ErrResidentPending) {
+				t.Fatalf("blocked Take did not produce a signed refusal: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("signed refusal did not reach the wire before the work deadline")
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("refusal arrived after the work deadline")
+		}
+		if transport.calls.Load() != 1 {
+			t.Fatal("work client was created after the blocked Take refusal")
+		}
+		close(gate)
+		waitStandbySleepCondition(t, func() bool {
+			_, releases, held := sleep.counts()
+			return releases == 2 && held == 0
+		})
+		if takes, releases, held := sleep.counts(); takes != 3 || releases != 2 || held != 0 {
+			t.Fatalf("late Take was not released: takes=%d releases=%d held=%d", takes, releases, held)
+		}
 	})
 }
 

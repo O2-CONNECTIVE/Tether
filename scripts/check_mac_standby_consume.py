@@ -14,9 +14,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport'
 TEST = 'TestStandbyConsumeEndsOriginalSource'
 SLEEP_TEST = 'TestStandbyConsumeSleepFailureRefusesAndMonitorCollects'
+SLEEP_WAIT_TEST = SLEEP_TEST + '/blocked_take'
 TEST_NAMES = (TEST, TEST + '/close', TEST + '/policy-drift', SLEEP_TEST)
+TEST_NAMES += (SLEEP_WAIT_TEST,)
 RUN_PATTERN = '^(' + TEST + '|' + SLEEP_TEST + ')$'
 ITERATIONS = 20
+GO_VERSION = 'go1.27.3'
 
 
 def validate_output(output):
@@ -54,7 +57,7 @@ def run():
     env.update(GOTOOLCHAIN='local', GOENV='off', GOWORK='off', GOPROXY='off',
                GOSUMDB='off', GOFLAGS='', GOOS='darwin', GOARCH=arch, CGO_ENABLED='1')
     go = shutil.which('go', path=env.get('PATH'))
-    if go is None or command([go, 'env', 'GOVERSION'], env).strip() != 'go1.27.3':
+    if go is None or command([go, 'env', 'GOVERSION'], env).strip() != GO_VERSION:
         raise ValueError('existing reviewed Go unavailable')
     reports = []
     with tempfile.TemporaryDirectory(prefix='standby-consume-replay-') as temporary:
@@ -70,8 +73,8 @@ def run():
             output = command(args + ['./internal/agenttransport'], env, ROOT / 'backend')
             reports.append({'race': race, 'passed': validate_output(output)})
     print(json.dumps({'fixture': 'standby-consume-source', 'reports': reports,
-                      'cases': 4, 'iterations': ITERATIONS, 'producerLaunches': 0,
-                      'scope': 'real memory consume/lease and sleep assertion failure/collection; no native work or live GUI proof'}))
+                      'cases': 5, 'iterations': ITERATIONS, 'producerLaunches': 0,
+                      'scope': 'real memory consume/lease, sleep assertion failure/collection and early blocked-Take refusal; no native work or live GUI proof'}))
 
 
 if __name__ == '__main__':
