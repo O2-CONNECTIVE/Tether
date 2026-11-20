@@ -1153,6 +1153,7 @@ func TestRescueGrantAllowsOnlyCUntilChosenLifetime(t *testing.T) {
 		t.Fatalf("channel with C = %v", err)
 	}
 	f.requireLive(t)
+	waitHostAuthenticated(t, f.r.approved)
 	_ = ch.Close()
 	_ = waitRescueEvent(t, f.events, RescueEventReconnecting)
 	f.clocks.advance(4*time.Minute+59*time.Second, 4*time.Minute+59*time.Second)
@@ -1233,6 +1234,7 @@ func TestRescueGraceUsesLastValidFrameRatherThanDetectionTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("channel: %v", err)
 	}
+	waitHostAuthenticated(t, f.r.approved)
 	f.r.noteActivity() // the last valid application or heartbeat frame
 	f.clocks.advance(30*time.Second, 30*time.Second)
 	if err := ch.Close(); err != nil {
@@ -1265,6 +1267,7 @@ func TestRescueGraceRechecksWallClockAfterSleepWithinOneSecond(t *testing.T) {
 	if err != nil {
 		t.Fatalf("channel: %v", err)
 	}
+	waitHostAuthenticated(t, f.r.approved)
 	f.r.noteActivity()
 	if err := ch.Close(); err != nil {
 		t.Fatalf("close channel: %v", err)
@@ -1300,6 +1303,7 @@ func TestRescueGraceExpiryOpensNewReceptionAndShowsOnlyOnItsRequest(t *testing.T
 	if err != nil {
 		t.Fatalf("generation 1 channel: %v", err)
 	}
+	waitHostAuthenticated(t, oldApproved)
 	if err := ch.Close(); err != nil {
 		t.Fatalf("close generation 1: %v", err)
 	}
@@ -1428,22 +1432,43 @@ func TestRescueReconnectionRechecksGraceBeforeAdmission(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("loop did not capture the old reception before waiting for its request")
 	}
-	opened := make(chan error, 1)
+	type openResult struct{ admissionWaitTimedOut bool }
+	opened := make(chan openResult, 1)
+	openDone := make(chan struct{})
 	go func() {
+		defer close(openDone)
 		hostKey, parseErr := ssh.ParsePublicKey(offer.dispatch.HostKey)
 		if parseErr != nil {
-			opened <- parseErr
+			opened <- openResult{}
 			return
 		}
-		channel, openErr := agentchannel.Open(context.Background(), agentchannel.ClientConfig{
+		channel, _ := agentchannel.Open(context.Background(), agentchannel.ClientConfig{
 			Binding: offer.dispatch.Binding, HostKey: hostKey, Signer: rescueC,
 			Deadline: offer.dispatch.Deadline, Budgets: f.cfg.Budgets,
 		}, offer.conn)
 		if channel != nil {
+			timer := time.NewTimer(3 * time.Second)
+			defer timer.Stop()
+			select {
+			case <-doneObserved:
+			case <-timer.C:
+				_ = channel.Close()
+				opened <- openResult{admissionWaitTimedOut: true}
+				return
+			}
 			_ = channel.Close()
 		}
-		opened <- openErr
+		opened <- openResult{}
 	}()
+	t.Cleanup(func() {
+		timer := time.NewTimer(f.cfg.Budgets.Handshake + 4*time.Second + f.cfg.Budgets.Cleanup)
+		defer timer.Stop()
+		select {
+		case <-openDone:
+		case <-timer.C:
+			t.Error("generation 2 SSH attempt did not finish during cleanup")
+		}
+	})
 	select {
 	case <-doneObserved:
 	case <-time.After(3 * time.Second):
@@ -1482,7 +1507,10 @@ receptionOpened:
 	}
 	f.requireLive(t)
 	select {
-	case <-opened:
+	case result := <-opened:
+		if result.admissionWaitTimedOut {
+			t.Fatal("grace expiry did not close the old reception before the generation 2 channel close")
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("the stale generation 2 SSH attempt did not finish")
 	}
@@ -1496,6 +1524,7 @@ func TestOldAfterServeCannotEndReplacementReception(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generation 1 channel: %v", err)
 	}
+	waitHostAuthenticated(t, approved)
 	if err := first.Close(); err != nil {
 		t.Fatalf("close generation 1: %v", err)
 	}
@@ -2105,6 +2134,7 @@ func TestRescueUnknownCleanupRequiresCleanupAndDoesNotReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("channel: %v", err)
 	}
+	waitHostAuthenticated(t, approved)
 	if err := ch.Close(); err != nil {
 		t.Fatalf("close channel: %v", err)
 	}
@@ -2129,6 +2159,7 @@ func TestRescueDeadlineCancelsOfflineReceptionReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generation 1 channel: %v", err)
 	}
+	waitHostAuthenticated(t, f.r.approved)
 	if err := ch.Close(); err != nil {
 		t.Fatalf("close generation 1: %v", err)
 	}
