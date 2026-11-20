@@ -3,6 +3,7 @@ package residentmac
 import (
 	"context"
 	"errors"
+	"log"
 	"reflect"
 	"sync"
 	"time"
@@ -30,6 +31,10 @@ type sleepAssertion interface {
 	Take() error
 	Release() error
 }
+type ownedWorkSleep struct {
+	acquired bool // guarded by Standby.sleepMu
+	released bool // guarded by Standby.sleepMu
+}
 type standbyCycle struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -40,6 +45,8 @@ type standbyCycle struct {
 	source        *FixedSource
 	lease         *agenttransport.ResidentSourceLease
 	work          *agentgateway.ResidentWorkBinding
+	workSleep     *ownedWorkSleep
+	workReady     bool          // gateway admission reply was written; monitor may collect
 	proved        chan struct{} // closed once the open source's cleanup proof was attempted
 	result        error
 	initialUntil  time.Time
@@ -57,7 +64,9 @@ type Standby struct {
 	sleepMu       sync.Mutex
 	config        StandbyConfig
 	sleep         sleepAssertion
+	sleepOwners   int // guarded by sleepMu
 	sleepHeld     bool
+	sleepErr      error // last Take/Release failure, guarded by sleepMu
 	factory       *FixedFactory
 	makeConnector func(context.Context) (residentConnector, error)
 	clock         func() (mono, wall time.Time) // nil reads elapsedNow and time.Now; tests replace it
@@ -80,17 +89,40 @@ type Standby struct {
 // collect sends the cleanup proof and keeps one it could not write. The
 // gateway refuses this member's next work until it has that proof, so consume
 // sends it over the next authenticated control.
-func (s *Standby) collect(lease *agenttransport.ResidentSourceLease, w agentgateway.ResidentWorkBinding, result error) error {
+type cleanupProofLease interface {
+	Collected(agentgateway.ResidentWorkBinding, error) error
+	Unsent() []byte
+}
+
+func (s *Standby) collect(lease cleanupProofLease, w agentgateway.ResidentWorkBinding, result error, workSleep *ownedWorkSleep) {
 	// Only a confirmed cleanup frees the gateway's slot, and only a failed
 	// write (not a refused repeat) leaves a proof worth sending again.
-	if e := lease.Collected(w, result); e != nil && result == nil && !errors.Is(e, agenttransport.ErrRefused) {
-		if proof := lease.Unsent(); proof != nil {
-			s.unsent.Lock()
-			s.unsent.proof = proof
-			s.unsent.Unlock()
+	if lease != nil {
+		if e := lease.Collected(w, result); e != nil && result == nil && !errors.Is(e, agenttransport.ErrRefused) {
+			if proof := lease.Unsent(); proof != nil {
+				s.unsent.Lock()
+				s.unsent.proof = proof
+				s.unsent.Unlock()
+			}
 		}
 	}
-	return s.releaseOwnedWork()
+	// Assertion release failure is diagnostic only; it cannot change the
+	// collection result or stop the monitor.
+	_ = s.releaseOwnedWork(workSleep)
+}
+func (s *Standby) collectLastWork(c *standbyCycle, lease cleanupProofLease, result error) error {
+	if c == nil {
+		return result
+	}
+	c.mu.Lock()
+	last := c.work
+	lastSleep := c.workSleep
+	c.mu.Unlock()
+	if last == nil {
+		return result
+	}
+	s.collect(lease, *last, result, lastSleep)
+	return result
 }
 
 // LoadStandby loads a resident with the zero-value config unless one config is passed.
@@ -132,49 +164,153 @@ func newStandby() *Standby {
 func newStandbyWithConfig(config StandbyConfig) *Standby {
 	return &Standby{config: config, updates: make(chan struct{}, 1), observation: StandbyObservation{Revision: 1, Standby: "off", Registration: "disconnected", Work: "idle", Cleanup: "confirmed", AdmissionSealed: true, CanRequestOn: true}}
 }
-func (s *Standby) prepareOwnedRequest(request *workerowner.Request) {
-	if s == nil || request == nil || request.Approve == nil || s.config.AllowSleepDuringWork {
+func (s *Standby) prepareOwnedRequest(request *workerowner.Request, workSleep *ownedWorkSleep) {
+	if s == nil || request == nil || request.Approve == nil || s.config.AllowSleepDuringWork || workSleep == nil {
 		return
 	}
 	approve := request.Approve
 	request.Approve = func(ctx context.Context) (*workerowner.Worker, error) {
-		if err := s.acquireOwnedWork(); err != nil {
+		if err := s.acquireOwnedWork(workSleep); err != nil {
 			return nil, err
 		}
 		return approve(ctx)
 	}
 }
-func (s *Standby) acquireOwnedWork() error {
+func (s *Standby) submitOwnedRequest(c *standbyCycle, request *workerowner.Request, work agentgateway.ResidentWorkBinding, requests chan<- *workerowner.Request, leaseCtx, sourceCtx context.Context) (sent, replied bool, reply error) {
+	workSleep, sent, err := s.queueOwnedRequest(c, request, work, requests, leaseCtx, sourceCtx)
+	if err != nil || !sent {
+		return sent, false, err
+	}
+	replied, reply = s.awaitOwnedRequest(c, request, workSleep, leaseCtx, sourceCtx)
+	return sent, replied, reply
+}
+func (s *Standby) queueOwnedRequest(c *standbyCycle, request *workerowner.Request, work agentgateway.ResidentWorkBinding, requests chan<- *workerowner.Request, leaseCtx, sourceCtx context.Context) (*ownedWorkSleep, bool, error) {
+	if c == nil || request == nil || leaseCtx == nil || sourceCtx == nil {
+		return nil, false, ErrStandbyUnavailable
+	}
+	workSleep := &ownedWorkSleep{}
+	s.prepareOwnedRequest(request, workSleep)
+	c.mu.Lock()
+	c.work = &work
+	c.workSleep = workSleep
+	c.workReady = false
+	c.mu.Unlock()
+	sent := false
+	select {
+	case requests <- request:
+		sent = true
+	case <-c.ctx.Done():
+	case <-leaseCtx.Done():
+	case <-sourceCtx.Done():
+	}
+	if !sent {
+		c.clearWorkSleep(workSleep)
+		_ = s.releaseOwnedWork(workSleep)
+		return nil, false, nil
+	}
+	return workSleep, true, nil
+}
+func (s *Standby) awaitOwnedRequest(c *standbyCycle, request *workerowner.Request, workSleep *ownedWorkSleep, leaseCtx, sourceCtx context.Context) (replied bool, reply error) {
+	select {
+	case reply = <-request.Reply:
+		replied = true
+		if reply != nil {
+			c.clearWorkSleep(workSleep)
+			_ = s.releaseOwnedWork(workSleep)
+		}
+	case <-c.ctx.Done():
+	case <-leaseCtx.Done():
+	case <-sourceCtx.Done():
+	}
+	return replied, reply
+}
+func (c *standbyCycle) clearWorkSleep(workSleep *ownedWorkSleep) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.workSleep == workSleep {
+		c.work = nil
+		c.workSleep = nil
+		c.workReady = false
+	}
+}
+func (c *standbyCycle) markWorkReady(workSleep *ownedWorkSleep) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.workSleep == workSleep {
+		c.workReady = true
+	}
+}
+func (s *Standby) acquireOwnedWork(workSleep *ownedWorkSleep) error {
 	if s == nil || s.config.AllowSleepDuringWork {
 		return nil
 	}
 	s.sleepMu.Lock()
 	defer s.sleepMu.Unlock()
-	if s.sleepHeld {
+	if workSleep == nil || workSleep.released {
+		return ErrStandbyUnavailable
+	}
+	if workSleep.acquired {
 		return nil
 	}
-	if s.sleep == nil {
-		return ErrSleepPreventionUnsupported
+	if s.sleepOwners == 0 && !s.sleepHeld {
+		if s.sleep == nil {
+			s.sleepErr = ErrSleepPreventionUnsupported
+			return ErrSleepPreventionUnsupported
+		}
+		if err := s.sleep.Take(); err != nil {
+			s.sleepErr = err
+			log.Printf("residentmac: sleep assertion take failed: %v", err)
+			return err
+		}
+		s.sleepHeld = true
+		s.sleepErr = nil
 	}
-	if err := s.sleep.Take(); err != nil {
-		return err
-	}
-	s.sleepHeld = true
+	workSleep.acquired = true
+	s.sleepOwners++
 	return nil
 }
-func (s *Standby) releaseOwnedWork() error {
+func (s *Standby) releaseOwnedWork(workSleep *ownedWorkSleep) error {
 	if s == nil {
 		return nil
 	}
 	s.sleepMu.Lock()
 	defer s.sleepMu.Unlock()
+	if workSleep == nil || workSleep.released {
+		return nil
+	}
+	workSleep.released = true
+	if !workSleep.acquired {
+		return nil
+	}
+	workSleep.acquired = false
+	s.sleepOwners--
+	if s.sleepOwners != 0 {
+		return nil
+	}
+	return s.releaseSleepLocked()
+}
+func (s *Standby) releaseIdleSleep() error {
+	if s == nil {
+		return nil
+	}
+	s.sleepMu.Lock()
+	defer s.sleepMu.Unlock()
+	if s.sleepOwners != 0 {
+		return nil
+	}
+	return s.releaseSleepLocked()
+}
+func (s *Standby) releaseSleepLocked() error {
 	if !s.sleepHeld {
 		return nil
 	}
 	if err := s.sleep.Release(); err != nil {
+		s.sleepErr = err
+		log.Printf("residentmac: sleep assertion release failed: %v", err)
 		return err
 	}
 	s.sleepHeld = false
+	s.sleepErr = nil
 	return nil
 }
 func cloneObservation(o StandbyObservation) StandbyObservation {
@@ -239,7 +375,13 @@ func (s *Standby) request(id, revision uint64, intent string, d time.Duration) S
 		return StandbyReceipt{RequestID: id, Intent: intent, Disposition: "rejected"}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	retrySleep := false
+	defer func() {
+		s.mu.Unlock()
+		if retrySleep {
+			_ = s.releaseIdleSleep()
+		}
+	}()
 	r, ok := s.admitLocked(id, revision, intent)
 	if !ok {
 		return r
@@ -268,6 +410,7 @@ func (s *Standby) request(id, revision uint64, intent string, d time.Duration) S
 		s.observation.StandbyExpired = s.standbyLeftLocked() <= 0
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
 		s.stopLocked()
+		retrySleep = true
 	}
 	r.Disposition = "accepted"
 	r.Revision = s.observation.Revision
@@ -283,7 +426,6 @@ func (s *Standby) stopLocked() {
 	s.observation.Work = "stopping"
 	s.observation.Cleanup = "pending"
 	s.changedLocked()
-	_ = s.releaseOwnedWork()
 	s.sealSourceLocked()
 	s.cycle.cancelAfterProof()
 }
@@ -322,7 +464,8 @@ func (s *Standby) Close(ctx context.Context) error {
 	if c == nil {
 		s.changedLocked()
 		s.mu.Unlock()
-		return s.releaseOwnedWork()
+		_ = s.releaseIdleSleep()
+		return nil
 	}
 	if s.observation.Standby == "on" {
 		s.observation.Standby = "stopping"
@@ -330,10 +473,10 @@ func (s *Standby) Close(ctx context.Context) error {
 		s.observation.Cleanup = "pending"
 	}
 	s.changedLocked()
-	_ = s.releaseOwnedWork()
 	s.sealSourceLocked()
 	c.cancel()
 	s.mu.Unlock()
+	_ = s.releaseIdleSleep()
 	select {
 	case <-c.done:
 		c.mu.Lock()
@@ -432,7 +575,6 @@ func (s *Standby) run(c *standbyCycle) {
 	}
 	s.changedLocked()
 	s.mu.Unlock()
-	_ = s.releaseOwnedWork()
 	c.cancel()
 	c.mu.Lock()
 	source := c.source
@@ -443,6 +585,10 @@ func (s *Standby) run(c *standbyCycle) {
 	cleanup, cancel := context.WithTimeout(context.Background(), standbyCleanup)
 	defer cancel()
 	ownerErr := c.owner.Stop(cleanup)
+	c.mu.Lock()
+	workSleep := c.workSleep
+	c.mu.Unlock()
+	_ = s.releaseOwnedWork(workSleep)
 	var transportErr error
 	if connector != nil {
 		connector.Stop()
@@ -467,7 +613,7 @@ func (s *Standby) run(c *standbyCycle) {
 	case <-cleanup.Done():
 		ownerErr = errors.Join(ownerErr, ErrStandbyUnknown)
 	}
-	result := errors.Join(ownerErr, transportErr, s.releaseOwnedWork())
+	result := errors.Join(ownerErr, transportErr)
 	if errors.Is(e, workerowner.ErrUnknown) || errors.Is(e, maclaunch.ErrResidentUnknown) || errors.Is(e, agenttransport.ErrCleanupUnknown) {
 		result = errors.Join(result, e)
 	}
@@ -577,12 +723,7 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 		case <-wait.Done():
 			collected = workerowner.ErrUnknown
 		}
-		c.mu.Lock()
-		last := c.work
-		c.mu.Unlock()
-		if last != nil {
-			collected = errors.Join(collected, s.collect(lease, *last, collected))
-		}
+		collected = s.collectLastWork(c, lease, collected)
 	})
 	readStopped := make(chan struct{})
 	stopRead := context.AfterFunc(source.Context(), func() {
@@ -619,34 +760,25 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 			_ = lease.Refuse(i.Correlation())
 			continue
 		}
-		s.prepareOwnedRequest(request)
-		sent := false
-		select {
-		case requests <- request:
-			sent = true
-		case <-c.ctx.Done():
-		case <-lease.Context().Done():
-		case <-source.Context().Done():
-		}
+		work := i.WorkBinding()
+		sent, replied, reply := s.submitOwnedRequest(c, request, work, requests, lease.Context(), source.Context())
 		if !sent {
 			break
 		}
-		select {
-		case e = <-request.Reply:
-			if e == nil {
-				c.mu.Lock()
-				w := i.WorkBinding()
-				c.work = &w
-				c.mu.Unlock()
-				if e = lease.Pending(i.Correlation()); e != nil {
-					err = e
-				}
+		if !replied {
+			break
+		}
+		if reply == nil {
+			if e = lease.Pending(i.Correlation()); e != nil {
+				err = e
 			} else {
-				_ = lease.Refuse(i.Correlation())
+				c.mu.Lock()
+				workSleep := c.workSleep
+				c.mu.Unlock()
+				c.markWorkReady(workSleep)
 			}
-		case <-c.ctx.Done():
-		case <-lease.Context().Done():
-		case <-source.Context().Done():
+		} else {
+			_ = lease.Refuse(i.Correlation())
 		}
 		if err != nil {
 			break
@@ -668,6 +800,8 @@ func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceL
 		c.source = nil
 		c.lease = nil
 		c.work = nil
+		c.workSleep = nil
+		c.workReady = false
 		c.mu.Unlock()
 	}
 	return errors.Join(err, finish)
@@ -691,7 +825,7 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 		case <-ticker.C:
 		}
 		c.mu.Lock()
-		connector, source, work, lease := c.connector, c.source, c.work, c.lease
+		connector, source, work, workSleep, workReady, lease := c.connector, c.source, c.work, c.workSleep, c.workReady, c.lease
 		c.mu.Unlock()
 		if connector == nil {
 			continue
@@ -711,6 +845,7 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 		}
 		if s.expireStandbyLocked() {
 			s.mu.Unlock()
+			_ = s.releaseIdleSleep()
 			continue
 		}
 		if s.observation.Standby == "on" {
@@ -786,7 +921,7 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 			}
 			reportedLease, reported, hasReported = lease, report, true
 		}
-		if work != nil && lease != nil && (owned.Unknown || owned.Owned == 0) {
+		if work != nil && workReady && lease != nil && (owned.Unknown || owned.Owned == 0) {
 			var collection error
 			if owned.Unknown {
 				collection = ErrStandbyUnknown
@@ -797,9 +932,7 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 					collection = ErrStandbyUnknown
 				}
 			}
-			if s.collect(lease, *work, collection) != nil {
-				stopForUnknown = true
-			}
+			s.collect(lease, *work, collection, workSleep)
 		}
 		if stopForUnknown {
 			c.cancel()

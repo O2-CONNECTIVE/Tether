@@ -36,8 +36,10 @@ protocol error です。`extend <request_id> <expected_revision> <hours>` は、
 止まったことを示す `standbyExpired`（次の ON で `false`。回収が unknown になっても残ります）を
 持ちます。JSON の方言の `status` は変えていません。
 
-所有作業の実行中は、macOS のシステム idle sleep を防ぎ、作業の回収確認、待機 OFF、
-常駐停止で assertion を解放します。待機 ON や `allow` だけでは防止を開始しません。
+所有作業の開始から回収確認、または回収予算の満了までは、macOS のシステム idle sleep を
+防ぎます。待機 OFF と常駐停止は先に受付と source を閉じ、回収後に assertion を解放します。
+解放 API の失敗は回収結果に影響せず診断へ記録し、次の作業終了・待機 OFF・Close で再試行します。
+待機 ON や `allow` だけでは防止を開始しません。
 画面の idle sleep と蓋を閉じたときのスリープは防ぎません。Go の `StandbyConfig` は
 ゼロ値で防止 ON、`AllowSleepDuringWork: true` で OFF です。設定の保存先と GUI の
 入力はまだ接続していません。プロセス終了時は macOS が assertion を解放します。
