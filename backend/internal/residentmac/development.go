@@ -25,7 +25,7 @@ func developmentPolicy(enrolled string) (string, error) {
 
 // Build-tag-only composition. Loading preserves the real protected loader and
 // fixed operation/authentication checks; it neither enrolls nor starts ON.
-func LoadDevelopmentStandby(ctx context.Context) (*Standby, error) {
+func LoadDevelopmentStandby(ctx context.Context, options ...StandbyConfig) (*Standby, error) {
 	enrolled, err := currentEnrolledPolicy(ctx)
 	if err != nil {
 		return nil, err
@@ -34,5 +34,5 @@ func LoadDevelopmentStandby(ctx context.Context) (*Standby, error) {
 	if err != nil {
 		return nil, err
 	}
-	return LoadStandby(ctx, selected)
+	return LoadStandby(ctx, selected, options...)
 }
