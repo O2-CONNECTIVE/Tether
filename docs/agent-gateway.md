@@ -91,13 +91,14 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 - principalは1〜4人で、label（運用者の表示名）、subject、役割、signerを持ちます。labelとsubjectの重複は拒否します。
 - 1 principalにつき、live routeは最大1本です。routeは1つのgrant（LaunchID、epoch、generation、鍵集合digest、Mac profile）と、1本のchannel・wire clientに対応します。この対応は変わりません。
 - Connectは、未知のlabel、signerのないprincipal、`rescue_operator`のないprincipal、常駐のhost（paired枠と`resident`に載るhost）からのdispatch、route取得中・保持中のprincipal、Mac以外のprofile、このprocessで既に使ったLaunchIDを拒否し、渡されたconnを閉じます。open に進んだ Connect は失敗してもその LaunchID を消費します。open 前の拒否は LaunchID を記録せず、渡された stream を閉じます。その場合の Mac 承認失効は既存 host の接続喪失処理が担い、gateway による消費とは区別します。
-- `initialize`が成功したときだけ、128 bit乱数の`Mcp-Session-Id`を発行します。sessionはそのprincipalへ固定されます。その時点で有効なrouteがあれば同routeへ束縛し、なければ恒久的に未束縛のdiscovery専用sessionを作ります。後からgrantへattachしません。
+- `initialize`が成功したときだけ、128 bit乱数の`Mcp-Session-Id`を発行します。sessionはそのprincipalへ固定されます。終了済み・`rescue`でないrouteを除いた後、ホストの許可と`rescue_operator`の検査を経たlive rescue routeがあれば、常駐がオンラインでもそのrouteを優先します。route sessionにはrescue toolsとそのrouteのbackendだけを載せ、常駐tools/backendは載せません。live rescue routeが無い場合は、オンラインの常駐、`resident_only`の常駐catalog、rescue discovery、通常のdiscoveryの順で選びます。pending・denyではrouteを公開しません。後からgrantへattachしません。
+- live rescue routeがある間、新しい`initialize`はそのrouteへ束縛されるため、そのprincipalの新しい常駐sessionは作りません。既存の常駐sessionは続きます。routeの終了後、次の`initialize`は常駐がオンラインなら常駐sessionを選びます。routeの選択中に終了した場合、その`initialize`は失敗し、別routeや常駐へ自動で切り替えません。
 - `rescue_request`と`rescue_request_status`は、受付口（`rescue_identity_key`）が有効なgatewayのrouteの無いdiscovery sessionにだけ表示し、呼び出せます。`rescue_request`は接続コードだけを受け取り、受付先や鍵を選ばせません。受付へ身元の証明を送ると`pending`を返します。`rescue_request_status`は状態が変わるまで待つ非同期の確認口です。WorkerがMCPの1往復を35秒で切るため、75秒待つ同期toolは使いません。状態は`none`、`pending`、`allow`、`deny`、`timeout`、`ended`、`failed`です。
 - 後続の各requestでは、毎回tokenを検証したうえで、次の条件をすべて確認します。いずれかが外れると404です。
   - sessionのprincipalが同じであること。他principalのsession IDは未知のものと同じに扱います
   - routeへ束縛されたsessionでは、そのrouteがprincipalの現在のrouteで、終了していないこと（discovery専用sessionにはrouteがない）
   - 最終使用から30分以内であること
-- routeは、channelの終了（心拍喪失、停滞、hard deadline、相手のclose）、wire clientの終了、gatewayのCloseで終わります。終わったrouteへ束縛したsessionは無効です。routeがなければ新しい`initialize`は認証済みdiscovery専用sessionを作れますが、commandは開始できません。次の作業には受け手の新しい承認・Connectと、新しいinitializeによるroute束縛が必要です。
+- routeは、channelの終了（心拍喪失、停滞、hard deadline、相手のclose）、wire clientの終了、gatewayのCloseで終わります。終わったrouteへ束縛したsessionは無効です。route、オンラインの常駐、`resident_only`の常駐catalogのどれも選べなければ、新しい`initialize`は認証済みdiscovery専用sessionを作れますが、commandは開始できません。次の作業には受け手の新しい承認・Connectと、新しいinitializeによるroute束縛が必要です。
 - 状態はすべてmemory上にあり、再起動で消えます。再起動後に旧session IDやrouteを再開する手段はありません。
 - 既知の制約：Macの`agentchannel`は、認証前に終わった接続でもgrantを失効させます。そのため、Connectを拒否してconnを閉じると、そのapprovalは使えなくなります（fail closed）。
 
@@ -109,7 +110,7 @@ Managed OAuthではclientはCloudflareからopaque access tokenを受け取り�
 | POST（notification、またはclientのresponse） | 202、本文なし |
 | POST（parse error、batch、不正なid） | 400、JSON-RPC error |
 | POST（session headerのない`initialize`以外） | 400。sessionは作りません |
-| `initialize`時にrouteがない / session数が上限 | 認証済みdiscovery専用session / 429（常駐作業用の`initialize`と、常駐の登録があるprincipalのdiscovery専用の`initialize`は次の2行） |
+| `initialize` | 有効なrescue routeを優先し、無ければオンラインの常駐へ束縛します。どちらも選べず`resident_only`でもない場合は認証済みrescue/discovery専用sessionです。session数が上限なら429（常駐sessionの置換条件は次の2行） |
 | 常駐作業用の`initialize`時にsession数が上限 | そのprincipalの常駐sessionを1件終了して受け付けます。接続世代が現行と異なるものがあれば、その中で最後の利用が最も古い1件。なければ、現行世代の中で最後の利用が最も古い1件。常駐sessionが1件もなければ429。discovery専用sessionとrouteへ束縛したsessionは終了しません。作業の結果は接続世代ごとに照会するため、現行世代のsessionを終了しても、同じ世代の別のsessionから照会できます。現行と異なる世代のsessionを終了すると、その世代の結果は、同じ世代のsessionが残っている間しか照会できません |
 | 常駐の登録があるprincipalの、常駐が未接続の間の`initialize`時にsession数が上限 | 新しいsessionがdiscovery専用になる場合に限り、そのprincipalの常駐sessionのうち、最後の利用が最も古い1件を終了して受け付けます。常駐sessionが1件もなければ429。承認済みrouteへ束縛される`initialize`は何も終了せず429です。`initialize` の途中で常駐の接続状態が変わった場合は、何も終了せず503です。常駐が未接続の間は、常駐sessionはすべて現行と異なる世代なので、終了したsessionの世代の結果は、同じ世代のsessionが残っている間しか照会できません |
 | discovery専用sessionの妥当なtools/call | backendへ到達せず404で同sessionを破棄。不正な要求は400等で拒否し得る。新規initializeが必要。grantへ後付け束縛せず、commandを配送しない |

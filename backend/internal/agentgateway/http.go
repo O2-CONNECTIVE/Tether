@@ -242,32 +242,30 @@ func (g *Gateway) challenge(w http.ResponseWriter, status int, code string) {
 	plain(w, status, http.StatusText(status))
 }
 
-// initialize binds a new session to the current route when one is present.
-// Otherwise it creates a permanently unbound, authenticated discovery session.
-// No later request can bind that session to a grant.
+// initialize binds a new session to a live rescue route before considering an
+// enrolled resident. Otherwise it creates the resident or permanently unbound,
+// authenticated discovery session selected for this principal.
 func (g *Gateway) initialize(w http.ResponseWriter, p *principal, body []byte) {
 	g.mu.Lock()
 	g.expireLocked()
 	rt, full, closed := p.route, p.sessions >= MaxSessionsPerPrincipal, g.closed
+	// A resident work route is never a target for generic rescue tools, and an
+	// ended route cannot be selected for a new session.
+	if rt != nil && (ended(rt) || !rt.rescue) {
+		rt = nil
+	}
 	var resident *residentSession
 	var entry *residentEntry
 	gen := ""
 	residentDiscovery := false
-	if g.resident != nil {
+	if rt == nil && g.resident != nil {
 		if entry = g.resident.entries[p]; entry != nil {
 			if gen = g.resident.control.ResidentGeneration(entry.enrollment.HostLabel, p.label); gen != "" {
 				resident = &residentSession{gateway: g, principal: p, entry: entry, generation: gen}
-				rt = nil
 			} else if g.residentOnly {
 				residentDiscovery = true
-				rt = nil
 			}
 		}
-	}
-	// A route that ConnectResident opened carries one resident work and is
-	// never a target for the generic tools.
-	if rt != nil && (ended(rt) || !rt.rescue) {
-		rt = nil
 	}
 	// A resident session, or the catalog session of an enrolled principal whose
 	// resident is away, may take the slot of one of that principal's resident
