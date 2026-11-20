@@ -15,12 +15,14 @@ import (
 // the dispatch approved; the LaunchID in it is only the SSH user selector.
 // Deadline is the local hard deadline and should not exceed the grant's.
 type ClientConfig struct {
-	Binding    Binding
-	HostKey    ssh.PublicKey
-	Signer     ssh.Signer
-	Deadline   time.Time
-	Budgets    Budgets
-	OnActivity func() // called after authenticated channel data or a valid heartbeat reply
+	Binding              Binding
+	HostKey              ssh.PublicKey
+	Signer               ssh.Signer
+	Deadline             time.Time
+	MaxLifetimeAllowance time.Duration    // additional upper-bound allowance for a trusted caller; never changes Deadline
+	Clock                func() time.Time // admission-time clock; nil uses time.Now
+	Budgets              Budgets
+	OnActivity           func() // called after authenticated channel data or a valid heartbeat reply
 }
 
 // Open takes ownership of conn on every call with a non-nil conn, performs the
@@ -39,9 +41,13 @@ func Open(ctx context.Context, cfg ClientConfig, conn net.Conn) (*Channel, error
 	}
 	host, hostErr := rawEd25519(cfg.HostKey)
 	signer, signerErr := newFixedSigner(cfg.Signer)
-	now := time.Now()
+	clock := cfg.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	now := clock()
 	if ctx == nil || hostErr != nil || signerErr != nil || !binding.valid() || !cfg.Budgets.valid() ||
-		!now.Before(cfg.Deadline) || cfg.Deadline.After(now.Add(MaxClientLifetime)) {
+		!now.Before(cfg.Deadline) || cfg.Deadline.After(now.Add(MaxClientLifetime+cfg.MaxLifetimeAllowance)) {
 		_ = conn.Close()
 		return nil, ErrConfig
 	}

@@ -223,6 +223,8 @@ func TestRescueHandlerForwardsIdentityAndSignedAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	hostTime := time.Date(2040, time.January, 2, 3, 4, 5, 0, time.UTC)
+	h.clock = func() time.Time { return hostTime.Add(-30 * time.Second) }
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -269,7 +271,7 @@ func TestRescueHandlerForwardsIdentityAndSignedAnswer(t *testing.T) {
 		t.Fatalf("identity signature does not verify: %v", err)
 	}
 
-	d := fixtureDispatch(rescueIdentity, "rescue-launch", time.Now().Add(time.Minute))
+	d := fixtureDispatch(rescueIdentity, "rescue-launch", hostTime.Add(24*time.Hour))
 	answerKey := rescueKey(0x49)
 	digest := sha256.Sum256(requestTranscript)
 	signature, err := answerKey.Sign(rand.Reader, agentgateway.RescueAnswerTranscript(id, identity.Nonce, digest[:], agentgateway.RescueAllow, d))
@@ -288,7 +290,7 @@ func TestRescueHandlerForwardsIdentityAndSignedAnswer(t *testing.T) {
 	}
 	select {
 	case call := <-registry.answered:
-		if !bytes.Equal(call.id, id) || call.a.Answer != agentgateway.RescueAllow || call.conn == nil || !sameDispatch(call.a.Dispatch, d) {
+		if !bytes.Equal(call.id, id) || call.a.Answer != agentgateway.RescueAllow || call.conn == nil || !sameDispatch(call.a.Dispatch, d) || call.a.MaxLifetimeAllowance != time.Minute {
 			t.Fatalf("AnswerRescue call = id %x, answer %q, conn %v", call.id, call.a.Answer, call.conn)
 		}
 		answerTranscript := agentgateway.RescueAnswerTranscript(id, identity.Nonce, digest[:], agentgateway.RescueAllow, d)

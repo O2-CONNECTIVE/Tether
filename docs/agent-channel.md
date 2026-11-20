@@ -26,7 +26,7 @@
 | `*Channel` | 上記の戻り値 | 渡されたconn、SSH接続、agent channel 1本とworkerを所有します。`Read`/`Write`/`Close`（`io.ReadWriteCloser`）、`Done`、`Reason`、`Peer`、`Binding` |
 
 - `ServerConfig`：正規の`Session`、承認済みのraw Ed25519鍵集合`AllowedKeys`、既存のhost signer `HostKey`（生成しません）、`Budgets`。Authorityの入力はありません。Binding、鍵集合digest、境界、hard deadline、失効signal、profileは、Sessionがclaimした正規Authorityから`Session.Grant()`・`Session.Done()`・`Session.Profile()`で読みます。そのため、同じ値に見える別Authorityを渡す余地はありません。
-- `ClientConfig`：明示のdispatchから来る`Binding`、pinしたraw Ed25519 host公開鍵`HostKey`、登録済みの`Signer`、端末側の`Deadline`（最大24時間、grantの期限以下にすること）、`Budgets`。
+- `ClientConfig`：明示のdispatchから来る`Binding`、pinしたraw Ed25519 host公開鍵`HostKey`、登録済みの`Signer`、端末側の`Deadline`（通常の上限検査は24時間。レスキュー受付の gateway だけは時計ずれのため受付検査に1分を加える。許可の期限値は延ばさない）、`Budgets`。
 - 失敗時の戻り値が`(nil, err)`なら、承認の失効・connのclose・workerの合流を確認済みです。`(*Channel, err)`で`ErrCleanupUnknown`を含むときは、同じownerが未確認のまま返っています。その`Close`だけが同じconnの再closeと合流を再試行し、別の接続を閉じることはありません。
 - `ctx`はchannelの寿命全体を区切ります。取消でteardownします。
 

@@ -44,6 +44,7 @@ type rescueActiveAttempt struct {
 // confirmed, so Close reports a close still in progress.
 type RescueHandler struct {
 	reg        RescueRegistry
+	clock      func() time.Time
 	mu         sync.Mutex
 	closed     bool
 	serving    int                             // ServeHTTP calls past admission
@@ -61,7 +62,7 @@ func NewRescueHandler(reg RescueRegistry) (*RescueHandler, error) {
 		return nil, ErrConfig
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &RescueHandler{reg: reg, active: map[*closer]rescueActiveAttempt{}, idle: make(chan struct{}), ctx: ctx, cancel: cancel}, nil
+	return &RescueHandler{reg: reg, clock: time.Now, active: map[*closer]rescueActiveAttempt{}, idle: make(chan struct{}), ctx: ctx, cancel: cancel}, nil
 }
 
 // ServeHTTP accepts and serves one host reception.
@@ -338,11 +339,13 @@ func (h *RescueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			answer, err := decodeRescueAnswer(rr.msg)
 			if err != nil || rr.typ != websocket.MessageText || len(rr.msg) > MaxRegistrationMessage ||
-				(answer.Answer == agentgateway.RescueAllow && checkDispatch(answer.Dispatch, time.Now()) != nil) {
-				// A frame the transport cannot accept is still the host's answer:
-				// the empty answer never verifies, so the gateway records failed
-				// (timeout after RescueRequestLifetime) instead of ended.
+				(answer.Answer == agentgateway.RescueAllow && checkRescueDispatch(answer.Dispatch, h.clock()) != nil) {
+				// A frame the transport cannot accept is still the host's answer.
+				// The empty answer fails signature verification immediately while
+				// the request is live; after expiry, timeout is recorded first.
 				answer = agentgateway.RescueAnswer{}
+			} else if answer.Answer == agentgateway.RescueAllow {
+				answer.MaxLifetimeAllowance = rescueDeadlineClockAllowance
 			}
 			stream := newStreamObserved(life, ws, c, DefaultBudgets().Cleanup,
 				nil, func() { h.reg.EndRescueAttempt(res.ID, res.AttemptID) }, nil)

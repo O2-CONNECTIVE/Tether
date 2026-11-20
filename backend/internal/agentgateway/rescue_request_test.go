@@ -46,6 +46,12 @@ func (c *rescueTestClock) Add(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+func (c *rescueTestClock) Set(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
+}
+
 func newRequestRig(t *testing.T, edit func(*agentgateway.Config)) *requestRig {
 	t.Helper()
 	clock := &rescueTestClock{now: time.Now()}
@@ -118,6 +124,7 @@ func requirePending(t *testing.T, c *caller, code string) {
 
 func TestRescueRequestAllowUsesOnlyPerRequestClientKey(t *testing.T) {
 	r := newRequestRig(t, nil)
+	r.clock.Set(time.Now().Add(-60 * time.Second))
 	res, hostKey := openRequestCode(t, r, 0)
 	c := r.caller(0)
 	requirePending(t, c, res.Code)
@@ -134,11 +141,13 @@ func TestRescueRequestAllowUsesOnlyPerRequestClientKey(t *testing.T) {
 		t.Fatalf("request profile = %q, want %q", identity.Profile, agentgateway.RescueProfile)
 	}
 	// The host only accepts C and pins K, so using the principal's long-term signer cannot open this channel.
-	m, stream, err := r.prepareApprovedHost(0, time.Minute, []ssh.PublicKey{client}, hostKey, 5*time.Second)
+	m, stream, err := r.prepareApprovedHost(0, 24*time.Hour, []ssh.PublicKey{client}, hostKey, 5*time.Second)
 	if err != nil {
 		t.Fatalf("prepare one-key host: %v", err)
 	}
+	r.clock.Set(m.dispatch.Deadline.Add(-24*time.Hour - 30*time.Second))
 	answer := signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch)
+	answer.MaxLifetimeAllowance = time.Minute
 	if err := r.gw.AnswerRescue(res.ID, res.AttemptID, answer, stream, nil); err != nil {
 		t.Fatalf("AnswerRescue(allow) = %v", err)
 	}

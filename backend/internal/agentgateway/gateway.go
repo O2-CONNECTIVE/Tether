@@ -331,11 +331,11 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 }
 
 func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool) (*route, error) {
-	return g.connectWithSignerForRescue(label, d, conn, rescue, signer, pinned, nil, nil)
+	return g.connectWithSignerForRescue(label, d, conn, rescue, signer, pinned, nil, nil, 0)
 }
 
 func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool,
-	publication *rescueRoutePublication, onActivity func()) (*route, error) {
+	publication *rescueRoutePublication, onActivity func(), maxLifetimeAllowance time.Duration) (*route, error) {
 	if g == nil || conn == nil {
 		if conn != nil {
 			_ = conn.Close()
@@ -375,7 +375,7 @@ func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.
 		return nil, refusal
 	}
 	defer g.watchers.Done() // includes failed/late acquisition and retire
-	r, err := g.openWithSigner(p, d, conn, signer, onActivity)
+	r, err := g.openWithSigner(p, d, conn, signer, onActivity, maxLifetimeAllowance)
 	if err == nil && publication != nil && g.rescueBeforePublishHook != nil {
 		g.rescueBeforePublishHook(r)
 	}
@@ -500,10 +500,10 @@ func (g *Gateway) residentHostLocked(name string, slot *hostSlot) bool {
 }
 
 func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) {
-	return g.openWithSigner(p, d, conn, p.signer, nil)
+	return g.openWithSigner(p, d, conn, p.signer, nil, 0)
 }
 
-func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func()) (*route, error) {
+func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func(), maxLifetimeAllowance time.Duration) (*route, error) {
 	host, err := ssh.ParsePublicKey(d.HostKey)
 	if err != nil {
 		_ = conn.Close()
@@ -512,7 +512,8 @@ func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer
 	// The channel lives until the gateway closes or the channel ends; its own
 	// deadline is the dispatched grant deadline.
 	ch, err := agentchannel.Open(g.ctx, agentchannel.ClientConfig{
-		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline, Budgets: g.budgets, OnActivity: onActivity,
+		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline, MaxLifetimeAllowance: maxLifetimeAllowance,
+		Clock: g.clock, Budgets: g.budgets, OnActivity: onActivity,
 	}, conn)
 	if err != nil {
 		if ch != nil {
