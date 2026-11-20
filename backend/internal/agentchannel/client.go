@@ -15,14 +15,12 @@ import (
 // the dispatch approved; the LaunchID in it is only the SSH user selector.
 // Deadline is the local hard deadline and should not exceed the grant's.
 type ClientConfig struct {
-	Binding              Binding
-	HostKey              ssh.PublicKey
-	Signer               ssh.Signer
-	Deadline             time.Time
-	AllowRescueClockSkew bool             // uses the fixed rescue allowance without changing Deadline
-	Clock                func() time.Time // admission-time clock; nil uses time.Now
-	Budgets              Budgets
-	OnActivity           func() // called after authenticated channel data or a valid heartbeat reply
+	Binding    Binding
+	HostKey    ssh.PublicKey
+	Signer     ssh.Signer
+	Deadline   time.Time
+	Budgets    Budgets
+	OnActivity func() // called after authenticated channel data or a valid heartbeat reply
 }
 
 // Open takes ownership of conn on every call with a non-nil conn, performs the
@@ -32,7 +30,22 @@ type ClientConfig struct {
 // channel. A non-nil Channel with an error is the same owner whose cleanup is
 // unconfirmed; call its Close to retry. There is no reconnect or retry.
 func Open(ctx context.Context, cfg ClientConfig, conn net.Conn) (*Channel, error) {
+	return openWithClock(ctx, cfg, conn, time.Now, MaxClientLifetime)
+}
+
+// OpenRescue takes ownership of conn and admits the fixed rescue clock-skew
+// allowance using now. It is reserved for AnswerRescue; Deadline itself is
+// never extended. A nil clock is rejected.
+func OpenRescue(ctx context.Context, cfg ClientConfig, conn net.Conn, now func() time.Time) (*Channel, error) {
+	return openWithClock(ctx, cfg, conn, now, MaxClientLifetime+RescueClockSkewAllowance)
+}
+
+func openWithClock(ctx context.Context, cfg ClientConfig, conn net.Conn, clock func() time.Time, maxLifetime time.Duration) (*Channel, error) {
 	if conn == nil {
+		return nil, ErrConfig
+	}
+	if clock == nil {
+		_ = conn.Close()
 		return nil, ErrConfig
 	}
 	binding := cfg.Binding
@@ -41,15 +54,7 @@ func Open(ctx context.Context, cfg ClientConfig, conn net.Conn) (*Channel, error
 	}
 	host, hostErr := rawEd25519(cfg.HostKey)
 	signer, signerErr := newFixedSigner(cfg.Signer)
-	clock := cfg.Clock
-	if clock == nil {
-		clock = time.Now
-	}
 	now := clock()
-	maxLifetime := MaxClientLifetime
-	if cfg.AllowRescueClockSkew {
-		maxLifetime += RescueClockSkewAllowance
-	}
 	if ctx == nil || hostErr != nil || signerErr != nil || !binding.valid() || !cfg.Budgets.valid() ||
 		!now.Before(cfg.Deadline) || cfg.Deadline.After(now.Add(maxLifetime)) {
 		_ = conn.Close()

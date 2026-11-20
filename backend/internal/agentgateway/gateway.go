@@ -331,11 +331,11 @@ func (g *Gateway) connect(label string, d Dispatch, conn net.Conn, rescue bool) 
 }
 
 func (g *Gateway) connectWithSigner(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool) (*route, error) {
-	return g.connectWithSignerForRescue(label, d, conn, rescue, signer, pinned, nil, nil, false)
+	return g.connectWithSignerForRescue(label, d, conn, rescue, signer, pinned, nil, nil)
 }
 
 func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.Conn, rescue bool, signer ssh.Signer, pinned bool,
-	publication *rescueRoutePublication, onActivity func(), allowRescueClockSkew bool) (*route, error) {
+	publication *rescueRoutePublication, onActivity func()) (*route, error) {
 	if g == nil || conn == nil {
 		if conn != nil {
 			_ = conn.Close()
@@ -375,7 +375,13 @@ func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.
 		return nil, refusal
 	}
 	defer g.watchers.Done() // includes failed/late acquisition and retire
-	r, err := g.openWithSigner(p, d, conn, signer, onActivity, allowRescueClockSkew)
+	var r *route
+	var err error
+	if publication != nil {
+		r, err = g.openRescueWithSigner(p, d, conn, signer, onActivity)
+	} else {
+		r, err = g.openWithSigner(p, d, conn, signer, onActivity)
+	}
 	if err == nil && publication != nil && g.rescueBeforePublishHook != nil {
 		g.rescueBeforePublishHook(r)
 	}
@@ -500,10 +506,21 @@ func (g *Gateway) residentHostLocked(name string, slot *hostSlot) bool {
 }
 
 func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) {
-	return g.openWithSigner(p, d, conn, p.signer, nil, false)
+	return g.openWithSigner(p, d, conn, p.signer, nil)
 }
 
-func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func(), allowRescueClockSkew bool) (*route, error) {
+func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func()) (*route, error) {
+	return g.openWithSignerUsing(p, d, conn, signer, onActivity, agentchannel.Open)
+}
+
+func (g *Gateway) openRescueWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func()) (*route, error) {
+	return g.openWithSignerUsing(p, d, conn, signer, onActivity, func(ctx context.Context, cfg agentchannel.ClientConfig, conn net.Conn) (*agentchannel.Channel, error) {
+		return agentchannel.OpenRescue(ctx, cfg, conn, g.clock)
+	})
+}
+
+func (g *Gateway) openWithSignerUsing(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func(),
+	openChannel func(context.Context, agentchannel.ClientConfig, net.Conn) (*agentchannel.Channel, error)) (*route, error) {
 	host, err := ssh.ParsePublicKey(d.HostKey)
 	if err != nil {
 		_ = conn.Close()
@@ -513,12 +530,9 @@ func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer
 	// deadline is the dispatched grant deadline.
 	clientConfig := agentchannel.ClientConfig{
 		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline,
-		AllowRescueClockSkew: allowRescueClockSkew, Budgets: g.budgets, OnActivity: onActivity,
+		Budgets: g.budgets, OnActivity: onActivity,
 	}
-	if allowRescueClockSkew {
-		clientConfig.Clock = g.clock
-	}
-	ch, err := agentchannel.Open(g.ctx, clientConfig, conn)
+	ch, err := openChannel(g.ctx, clientConfig, conn)
 	if err != nil {
 		if ch != nil {
 			g.mu.Lock()

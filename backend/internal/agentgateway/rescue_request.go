@@ -177,7 +177,7 @@ func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn
 	g.rescue.mu.Unlock()
 	taken = true
 	newRoute, err := g.connectWithSignerForRescue(principal.label, a.Dispatch, conn, true, clientSigner, true,
-		&rescueRoutePublication{id: string(id), attemptID: attemptID, record: record}, onActivity, true)
+		&rescueRoutePublication{id: string(id), attemptID: attemptID, record: record}, onActivity)
 	g.rescue.mu.Lock()
 	if g.rescue.records[string(id)] == record {
 		if err != nil {

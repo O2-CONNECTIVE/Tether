@@ -22,11 +22,12 @@
 | `NewServer(ServerConfig)` | host側の信頼済みlocal owner（通常は`agentlink.NewHost`） | 全入力を検査した後で、Sessionの単回transport専有（`Session.ClaimTransport`）を取ります。2つ目のServerは拒否されます |
 | `CanonicalKeys([]ssh.PublicKey)` / `(*Server).ApprovedKeys()` | 同上 | 承認鍵を1度だけ正規のraw Ed25519複製へparseします。channelとagentwireの両方が、同じ複製をdigestと所属の照合に使います |
 | `(*Server).Accept(ctx, net.Conn)` | 同じowner。connは既に受理済みのもの | non-nilのconnは呼出し時に1度だけ移ります。1 Serverにつき1回で、2回目は`ErrUsed`で渡されたconnだけを閉じます |
-| `Open(ctx, ClientConfig, net.Conn)` | 端末側の信頼済みcomposition | 同上（Openごとにconn 1本） |
+| `Open(ctx, ClientConfig, net.Conn)` | 端末側の信頼済みcomposition | 実時計で24時間を厳密に検査し、同上（Openごとにconn 1本） |
+| `OpenRescue(ctx, ClientConfig, net.Conn, now)` | `agentgateway.AnswerRescue`のみ | 固定の1分を加えた上限と注入時計で検査し、Deadline自体は変えません |
 | `*Channel` | 上記の戻り値 | 渡されたconn、SSH接続、agent channel 1本とworkerを所有します。`Read`/`Write`/`Close`（`io.ReadWriteCloser`）、`Done`、`Reason`、`Peer`、`Binding` |
 
 - `ServerConfig`：正規の`Session`、承認済みのraw Ed25519鍵集合`AllowedKeys`、既存のhost signer `HostKey`（生成しません）、`Budgets`。Authorityの入力はありません。Binding、鍵集合digest、境界、hard deadline、失効signal、profileは、Sessionがclaimした正規Authorityから`Session.Grant()`・`Session.Done()`・`Session.Profile()`で読みます。そのため、同じ値に見える別Authorityを渡す余地はありません。
-- `ClientConfig`：明示のdispatchから来る`Binding`、pinしたraw Ed25519 host公開鍵`HostKey`、登録済みの`Signer`、端末側の`Deadline`（通常の上限検査は24時間。レスキュー回答を開く`AnswerRescue`だけは時計ずれのため上限検査に固定の1分を加える。許可の期限値は延ばさない）、`Budgets`。
+- `ClientConfig`：明示のdispatchから来る`Binding`、pinしたraw Ed25519 host公開鍵`HostKey`、登録済みの`Signer`、端末側の`Deadline`、`Budgets`。上限の検査方法は入口ごとに固定し、共通設定から時計や許容幅を渡せません。
 - 失敗時の戻り値が`(nil, err)`なら、承認の失効・connのclose・workerの合流を確認済みです。`(*Channel, err)`で`ErrCleanupUnknown`を含むときは、同じownerが未確認のまま返っています。その`Close`だけが同じconnの再closeと合流を再試行し、別の接続を閉じることはありません。
 - `ctx`はchannelの寿命全体を区切ります。取消でteardownします。
 

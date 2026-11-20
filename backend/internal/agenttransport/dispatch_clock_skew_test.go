@@ -21,16 +21,17 @@ func TestCheckRescueDispatchAllowsThirtySecondSkewAndOneMinuteBoundary(t *testin
 		t.Fatalf("rescue check changed issued deadline to %v", d.Deadline)
 	}
 
+	const rescueDeadlineLimit = 24*time.Hour + time.Minute
 	for _, tc := range []struct {
-		name    string
-		extra   time.Duration
-		wantErr bool
+		name     string
+		lifetime time.Duration
+		wantErr  bool
 	}{
-		{name: "at allowance", extra: agentchannel.RescueClockSkewAllowance},
-		{name: "above allowance", extra: agentchannel.RescueClockSkewAllowance + time.Nanosecond, wantErr: true},
+		{name: "at allowance", lifetime: rescueDeadlineLimit},
+		{name: "above allowance", lifetime: rescueDeadlineLimit + time.Nanosecond, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := fixtureDispatch(rescueKey(0x67), "rescue-launch", gatewayNow.Add(agentchannel.MaxClientLifetime+tc.extra))
+			d := fixtureDispatch(rescueKey(0x67), "rescue-launch", gatewayNow.Add(tc.lifetime))
 			err := checkRescueDispatch(d, gatewayNow)
 			if tc.wantErr && !errors.Is(err, ErrRefused) {
 				t.Fatalf("checkRescueDispatch = %v, want ErrRefused", err)
