@@ -43,6 +43,8 @@ const (
 	MaxWriteStall        = 60 * time.Second
 	MaxCleanup           = 10 * time.Second
 	MaxClientLifetime    = 24 * time.Hour
+	// RescueClockSkewAllowance applies only while admitting a rescue answer.
+	RescueClockSkewAllowance = time.Minute
 	// MaxPeerHeartbeats is the number of peer heartbeats answered per
 	// one-second window; one more is a protocol violation.
 	MaxPeerHeartbeats = 100

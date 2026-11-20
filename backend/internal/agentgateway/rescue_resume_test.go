@@ -828,7 +828,7 @@ func TestAnswerRescueDoesNotPublishAfterHardDeadline(t *testing.T) {
 			t.Error("SSH channel did not open before the publication barrier")
 			return
 		}
-		clock.Add(2 * time.Minute)
+		clock.Add(time.Minute + time.Nanosecond)
 		select {
 		case <-r.channel.Done():
 			t.Error("channel ended before the publication deadline check")

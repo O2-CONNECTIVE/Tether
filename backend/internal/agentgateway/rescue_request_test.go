@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"golang.org/x/crypto/ssh"
 )
@@ -45,6 +46,12 @@ func (c *rescueTestClock) Add(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.now = c.now.Add(d)
+}
+
+func (c *rescueTestClock) Set(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
 }
 
 func newRequestRig(t *testing.T, edit func(*agentgateway.Config)) *requestRig {
@@ -119,6 +126,7 @@ func requirePending(t *testing.T, c *caller, code string) {
 
 func TestRescueRequestAllowUsesOnlyPerRequestClientKey(t *testing.T) {
 	r := newRequestRig(t, nil)
+	r.clock.Set(time.Now().Add(-60 * time.Second))
 	res, hostKey := openRequestCode(t, r, 0)
 	c := r.caller(0)
 	requirePending(t, c, res.Code)
@@ -135,10 +143,11 @@ func TestRescueRequestAllowUsesOnlyPerRequestClientKey(t *testing.T) {
 		t.Fatalf("request profile = %q, want %q", identity.Profile, agentgateway.RescueProfile)
 	}
 	// The host only accepts C and pins K, so using the principal's long-term signer cannot open this channel.
-	m, stream, err := r.prepareApprovedHost(0, time.Minute, []ssh.PublicKey{client}, hostKey, 5*time.Second)
+	m, stream, err := r.prepareApprovedHost(0, 24*time.Hour, []ssh.PublicKey{client}, hostKey, 5*time.Second)
 	if err != nil {
 		t.Fatalf("prepare one-key host: %v", err)
 	}
+	r.clock.Set(m.dispatch.Deadline.Add(-24*time.Hour - 30*time.Second))
 	answer := signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch)
 	if err := r.gw.AnswerRescue(res.ID, res.AttemptID, answer, stream, nil); err != nil {
 		t.Fatalf("AnswerRescue(allow) = %v", err)
@@ -168,6 +177,35 @@ func TestRescueRequestAllowUsesOnlyPerRequestClientKey(t *testing.T) {
 		t.Fatalf("second request = %q, %v; want active-request refusal", msg, busy)
 	}
 	assertNoIdentity(t, otherReception)
+}
+
+func TestAnswerRescueUsesInjectedClockForLifetimeAdmission(t *testing.T) {
+	r := newRequestRig(t, nil)
+	r.clock.Set(time.Now().Add(-12*time.Hour - 3*time.Minute))
+	res, hostKey := openRequestCode(t, r, 10)
+	c := r.caller(0)
+	requirePending(t, c, res.Code)
+	identity := receiveIdentity(t, res)
+	client, err := ssh.ParsePublicKey(identity.Client)
+	if err != nil {
+		t.Fatalf("parse request client key: %v", err)
+	}
+	m, stream, err := r.prepareApprovedHost(0, 12*time.Hour, []ssh.PublicKey{client}, hostKey, 5*time.Second)
+	if err != nil {
+		t.Fatalf("prepare one-key host: %v", err)
+	}
+	wallRemaining := m.dispatch.Deadline.Sub(time.Now())
+	injectedRemaining := m.dispatch.Deadline.Sub(r.clock.Now())
+	if wallRemaining <= 0 || wallRemaining > 24*time.Hour || injectedRemaining <= 24*time.Hour+time.Minute {
+		t.Fatalf("deadline remaining: wall=%v, injected=%v; want wall within 24h and injected above 24h+1m", wallRemaining, injectedRemaining)
+	}
+	answer := signAnswer(t, hostKey, r.gw.RescueEndpoint(), res.ID, identity, agentgateway.RescueAllow, m.dispatch)
+	if err := r.gw.AnswerRescue(res.ID, res.AttemptID, answer, stream, nil); !errors.Is(err, agentchannel.ErrConfig) {
+		t.Fatalf("AnswerRescue with injected clock beyond allowance = %v, want ErrConfig", err)
+	}
+	if !stream.isClosed() {
+		t.Fatal("AnswerRescue left the rejected connection open")
+	}
 }
 
 func TestRescueRequestUsesConfiguredIdentityNotTokenClaims(t *testing.T) {

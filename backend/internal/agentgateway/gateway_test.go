@@ -7,9 +7,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
+	"golang.org/x/crypto/ssh"
 )
+
+func TestGatewayConnectKeepsClientLifetimeStrict(t *testing.T) {
+	r := newRig(t, 0)
+	client, host := fixtureSigner(t, 0x21), fixtureSigner(t, 0x61)
+	m, conn, err := r.prepareApprovedHost(0, time.Minute, []ssh.PublicKey{client.PublicKey()}, host, 5*time.Second)
+	if err != nil {
+		t.Fatalf("prepare approved host: %v", err)
+	}
+	d := m.dispatch
+	d.Deadline = time.Now().Add(agentchannel.MaxClientLifetime + 30*time.Second)
+	if err := r.gw.Connect(label(0), d, conn); !errors.Is(err, agentchannel.ErrConfig) {
+		t.Fatalf("registration Open = %v, want strict ErrConfig", err)
+	}
+}
 
 // The four tools reach the one approved Mac Session through the gateway:
 // start with request_id idempotency and mismatch refusal, output, status and

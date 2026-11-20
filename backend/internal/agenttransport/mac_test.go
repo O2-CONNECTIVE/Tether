@@ -34,14 +34,18 @@ type composed struct {
 }
 
 func newComposed(t *testing.T, edit func(*ClientConfig)) *composed {
+	return newComposedWithClock(t, edit, 30*time.Second, nil)
+}
+
+func newComposedWithClock(t *testing.T, edit func(*ClientConfig), lifetime time.Duration, clock func() time.Time) *composed {
 	t.Helper()
 	p := &composed{host1: fixtureSigner(t, 0x11), host2: fixtureSigner(t, 0x12), m1: fixtureSigner(t, 0x21), m2: fixtureSigner(t, 0x22)}
-	p.gateway = newGateway(t, map[string]ssh.Signer{member1: p.m1, member2: p.m2})
+	p.gateway = newGatewayWithClock(t, map[string]ssh.Signer{member1: p.m1, member2: p.m2}, clock)
 	p.rec = newRecorder(p.gateway)
 	p.h = newHandler(t, p.rec, testBudgets(),
 		EnrolledHost{Label: hostLabel, PublicKey: p.host1.PublicKey(), Principals: []string{member1}},
 		EnrolledHost{Label: otherHost, PublicKey: p.host2.PublicKey(), Principals: []string{member2}})
-	p.owner = newLinkOwner(t, p.host1, 30*time.Second, p.m1.PublicKey(), p.m2.PublicKey())
+	p.owner = newLinkOwner(t, p.host1, lifetime, p.m1.PublicKey(), p.m2.PublicKey())
 	p.m = newMemTransport(p.h)
 	cfg := clientConfig(p.host1)
 	if edit != nil {
@@ -49,6 +53,15 @@ func newComposed(t *testing.T, edit func(*ClientConfig)) *composed {
 	}
 	p.c = newMemClient(t, cfg, p.owner, p.m)
 	return p
+}
+
+func TestRegisteredHostWithSlowGatewayClockOpensNearMaximumLifetime(t *testing.T) {
+	p := newComposedWithClock(t, nil, agentchannel.MaxClientLifetime-5*time.Second, func() time.Time {
+		return time.Now().Add(-30 * time.Second)
+	})
+	done, ends := p.connected(t)
+	ends.client.link.setBlackhole()
+	p.ended(t, done, ends)
 }
 
 func (p *composed) ownerDispatch() agentgateway.Dispatch {

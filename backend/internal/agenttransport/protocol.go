@@ -151,12 +151,24 @@ func rawEd25519(wire []byte) (ssh.PublicKey, error) {
 // checkDispatch accepts only an unexpired Mac current-user dispatch with a
 // complete binding. It is a shape and freshness check, not a credential.
 func checkDispatch(d agentgateway.Dispatch, now time.Time) error {
+	return checkDispatchWithRescueClockSkew(d, now, false)
+}
+
+func checkRescueDispatch(d agentgateway.Dispatch, now time.Time) error {
+	return checkDispatchWithRescueClockSkew(d, now, true)
+}
+
+func checkDispatchWithRescueClockSkew(d agentgateway.Dispatch, now time.Time, allowRescueClockSkew bool) error {
 	b := d.Binding
 	if b.Profile != agentexec.ProfileMacCurrentUser || b.Grant.Generation == 0 || b.ConnectionGeneration == 0 || !b.Grant.Identity.Valid() ||
 		b.Grant.Identity.PolicyDigest != agentexec.MacCurrentUserPolicyDigest() || b.KeySetDigest == ([32]byte{}) {
 		return ErrRefused
 	}
-	if !now.Add(minRemaining).Before(d.Deadline) || d.Deadline.After(now.Add(agentchannel.MaxClientLifetime)) ||
+	maxLifetime := agentchannel.MaxClientLifetime
+	if allowRescueClockSkew {
+		maxLifetime += agentchannel.RescueClockSkewAllowance
+	}
+	if !now.Add(minRemaining).Before(d.Deadline) || d.Deadline.After(now.Add(maxLifetime)) ||
 		!time.Unix(0, d.Deadline.UnixNano()).Equal(d.Deadline) {
 		return ErrRefused
 	}

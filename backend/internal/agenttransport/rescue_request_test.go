@@ -223,6 +223,8 @@ func TestRescueHandlerForwardsIdentityAndSignedAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	hostTime := time.Date(2040, time.January, 2, 3, 4, 5, 0, time.UTC)
+	h.clock = func() time.Time { return hostTime.Add(-30 * time.Second) }
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -269,7 +271,7 @@ func TestRescueHandlerForwardsIdentityAndSignedAnswer(t *testing.T) {
 		t.Fatalf("identity signature does not verify: %v", err)
 	}
 
-	d := fixtureDispatch(rescueIdentity, "rescue-launch", time.Now().Add(time.Minute))
+	d := fixtureDispatch(rescueIdentity, "rescue-launch", hostTime.Add(24*time.Hour))
 	answerKey := rescueKey(0x49)
 	digest := sha256.Sum256(requestTranscript)
 	signature, err := answerKey.Sign(rand.Reader, agentgateway.RescueAnswerTranscript(id, identity.Nonce, digest[:], agentgateway.RescueAllow, d))
@@ -724,14 +726,9 @@ func TestRescueHandlerHandsUnacceptableAnswerToGatewayAsUnverifiable(t *testing.
 	}{
 		"not json":     {websocket.MessageText, []byte("{")},
 		"binary frame": {websocket.MessageBinary, []byte(`{"type":"answer","answer":"deny","signature":"AA"}`)},
-		"expired allow": {websocket.MessageText, func() []byte {
-			b, _ := json.Marshal(map[string]any{"type": "answer", "answer": agentgateway.RescueAllow,
-				"signature":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x01}, ed25519.SignatureSize)),
-				"generation": strconv.FormatUint(expired.Binding.Grant.Generation, 10), "launch_id": expired.Binding.Grant.Identity.LaunchID, "epoch": expired.Binding.Grant.Identity.Epoch,
-				"policy_digest": expired.Binding.Grant.Identity.PolicyDigest, "key_set_digest": hex.EncodeToString(expired.Binding.KeySetDigest[:]),
-				"profile": profileMac, "deadline_unix_nano": strconv.FormatInt(expired.Deadline.UnixNano(), 10), "host_key": base64.RawURLEncoding.EncodeToString(expired.HostKey)})
-			return b
-		}()},
+		"expired allow": {websocket.MessageText, encodeRescueAnswer(agentgateway.RescueAnswer{
+			Answer: agentgateway.RescueAllow, Dispatch: expired, Signature: bytes.Repeat([]byte{0x01}, ed25519.SignatureSize),
+		})},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

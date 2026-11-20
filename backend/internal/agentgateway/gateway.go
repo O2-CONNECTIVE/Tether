@@ -379,7 +379,13 @@ func (g *Gateway) connectWithSignerForRescue(label string, d Dispatch, conn net.
 		return nil, refusal
 	}
 	defer g.watchers.Done() // includes failed/late acquisition and retire
-	r, err := g.openWithSigner(p, d, conn, signer, onActivity)
+	var r *route
+	var err error
+	if publication != nil {
+		r, err = g.openRescueWithSigner(p, d, conn, signer, onActivity)
+	} else {
+		r, err = g.openWithSigner(p, d, conn, signer, onActivity)
+	}
 	if err == nil && publication != nil && g.rescueBeforePublishHook != nil {
 		g.rescueBeforePublishHook(r)
 	}
@@ -508,6 +514,17 @@ func (g *Gateway) open(p *principal, d Dispatch, conn net.Conn) (*route, error) 
 }
 
 func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func()) (*route, error) {
+	return g.openWithSignerUsing(p, d, conn, signer, onActivity, agentchannel.Open)
+}
+
+func (g *Gateway) openRescueWithSigner(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func()) (*route, error) {
+	return g.openWithSignerUsing(p, d, conn, signer, onActivity, func(ctx context.Context, cfg agentchannel.ClientConfig, conn net.Conn) (*agentchannel.Channel, error) {
+		return agentchannel.OpenRescue(ctx, cfg, conn, g.clock)
+	})
+}
+
+func (g *Gateway) openWithSignerUsing(p *principal, d Dispatch, conn net.Conn, signer ssh.Signer, onActivity func(),
+	openChannel func(context.Context, agentchannel.ClientConfig, net.Conn) (*agentchannel.Channel, error)) (*route, error) {
 	host, err := ssh.ParsePublicKey(d.HostKey)
 	if err != nil {
 		_ = conn.Close()
@@ -515,9 +532,11 @@ func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer
 	}
 	// The channel lives until the gateway closes or the channel ends; its own
 	// deadline is the dispatched grant deadline.
-	ch, err := agentchannel.Open(g.ctx, agentchannel.ClientConfig{
-		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline, Budgets: g.budgets, OnActivity: onActivity,
-	}, conn)
+	clientConfig := agentchannel.ClientConfig{
+		Binding: d.Binding, HostKey: host, Signer: signer, Deadline: d.Deadline,
+		Budgets: g.budgets, OnActivity: onActivity,
+	}
+	ch, err := openChannel(g.ctx, clientConfig, conn)
 	if err != nil {
 		if ch != nil {
 			g.mu.Lock()

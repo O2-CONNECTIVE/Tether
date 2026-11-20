@@ -98,6 +98,8 @@ func (g *Gateway) AnswerRescue(id []byte, attemptID uint64, a RescueAnswer, conn
 		g.rescue.mu.Unlock()
 		return ErrRefused
 	}
+	// A transport-rejected answer is empty. Expiry takes precedence: only an
+	// initial attempt records timeout; resume expiry closes only that attempt.
 	if rescueClockTime(g.clock()).UnixNano() >= record.requested.Add(RescueRequestLifetime).UnixNano() {
 		if record.resuming {
 			record.awaitingAnswer = false

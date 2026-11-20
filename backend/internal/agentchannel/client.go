@@ -30,7 +30,22 @@ type ClientConfig struct {
 // channel. A non-nil Channel with an error is the same owner whose cleanup is
 // unconfirmed; call its Close to retry. There is no reconnect or retry.
 func Open(ctx context.Context, cfg ClientConfig, conn net.Conn) (*Channel, error) {
+	return openWithClock(ctx, cfg, conn, time.Now, MaxClientLifetime)
+}
+
+// OpenRescue takes ownership of conn and admits the fixed rescue clock-skew
+// allowance using now. It is reserved for AnswerRescue; Deadline itself is
+// never extended. A nil clock is rejected.
+func OpenRescue(ctx context.Context, cfg ClientConfig, conn net.Conn, now func() time.Time) (*Channel, error) {
+	return openWithClock(ctx, cfg, conn, now, MaxClientLifetime+RescueClockSkewAllowance)
+}
+
+func openWithClock(ctx context.Context, cfg ClientConfig, conn net.Conn, clock func() time.Time, maxLifetime time.Duration) (*Channel, error) {
 	if conn == nil {
+		return nil, ErrConfig
+	}
+	if clock == nil {
+		_ = conn.Close()
 		return nil, ErrConfig
 	}
 	binding := cfg.Binding
@@ -39,9 +54,9 @@ func Open(ctx context.Context, cfg ClientConfig, conn net.Conn) (*Channel, error
 	}
 	host, hostErr := rawEd25519(cfg.HostKey)
 	signer, signerErr := newFixedSigner(cfg.Signer)
-	now := time.Now()
+	now := clock()
 	if ctx == nil || hostErr != nil || signerErr != nil || !binding.valid() || !cfg.Budgets.valid() ||
-		!now.Before(cfg.Deadline) || cfg.Deadline.After(now.Add(MaxClientLifetime)) {
+		!now.Before(cfg.Deadline) || cfg.Deadline.After(now.Add(maxLifetime)) {
 		_ = conn.Close()
 		return nil, ErrConfig
 	}
