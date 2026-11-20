@@ -32,8 +32,9 @@ type sleepAssertion interface {
 	Release() error
 }
 type ownedWorkSleep struct {
-	acquired bool // guarded by Standby.sleepMu
-	released bool // guarded by Standby.sleepMu
+	acquired       bool // guarded by Standby.sleepMu
+	released       bool // guarded by Standby.sleepMu
+	assertionReady chan error
 }
 type standbyCycle struct {
 	ctx           context.Context
@@ -169,8 +170,11 @@ func (s *Standby) prepareOwnedRequest(request *workerowner.Request, workSleep *o
 		return
 	}
 	approve := request.Approve
+	workSleep.assertionReady = make(chan error, 1)
 	request.Approve = func(ctx context.Context) (*workerowner.Worker, error) {
-		if err := s.acquireOwnedWork(workSleep); err != nil {
+		err := s.acquireOwnedWork(workSleep)
+		workSleep.assertionReady <- err
+		if err != nil {
 			return nil, err
 		}
 		return approve(ctx)
@@ -214,13 +218,27 @@ func (s *Standby) awaitOwnedRequest(c *standbyCycle, request *workerowner.Reques
 	select {
 	case reply = <-request.Reply:
 		replied = true
-		if reply != nil {
-			c.clearWorkSleep(workSleep)
-			_ = s.releaseOwnedWork(workSleep)
-		}
 	case <-c.ctx.Done():
 	case <-leaseCtx.Done():
 	case <-sourceCtx.Done():
+	}
+	if replied && reply == nil && workSleep != nil && workSleep.assertionReady != nil {
+		select {
+		case err := <-workSleep.assertionReady:
+			if err != nil {
+				reply = agenttransport.ErrWorkUnconfigured
+			}
+		case <-c.ctx.Done():
+			replied = false
+		case <-leaseCtx.Done():
+			replied = false
+		case <-sourceCtx.Done():
+			replied = false
+		}
+	}
+	if replied && reply != nil {
+		c.clearWorkSleep(workSleep)
+		_ = s.releaseOwnedWork(workSleep)
 	}
 	return replied, reply
 }
@@ -255,6 +273,7 @@ func (s *Standby) acquireOwnedWork(workSleep *ownedWorkSleep) error {
 	if s.sleepOwners == 0 && !s.sleepHeld {
 		if s.sleep == nil {
 			s.sleepErr = ErrSleepPreventionUnsupported
+			log.Printf("residentmac: sleep assertion take failed: %v", ErrSleepPreventionUnsupported)
 			return ErrSleepPreventionUnsupported
 		}
 		if err := s.sleep.Take(); err != nil {

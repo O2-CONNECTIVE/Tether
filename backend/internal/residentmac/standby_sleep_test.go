@@ -1,11 +1,13 @@
 package residentmac
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -218,6 +220,62 @@ func silenceSleepDiagnostics(t *testing.T) {
 	previous := log.Writer()
 	log.SetOutput(io.Discard)
 	t.Cleanup(func() { log.SetOutput(previous) })
+}
+
+func TestStandbySleepAssertionFailureRefusesAndNextWorkProceeds(t *testing.T) {
+	var diagnostics bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&diagnostics)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	h := newSleepHarness(t, StandbyConfig{})
+	failure := errors.New("synthetic sleep assertion failure")
+	fake := &fakeSleepAssertion{takeErr: failure}
+	h.standby.sleep = fake
+	first := newSleepTestSession()
+	sent, replied, result := h.standby.submitOwnedRequest(h.cycle, sleepRequest(first, h.source), sleepBinding(8), h.requests, h.cycle.ctx, h.source)
+	refused := sent && replied && errors.Is(result, agenttransport.ErrWorkUnconfigured)
+	select {
+	case <-first.started:
+		t.Fatal("work started after assertion acquisition failed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
+	if !refused {
+		t.Fatalf("assertion failure was not refused: sent=%v replied=%v result=%v", sent, replied, result)
+	}
+	h.standby.sleepMu.Lock()
+	recorded := h.standby.sleepErr
+	h.standby.sleepMu.Unlock()
+	if !errors.Is(recorded, failure) || !strings.Contains(diagnostics.String(), failure.Error()) {
+		t.Fatalf("assertion failure reason was not retained in diagnostics: error=%v log=%q", recorded, diagnostics.String())
+	}
+	if observation := h.standby.Snapshot(); observation.Cleanup != "confirmed" {
+		t.Fatalf("failed acquisition changed cleanup observation: %+v", observation)
+	}
+
+	fake.mu.Lock()
+	fake.takeErr = nil
+	fake.mu.Unlock()
+	second := newSleepTestSession()
+	workSleep := submitSleepWork(t, h.standby, h.cycle, h.requests, second, 9, h.cycle.ctx, h.source)
+	select {
+	case <-second.started:
+	case <-time.After(time.Second):
+		t.Fatal("next work did not start")
+	}
+	if takes, releases, held, _ := fake.counts(); takes != 2 || releases != 0 || held != 1 {
+		t.Fatalf("next work did not acquire assertion: takes=%d releases=%d held=%d", takes, releases, held)
+	}
+	close(second.finish)
+	eventually(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
+	h.standby.collect(&sleepProofLease{}, sleepBinding(9), nil, workSleep)
+	if takes, releases, held, _ := fake.counts(); takes != 2 || releases != 1 || held != 0 {
+		t.Fatalf("next work collection mismatch: takes=%d releases=%d held=%d", takes, releases, held)
+	}
+	h.cancelSource()
+	if err := waitSleepOwner(t, h); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStandbySleepPreventionFollowsOwnedRequestAndCollection(t *testing.T) {
