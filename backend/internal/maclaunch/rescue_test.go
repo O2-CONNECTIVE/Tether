@@ -2188,6 +2188,117 @@ func TestRescueStopRevokesPendingIssuingGrantBeforeDone(t *testing.T) {
 	}
 }
 
+func TestRescueStopRevokesUnregisteredGrantBeforeDone(t *testing.T) {
+	f := newRescueFixture(t, 4*time.Hour)
+	f.r.cfg.CleanupTimeout = 40 * time.Millisecond
+	prompt := f.prompt(t)
+	approvedReady := make(chan *Approved)
+	continueIssue := make(chan struct{})
+	unregistered := make(chan struct{}, 1)
+	stopGateEntered := make(chan struct{})
+	continueStop := make(chan struct{})
+	answerDone := make(chan struct{})
+	stopDone := make(chan struct{})
+	var issueOnce, stopReleaseOnce, stopGateOnce sync.Once
+	var approved *Approved
+	lifeCancel := f.r.cancel
+	closeMuLocked := false
+	stopStarted := false
+	releaseIssue := func() { issueOnce.Do(func() { close(continueIssue) }) }
+	releaseStop := func() { stopReleaseOnce.Do(func() { close(continueStop) }) }
+	f.r.issueTestSync = func(point rescueIssueTestPoint, a *Approved) {
+		switch point {
+		case rescueIssueAfterComplete:
+			approvedReady <- a
+			<-continueIssue
+		case rescueIssueUnregistered:
+			unregistered <- struct{}{}
+		}
+	}
+	f.r.mu.Lock()
+	f.r.reopenCancel = func() {
+		stopGateOnce.Do(func() { close(stopGateEntered) })
+		<-continueStop
+	}
+	f.r.cancel = nil
+	f.r.mu.Unlock()
+	go func() {
+		_ = f.r.Answer(f.helper, RescueReply{RequestID: prompt.RequestID, Digest: prompt.Digest(), Allow: true})
+		close(answerDone)
+	}()
+	t.Cleanup(func() {
+		releaseIssue()
+		releaseStop()
+		if closeMuLocked {
+			approved.closeMu.Unlock()
+		}
+		if lifeCancel != nil {
+			lifeCancel()
+		}
+		select {
+		case <-answerDone:
+		case <-time.After(5 * time.Second):
+			t.Error("Answer did not return after releasing test gates")
+		}
+		if stopStarted {
+			select {
+			case <-stopDone:
+			case <-time.After(5 * time.Second):
+				t.Error("Stop did not return after releasing test gates")
+			}
+		}
+	})
+	select {
+	case approved = <-approvedReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("completeApproved did not return an Approved owner")
+	}
+	if !approved.issuer.Snapshot().HasAuthority {
+		t.Fatal("test setup did not create a live grant")
+	}
+	approved.closeMu.Lock()
+	closeMuLocked = true
+	stopStarted = true
+	go func() {
+		f.r.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopGateEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not set stopRequested before entering its gate")
+	}
+	releaseIssue()
+	select {
+	case <-unregistered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("issue did not clear issuing after Stop was requested")
+	}
+	f.r.mu.Lock()
+	noOwner := f.r.stopRequested && f.r.issuing == nil && f.r.approved == nil
+	f.r.mu.Unlock()
+	if !noOwner {
+		t.Fatal("test did not reach the unregistered-grant window")
+	}
+	releaseStop()
+	f.waitDone(t)
+	if approved.issuer.Snapshot().HasAuthority {
+		t.Fatal("Done closed while the grant was still live")
+	}
+	approved.closeMu.Unlock()
+	closeMuLocked = false
+	select {
+	case <-answerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Answer did not return after Approved.Close acquired closeMu")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return after Done closed")
+	}
+}
+
 // A host-side end while the grant is handed to the reception waits for that
 // hand-over and then revokes the grant: Done never closes over a live grant.
 func TestRescueStopWhileIssuingRevokesGrant(t *testing.T) {

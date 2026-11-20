@@ -168,6 +168,13 @@ const (
 	rescueEnded
 )
 
+type rescueIssueTestPoint uint8
+
+const (
+	rescueIssueAfterComplete rescueIssueTestPoint = iota + 1
+	rescueIssueUnregistered
+)
+
 type rescueReceptionCandidate struct {
 	reception RescueReception
 	initOnce  sync.Once
@@ -264,6 +271,7 @@ type Rescue struct {
 	stopRequested      bool
 	issuing            *Pending
 	approved           *Approved
+	issueTestSync      func(rescueIssueTestPoint, *Approved)
 	cleanupErr         error
 	cleanupObserved    bool
 	life               context.Context
@@ -774,6 +782,9 @@ func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, n
 	r.issuing = p
 	r.mu.Unlock()
 	a, err := p.completeApproved(r.life)
+	if a != nil && err == nil && r.issueTestSync != nil {
+		r.issueTestSync(rescueIssueAfterComplete, a)
+	}
 	if a == nil {
 		_ = p.issuer.Close()
 		return nil, nil, err
@@ -788,14 +799,20 @@ func (r *Rescue) issue(approvedAt time.Time, client ssh.PublicKey) (*Approved, n
 		r.issuing = nil
 	}
 	registered := r.state == rescueIssuing && !r.stopRequested
+	var revokeErr error
 	if registered {
 		r.approved = a
+	} else {
+		revokeErr = a.revokeForRescue()
 	}
 	r.mu.Unlock()
 	if !registered {
+		if r.issueTestSync != nil {
+			r.issueTestSync(rescueIssueUnregistered, a)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.CleanupTimeout)
 		defer cancel()
-		return nil, nil, errors.Join(agentchannel.ErrClosed, a.Close(ctx))
+		return nil, nil, errors.Join(agentchannel.ErrClosed, revokeErr, a.Close(ctx))
 	}
 	conn, err := reception.Allow(a.Dispatch())
 	return a, conn, err
