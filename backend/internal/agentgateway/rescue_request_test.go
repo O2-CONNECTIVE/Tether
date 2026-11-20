@@ -840,6 +840,16 @@ func TestInitializeKeepsRescueRoutesBoundToTheirPrincipals(t *testing.T) {
 	if final := bound1.awaitTerminal(id1); final["phase"] != "exited" {
 		t.Fatalf("principal 1 route result = %v", final)
 	}
+	output0, output0Error := bound0.tool("rescue_output", map[string]any{"command_id": id0, "cursor": 0, "max_bytes": 1024})
+	chunks0, _ := output0["chunks"].([]any)
+	if output0Error || len(chunks0) != 1 || chunks0[0].(map[string]any)["data"] != "principal-zero\\n" {
+		t.Fatalf("principal 0 rescue output = %v, want its host's output", output0)
+	}
+	output1, output1Error := bound1.tool("rescue_output", map[string]any{"command_id": id1, "cursor": 0, "max_bytes": 1024})
+	chunks1, _ := output1["chunks"].([]any)
+	if output1Error || len(chunks1) != 1 || chunks1[0].(map[string]any)["data"] != "principal-one\\n" {
+		t.Fatalf("principal 1 rescue output = %v, want its host's output", output1)
+	}
 }
 
 func TestInitializeRescueRouteExcludesResidentToolsAndBackend(t *testing.T) {

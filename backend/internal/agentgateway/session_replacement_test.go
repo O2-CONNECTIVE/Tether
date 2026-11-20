@@ -350,3 +350,52 @@ func TestSessionBoundHoldsWithoutReplaceableSession(t *testing.T) {
 		c.assertAllAlive(ids)
 	})
 }
+
+func TestOnlineResidentCapacityRescuePriorityAndRecovery(t *testing.T) {
+	c := newCapacityRig(t)
+	c.control.set(generationA)
+	ids := c.fill()
+	m := c.approve(0, time.Minute)
+	if status := c.initializeStatus(); status != http.StatusTooManyRequests {
+		t.Fatalf("initialize at capacity with online resident and rescue route = %d, want 429", status)
+	}
+	c.assertAllAlive(ids)
+
+	if deleted := c.do(http.MethodDelete, c.bearer, ids[0], "", nil); deleted.status != http.StatusNoContent {
+		t.Fatalf("delete resident session = %d, want 204", deleted.status)
+	}
+	rescueInit := c.do(http.MethodPost, c.bearer, "", rpc(0, "initialize", initParams()), nil)
+	rescueID := rescueInit.header.Get(agentgateway.HeaderSession)
+	if rescueInit.status != http.StatusOK || rescueID == "" {
+		t.Fatalf("initialize with capacity and live rescue route = %d, session %q; want rescue session", rescueInit.status, rescueID)
+	}
+	if initialized := c.do(http.MethodPost, c.bearer, rescueID, rpc(nil, "notifications/initialized", nil), nil); initialized.status != http.StatusAccepted {
+		t.Fatalf("rescue initialized notification = %d, want 202", initialized.status)
+	}
+	expectRescueRouteTools(t, &caller{r: c.rig, bearer: c.bearer, sid: rescueID, next: 100})
+
+	if err := m.hostConn.Close(); err != nil {
+		t.Fatalf("close rescue host connection: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ended := c.do(http.MethodPost, c.bearer, rescueID, rpc(1, "tools/list", nil), nil)
+		if ended.status == http.StatusNotFound {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("old rescue session after route end = %d, want 404", ended.status)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	residentInit := c.do(http.MethodPost, c.bearer, "", rpc(0, "initialize", initParams()), nil)
+	residentID := residentInit.header.Get(agentgateway.HeaderSession)
+	if residentInit.status != http.StatusOK || residentID == "" {
+		t.Fatalf("initialize after rescue route ended = %d, session %q; want resident session", residentInit.status, residentID)
+	}
+	if initialized := c.do(http.MethodPost, c.bearer, residentID, rpc(nil, "notifications/initialized", nil), nil); initialized.status != http.StatusAccepted {
+		t.Fatalf("resident initialized notification = %d, want 202", initialized.status)
+	}
+	expectResidentToolsOnly(t, &caller{r: c.rig, bearer: c.bearer, sid: residentID, next: 100})
+}

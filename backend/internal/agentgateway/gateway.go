@@ -111,6 +111,9 @@ type route struct {
 	binding     agentchannel.Binding
 	channel     *agentchannel.Channel
 	client      *agentwire.Client
+	deadline    time.Time
+	channelDone <-chan struct{}
+	clientDone  <-chan struct{}
 	slots       chan struct{}
 	rescue      bool          // opened by Connect; only such a route binds generic MCP sessions
 	ended       chan struct{} // closed once the route is no longer routable
@@ -531,7 +534,8 @@ func (g *Gateway) openWithSigner(p *principal, d Dispatch, conn net.Conn, signer
 		return nil, errors.Join(err, g.closeChannel(ch))
 	}
 	return &route{
-		owner: p, binding: d.Binding, channel: ch, client: client, slots: make(chan struct{}, mcpadapter.MaxConcurrent),
+		owner: p, binding: d.Binding, channel: ch, client: client, deadline: d.Deadline,
+		channelDone: ch.Done(), clientDone: client.Done(), slots: make(chan struct{}, mcpadapter.MaxConcurrent),
 		ended: make(chan struct{}), cleanupDone: make(chan struct{}),
 	}, nil
 }
