@@ -272,9 +272,13 @@ func (s *Standby) acquireOwnedWork(workSleep *ownedWorkSleep) error {
 	}
 	if s.sleepOwners == 0 && !s.sleepHeld {
 		if s.sleep == nil {
-			s.sleepErr = ErrSleepPreventionUnsupported
-			log.Printf("residentmac: sleep assertion take failed: %v", ErrSleepPreventionUnsupported)
-			return ErrSleepPreventionUnsupported
+			assertion, err := newSleepAssertion()
+			if err != nil {
+				s.sleepErr = err
+				log.Printf("residentmac: sleep assertion take failed: %v", err)
+				return err
+			}
+			s.sleep = assertion
 		}
 		if err := s.sleep.Take(); err != nil {
 			s.sleepErr = err
