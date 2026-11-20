@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter"
 	"golang.org/x/crypto/ssh"
@@ -115,6 +117,48 @@ func rolesClosedSignal() <-chan struct{} {
 	return done
 }
 
+func rolesSignalOpen(signal <-chan struct{}) bool {
+	select {
+	case <-signal:
+		return false
+	default:
+		return true
+	}
+}
+
+func assertRolesResidentSessionWithoutRescue(t *testing.T, s *session) {
+	t.Helper()
+	if s == nil || s.route != nil || s.resident == nil {
+		t.Fatalf("route-less initialize selected session %+v, want resident session without rescue route", s)
+	}
+	if got := s.mcp.Handle([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)); got.Kind != mcpadapter.HTTPAccepted {
+		t.Fatalf("resident initialized notification = %+v, want accepted", got)
+	}
+	listed := s.mcp.Handle([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	if listed.Error {
+		t.Fatalf("resident tools/list = %s", listed.Body)
+	}
+	var catalog struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(listed.Body, &catalog); err != nil {
+		t.Fatalf("decode resident tools/list: %v", err)
+	}
+	for _, tool := range catalog.Result.Tools {
+		if strings.HasPrefix(tool.Name, "rescue_") {
+			t.Fatalf("resident session exposed rescue tool %q", tool.Name)
+		}
+	}
+	called := s.mcp.Handle([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rescue_start","arguments":{"request_id":"00000000000000000000000000000000","command":"true","timeout_ms":1000}}}`))
+	if !called.Error || !bytes.Contains(called.Body, []byte("unknown fixed operation tool")) {
+		t.Fatalf("resident rescue_start = %+v, want local unknown-tool error without reaching a backend", called)
+	}
+}
+
 func rolesInitializeBody() []byte {
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 0, "method": "initialize",
 		"params": map[string]any{"protocolVersion": mcpadapter.ProtocolVersion, "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "t", "version": "1"}}})
@@ -128,6 +172,9 @@ func TestInitializeSkipsRescueRouteThatIsNotLiveAtSelection(t *testing.T) {
 	}{
 		{name: "deadline", end: func(r *route, now *time.Time) { r.deadline = now.Add(-time.Second) }},
 		{name: "channel", end: func(r *route, _ *time.Time) { r.channelDone = rolesClosedSignal() }},
+		{name: "channel reason recorded", end: func(r *route, _ *time.Time) {
+			r.channelReason = func() agentchannel.Reason { return agentchannel.ReasonTransport }
+		}},
 		{name: "wire client", end: func(r *route, _ *time.Time) { r.clientDone = rolesClosedSignal() }},
 		{name: "retired", end: func(r *route, _ *time.Time) { close(r.ended) }},
 	}
@@ -138,6 +185,9 @@ func TestInitializeSkipsRescueRouteThatIsNotLiveAtSelection(t *testing.T) {
 			g.clock = func() time.Time { return now }
 			rt := rolesLiveRoute(p, now.Add(time.Hour))
 			tc.end(rt, &now)
+			if tc.name == "channel reason recorded" && (!rolesSignalOpen(rt.channelDone) || !rolesSignalOpen(rt.clientDone)) {
+				t.Fatal("channel reason case must leave channel and wire client Done open")
+			}
 			g.mu.Lock()
 			p.route = rt
 			g.mu.Unlock()
@@ -150,9 +200,7 @@ func TestInitializeSkipsRescueRouteThatIsNotLiveAtSelection(t *testing.T) {
 			g.mu.Lock()
 			s := g.sessions[id]
 			g.mu.Unlock()
-			if s == nil || s.route != nil || s.resident == nil {
-				t.Fatalf("session selected after dead rescue route = %+v, want resident", s)
-			}
+			assertRolesResidentSessionWithoutRescue(t, s)
 		})
 	}
 }
@@ -166,6 +214,11 @@ func TestInitializeFailsWhenSelectedRescueRouteEndsBeforeBinding(t *testing.T) {
 		{name: "channel signal", change: func(g *Gateway, _ *principal, r *route, _ *time.Time) {
 			g.mu.Lock()
 			r.channelDone = rolesClosedSignal()
+			g.mu.Unlock()
+		}},
+		{name: "channel reason recorded", change: func(g *Gateway, _ *principal, r *route, _ *time.Time) {
+			g.mu.Lock()
+			r.channelReason = func() agentchannel.Reason { return agentchannel.ReasonTransport }
 			g.mu.Unlock()
 		}},
 		{name: "wire client signal", change: func(g *Gateway, _ *principal, r *route, _ *time.Time) {
@@ -212,6 +265,9 @@ func TestInitializeFailsWhenSelectedRescueRouteEndsBeforeBinding(t *testing.T) {
 				t.Fatal("initialize did not reach session binding barrier")
 			}
 			tc.change(g, p, oldRoute, &now)
+			if tc.name == "channel reason recorded" && (!rolesSignalOpen(oldRoute.channelDone) || !rolesSignalOpen(oldRoute.clientDone)) {
+				t.Fatal("channel reason case must leave channel and wire client Done open")
+			}
 			close(barrier.release)
 			var rec *httptest.ResponseRecorder
 			select {

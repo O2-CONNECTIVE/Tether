@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/mcpadapter"
 )
 
@@ -480,6 +481,9 @@ func ended(r *route) bool {
 
 func liveRescueRoute(r *route, now time.Time) bool {
 	if r == nil || !r.rescue || ended(r) || !now.Before(r.deadline) {
+		return false
+	}
+	if r.channelReason != nil && r.channelReason() != agentchannel.ReasonNone {
 		return false
 	}
 	select {
