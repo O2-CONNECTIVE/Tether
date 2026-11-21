@@ -26,7 +26,11 @@ func elapsedNow() time.Time {
 }
 
 // ponytail: 待ちの間の 1 秒ごとの確認。遅れや電力が問題になれば IORegisterForSystemPower・NWPathMonitor に上げる。
-func startReconnectSignals(ctx context.Context, connector residentConnector, nudge func()) {
+func startReconnectSignals(ctx context.Context, connector residentConnector, nudge func(uint64)) {
+	startReconnectSignalsUsing(ctx, connector, reconnectAddresses, reconnectWakePoll, nudge)
+}
+
+func startReconnectSignalsUsing(ctx context.Context, connector residentConnector, addressesFn func() (string, error), poll time.Duration, nudge func(uint64)) {
 	changesSource, ok := connector.(interface{ Changes() <-chan struct{} })
 	if !ok || nudge == nil {
 		return
@@ -45,10 +49,10 @@ func startReconnectSignals(ctx context.Context, connector residentConnector, nud
 			continue
 		}
 		var detector reconnectWakeDetector
-		addresses, err := reconnectAddresses()
+		addresses, err := addressesFn()
 		detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
 		waitID := connector.Snapshot().RetryWaitID
-		ticker := time.NewTicker(reconnectWakePoll)
+		ticker := time.NewTicker(poll)
 		waiting := true
 		for waiting {
 			select {
@@ -61,7 +65,7 @@ func startReconnectSignals(ctx context.Context, connector residentConnector, nud
 				if waiting && snapshot.RetryWaitID != waitID {
 					waitID = snapshot.RetryWaitID
 					detector = reconnectWakeDetector{}
-					addresses, err = reconnectAddresses()
+					addresses, err = addressesFn()
 					detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
 				}
 			case <-ticker.C:
@@ -77,9 +81,9 @@ func startReconnectSignals(ctx context.Context, connector residentConnector, nud
 					detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
 					continue
 				}
-				addresses, err := reconnectAddresses()
+				addresses, err := addressesFn()
 				if detector.observe(elapsedNow(), time.Now(), addresses, err == nil) {
-					nudge()
+					nudge(waitID)
 					waiting = false
 				}
 			}

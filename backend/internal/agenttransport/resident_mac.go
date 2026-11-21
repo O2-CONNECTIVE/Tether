@@ -154,13 +154,13 @@ func (c *ResidentClient) Snapshot() ResidentControlSnapshot {
 
 // Nudge interrupts a resident backoff only while the client is waiting to
 // retry. It never closes an active connection or queues a stale wakeup.
-func (c *ResidentClient) Nudge() {
+func (c *ResidentClient) Nudge(waitID uint64) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.retrying {
+	if !c.retrying || c.retryWaitID != waitID {
 		return
 	}
 	select {
@@ -233,7 +233,7 @@ func residentOccupiedExpired(since, now time.Time) bool {
 }
 
 func residentHTTPRetryable(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
+	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 }
 
 // Changes is coalesced notification to re-read Snapshot, not a complete journal.
@@ -371,7 +371,7 @@ func residentFailureDisposition(e error, authenticated, occupiedExpired bool) (b
 		}
 		return true, ""
 	}
-	if status == websocket.StatusPolicyViolation {
+	if status == residentIdentityRefusedClose {
 		return false, ResidentFailureIdentityRefused
 	}
 	if residentRetryable(e, authenticated) {
@@ -437,6 +437,9 @@ func (c *ResidentClient) attempt(parent context.Context) (result, cleanup error,
 	observed := link.settle()
 	if e != nil {
 		if resp != nil && residentHTTPRetryable(resp.StatusCode) {
+			return errResidentUnavailable, nil, false
+		}
+		if parent.Err() == nil && life.Err() != nil && (errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded)) {
 			return errResidentUnavailable, nil, false
 		}
 		return e, nil, false

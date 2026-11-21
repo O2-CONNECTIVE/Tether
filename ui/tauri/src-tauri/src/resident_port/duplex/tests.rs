@@ -98,6 +98,67 @@ fn nullable_and_unknown_snapshot_fields_are_strict() {
 }
 
 #[test]
+fn accepts_reconnecting_and_needs_action_states_with_registration_reasons() {
+    for (registration, reason) in [
+        ("reconnecting", None),
+        ("needs_action", Some("identity_refused")),
+        ("needs_action", Some("connection_occupied")),
+        ("needs_action", Some("gateway_refused")),
+    ] {
+        let mut value = status(100);
+        value["snapshot"]["standby"] = json!("on");
+        value["snapshot"]["registration"] = json!(registration);
+        value["snapshot"]["work"] = json!("idle");
+        value["snapshot"]["cleanup"] = json!("confirmed");
+        value["snapshot"]["canRequestOn"] = json!(false);
+        value["snapshot"]["canRequestOff"] = json!(true);
+        if let Some(reason) = reason {
+            value["snapshot"]["registrationReason"] = json!(reason);
+        }
+        let Event::Status { snapshot, .. } = event(&value) else {
+            panic!("wrong event");
+        };
+        let observation = snapshot.observation().expect("valid registration state");
+        let encoded = serde_json::to_value(observation).unwrap();
+        assert_eq!(encoded["registration"], json!(registration));
+        assert_eq!(
+            encoded.get("registrationReason").and_then(|v| v.as_str()),
+            reason
+        );
+    }
+}
+
+#[test]
+fn needs_action_requires_a_known_registration_reason() {
+    for reason in [None, Some("unknown_reason")] {
+        let mut value = status(100);
+        value["snapshot"]["standby"] = json!("on");
+        value["snapshot"]["registration"] = json!("needs_action");
+        value["snapshot"]["work"] = json!("idle");
+        value["snapshot"]["cleanup"] = json!("confirmed");
+        value["snapshot"]["canRequestOn"] = json!(false);
+        value["snapshot"]["canRequestOff"] = json!(true);
+        if let Some(reason) = reason {
+            value["snapshot"]["registrationReason"] = json!(reason);
+        }
+        let bytes = serde_json::to_vec(&value).unwrap();
+        match Event::parse(&bytes) {
+            Ok(Event::Status { snapshot, .. }) => {
+                assert!(
+                    snapshot.observation().is_err(),
+                    "accepted reason {reason:?}"
+                );
+            }
+            Err(()) if reason == Some("unknown_reason") => {}
+            result => panic!(
+                "unexpected parse result for reason {reason:?}: {}",
+                result.is_ok()
+            ),
+        }
+    }
+}
+
+#[test]
 fn observation_invariants_are_validated_before_close_accepts_status() {
     let cases = [
         ("revision", json!(0)),

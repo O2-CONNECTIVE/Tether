@@ -11,4 +11,4 @@ import (
 // run and only tests read it.
 func elapsedNow() time.Time { return time.Now() }
 
-func startReconnectSignals(context.Context, residentConnector, func()) {}
+func startReconnectSignals(context.Context, residentConnector, func(uint64)) {}

@@ -174,6 +174,28 @@ func TestStandbyKeepsNeedsActionAfterCleanConnectorExit(t *testing.T) {
 	}
 }
 
+func TestNeedsActionExpiresUsingInjectedClock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, _, _ := idleStandby(t)
+		clock := &stepClock{base: time.Now()}
+		s.clock = clock.now
+		refusal := terminalRefusalConnector()
+		s.makeConnector = func(context.Context) (residentConnector, error) { return refusal, nil }
+		if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
+			t.Fatal(r)
+		}
+		settle()
+		if o := s.Snapshot(); o.Standby != "on" || o.Registration != "needs_action" {
+			t.Fatal("clean terminal refusal was not retained before the end", o)
+		}
+		clock.awake(2 * time.Hour)
+		settle()
+		if o := s.Snapshot(); o.Standby != "off" || o.Registration != "disconnected" || o.RegistrationReason != "" || !o.StandbyExpired || !o.CanRequestOn {
+			t.Fatal("needs-action standby did not turn off at its deadline", o)
+		}
+	})
+}
+
 func TestNeedsActionRequiresOffBeforeOnRetries(t *testing.T) {
 	s, _, calls := idleStandby(t)
 	first := terminalRefusalConnector()

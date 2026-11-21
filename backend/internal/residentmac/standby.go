@@ -86,6 +86,7 @@ type standbyCycle struct {
 	work          *agentgateway.ResidentWorkBinding
 	proved        chan struct{} // closed once the open source's cleanup proof was attempted
 	result        error
+	expiryCancel  context.CancelFunc
 	initialUntil  time.Time
 	until         time.Time // guarded by Standby.mu: the end of standby (#399)
 	untilWall     int64     // the same instant on the wall clock, Unix ns
@@ -739,6 +740,9 @@ func (s *Standby) request(id, revision uint64, intent string, d time.Duration) S
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
 		if s.observation.Registration == "needs_action" && s.observation.Cleanup == "confirmed" {
 			s.endNeedsActionLocked()
+			if s.cycle.expiryCancel != nil {
+				s.cycle.expiryCancel()
+			}
 			s.observation.Transition.Outcome = "applied"
 			s.changedLocked()
 		} else {
@@ -816,6 +820,9 @@ func (s *Standby) Close(ctx context.Context) error {
 	}
 	if s.observation.Registration == "needs_action" && s.observation.Cleanup == "confirmed" {
 		s.endNeedsActionLocked()
+		if c.expiryCancel != nil {
+			c.expiryCancel()
+		}
 	} else if s.observation.Standby == "on" {
 		s.observation.Standby = "stopping"
 		s.observation.Work = "stopping"
@@ -882,7 +889,7 @@ func (s *Standby) run(c *standbyCycle) {
 		c.mu.Lock()
 		c.connector = connector
 		c.mu.Unlock()
-		if nudger, ok := connector.(interface{ Nudge() }); ok {
+		if nudger, ok := connector.(interface{ Nudge(uint64) }); ok {
 			retrySignalsDone = make(chan struct{})
 			go func() {
 				defer close(retrySignalsDone)
@@ -988,7 +995,7 @@ func (s *Standby) run(c *standbyCycle) {
 	c.result = result
 	c.mu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var expiryContext context.Context
 	needsActionReason := registrationReason(e)
 	offRequested := s.observation.Transition != nil && s.observation.Transition.Intent == "off"
 	if result == nil && needsActionReason != "" && !offRequested && !s.observation.StandbyExpired && s.standbyLeftLocked() <= 0 {
@@ -1012,6 +1019,7 @@ func (s *Standby) run(c *standbyCycle) {
 		s.observation.Cleanup = "confirmed"
 		s.observation.Owned = 0
 		s.observation.Caller = nil
+		expiryContext, c.expiryCancel = context.WithCancel(context.Background())
 		if s.observation.Transition != nil && s.observation.Transition.Intent == "on" {
 			s.observation.Transition.Outcome = "applied"
 		}
@@ -1029,8 +1037,37 @@ func (s *Standby) run(c *standbyCycle) {
 			s.observation.Transition.Outcome = "rejected"
 		}
 	}
-	close(c.done) // final observation and all original joins precede Close completion/re-ON
 	s.changedLocked()
+	s.mu.Unlock()
+	if expiryContext != nil {
+		s.monitorNeedsActionExpiry(c, expiryContext)
+		c.expiryCancel()
+	}
+	s.mu.Lock()
+	close(c.done) // all original joins and needs-action expiry precede Close completion/re-ON
+	s.mu.Unlock()
+}
+
+func (s *Standby) monitorNeedsActionExpiry(c *standbyCycle, ctx context.Context) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			if s.cycle != c || s.closed || s.observation.Standby != "on" || s.observation.Registration != "needs_action" {
+				s.mu.Unlock()
+				return
+			}
+			expired := s.expireStandbyLocked()
+			s.mu.Unlock()
+			if expired {
+				return
+			}
+		}
+	}
 }
 
 func registrationReason(err error) RegistrationReason {

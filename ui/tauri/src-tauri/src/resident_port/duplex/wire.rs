@@ -51,6 +51,8 @@ pub(super) struct Snapshot {
     valid_for_ms: u32,
     standby: Standby,
     registration: Registration,
+    #[serde(default)]
+    registration_reason: Option<RegistrationReason>,
     #[serde(deserialize_with = "Option::deserialize")]
     caller: Option<String>,
     work: Work,
@@ -78,6 +80,7 @@ impl Snapshot {
             valid_for_ms: self.valid_for_ms,
             standby: self.standby,
             registration: self.registration,
+            registration_reason: self.registration_reason,
             caller: self.caller,
             work: self.work,
             cleanup: self.cleanup,
