@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log"
 	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,38 @@ const sleepTakeWait = 5 * time.Second
 const sleepRefusalReserve = 5 * time.Second
 const sleepReleaseRetryInitial = time.Second
 const sleepReleaseRetryMax = 30 * time.Second
+const reconnectWakePoll = time.Second
+const reconnectWakeThreshold = 5 * time.Second
+
+type reconnectWakeDetector struct {
+	active       bool
+	awake        time.Time
+	elapsed      time.Time
+	network      string
+	networkKnown bool
+}
+
+func (d *reconnectWakeDetector) observe(elapsed, awake time.Time, network string, networkKnown bool) bool {
+	if !d.active {
+		d.active = true
+		d.awake, d.elapsed = awake, elapsed
+		d.network, d.networkKnown = network, networkKnown
+		return false
+	}
+	woke := elapsed.Sub(d.elapsed)-awake.Sub(d.awake) > reconnectWakeThreshold
+	networkChanged := networkKnown && d.networkKnown && network != d.network
+	d.awake, d.elapsed = awake, elapsed
+	if networkKnown {
+		d.network, d.networkKnown = network, true
+	}
+	return woke || networkChanged
+}
+
+func reconnectNetworkFingerprint(addresses []string) string {
+	copyOf := append([]string(nil), addresses...)
+	sort.Strings(copyOf)
+	return strings.Join(copyOf, "\n")
+}
 
 // Private lifecycle-only fake seam; it cannot mint authority or native work.
 type residentConnector interface {
@@ -640,6 +674,8 @@ func (s *Standby) changedLocked() {
 	} else {
 		s.closed = true
 		s.observation.Standby = "unknown"
+		s.observation.Registration = "unknown"
+		s.observation.RegistrationReason = ""
 		s.observation.Cleanup = "unknown"
 		s.observation.AdmissionSealed = true
 		if s.cycle != nil {
@@ -686,6 +722,7 @@ func (s *Standby) request(id, revision uint64, intent string, d time.Duration) S
 		s.beginSleepCycle(c.owner)
 		s.observation.Standby = "on"
 		s.observation.Registration = "connecting"
+		s.observation.RegistrationReason = ""
 		s.observation.AdmissionSealed = false
 		s.observation.StandbyExpired = false
 		s.endStandbyInLocked(d)
@@ -700,11 +737,31 @@ func (s *Standby) request(id, revision uint64, intent string, d time.Duration) S
 		// stops a cycle that ran out.
 		s.observation.StandbyExpired = s.standbyLeftLocked() <= 0
 		s.observation.Transition = &StandbyTransition{RequestID: id, Intent: intent, Outcome: "pending"}
-		s.stopLocked()
+		if s.observation.Registration == "needs_action" && s.observation.Cleanup == "confirmed" {
+			s.endNeedsActionLocked()
+			s.observation.Transition.Outcome = "applied"
+			s.changedLocked()
+		} else {
+			s.stopLocked()
+		}
 	}
 	r.Disposition = "accepted"
 	r.Revision = s.observation.Revision
 	return r
+}
+
+func (s *Standby) endNeedsActionLocked() {
+	s.observation.Standby = "off"
+	s.observation.Registration = "disconnected"
+	s.observation.RegistrationReason = ""
+	s.observation.TransportGeneration = ""
+	s.observation.Work = "idle"
+	s.observation.Cleanup = "confirmed"
+	s.observation.AdmissionSealed = true
+	s.observation.Owned = 0
+	s.observation.Caller = nil
+	s.observation.StandbyUntil = time.Time{}
+	s.observation.StandbyEndingSoon = false
 }
 
 // stopLocked is standby OFF, whether the person asked for it or standby ran
@@ -757,7 +814,9 @@ func (s *Standby) Close(ctx context.Context) error {
 		s.reconcileSleep(nil, true)
 		return nil
 	}
-	if s.observation.Standby == "on" {
+	if s.observation.Registration == "needs_action" && s.observation.Cleanup == "confirmed" {
+		s.endNeedsActionLocked()
+	} else if s.observation.Standby == "on" {
 		s.observation.Standby = "stopping"
 		s.observation.Work = "stopping"
 		s.observation.Cleanup = "pending"
@@ -817,11 +876,19 @@ func (s *Standby) run(c *standbyCycle) {
 	stop()
 	var runDone chan error
 	monitorDone := make(chan struct{})
+	var retrySignalsDone chan struct{}
 	var reportDone chan struct{}
 	if e == nil {
 		c.mu.Lock()
 		c.connector = connector
 		c.mu.Unlock()
+		if nudger, ok := connector.(interface{ Nudge() }); ok {
+			retrySignalsDone = make(chan struct{})
+			go func() {
+				defer close(retrySignalsDone)
+				startReconnectSignals(c.ctx, connector, nudger.Nudge)
+			}()
+		}
 		runDone = make(chan error, 1)
 		go func() { runDone <- connector.Run(c.ctx) }()
 		reports := make(chan standbyReport, 1)
@@ -882,7 +949,10 @@ func (s *Standby) run(c *standbyCycle) {
 		transportErr = connector.Close(cleanup)
 		if runDone != nil {
 			select {
-			case <-runDone:
+			case runErr := <-runDone:
+				if _, needsAction := agenttransport.ResidentNeedsActionReason(runErr); needsAction {
+					e = runErr
+				}
 			case <-cleanup.Done():
 				transportErr = errors.Join(transportErr, ErrStandbyUnknown)
 			}
@@ -900,6 +970,13 @@ func (s *Standby) run(c *standbyCycle) {
 	case <-cleanup.Done():
 		ownerErr = errors.Join(ownerErr, ErrStandbyUnknown)
 	}
+	if retrySignalsDone != nil {
+		select {
+		case <-retrySignalsDone:
+		case <-cleanup.Done():
+			transportErr = errors.Join(transportErr, ErrStandbyUnknown)
+		}
+	}
 	result := errors.Join(ownerErr, transportErr)
 	if errors.Is(e, workerowner.ErrUnknown) || errors.Is(e, maclaunch.ErrResidentUnknown) || errors.Is(e, agenttransport.ErrCleanupUnknown) {
 		result = errors.Join(result, e)
@@ -912,17 +989,36 @@ func (s *Standby) run(c *standbyCycle) {
 	c.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	needsActionReason := registrationReason(e)
+	offRequested := s.observation.Transition != nil && s.observation.Transition.Intent == "off"
+	if result == nil && needsActionReason != "" && !offRequested && !s.observation.StandbyExpired && s.standbyLeftLocked() <= 0 {
+		s.observation.StandbyExpired = true
+	}
 	if result != nil {
 		s.observation.Standby = "unknown"
 		s.observation.Registration = "unknown"
+		s.observation.RegistrationReason = ""
 		s.observation.Work = "unknown"
 		s.observation.Cleanup = "unknown"
 		if s.observation.Transition != nil {
 			s.observation.Transition.Outcome = "unknown"
 		}
+	} else if needsActionReason != "" && !s.closed && !s.observation.StandbyExpired && !offRequested {
+		s.observation.Standby = "on"
+		s.observation.Registration = "needs_action"
+		s.observation.RegistrationReason = needsActionReason
+		s.observation.AdmissionSealed = true
+		s.observation.Work = "idle"
+		s.observation.Cleanup = "confirmed"
+		s.observation.Owned = 0
+		s.observation.Caller = nil
+		if s.observation.Transition != nil && s.observation.Transition.Intent == "on" {
+			s.observation.Transition.Outcome = "applied"
+		}
 	} else {
 		s.observation.Standby = "off"
 		s.observation.Registration = "disconnected"
+		s.observation.RegistrationReason = ""
 		s.observation.Work = "idle"
 		s.observation.Cleanup = "confirmed"
 		s.observation.Owned = 0
@@ -935,6 +1031,33 @@ func (s *Standby) run(c *standbyCycle) {
 	}
 	close(c.done) // final observation and all original joins precede Close completion/re-ON
 	s.changedLocked()
+}
+
+func registrationReason(err error) RegistrationReason {
+	reason, ok := agenttransport.ResidentNeedsActionReason(err)
+	if !ok {
+		return ""
+	}
+	switch reason {
+	case agenttransport.ResidentFailureIdentityRefused:
+		return RegistrationReasonIdentityRefused
+	case agenttransport.ResidentFailureConnectionOccupied:
+		return RegistrationReasonConnectionOccupied
+	case agenttransport.ResidentFailureGatewayRefused:
+		return RegistrationReasonGatewayRefused
+	default:
+		return ""
+	}
+}
+
+func registrationStatus(control agenttransport.ResidentControlSnapshot, authenticated bool) string {
+	if control.Connected {
+		return "authenticated"
+	}
+	if control.Reconnecting || control.RetryWaiting || authenticated {
+		return "reconnecting"
+	}
+	return "connecting"
 }
 func (s *Standby) consume(c *standbyCycle, lease *agenttransport.ResidentSourceLease) error {
 	if lease == nil {
@@ -1147,12 +1270,14 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 					s.observation.Transition.Outcome = "applied"
 				}
 			}
-			s.observation.Registration = "connecting"
-			if control.Connected {
-				s.observation.Registration = "authenticated"
-				c.authenticated = true
-				if s.observation.Transition != nil && s.observation.Transition.Intent == "on" && s.observation.Transition.Outcome == "pending" {
-					s.observation.Transition.Outcome = "applied"
+			if s.observation.Registration != "needs_action" {
+				s.observation.Registration = registrationStatus(control, c.authenticated)
+				if control.Connected {
+					s.observation.RegistrationReason = ""
+					c.authenticated = true
+					if s.observation.Transition != nil && s.observation.Transition.Intent == "on" && s.observation.Transition.Outcome == "pending" {
+						s.observation.Transition.Outcome = "applied"
+					}
 				}
 			}
 			if !c.authenticated && !time.Now().Before(c.initialUntil) {

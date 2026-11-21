@@ -9,6 +9,14 @@ var ErrStandbyUnavailable = errors.New("residentmac: standby unavailable or stal
 var ErrStandbyUnknown = errors.New("residentmac: original shutdown unconfirmed")
 var ErrSleepPreventionUnsupported = errors.New("residentmac: sleep prevention is not implemented on this platform")
 
+type RegistrationReason string
+
+const (
+	RegistrationReasonIdentityRefused    RegistrationReason = "identity_refused"
+	RegistrationReasonConnectionOccupied RegistrationReason = "connection_occupied"
+	RegistrationReasonGatewayRefused     RegistrationReason = "gateway_refused"
+)
+
 // StandbyConfig controls resident behavior. Its zero value prevents system
 // idle sleep while owned work is being collected.
 type StandbyConfig struct {
@@ -32,6 +40,7 @@ type StandbyObservation struct {
 	Revision            uint64
 	Standby             string
 	Registration        string
+	RegistrationReason  RegistrationReason
 	Caller              *string
 	Work                string
 	Cleanup             string

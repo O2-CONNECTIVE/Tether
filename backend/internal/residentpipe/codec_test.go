@@ -87,6 +87,59 @@ func TestMappingHeartbeatAndNativeProof(t *testing.T) {
 		t.Fatal(s, e)
 	}
 }
+
+func TestMappingReconnectAndNeedsActionStates(t *testing.T) {
+	reconnecting := fixtureOff()
+	reconnecting.Revision = 2
+	reconnecting.Standby = "on"
+	reconnecting.Registration = "reconnecting"
+	reconnecting.AdmissionSealed = false
+	reconnecting.CanRequestOn = false
+	reconnecting.CanRequestOff = true
+	reconnecting.TransportGeneration = "previous-generation"
+	reconnecting.Transition = &residentmac.StandbyTransition{RequestID: 1, Intent: "on", Outcome: "applied"}
+	var reconnectMapper mapper
+	s, err := reconnectMapper.observe(reconnecting, 10)
+	if err != nil || s.Snapshot.Standby != "on" || s.Snapshot.Registration != "reconnecting" || !s.Snapshot.CanRequestOff {
+		t.Fatal("reconnecting status was not mapped as the existing standby", s, err)
+	}
+
+	needsAction := fixtureOff()
+	needsAction.Revision = 2
+	needsAction.Standby = "on"
+	needsAction.Registration = "needs_action"
+	needsAction.RegistrationReason = residentmac.RegistrationReasonIdentityRefused
+	needsAction.Transition = &residentmac.StandbyTransition{RequestID: 1, Intent: "on", Outcome: "applied"}
+	needsAction.CanRequestOn = false
+	needsAction.CanRequestOff = true
+	var needsMapper mapper
+	s, err = needsMapper.observe(needsAction, 10)
+	if err != nil || s.Snapshot.Standby != "on" || s.Snapshot.Registration != "needs_action" || s.Snapshot.RegistrationReason != "identity_refused" || !s.Snapshot.CanRequestOff || s.Snapshot.CanRequestOn {
+		t.Fatal("needs-action state lost its reason or OFF affordance", s, err)
+	}
+	got := statusSnapshot(t, &needsMapper, s)
+	if string(got["registrationReason"]) != `"identity_refused"` {
+		t.Fatal("JSONL omitted the needs-action reason", got)
+	}
+
+	for name, change := range map[string]func(*residentmac.StandbyObservation){
+		"missing reason": func(o *residentmac.StandbyObservation) { o.RegistrationReason = "" },
+		"reason on normal state": func(o *residentmac.StandbyObservation) {
+			o.Registration = "authenticated"
+			o.RegistrationReason = residentmac.RegistrationReasonGatewayRefused
+		},
+		"unknown reason": func(o *residentmac.StandbyObservation) { o.RegistrationReason = "unknown" },
+	} {
+		invalid := needsAction
+		invalid.Revision++
+		change(&invalid)
+		var m mapper
+		if _, err := m.observe(invalid, 10); err != ErrProtocol {
+			t.Fatalf("%s was accepted: %v", name, err)
+		}
+	}
+}
+
 func TestMappingPoisonAndRegression(t *testing.T) {
 	var m mapper
 	o := fixtureOff()

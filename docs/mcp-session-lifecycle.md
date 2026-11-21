@@ -16,9 +16,9 @@
 
 レスキューの受付口（`forwardRescue`、`rescue-agent-reception.v1`）は別です。受付の接続とchannelが同じWSSに載るため、寿命は24時間10分で、frameの予算は同じ率で広げています。この節の5分と再接続の扱いは通常登録とresidentだけのものです。詳細は[レスキュー中継の寿命](rescue-connection-start.md#中継の寿命)を参照してください。
 
-Goのresident control自体は5分timerを持ちません。MacのResidentClientは4000を再接続可能な終了として扱いますが、元transportの回収確認が前提です。初回5秒、最大30秒のbackoffと再認証を使い、回収不明なら停止します。開発helperに自身の寿命はなく、待機の期限（2〜24時間）は再接続によって延長しません。
+Goのresident control自体は5分timerを持ちません。MacのResidentClientは4000を再接続可能な終了として扱いますが、元transportの回収確認が前提です。初回5秒、10・20秒、最大30秒のbackoffに0.8〜1.0倍のjitterを加え、認証成功後は5秒へ戻します。Darwinではbackoff中だけ1秒ごとにsleepを跨ぐ経過時計とGoの単調時計、network interfaceのaddress fingerprintを比べ、sleep復帰・address変更を検出すると待ちを切って再試行します。再接続は新しいcontrolの相互認証だけで、以前の許可や作業を復活させません。回収不明なら従来どおりunknownで停止します。開発helperに自身の寿命はなく、待機の期限（2〜24時間）は再接続によって延長しません。
 
-gatewayは、同じhost/principalの古いcontrolがまだ枠を持つ間の登録を4013で拒否し、生きている古いcontrolを置き換えません。gatewayは、生きている重複と、古いcontrolの終了に気づく前に届いた同じMacの再接続を区別できないためです（[#380](https://github.com/O2-CONNECTIVE/Tether/issues/380)）。共有relayの`closeCode`は3000〜4999をそのまま通し、1013は1011へ変えるため、4000番台を使います。Macは4013を同じbackoffで再試行し、最後の認証成功の後の最初の4013から60秒を過ぎると停止します。身元の拒否（1008）は再試行しません。4013を知らない古いMacは、1008と同じく再試行せずに停止します。
+gatewayは、同じhost/principalの古いcontrolがまだ枠を持つ間の登録を4013で拒否し、生きている古いcontrolを置き換えません。gatewayは、生きている重複と、古いcontrolの終了に気づく前に届いた同じMacの再接続を区別できないためです（[#380](https://github.com/O2-CONNECTIVE/Tether/issues/380)）。共有relayの`closeCode`は3000〜4999をそのまま通し、1013は1011へ変えるため、4000番台を使います。Macは4013を最後の認証成功後の最初の拒否から60秒以内は再試行し、超過後は`needs_action` / `connection_occupied`になります。1008の身元拒否（鍵拒否・ペア置き換え）は`needs_action` / `identity_refused`、その他の停止するHTTP応答・未知close codeは`needs_action` / `gateway_refused`です。理由コードはresidentpipe JSONLの`registrationReason`にだけ載せます。要対応は待機を`on`のまま受付をsealedにし、OFFで理由を消します。OFFの後にONすると新しいcycleで再試行し、process再起動でも要対応状態は引き継ぎません。4013を知らない古いMacは、1008と同じく再試行せずに停止します。
 
 新しいcontrolは新しいgenerationになります。古いMCP SIDは元のgenerationの結果読取り・取消・releaseの範囲を保持し、新しいworkを許可しません。busyやreplay ledger上限などの先行拒否条件に当たらず世代不一致の判定に達すると、`control_ended`と`reinitialize_required`を返します。新しいgenerationのSIDから古い結果は読めず、古いrequest IDの再実行もできません。新しいworkには新しいinitializeが必要で、そのSIDも4枠を消費します。
 

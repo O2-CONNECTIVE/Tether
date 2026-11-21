@@ -146,6 +146,62 @@ func TestResidentReconnectUsesFreshMutualProofWithoutGrant(t *testing.T) {
 	}
 	_ = await(t, done, 3*time.Second)
 }
+
+func TestResidentNudgeOnlyInterruptsRetryWaitAndAuthenticationResetsBackoff(t *testing.T) {
+	r := newResidentRig(t, nil)
+	c := r.c
+	c.retryDelay = 5 * time.Second
+	c.random = func() float64 { return 0.5 }
+	waits := make(chan time.Duration, 2)
+	c.waitRetry = func(ctx context.Context, delay time.Duration, nudge <-chan struct{}) residentRetryResult {
+		select {
+		case <-nudge:
+			return residentRetryWoken
+		default:
+		}
+		waits <- delay
+		select {
+		case <-ctx.Done():
+			return residentRetryCanceled
+		case <-nudge:
+			return residentRetryWoken
+		}
+	}
+	done := residentRun(c)
+	residentReady(t, r)
+	first := <-r.m.pairs
+	firstGeneration := residentGeneration(r.h)
+	c.Nudge()
+	if r.m.trips.Load() != 1 {
+		t.Fatal("nudge disconnected an authenticated control", r.m.trips.Load())
+	}
+	_ = first.server.Close()
+	var firstDelay time.Duration
+	select {
+	case firstDelay = <-waits:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transient loss did not enter retry backoff")
+	}
+	if firstDelay != 4500*time.Millisecond || !c.Snapshot().RetryWaiting || !c.Snapshot().Reconnecting {
+		t.Fatal("first reconnect wait did not expose jittered reconnecting state", firstDelay, c.Snapshot())
+	}
+	c.Nudge()
+	verticalEventually(t, func() bool {
+		return c.Connected() && residentGeneration(r.h) != "" && residentGeneration(r.h) != firstGeneration
+	})
+	second := <-r.m.pairs
+	_ = second.server.Close()
+	var secondDelay time.Duration
+	select {
+	case secondDelay = <-waits:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconnected control did not enter retry backoff")
+	}
+	if secondDelay != 4500*time.Millisecond {
+		t.Fatal("successful authentication did not reset the retry base", secondDelay)
+	}
+	residentStop(t, r, done)
+}
 func TestResidentPinsAndEnrollmentRefuseWithoutReconnect(t *testing.T) {
 	for _, tc := range []struct {
 		name string

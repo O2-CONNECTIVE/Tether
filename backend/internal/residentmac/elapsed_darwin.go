@@ -3,6 +3,9 @@
 package residentmac
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -20,4 +23,85 @@ func elapsedNow() time.Time {
 		return time.Unix(1<<62, 0)
 	}
 	return time.Unix(ts.Unix())
+}
+
+// ponytail: 待ちの間の 1 秒ごとの確認。遅れや電力が問題になれば IORegisterForSystemPower・NWPathMonitor に上げる。
+func startReconnectSignals(ctx context.Context, connector residentConnector, nudge func()) {
+	changesSource, ok := connector.(interface{ Changes() <-chan struct{} })
+	if !ok || nudge == nil {
+		return
+	}
+	changes := changesSource.Changes()
+	if changes == nil {
+		return
+	}
+	for {
+		if !connector.Snapshot().RetryWaiting {
+			select {
+			case <-ctx.Done():
+				return
+			case <-changes:
+			}
+			continue
+		}
+		var detector reconnectWakeDetector
+		addresses, err := reconnectAddresses()
+		detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
+		waitID := connector.Snapshot().RetryWaitID
+		ticker := time.NewTicker(reconnectWakePoll)
+		waiting := true
+		for waiting {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-changes:
+				snapshot := connector.Snapshot()
+				waiting = snapshot.RetryWaiting
+				if waiting && snapshot.RetryWaitID != waitID {
+					waitID = snapshot.RetryWaitID
+					detector = reconnectWakeDetector{}
+					addresses, err = reconnectAddresses()
+					detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
+				}
+			case <-ticker.C:
+				snapshot := connector.Snapshot()
+				if !snapshot.RetryWaiting {
+					waiting = false
+					continue
+				}
+				if snapshot.RetryWaitID != waitID {
+					waitID = snapshot.RetryWaitID
+					detector = reconnectWakeDetector{}
+					addresses, err = reconnectAddresses()
+					detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
+					continue
+				}
+				addresses, err := reconnectAddresses()
+				if detector.observe(elapsedNow(), time.Now(), addresses, err == nil) {
+					nudge()
+					waiting = false
+				}
+			}
+		}
+		ticker.Stop()
+	}
+}
+
+func reconnectAddresses() (string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+	addresses := make([]string, 0, len(interfaces))
+	for _, iface := range interfaces {
+		current, err := iface.Addrs()
+		if err != nil {
+			return "", err
+		}
+		for _, address := range current {
+			addresses = append(addresses, fmt.Sprintf("%d:%s/%s", iface.Index, iface.Name, address.String()))
+		}
+	}
+	return reconnectNetworkFingerprint(addresses), nil
 }

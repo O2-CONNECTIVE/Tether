@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -28,6 +30,111 @@ func TestResidentOccupiedCloseStopsAMacThatPredatesIt(t *testing.T) {
 	refusal := fmt.Errorf("failed to get reader: %w", websocket.CloseError{Code: occupiedClose, Reason: "resident control occupied"})
 	if residentRetryable(refusal, false) || residentRetryable(refusal, true) {
 		t.Fatal("the classification older Macs use retries the occupancy refusal")
+	}
+}
+
+func TestResidentIdentityRefusalReportsReasonAndDoesNotRetry(t *testing.T) {
+	r := newResidentRig(t, nil)
+	refuse := residentRefusing(r)
+	refuse.Store(int32(websocket.StatusPolicyViolation))
+
+	err := await(t, residentRun(r.c), 5*time.Second)
+	reason, hasReason := ResidentNeedsActionReason(err)
+	if !errors.Is(err, ErrRefused) || !hasReason || reason != ResidentFailureIdentityRefused {
+		t.Fatal("identity refusal did not expose its reason code", err)
+	}
+	if r.m.trips.Load() != 1 || r.c.Connected() {
+		t.Fatal("identity refusal retried or remained connected", r.m.trips.Load())
+	}
+}
+
+func TestResidentFailureDisposition(t *testing.T) {
+	closeErr := func(code websocket.StatusCode) error {
+		return fmt.Errorf("received close: %w", websocket.CloseError{Code: code, Reason: "synthetic"})
+	}
+	for _, tc := range []struct {
+		name            string
+		err             error
+		authenticated   bool
+		occupiedExpired bool
+		wantRetry       bool
+		wantReason      ResidentFailureReason
+	}{
+		{"1008", closeErr(websocket.StatusPolicyViolation), false, false, false, ResidentFailureIdentityRefused},
+		{"4013 within 60 seconds", closeErr(occupiedClose), false, false, true, ""},
+		{"4013 after 60 seconds", closeErr(occupiedClose), false, true, false, ResidentFailureConnectionOccupied},
+		{"429", errResidentUnavailable, false, false, true, ""},
+		{"503", errResidentUnavailable, false, false, true, ""},
+		{"EOF", io.EOF, true, false, true, ""},
+		{"timeout", &net.DNSError{IsTimeout: true, Err: "timeout", Name: "gateway"}, false, false, true, ""},
+		{"normal close", closeErr(websocket.StatusNormalClosure), true, false, true, ""},
+		{"going away", closeErr(websocket.StatusGoingAway), true, false, true, ""},
+		{"internal error", closeErr(websocket.StatusInternalError), true, false, true, ""},
+		{"resident relay expiry", closeErr(websocket.StatusCode(4000)), true, false, true, ""},
+		{"unknown close code", closeErr(websocket.StatusCode(4001)), false, false, false, ResidentFailureGatewayRefused},
+		{"local refusal without 1008", ErrRefused, false, false, false, ResidentFailureGatewayRefused},
+		{"other HTTP response", errors.New("websocket dial returned HTTP 403"), false, false, false, ResidentFailureGatewayRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			retry, reason := residentFailureDisposition(tc.err, tc.authenticated, tc.occupiedExpired)
+			if retry != tc.wantRetry || reason != tc.wantReason {
+				t.Fatalf("residentFailureDisposition() = (%v, %q), want (%v, %q)", retry, reason, tc.wantRetry, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestResidentHTTPRetryStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   bool
+	}{
+		{http.StatusTooManyRequests, true},
+		{http.StatusServiceUnavailable, true},
+		{http.StatusBadRequest, false},
+		{http.StatusForbidden, false},
+		{http.StatusInternalServerError, false},
+	} {
+		if got := residentHTTPRetryable(tc.status); got != tc.want {
+			t.Errorf("residentHTTPRetryable(%d) = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestResidentOccupiedLimitUsesStrictlyMoreThanSixtySeconds(t *testing.T) {
+	start := time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
+	if residentOccupiedExpired(start, start.Add(60*time.Second)) || !residentOccupiedExpired(start, start.Add(60*time.Second+time.Nanosecond)) {
+		t.Fatal("occupancy limit must expire only after 60 seconds")
+	}
+}
+
+func TestResidentJitterStaysWithinTwentyPercentBelowBase(t *testing.T) {
+	for _, tc := range []struct {
+		value float64
+		want  time.Duration
+	}{
+		{0, 4 * time.Second},
+		{0.5, 4500 * time.Millisecond},
+		{1, 5 * time.Second},
+		{-1, 4 * time.Second},
+		{2, 5 * time.Second},
+	} {
+		if got := residentJitteredDelay(5*time.Second, func() float64 { return tc.value }); got != tc.want {
+			t.Errorf("residentJitteredDelay(%v) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestResidentRetryBackoffPreservesFiveSecondDoublingAndThirtySecondCap(t *testing.T) {
+	for _, tc := range []struct{ current, want time.Duration }{
+		{5 * time.Second, 10 * time.Second},
+		{10 * time.Second, 20 * time.Second},
+		{20 * time.Second, 30 * time.Second},
+		{30 * time.Second, 30 * time.Second},
+	} {
+		if got := nextResidentRetryDelay(tc.current); got != tc.want {
+			t.Errorf("nextResidentRetryDelay(%v) = %v, want %v", tc.current, got, tc.want)
+		}
 	}
 }
 
