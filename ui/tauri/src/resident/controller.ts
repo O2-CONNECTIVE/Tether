@@ -8,6 +8,7 @@ interface Options { invoke: ResidentInvoke | undefined; onChange: (state: Reside
 export function createResidentController({ invoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: Options) {
   let state = initialResidentState();
   let disposed = false, sealed = false, busy = false;
+  let cleanupLatched = false;
   let epoch = 0, requestId = 0, revision = 0, until = 0, lastClock = 0;
   let pending: { id: number; intent: Intent } | undefined;
   let observation: Observation | null = null;
@@ -15,10 +16,11 @@ export function createResidentController({ invoke, onChange, now = () => perform
   const clock = () => { const t = now(); if (!Number.isFinite(t) || t < lastClock) return NaN; lastClock = t; return t; };
   const publish = (diagnostic: string, cleanupUnknown = false) => {
     if (disposed) return;
+    cleanupLatched ||= cleanupUnknown;
     const fresh = !sealed && Number.isFinite(clock()) && lastClock < until;
     state = { visible: state.visible, observation: fresh ? observation : null, busy, pending: !!pending,
       canOn: fresh && !busy && !pending && observation?.canRequestOn === true,
-      canOff: fresh && !busy && !pending && observation?.canRequestOff === true, cleanupUnknown, diagnostic,
+      canOff: fresh && !busy && !pending && observation?.canRequestOff === true, cleanupUnknown: cleanupLatched, diagnostic,
       lastReceipt: state.lastReceipt, lastRequestId: state.lastRequestId };
     onChange(state);
   };
@@ -69,7 +71,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
         && next.registration === 'connecting' && next.work === 'idle' && next.cleanup === 'confirmed'
         && !next.canRequestOn && !next.canRequestOff;
       if (next.cleanup === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN', true);
-      if ((next.standby === 'unknown' && !pendingOn) || t?.outcome === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN');
+      if ((next.standby === 'unknown' && !pendingOn) || t?.outcome === 'unknown') return fail('RESIDENT_STATE_UNKNOWN');
       if (pending && t?.requestId === pending.id && t.intent === pending.intent && (t.outcome === 'applied' || t.outcome === 'rejected')) pending = undefined;
       clearTimeout(expiry);
       expiry = setTimeout(() => fail('RESIDENT_OBSERVATION_EXPIRED'), Math.max(0, until - received));

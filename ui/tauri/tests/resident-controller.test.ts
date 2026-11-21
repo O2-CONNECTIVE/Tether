@@ -115,7 +115,39 @@ void test('cleanup uncertainty is shown as needs cleanup, never generic unconfir
     assert.equal(state?.canOff, false);
   } finally { r.controller.dispose(); }
 });
-void test('an exited sidecar with expired status stays unconfirmed, not OFF, ON, waiting or success', async () => {
+void test('cleanup and other unknown states use separate diagnostics', async () => {
+  const cases = [
+    { change: { cleanup: 'unknown', canRequestOn: false }, diagnostic: 'RESIDENT_CLEANUP_UNKNOWN', cleanupUnknown: true },
+    { change: { standby: 'unknown', canRequestOn: false }, diagnostic: 'RESIDENT_STATE_UNKNOWN', cleanupUnknown: false },
+    { change: { transition: { requestId: 1, intent: 'on', outcome: 'unknown' }, canRequestOn: false },
+      diagnostic: 'RESIDENT_STATE_UNKNOWN', cleanupUnknown: false },
+  ];
+  for (const { change, diagnostic, cleanupUnknown } of cases) {
+    const r = capture(() => Promise.resolve(sample(change)));
+    try {
+      await r.controller.refresh();
+      assert.equal(r.last()?.diagnostic, diagnostic);
+      assert.equal(r.last()?.cleanupUnknown, cleanupUnknown);
+    } finally { r.controller.dispose(); }
+  }
+});
+void test('cleanup uncertainty stays latched after the view is invalidated', async () => {
+  let observation = sample();
+  const r = capture(() => Promise.resolve(observation));
+  try {
+    await r.controller.refresh();
+    observation = sample({ revision: 2, cleanup: 'unknown', canRequestOn: false });
+    await r.controller.refresh();
+    r.controller.invalidate();
+    const state = r.last();
+    const view = presentResident(state?.observation ?? null, state?.pending ?? false, state?.cleanupUnknown ?? false);
+    assert.equal(state?.cleanupUnknown, true);
+    assert.equal(view.heading, '要清掃: 常駐ホストの回収を確認できません');
+    assert.equal(state?.canOn, false);
+    assert.equal(state?.canOff, false);
+  } finally { r.controller.dispose(); }
+});
+void test('the current EOF response stays generically unconfirmed', async () => {
   let observation = sample();
   const r = capture(() => Promise.resolve(observation));
   try {
@@ -125,11 +157,24 @@ void test('an exited sidecar with expired status stays unconfirmed, not OFF, ON,
     await r.controller.refresh();
     const state = r.last();
     const view = presentResident(state?.observation ?? null, state?.pending ?? false, state?.cleanupUnknown ?? false);
+    assert.equal(state?.diagnostic, 'RESIDENT_REVISION_INVALID');
     assert.equal(view.heading, '常駐ホストの状態を確認できません');
     assert.equal(view.tone, 'unconfirmed');
     assert.equal(state?.canOn, false);
     assert.equal(state?.canOff, false);
     assert.equal(state?.pending, false);
+  } finally { r.controller.dispose(); }
+});
+void test('zero validity expires without changing the same revision action flags', async () => {
+  let observation = sample({ canRequestOn: false });
+  const r = capture(() => Promise.resolve(observation), { now: () => 10 });
+  try {
+    await r.controller.refresh();
+    observation = sample({ validForMs: 0, canRequestOn: false });
+    await r.controller.refresh();
+    assert.equal(r.last()?.diagnostic, 'RESIDENT_OBSERVATION_EXPIRED');
+    assert.equal(r.last()?.canOn, false);
+    assert.equal(r.last()?.canOff, false);
   } finally { r.controller.dispose(); }
 });
 void test('elapsed IPC time, clock rollback and old revision cannot refresh authority', async () => {

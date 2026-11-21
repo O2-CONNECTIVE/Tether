@@ -5,14 +5,14 @@
 
 ## 二つの構成を区別する
 
-通常の`run()`はresident status/intent commandを登録し、標準`tauri.conf.json`が選ぶ`shell-local` capabilityは`allow-resident-port`を許可します。
-通常起動のsourceは`Unbound`でsidecarを起動しません。sidecarの所有は#456の後続で配線します。
+標準の`run()`は`ResidentState::startup()`のstateを`commands_with_state`へ渡し、resident status/intent commandを登録します。標準buildのsourceは`Unbound`でsidecarを起動しません。
+Unbound statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`です。intent receiptはどちらも`unavailable`です。
+標準`tauri.conf.json`が選ぶ`shell-local` capabilityは`allow-resident-port`を許可します。
 このpermissionはcommandの呼び出しだけを許し、source binding・認証・操作権限を有効にしません。
 
-明示的な`commands_with_ports`は既存の具体的`ResidentPort`を受けるprivate builderです。
-通常callerはなく、bind/launch/policy command、任意path/argv/fd/digest/credential入力、source差し替え口はありません。
-将来のsealed trusted bootstrapが同じownerのportを確立して使う接続先です。
-このbuilderを選ぶだけでportがboundになることはなく、unboundならStatus/Receiptもunavailableです。
+`commands_with_ports`は`#[cfg(any(test, resident_gui_fixture))]`のtest/GUI fixture限定private builderで、通常起動や将来のbootstrapには使いません。
+通常起動は`commands_with_state`が管理するstateを使います。bind/launch/policy command、任意path/argv/fd/digest/credential入力、source差し替え口はありません。
+信頼した起動から通常stateへつなぐ作業は「#456 の後続」です。
 旧shell statusはこの構成でもnot_connected/操作不可/終了未確認のままです。
 
 command manifestと限定`allow-resident-port` permissionはsourceとして定義し、標準shell-localがmain/localへ付与します。

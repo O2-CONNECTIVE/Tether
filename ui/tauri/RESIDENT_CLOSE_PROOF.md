@@ -1,8 +1,9 @@
 # Resident wireのClose証跡前提
 
-通常Mac起動とIPCは未接続のままです。
+標準の`run()`は`commands_with_state`を使い、`get_resident_status`と`request_resident_intent`を登録します。
+標準buildのUnbound statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`です。intent receiptは`unavailable`で、producerへは送信されません。
 この文書は内部`resident_port`のwire復号・状態整合・post-Close証跡部分を扱います。
-[具体duplex owner](RESIDENT_DUPLEX_OWNER.md)の内部IOへ接続していますが、通常のport/provider/Status factory、IPC intent受付、trusted launcherはありません。
+[具体duplex owner](RESIDENT_DUPLEX_OWNER.md)はportとStatus/Receiptの内部IOへ接続しています。信頼した起動から通常stateへつなぐ作業は「#456 の後続」です。
 ON/OFFのwire dataだけでは、本人同意や実行許可を成立させません。
 
 ## 復号と証跡

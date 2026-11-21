@@ -13,7 +13,7 @@ const cleanup: Record<Observation['cleanup'], string> = { confirmed: '回収確�
 // Pure display mapping. It grants nothing: missing evidence stays unconfirmed,
 // and a pending change is never shown as a settled state.
 export function presentResident(o: Observation | null, pending: boolean, cleanupUnknown = false): ResidentPresentation {
-  if (cleanupUnknown) return { heading: '要清掃: 常駐ホストの回収を確認できません',
+  if (cleanupUnknown || o?.cleanup === 'unknown') return { heading: '要清掃: 常駐ホストの回収を確認できません',
     detail: '回収を確かめられないため、停止の成功を示しません。', tone: 'unconfirmed', icon: 'warning' };
   if (!o) return { heading: '常駐ホストの状態を確認できません', detail: '未確認。接続・停止・回収の成功を示しません。', tone: 'unconfirmed', icon: 'warning' };
   const detail = `待機: ${standby[o.standby]} / 接続: ${registration[o.registration]} / 作業: ${work[o.work]} / 回収: ${cleanup[o.cleanup]}`;

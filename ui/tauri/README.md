@@ -5,8 +5,9 @@
 Rust が接続機能の未配線状態だけを返す開発用 shell です。
 通常 App の [Mac 状態表示経路](MAC_STATUS_APP.md)は backend 固定 platform を使います。Mac の本番応答は native 入力未接続だけで、観測注入は test build と browser fixture に限定します。
 [Mac状態入力の読取前提](MAC_STATUS_INPUT.md)は専用descriptorの所有とclockを準備しますが、通常起動とIPCには接続していません。
-[Resident wireのClose証跡前提](RESIDENT_CLOSE_PROOF.md)と[具体duplex所有契約](RESIDENT_DUPLEX_OWNER.md)は内部sourceです。通常の`run()`はresident status/intent commandを登録し、標準の`shell-local` capabilityは`allow-resident-port`を許可します。
-通常起動のsourceは`Unbound`で、sidecarは起動しません（sidecarの所有は#456の後続で配線）。trusted launcherは未配線です。
+[Resident wireのClose証跡前提](RESIDENT_CLOSE_PROOF.md)と[具体duplex所有契約](RESIDENT_DUPLEX_OWNER.md)は内部sourceです。通常の`run()`は`ResidentState::startup()`のstateを`commands_with_state`へ渡し、resident status/intent commandを登録します。
+標準buildのUnbound statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`です。intent receiptは`unavailable`です。sidecarと信頼した起動から通常stateへの接続は「#456 の後続」です。
+`commands_with_ports`はtest/GUI fixture限定で、通常起動には使いません。標準の`shell-local` capabilityは`allow-resident-port`を許可します。
 操作する担当者向けの[操作側GUIプロトタイプ](operator/README.md)は別入口・別buildです。host shellと実接続の配線は共有しません。
 Go/SSHの実接続とsidecarの通常起動はありません。
 製品接続ゲートと起動方法は変更しません。

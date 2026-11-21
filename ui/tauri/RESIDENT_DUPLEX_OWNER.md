@@ -1,7 +1,9 @@
 # Resident duplexの内部所有契約
 
 公開済みwire/Close前提を、既存の具体Pump・Shared・Supervisorへ接続するsourceです。
-通常起動、IPC、Status/provider、trusted launch factoryは未接続です。
+通常の`run()`は`ResidentState::startup()`のstateを`commands_with_state`へ渡し、resident status/intent commandを登録します。
+標準buildは`Unbound`でsidecarを起動せず、statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`、intent receiptは`unavailable`です。
+このsourceを信頼したproducer起動から標準stateへ接続する作業は「#456 の後続」です。trusted launch factoryは未接続です。
 実producer、鍵やprotected policy、GUIのON/OFF/Quitを起動・有効化しません。
 
 ## 構築の境界
@@ -36,7 +38,7 @@ production Dropはwire Close証跡・実EOF・exit0・IO/supervisor joinを要�
 unknownでは親を保持し、reapだけで解放しません。この層の`cleanup_confirmed`は、信頼済producerからのauthorityを別途確立して使う内部結果です。
 任意のwire bytes、fixture成功、process exitを実認証やアプリ終了許可へ昇格させません。
 
-後続はprotected producer準備を持つsealed launcher、通常Status/intent経路、StandbyOwner/ExitGateのouter monitor joinとguarded Quitです。
+後続はprotected producer準備を持つsealed launcherから通常stateへ接続し、StandbyOwner/ExitGateのouter monitor joinとguarded QuitをGUIへ結ぶ作業です。
 それらの結合と実Mac GUI/producer/ON/OFF/退出は未実証です。
 #199のEOF guardは継続し、凍結private callerでは到達しない単体防御という静的所見を変更しません。private実行候補は未編集です。
 
