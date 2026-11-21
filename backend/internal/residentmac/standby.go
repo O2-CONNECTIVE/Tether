@@ -1281,7 +1281,7 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 		if connector == nil {
 			continue
 		}
-		stopForUnknown := false
+		stopForUnknown, initialExpired := false, false
 		control := connector.Snapshot()
 		owned := c.owner.Snapshot()
 		var w *maclaunch.ResidentWorker
@@ -1318,6 +1318,7 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 				}
 			}
 			if !c.authenticated && !time.Now().Before(c.initialUntil) {
+				initialExpired = true
 				s.observation.AdmissionSealed = true
 				if source != nil {
 					source.Close()
@@ -1349,6 +1350,16 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 					source.Close()
 				}
 				stopForUnknown = true
+			}
+			// Seal and stop in one update, as the cycle's end would: sealed but
+			// still ON is standby unknown on the pipe, which the GUIs read as
+			// unconfirmed cleanup (#466). An unknown from this tick stays unknown.
+			if initialExpired {
+				s.observation.Standby = "stopping"
+				if s.observation.Cleanup != "unknown" {
+					s.observation.Work = "stopping"
+					s.observation.Cleanup = "pending"
+				}
 			}
 		}
 		if !reflect.DeepEqual(before, s.observation) {

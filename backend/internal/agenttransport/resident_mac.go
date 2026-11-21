@@ -396,7 +396,7 @@ func residentRetryable(e error, authenticated bool) bool {
 	if status != -1 {
 		return false
 	}
-	if errors.Is(e, io.EOF) || errors.Is(e, io.ErrClosedPipe) || errors.Is(e, io.ErrUnexpectedEOF) || errors.Is(e, net.ErrClosed) || errors.Is(e, syscall.ECONNREFUSED) || errors.Is(e, syscall.ECONNRESET) || errors.Is(e, syscall.ENETUNREACH) || errors.Is(e, syscall.EHOSTUNREACH) {
+	if errors.Is(e, io.EOF) || errors.Is(e, io.ErrClosedPipe) || errors.Is(e, io.ErrUnexpectedEOF) || errors.Is(e, net.ErrClosed) || errors.Is(e, syscall.ECONNREFUSED) || errors.Is(e, syscall.ECONNRESET) || errors.Is(e, syscall.ENETUNREACH) || errors.Is(e, syscall.EHOSTUNREACH) || errors.Is(e, syscall.EPIPE) || errors.Is(e, syscall.ENETDOWN) || errors.Is(e, syscall.EHOSTDOWN) || errors.Is(e, syscall.ENETRESET) || errors.Is(e, syscall.EADDRNOTAVAIL) {
 		return true
 	}
 	var n net.Error
