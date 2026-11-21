@@ -27,11 +27,11 @@ func runDevelopmentInput(lifetime context.Context) error {
 		return err
 	}
 	defer pipes.close()
-	loadCtx, cancel := context.WithTimeout(lifetime, LoadBudget)
-	owner, err := residentmac.LoadDevelopmentStandby(loadCtx)
-	cancel()
+	coord, owner, err := startStandby(lifetime, func(ctx context.Context) (*residentmac.Standby, error) {
+		return residentmac.LoadDevelopmentStandby(ctx)
+	})
 	if err != nil {
 		return err
 	} // no invented startup-rejection receipt
-	return runOwnedInput(lifetime, owner, pipes, foregroundInput)
+	return runOwnedInput(lifetime, coord, owner, pipes, foregroundInput)
 }

@@ -36,6 +36,7 @@ PRODUCT_FILES = {
     'github.com/O2-CONNECTIVE/rescue-host/backend/cmd/rescue-auth-helper': {'main.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/auth': {'keys.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/control': {'coordinator.go', 'codec.go', 'adapter.go'},
+    'github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostlifecycle': {'coordinator.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/forward': {'policy.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/lease': {'authority.go'},
     'github.com/O2-CONNECTIVE/rescue-host/backend/internal/stdio': {'loop.go'},

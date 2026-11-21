@@ -355,4 +355,8 @@ Linux/Windowsは非対応の拒否・root handle消費と共通permission契約�
 
 `internal/maclaunch` に、ホストの許可の状態機械 `rescue.go` を共通の1fileとして追加します（[#424](https://github.com/O2-CONNECTIVE/Tether/issues/424)）。ネイティブの補助・受付の接続・時計は試験の fake だけで、製品の入口からは使いません。
 
-現inventoryは53 packageです。cgo有効時のfile数はLinux404 / Darwin409 / Windows435、Darwinのcgo無効時は406です。
+## ホストの lifecycle coordinator
+
+`internal/hostlifecycle` に、ホストが取った資源の台帳と停止の判定を持つ coordinator `coordinator.go` を共通の1fileとして追加します（[#456](https://github.com/O2-CONNECTIVE/Tether/issues/456)）。Mac の resident sidecar が、Standby の読み込みと停止をこれに載せます。
+
+現inventoryは54 packageです。cgo有効時のfile数はLinux405 / Darwin410 / Windows436、Darwinのcgo無効時は407です。

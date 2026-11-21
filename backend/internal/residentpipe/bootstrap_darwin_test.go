@@ -13,10 +13,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostlifecycle"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 	"golang.org/x/sys/unix"
 )
+
+type panicCloseResource struct{}
+
+func (panicCloseResource) Close(context.Context) error { panic("synthetic close panic") }
 
 func TestBootstrapSelectionIsClosed(t *testing.T) {
 	for _, tc := range []struct {
@@ -89,7 +94,20 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 		cancel  bool
 	}{{"json-eof", jsonInput, false}, {"foreground-close", foregroundInput, false}, {"foreground-cancel", foregroundInput, true}} {
 		t.Run(tc.name, func(t *testing.T) {
-			owner := idleProtectedOwner(t)
+			policyPath := idleProtectedPolicy(t)
+			coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
+				return loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if err := owner.Close(ctx); err != nil {
+					t.Error("same idle owner cleanup", err)
+				}
+			})
 			inR, inW, err := os.Pipe()
 			if err != nil {
 				t.Fatal(err)
@@ -112,7 +130,7 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
-			go func() { done <- runOwnedInput(ctx, owner, pipes, tc.dialect) }()
+			go func() { done <- runOwnedInput(ctx, coord, owner, pipes, tc.dialect) }()
 			joined := false
 			t.Cleanup(func() {
 				cancel()
@@ -151,6 +169,9 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("shared lifetime did not finish")
 			}
+			if owner.Snapshot().CanRequestOn {
+				t.Fatal("original Standby still accepts requests")
+			}
 			found := false
 			for i := 0; i < 8; i++ {
 				line, err = reader.ReadBytes('\n')
@@ -182,6 +203,93 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 	}
 }
 
+func TestBootstrapSharedLifetimeReportsCoordinatorCleanup(t *testing.T) {
+	policyPath := idleProtectedPolicy(t)
+	coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
+		return loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := owner.Close(ctx); err != nil {
+			t.Error("same idle owner cleanup", err)
+		}
+	})
+	if err := coord.Start(context.Background(), hostlifecycle.Step{Name: "later", Acquire: func(context.Context) (hostlifecycle.Resource, error) {
+		return panicCloseResource{}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inR.Close()
+	defer inW.Close()
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outR.Close()
+	defer outW.Close()
+	pipes := &ownedPipes{int(inR.Fd()), int(outW.Fd())}
+	if unix.SetNonblock(pipes.in, true) != nil || unix.SetNonblock(pipes.out, true) != nil {
+		t.Fatal("pipe setup")
+	}
+	if err := outR.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runOwnedInput(ctx, coord, owner, pipes, jsonInput) }()
+	reader := bufio.NewReader(outR)
+	line, err := reader.ReadBytes('\n')
+	var status statusEnvelope
+	if err != nil || json.Unmarshal(line, &status) != nil || status.Snapshot.Standby != "off" {
+		t.Fatal("accepted policy did not remain idle", err)
+	}
+	if err := inW.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var closed closedEnvelope
+	for i := 0; i < 8; i++ {
+		line, err = reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Type == "closed" {
+			if err := json.Unmarshal(line, &closed); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if closed.Type != "closed" || closed.Outcome != "unknown" {
+		t.Fatal("coordinator cleanup failure became confirmed", closed)
+	}
+	if owner.Snapshot().CanRequestOn {
+		t.Fatal("coordinator did not close the original Standby")
+	}
+	if result := coord.Stop(); result.Stopped || len(result.NeedsCleanup) != 1 || result.NeedsCleanup[0] != "later" {
+		t.Fatal("coordinator did not retain the failing resource", result)
+	}
+	select {
+	case err := <-done:
+		t.Fatal("unknown cleanup returned from runOwnedInput", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 // The GUI reads exit 0 as one of its four collection proofs. Only a requested
 // close or input EOF, after a confirmed close whose terminal was written, may
 // end that way. No lifetime has a deadline any more (#399 replaced the
@@ -207,5 +315,31 @@ func TestOwnedResultExitsCleanlyOnlyAfterConfirmedClose(t *testing.T) {
 		if got := ExitCode(ownedResult(tc.served, tc.closeErr, tc.terminalErr)); got != tc.want {
 			t.Errorf("%s: exit %d, want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A load that cannot be confirmed as taken back (a panic may have acquired
+// something) keeps this process and its coordinator, like an unconfirmed close.
+// It never returns a plain failure that would end the process.
+func TestStartStandbyRetainsAnUnconfirmedLoad(t *testing.T) {
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := startStandby(context.Background(), func(context.Context) (*residentmac.Standby, error) { panic("load panicked") })
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatal("unconfirmed load returned", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A clean load failure has nothing to take back. It returns the loader's own
+// error, so the startup-rejection receipt still sees its concrete type.
+func TestStartStandbyReturnsACleanLoadFailure(t *testing.T) {
+	refused := errors.New("load refused")
+	_, owner, err := startStandby(context.Background(), func(context.Context) (*residentmac.Standby, error) { return nil, refused })
+	if err != refused || owner != nil {
+		t.Fatal(err, owner)
 	}
 }
