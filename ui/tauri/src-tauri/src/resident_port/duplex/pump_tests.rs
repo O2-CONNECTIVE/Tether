@@ -38,6 +38,30 @@ fn closing() -> (Pump<Cursor<Vec<u8>>>, Shared) {
 }
 
 #[test]
+fn post_close_status_does_not_clear_a_recorded_cleanup_unknown() {
+    // Unknown cleanup never reverts: a later status must not hide it from a
+    // view that first reads after that status.
+    let (mut pump, mut shared) = closing();
+    feed(
+        &mut pump,
+        &mut shared,
+        &status(3, 101, "unknown", false, false),
+        101,
+    )
+    .unwrap();
+    feed(
+        &mut pump,
+        &mut shared,
+        &status(4, 102, "confirmed", false, false),
+        102,
+    )
+    .unwrap();
+    let observed = serde_json::to_value(shared.current(102).unwrap()).unwrap();
+    assert_eq!(observed["cleanup"], "unknown");
+    assert_eq!(observed["revision"], 3);
+}
+
+#[test]
 fn post_close_revision_rollback_is_not_recorded_or_a_close_failure() {
     let (mut pump, mut shared) = closing();
     feed(
@@ -106,7 +130,7 @@ fn actionable_status_after_close_stays_non_actionable() {
 fn expired_post_close_status_does_not_block_confirmed_terminal_or_eof() {
     let clock = ContinuousClock::new().unwrap();
     let mut now = clock.now_millis().unwrap();
-    while now < 5_000 {
+    while now <= 5_000 {
         std::thread::sleep(std::time::Duration::from_millis(1));
         now = clock.now_millis().unwrap();
     }

@@ -99,7 +99,8 @@ impl Tracking {
                     previous == observation
                 })
         });
-        if !acceptable {
+        // Unknown cleanup never reverts; keep it visible to a later reader.
+        if !acceptable || (self.cleanup_unknown && observation.cleanup != Cleanup::Unknown) {
             return;
         }
         self.cleanup_unknown |= observation.cleanup == Cleanup::Unknown;
