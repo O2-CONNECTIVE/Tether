@@ -39,7 +39,7 @@ void test('the detail line uses Japanese labels and leaks no raw state value', (
   assert.equal(presentResident(observed({ standby: 'on', registration: 'authenticated', work: 'running', cleanup: 'pending' }), false).detail,
     '待機: ON / 接続: 認証済み / 作業: 実行中 / 回収: 回収待ち');
   assert.equal(presentResident(observed({ standby: 'unknown', registration: 'unknown', work: 'unknown', cleanup: 'unknown' }), false).detail,
-    '待機: 未確認 / 接続: 未確認 / 作業: 未確認 / 回収: 未確認');
+    '待機: 未確認 / 接続: 未確認 / 作業: 未確認 / 回収: 要清掃');
   assert.equal(/[a-z]/.test(presentResident(observed({ registration: 'connecting', work: 'preparing' }), false).detail), false);
 });
 

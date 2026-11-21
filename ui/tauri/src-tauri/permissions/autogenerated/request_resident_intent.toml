@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-request-resident-intent"
+description = "Enables the request_resident_intent command without any pre-configured scope."
+commands.allow = ["request_resident_intent"]
+
+[[permission]]
+identifier = "deny-request-resident-intent"
+description = "Denies the request_resident_intent command without any pre-configured scope."
+commands.deny = ["request_resident_intent"]

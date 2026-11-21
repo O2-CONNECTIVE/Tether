@@ -46,7 +46,7 @@ void test('resident controls use shared IPC and wait for applied observations', 
   assert.doesNotMatch(panel, /受付は変更完了/);
   await page.close();
 });
-void test('unknown source disables resident controls and does not expose caller or raw errors', async () => {
+void test('cleanup unknown disables resident controls and is shown as needs cleanup', async () => {
   const page = await browser.newPage();
   await page.addInitScript(() => {
     window.__TAURI__ = { core: { invoke: command => Promise.resolve(command === 'get_status_presentation'
@@ -57,6 +57,8 @@ void test('unknown source disables resident controls and does not expose caller 
   });
   await page.goto(url); await page.waitForSelector('#resident-panel');
   assert.equal(await page.locator('#resident-on').isDisabled(), true); assert.equal(await page.locator('#resident-off').isDisabled(), true);
+  assert.equal(await page.locator('#resident-heading').innerText(), '要清掃: 常駐ホストの回収を確認できません');
+  assert.equal(await page.locator('#resident-state').innerText(), '回収を確かめられないため、停止の成功を示しません。');
   assert.equal(await page.locator('#resident-diagnostic').innerText(), 'RESIDENT_CLEANUP_UNKNOWN');
   assert.doesNotMatch(await page.locator('body').innerText(), /private-fixture-name/);
   await page.close();

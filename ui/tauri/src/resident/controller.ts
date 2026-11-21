@@ -1,9 +1,9 @@
 import { decodeReceipt, decodeStatus, type Intent, type Observation, type ResidentInvoke } from './model.ts';
 export type ResidentState = { visible: boolean; observation: Observation | null; busy: boolean; pending: boolean;
-  canOn: boolean; canOff: boolean; diagnostic: string;
+  canOn: boolean; canOff: boolean; cleanupUnknown: boolean; diagnostic: string;
   lastReceipt: 'accepted' | 'rejected' | 'stale' | 'unavailable' | null; lastRequestId: number };
 export const initialResidentState = (): ResidentState => ({ visible: false, observation: null, busy: false, pending: false,
-  canOn: false, canOff: false, diagnostic: 'RESIDENT_CHECKING', lastReceipt: null, lastRequestId: 0 });
+  canOn: false, canOff: false, cleanupUnknown: false, diagnostic: 'RESIDENT_CHECKING', lastReceipt: null, lastRequestId: 0 });
 interface Options { invoke: ResidentInvoke | undefined; onChange: (state: ResidentState) => void; now?: () => number; timeoutMs?: number; pollMs?: number }
 export function createResidentController({ invoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: Options) {
   let state = initialResidentState();
@@ -13,17 +13,17 @@ export function createResidentController({ invoke, onChange, now = () => perform
   let observation: Observation | null = null;
   let poll: ReturnType<typeof setTimeout> | undefined, expiry: ReturnType<typeof setTimeout> | undefined;
   const clock = () => { const t = now(); if (!Number.isFinite(t) || t < lastClock) return NaN; lastClock = t; return t; };
-  const publish = (diagnostic: string) => {
+  const publish = (diagnostic: string, cleanupUnknown = false) => {
     if (disposed) return;
     const fresh = !sealed && Number.isFinite(clock()) && lastClock < until;
     state = { visible: state.visible, observation: fresh ? observation : null, busy, pending: !!pending,
       canOn: fresh && !busy && !pending && observation?.canRequestOn === true,
-      canOff: fresh && !busy && !pending && observation?.canRequestOff === true, diagnostic,
+      canOff: fresh && !busy && !pending && observation?.canRequestOff === true, cleanupUnknown, diagnostic,
       lastReceipt: state.lastReceipt, lastRequestId: state.lastRequestId };
     onChange(state);
   };
   const stopTimers = () => { clearTimeout(poll); clearTimeout(expiry); };
-  const fail = (diagnostic: string) => { sealed = true; epoch++; busy = false; stopTimers(); publish(diagnostic); };
+  const fail = (diagnostic: string, cleanupUnknown = false) => { sealed = true; epoch++; busy = false; stopTimers(); publish(diagnostic, cleanupUnknown); };
   const call = async (command: Parameters<ResidentInvoke>[0], args: Parameters<ResidentInvoke>[1]) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try { return await Promise.race([invoke?.(command, args), new Promise<never>((_, reject) => {
@@ -68,7 +68,8 @@ export function createResidentController({ invoke, onChange, now = () => perform
       const pendingOn = t?.intent === 'on' && t.outcome === 'pending' && pending?.id === t.requestId
         && next.registration === 'connecting' && next.work === 'idle' && next.cleanup === 'confirmed'
         && !next.canRequestOn && !next.canRequestOff;
-      if (next.cleanup === 'unknown' || (next.standby === 'unknown' && !pendingOn) || t?.outcome === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN');
+      if (next.cleanup === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN', true);
+      if ((next.standby === 'unknown' && !pendingOn) || t?.outcome === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN');
       if (pending && t?.requestId === pending.id && t.intent === pending.intent && (t.outcome === 'applied' || t.outcome === 'rejected')) pending = undefined;
       clearTimeout(expiry);
       expiry = setTimeout(() => fail('RESIDENT_OBSERVATION_EXPIRED'), Math.max(0, until - received));

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createResidentController, type ResidentState } from '../src/resident/controller.ts';
 import { decodeStatus, decodeReceipt, type ResidentInvoke } from '../src/resident/model.ts';
+import { presentResident } from '../src/resident/presentation.ts';
 const sample = (change: Record<string, unknown> = {}) => ({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1,
   validForMs: 3000, standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false, transition: null, ...change });
 const settle = () => new Promise(resolve => setTimeout(resolve, 5));
@@ -95,6 +96,41 @@ void test('cleanup unknown is sticky and cannot be revived by a later green sour
   await r.controller.refresh(); assert.equal(r.last()?.diagnostic, 'RESIDENT_CLEANUP_UNKNOWN');
   observation = sample({ revision: 3 }); await r.controller.refresh(); await r.controller.request('on');
   assert.equal(calls, 2); assert.equal(r.last()?.canOn, false); r.controller.dispose();
+});
+void test('cleanup uncertainty is shown as needs cleanup, never generic unconfirmed or success', async () => {
+  let observation = sample();
+  const r = capture(command => Promise.resolve(command === 'get_resident_status' ? observation : undefined));
+  try {
+    await r.controller.refresh();
+    observation = sample({ revision: 2, cleanup: 'unknown', canRequestOn: false });
+    await r.controller.refresh();
+    const state = r.last();
+    const view = presentResident(state?.observation ?? null, state?.pending ?? false, state?.cleanupUnknown ?? false);
+    // An unproved cleanup must not look like a successful stop or an ordinary status expiry.
+    assert.equal(view.heading, '要清掃: 常駐ホストの回収を確認できません');
+    assert.equal(view.detail, '回収を確かめられないため、停止の成功を示しません。');
+    assert.equal(view.tone, 'unconfirmed');
+    assert.equal(view.icon, 'warning');
+    assert.equal(state?.canOn, false);
+    assert.equal(state?.canOff, false);
+  } finally { r.controller.dispose(); }
+});
+void test('an exited sidecar with expired status stays unconfirmed, not OFF, ON, waiting or success', async () => {
+  let observation = sample();
+  const r = capture(() => Promise.resolve(observation));
+  try {
+    await r.controller.refresh();
+    // Rust's status after stdout EOF without a closed frame has expired validity and no actions.
+    observation = sample({ validForMs: 0, canRequestOn: false, canRequestOff: false });
+    await r.controller.refresh();
+    const state = r.last();
+    const view = presentResident(state?.observation ?? null, state?.pending ?? false, state?.cleanupUnknown ?? false);
+    assert.equal(view.heading, '常駐ホストの状態を確認できません');
+    assert.equal(view.tone, 'unconfirmed');
+    assert.equal(state?.canOn, false);
+    assert.equal(state?.canOff, false);
+    assert.equal(state?.pending, false);
+  } finally { r.controller.dispose(); }
 });
 void test('elapsed IPC time, clock rollback and old revision cannot refresh authority', async () => {
   for (const mode of ['elapsed', 'clock', 'revision', 'same-revision']) {

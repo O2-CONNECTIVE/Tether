@@ -140,6 +140,78 @@ fn explicit_capability_rejects_other_windows_remote_and_opposite_platform_origin
 
 #[cfg(target_os = "macos")]
 #[test]
+fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_actionable() {
+    use crate::mac_status::ContinuousClock;
+    use std::{
+        process::Command,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    let now = ContinuousClock::new().unwrap().now_millis().unwrap();
+    let frame = json!({
+        "protocolVersion": 1,
+        "type": "status",
+        "sourceContinuousMs": now,
+        "snapshot": {
+            "protocolVersion": 1,
+            "source": "resident-owner",
+            "state": "source-observation",
+            "revision": 1,
+            "validForMs": 3000,
+            "standby": "off",
+            "registration": "disconnected",
+            "caller": null,
+            "work": "idle",
+            "cleanup": "confirmed",
+            "canRequestOn": true,
+            "canRequestOff": false,
+            "transition": null
+        }
+    });
+    // This crashed sidecar writes a fresh status, exits without a closed frame, and cannot prove cleanup.
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(format!(
+            "printf '%s\\n' '{}'; /bin/sleep 0.1; exit 7",
+            frame
+        ))
+        .env_clear();
+    let (mut owner, source) =
+        crate::resident_port::duplex::owner::Supervisor::fixture(command).unwrap();
+    let app = app(ResidentPort::bound(source.unwrap()).unwrap());
+    let start = Instant::now();
+    loop {
+        if let Some(result) = owner.poll_join() {
+            assert!(matches!(
+                result,
+                Ok(crate::resident_port::duplex::owner::End::Reaped(status)) if status.code() == Some(7)
+            ));
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "sidecar did not reach stdout EOF"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let status = read(
+        &app,
+        "main",
+        crate::LOCAL_TEST_ORIGIN,
+        "get_resident_status",
+        json!({"protocolVersion":1}),
+    )
+    .unwrap();
+    assert_eq!(status["validForMs"], 0);
+    assert_eq!(status["canRequestOn"], false);
+    assert_eq!(status["canRequestOff"], false);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn async_mock_ipc_receipt_and_later_observation_use_the_same_joined_owner() {
     use std::time::{Duration, Instant};
     let mut fixture = super::port_pipe_tests::Fixture::start();

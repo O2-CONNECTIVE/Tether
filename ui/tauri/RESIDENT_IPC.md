@@ -5,8 +5,9 @@
 
 ## 二つの構成を区別する
 
-通常の`commands()`/`run()`、標準`tauri.conf.json`、`shell-local` capabilityの選択は変えていません。
-通常shellはresident/binding commandを許可せず、認証や操作権限を有効化しません。
+通常の`run()`はresident status/intent commandを登録し、標準`tauri.conf.json`が選ぶ`shell-local` capabilityは`allow-resident-port`を許可します。
+通常起動のsourceは`Unbound`でsidecarを起動しません。sidecarを所有するのは#456のPR Dです。
+このpermissionはcommandの呼び出しだけを許し、source binding・認証・操作権限を有効にしません。
 
 明示的な`commands_with_ports`は既存の具体的`ResidentPort`を受けるprivate builderです。
 通常callerはなく、bind/launch/policy command、任意path/argv/fd/digest/credential入力、source差し替え口はありません。
@@ -14,8 +15,8 @@
 このbuilderを選ぶだけでportがboundになることはなく、unboundならStatus/Receiptもunavailableです。
 旧shell statusはこの構成でもnot_connected/操作不可/終了未確認のままです。
 
-command manifestと限定`allow-resident-port` permissionはsourceとして定義しますが、通常shell-localには付与しません。
-`tests/resident-context/tauri.conf.json`だけがmain/localの限定permissionを選び、MockRuntimeで実handler/ACLを検査します。
+command manifestと限定`allow-resident-port` permissionはsourceとして定義し、標準shell-localがmain/localへ付与します。
+`tests/resident-context/tauri.conf.json`もmain/localの限定permissionを選び、MockRuntimeで実handler/ACLを検査します。
 このtest contextを通常runへ選ぶ環境変数・CLI flag・GUI導線は追加せず、実GUI起動にも使用していません。
 Tauriの当該版はconfigの親directoryから標準名を読むため、test configを別directoryに置いて選択自体もassertします。
 
@@ -27,6 +28,13 @@ UI thread上で待たず、送信者切断はunknown、task失敗は固定unavai
 自動retry・再bind・観測の楽観更新・receiptからのON/OFF確定はありません。
 後続のmatching transition、freshness、cleanupとreceiptは別に扱います。
 viewer/app破棄だけを元ownerのClose/回収証明へ変えません。
+
+## 画面との最小の境界
+
+HostSnapshotはresident pipeのstatus frameが持つsnapshot、Intentはintent frame、Eventはreceipt・`closed`・`startupRejected`です。
+Tauriの`get_resident_status`はstatusだけを返し、`closed` outcomeと`startupRejected`はRust内部で扱います。
+期限切れ・EOF・異常応答は「未確認」とし、OFF・ON・待機中・成功へ丸めません。`cleanup: unknown`は「要清掃」と表示し、停止成功を示しません。
+全停止はGoの`hostlifecycle` coordinatorが判定し、`closed`のoutcomeはその判定から出ます。schemaの正本（#36 DEC-02）は未決です。
 
 source試験は正規の要求/厳密な拒否、別window/remote/opposite-platform origin拒否、受付とmatching観測の分離を検査します。
 同じ自己所有fixtureの実stdin/stdout、Close/EOF、exact Child Wait、単一IO/supervisor workerとouter monitorの実join、temp削除を維持します。
