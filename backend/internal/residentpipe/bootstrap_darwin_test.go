@@ -317,3 +317,29 @@ func TestOwnedResultExitsCleanlyOnlyAfterConfirmedClose(t *testing.T) {
 		}
 	}
 }
+
+// A load that cannot be confirmed as taken back (a panic may have acquired
+// something) keeps this process and its coordinator, like an unconfirmed close.
+// It never returns a plain failure that would end the process.
+func TestStartStandbyRetainsAnUnconfirmedLoad(t *testing.T) {
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := startStandby(context.Background(), func(context.Context) (*residentmac.Standby, error) { panic("load panicked") })
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatal("unconfirmed load returned", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A clean load failure has nothing to take back. It returns the loader's own
+// error, so the startup-rejection receipt still sees its concrete type.
+func TestStartStandbyReturnsACleanLoadFailure(t *testing.T) {
+	refused := errors.New("load refused")
+	_, owner, err := startStandby(context.Background(), func(context.Context) (*residentmac.Standby, error) { return nil, refused })
+	if err != refused || owner != nil {
+		t.Fatal(err, owner)
+	}
+}

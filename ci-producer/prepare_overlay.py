@@ -15,7 +15,7 @@ parser.add_argument('--backend', type=Path, default=ROOT.parent / 'backend')
 BACKEND = parser.parse_args().backend.resolve()
 if not (BACKEND / 'go.mod').is_file():
     raise SystemExit('Expected repository backend; pass --backend for isolated review copy')
-SOURCE_SHA = '45ef36a74a2e8ba2307e2418df86bfcfe980c30541deb12c197a605a88153e8d'
+SOURCE_SHA = '52bc93507621774a1fd5fdfcbeb9631d35f1efa65492ab14ba0b7302a814d337'
 WORK_ENTRY_SHA = '2fd42dda65cdad708632c7d65ce12bc11819c88732b694e2d3d51f0ee2567dfd'
 CLI_ENTRY_SHA = 'c7420e9cfb1e6a7527b48152a384e9eb33266684bcfea4c509a9120af57aa646'
 source = BACKEND / 'internal/residentpipe/run_darwin.go'

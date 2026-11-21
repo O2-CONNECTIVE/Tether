@@ -93,9 +93,22 @@ func startStandby(lifetime context.Context, load func(context.Context) (*residen
 	})
 	if err != nil {
 		// A load past its budget may still be writing owner; do not read it.
+		if !coord.Stop().Stopped {
+			retainForever(coord) // a load that was not taken back stays owned here
+		}
 		return coord, nil, err
 	}
 	return coord, owner, nil
+}
+
+// retainForever keeps unconfirmed cleanup in this process indefinitely: no
+// replacement, retry, success exit, kill, or fabricated OFF.
+func retainForever(keep ...any) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		runtime.KeepAlive(keep)
+	}
 }
 
 func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy string, dialect inputDialect) error {
@@ -132,14 +145,7 @@ func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, o
 	}
 	terminalErr := writeClosed(pipes, closeErr)
 	if closeErr != nil {
-		// Unknown is retained in this process indefinitely: no replacement, retry,
-		// success exit, kill, or fabricated OFF. Keep the original object reachable.
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			runtime.KeepAlive(coord)
-			runtime.KeepAlive(owner)
-		}
+		retainForever(coord, owner) // keep the original objects reachable
 	}
 	runtime.KeepAlive(coord)
 	runtime.KeepAlive(owner)
