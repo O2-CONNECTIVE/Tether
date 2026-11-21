@@ -19,3 +19,6 @@ third_party/
 
 # Local Cloudflare CLI cache/state is not project source
 /.wrangler/
+
+# Go の試験が backend/ に書き出し、scripts/go_ci.py が読んで消す記録
+/backend/go-result.json
