@@ -5,14 +5,14 @@
 標準buildは`resident_native_source` cfgを有効にせず、sourceは`Unbound`でsidecarを起動しません。statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`、intent receiptは`unavailable`です。
 macOS標準buildでは`Unbound`の`request_exit()`がtrueとなり、`ExitRequested`を保留しません。
 macOSで`resident_native_source` cfgを明示した構成では、`NativeSession`が`NativeOuterOwner`を保持します。`run()`は`ExitRequested`時にownerの判定がfalseなら`prevent_exit()`を呼び、outer monitorの安全な結果と実joinを待ちます。
-このsourceを信頼したproducer起動から標準stateへ接続する作業は「#456 の後続」です。trusted launch factoryは未接続です。
-実producer、鍵やprotected policy、GUIのON/OFFは起動・有効化しません。
+標準buildは`Unbound`のままでproducerを起動しません。macOSで`#[cfg(all(target_os = "macos", resident_native_source))]`を有効にした署名候補には、生成されたrelease identityに結び付く登録済みproducerを固定bundle内から起動するsource経路があります。この経路の実機起動は未検証です。
+標準buildへのproducer接続、配布bundleと信頼した配置、実機でのproducer回収確認は「#456 の後続」です。鍵やprotected policy、GUIのON/OFFも実機未検証です。
 
 ## 構築の境界
 
 macOSの`owner::launcher`は非公開の`internal_start.rs`です。
 Commandを受ける`start`はその親ownerだけに見え、通常buildにcrate-visibleなCommand/path/argv/fd factoryはありません。
-既存のPreparedResidentLaunchを受けるproduction wrapperは、保護されたproducer準備を公開構成へ確立するまで追加しません。
+Rust側に既存のPreparedResidentLaunchを受ける公開production wrapperはありません。これは前述した署名候補のSwift固定起動経路とは別の境界です。
 実装本体は通常buildでもcompileし、cfg(test)だけのfixture factoryが無害な自己所有子へ同じ処理を使います。
 fixtureのstatus/receiptは認証やlive表示の証拠ではありません。
 

@@ -11,8 +11,8 @@ Unbound statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsu
 
 `commands_with_ports`は`#[cfg(any(test, resident_gui_fixture))]`のtest/GUI fixture限定private builderで、通常起動や将来のbootstrapには使いません。
 通常起動は`commands_with_state`が管理するstateを使います。bind/launch/policy command、任意path/argv/fd/digest/credential入力、source差し替え口はありません。
-信頼した起動から通常stateへつなぐ作業は「#456 の後続」です。
-旧shell statusはこの構成でもnot_connected/操作不可/終了未確認のままです。
+標準buildは`Unbound`でproducerを起動しません。macOSで`#[cfg(all(target_os = "macos", resident_native_source))]`を有効にした署名候補には、登録済みproducerの固定bundle起動経路がありますが、実機起動は未検証です。
+旧shell statusはこのIPC構成でもnot_connected/操作不可/終了未確認のままです。
 
 command manifestと限定`allow-resident-port` permissionはsourceとして定義し、標準shell-localがmain/localへ付与します。
 `tests/resident-context/tauri.conf.json`もmain/localの限定permissionを選び、MockRuntimeで実handler/ACLを検査します。
@@ -39,7 +39,7 @@ source試験は正規の要求/厳密な拒否、別window/remote/opposite-platf
 同じ自己所有fixtureの実stdin/stdout、Close/EOF、exact Child Wait、単一IO/supervisor workerとouter monitorの実join、temp削除を維持します。
 fixtureはregistration=disconnectedであり、実producer/auth/GUIの実証ではありません。
 
-## trusted launcherをまだ作らない理由
+## 配布と信頼の成立は未検証
 
 公開repoのTauri bundleはactive=falseで、resident producerのbuild/同梱/信頼した配置元の対応がありません。
 この IPC 準備時点では Go source 閉包は未整備でした。後続の [公開 producer 組成](../../docs/mac-resident-producer-composition.md)が residentpipe / residentmac / residentwork と policy の source を準備しますが、実配布・配置・署名の信頼確立は別条件です。
@@ -50,5 +50,5 @@ private評価の端末固有producer pinやpolicy path、利用者入力の期�
 既存loaderのfinite context→保護されたReadTrustConfig→strict schema/fixed scope→既存key loader→immutable factoryを尊重し、Rustに第二のpolicy承認器を作りません。
 実policy/鍵は読み取らず、新しいenrollment/署名/OS trust/運用設定も行っていません。
 
-後続はproducer/policyの公開source閉包、固定build/package provenanceと信頼した配置契約、sealed launch、その後の通常GUI/native Quit結合と実機検証です。
+標準buildは引き続き`Unbound`です。署名候補の固定bundle起動経路があることは、producer/policyの公開source閉包、固定build/package provenance、信頼した配置契約や実機検証の成立を意味しません。
 現在のGUI/producer/認証/ON/OFF/配布物は未実証のままです。

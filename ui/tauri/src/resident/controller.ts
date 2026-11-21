@@ -56,6 +56,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
       }
       if (next.revision < revision || (next.revision === revision && observation
         && JSON.stringify({ ...next, validForMs: 0 }) !== JSON.stringify({ ...observation, validForMs: 0 }))) return fail('RESIDENT_REVISION_INVALID');
+      if (next.cleanup === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN', true);
       until = started + next.validForMs;
       if (received >= until) return fail('RESIDENT_OBSERVATION_EXPIRED');
       revision = next.revision; observation = next;
@@ -70,7 +71,6 @@ export function createResidentController({ invoke, onChange, now = () => perform
       const pendingOn = t?.intent === 'on' && t.outcome === 'pending' && pending?.id === t.requestId
         && next.registration === 'connecting' && next.work === 'idle' && next.cleanup === 'confirmed'
         && !next.canRequestOn && !next.canRequestOff;
-      if (next.cleanup === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN', true);
       if ((next.standby === 'unknown' && !pendingOn) || t?.outcome === 'unknown') return fail('RESIDENT_STATE_UNKNOWN');
       if (pending && t?.requestId === pending.id && t.intent === pending.intent && (t.outcome === 'applied' || t.outcome === 'rejected')) pending = undefined;
       clearTimeout(expiry);
