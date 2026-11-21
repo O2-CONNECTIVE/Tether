@@ -16,3 +16,4 @@ deploy/cloudflare/prepare-directory.ps1 -text
 
 # Go/Swift共通のwire fixtureはLFを含む固定bytesとして保持する。
 ui/mac-development/Tests/DevelopmentChecks/Fixtures/mapper-pending.jsonl -text
+ui/mac-development/Tests/DevelopmentChecks/Fixtures/mapper-reconnect.jsonl -text

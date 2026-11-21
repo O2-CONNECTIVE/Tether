@@ -4,6 +4,7 @@ public struct Observation {
     public let revision: UInt64
     public let sourceMS: UInt64
     public let standby, registration, work, cleanup: String
+    public let registrationReason: String?
     public let canOn, canOff: Bool
     public let standbyUntil: UInt64? // owner wall-clock end of standby, Unix epoch ms
     public let standbyEndingSoon, standbyExpired: Bool
@@ -51,7 +52,8 @@ public struct Feed {
     }
     public func can(_ intent: String, at now: UInt64) -> Bool {
         guard fresh(at: now), !closing, pending == nil, awaitingReceipt == nil, let o = observation else { return false }
-        if intent == "allow" || intent == "extend" { return o.standby == "on" }
+        // The owner closes admission in needs_action and rejects both.
+        if intent == "allow" || intent == "extend" { return o.standby == "on" && o.registration != "needs_action" }
         if intent == "deny" { return o.standby == "on" } // offered even if this view shows none
         return intent == "on" ? o.canOn : intent == "off" && o.canOff
     }
@@ -169,7 +171,9 @@ public struct Feed {
         }
     }
     private mutating func receiveStatus(_ value: Value, source: UInt64) throws {
-        let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"])
+        let keys = ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"]
+        guard case let .object(fields) = value else { throw Invalid.input }
+        let s = try Object(value, fields["registrationReason"] == nil ? keys : keys + ["registrationReason"])
         guard try s.number("protocolVersion") == 1,
               try s.text("source", ["resident-owner"]) == "resident-owner",
               try s.text("state", ["source-observation"]) == "source-observation",
@@ -181,7 +185,14 @@ public struct Feed {
                   !caller.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw Invalid.input }
         } else if case .null? = s.fields["caller"] {} else { throw Invalid.input }
         let standby = try s.text("standby", ["off", "on", "stopping", "unknown"])
-        let registration = try s.text("registration", ["disconnected", "connecting", "authenticated", "unknown"])
+        let registration = try s.text("registration", ["disconnected", "connecting", "authenticated", "reconnecting", "needs_action", "unknown"])
+        let registrationReason: String?
+        if registration == "needs_action" {
+            registrationReason = try s.text("registrationReason", ["identity_refused", "connection_occupied", "gateway_refused"])
+        } else {
+            guard s.fields["registrationReason"] == nil else { throw Invalid.input }
+            registrationReason = nil
+        }
         let work = try s.text("work", ["idle", "preparing", "running", "stopping", "unknown"])
         let cleanup = try s.text("cleanup", ["confirmed", "pending", "unknown"])
         let canOn = try s.bool("canRequestOn"), canOff = try s.bool("canRequestOff")
@@ -194,6 +205,7 @@ public struct Feed {
         guard
               !canOn || (standby == "off" && work == "idle" && cleanup == "confirmed"),
               !canOff || standby == "on", !(canOn && canOff),
+              registration != "needs_action" || (standby == "on" && work == "idle" && cleanup == "confirmed"),
               !standbyEndingSoon || standbyUntil != nil else { throw Invalid.input }
         if case .null? = s.fields["transition"] {} else {
             let t = try Object(s.fields["transition"]!, ["requestId", "intent", "outcome"])
@@ -212,7 +224,7 @@ public struct Feed {
                 } else if outcome == "pending" { throw Invalid.input }
             } else if outcome == "pending" { throw Invalid.input }
         }
-        observation = Observation(revision: revision, sourceMS: source, standby: standby, registration: registration, work: work, cleanup: cleanup, canOn: canOn, canOff: canOff, standbyUntil: standbyUntil, standbyEndingSoon: standbyEndingSoon, standbyExpired: standbyExpired)
-        if standby != "on" { allowGranted = false }
+        observation = Observation(revision: revision, sourceMS: source, standby: standby, registration: registration, work: work, cleanup: cleanup, registrationReason: registrationReason, canOn: canOn, canOff: canOff, standbyUntil: standbyUntil, standbyEndingSoon: standbyEndingSoon, standbyExpired: standbyExpired)
+        if standby != "on" || registration == "needs_action" { allowGranted = false }
     }
 }
