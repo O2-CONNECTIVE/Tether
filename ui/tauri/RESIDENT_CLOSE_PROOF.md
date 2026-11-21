@@ -1,8 +1,10 @@
 # Resident wireのClose証跡前提
 
-通常Mac起動とIPCは未接続のままです。
+標準の`run()`は`commands_with_state`を使い、`get_resident_status`と`request_resident_intent`を登録します。
+標準buildのUnbound statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`です。intent receiptは`unavailable`で、producerへは送信されません。
+標準buildは`resident_native_source` cfgを有効にせず、`ResidentState`のsourceは`Unbound`でproducerを起動しません。macOS標準buildの`request_exit()`はtrueとなり、`ExitRequested`を保留しません。macOSで`#[cfg(all(target_os = "macos", resident_native_source))]`を明示した署名候補では、`NativeSession`が`NativeOuterOwner`を保持し、登録済みproducerを固定bundleから起動するsource経路があります。`run()`の`ExitRequested`はouter ownerの判定がfalseの間`prevent_exit()`で退出を保留します。この署名候補の実機起動・回収は未検証です。
 この文書は内部`resident_port`のwire復号・状態整合・post-Close証跡部分を扱います。
-[具体duplex owner](RESIDENT_DUPLEX_OWNER.md)の内部IOへ接続していますが、通常のport/provider/Status factory、IPC intent受付、trusted launcherはありません。
+[具体duplex owner](RESIDENT_DUPLEX_OWNER.md)はportとStatus/Receiptの内部IOへ接続しています。標準buildは`Unbound`のままで、署名候補のproducer起動経路とは構成を区別します。
 ON/OFFのwire dataだけでは、本人同意や実行許可を成立させません。
 
 ## 復号と証跡
@@ -27,12 +29,12 @@ EOF後event拒否は、従来PumpがEOFで止まる順序をこの内部部品�
 
 既存の`Pump::step/consume`は同じChildから取得したstdin/stdoutを所有し、実半閉鎖・bounded framing・実EOFをClosureへ伝えます。
 既存の`Supervisor::record`は、同じproducerからのauthoritative Close、実EOF、exact Child Wait、reader/writerを含むIOとsupervisor joinを区別して検査します。
-さらに`StandbyOwner/ExitGate`はouter monitorの実joinを待ち、unknownを保持します。
-Pump/Supervisorとstartup rejectionの別証跡は内部実装へ接続しています。trusted producer準備/protected policy、outer monitorとguarded Quitは未接続です。
+明示構成の`NativeOuterOwner/ExitGate`はouter monitorの実joinを待ち、unknownを保持します。
+Pump/Supervisorとstartup rejectionの別証跡は内部実装へ接続しています。明示的な`resident_native_source` cfgのmacOS構成ではouter monitor、guarded Quit、署名候補の登録済みproducer起動経路もソースにあります。実機での起動・回収は未検証です。
 単純なprocess exitやreap gateを、resident全体の回収証明へ昇格させません。
 
 ## 確認範囲
 
 このwire部分の試験はmemory内のpayloadとClosureを扱い、実IO ownerのfixtureとは結果を分けます。
 正負のschema、時刻、OFF/status/receipt混同拒否、terminalとEOFの順序、unknown/fault保持を検査します。
-実producer、認証、OS保護、実GUIのON/OFF/Quitとouter monitorは未実証です。自己所有fixtureのIO/supervisor joinを製品全体の終了証明にしません。
+署名候補のproducer起動経路は実機未検証です。認証、OS保護、実GUIのON/OFF/Quitとouter monitorも未実証です。自己所有fixtureのIO/supervisor joinを製品全体の終了証明にしません。

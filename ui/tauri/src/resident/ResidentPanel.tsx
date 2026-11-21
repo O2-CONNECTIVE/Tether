@@ -22,7 +22,7 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
   }, [invoke]);
   if (!state.visible) return null;
   const o = state.observation;
-  const view = presentResident(o, state.pending);
+  const view = presentResident(o, state.pending, state.cleanupUnknown);
   return <Card id="resident-panel" aria-labelledby="resident-heading"
     data-resident-receipt={state.lastReceipt ?? 'none'} data-resident-request-id={state.lastRequestId}
     data-resident-registration={o?.registration ?? 'unknown'} data-resident-standby={o?.standby ?? 'unknown'}

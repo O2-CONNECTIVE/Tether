@@ -5,9 +5,11 @@
 Rust が接続機能の未配線状態だけを返す開発用 shell です。
 通常 App の [Mac 状態表示経路](MAC_STATUS_APP.md)は backend 固定 platform を使います。Mac の本番応答は native 入力未接続だけで、観測注入は test build と browser fixture に限定します。
 [Mac状態入力の読取前提](MAC_STATUS_INPUT.md)は専用descriptorの所有とclockを準備しますが、通常起動とIPCには接続していません。
-[Resident wireのClose証跡前提](RESIDENT_CLOSE_PROOF.md)と[具体duplex所有契約](RESIDENT_DUPLEX_OWNER.md)は内部sourceです。通常起動/IPC、trusted launcher、outer終了判定は未接続です。
+[Resident wireのClose証跡前提](RESIDENT_CLOSE_PROOF.md)と[具体duplex所有契約](RESIDENT_DUPLEX_OWNER.md)は内部sourceです。通常の`run()`は`ResidentState::startup()`のstateを`commands_with_state`へ渡し、resident status/intent commandを登録します。
+標準buildのUnbound statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`です。intent receiptは`unavailable`で、標準buildはproducerを起動しません。macOSで`#[cfg(all(target_os = "macos", resident_native_source))]`を有効にした署名候補には登録済みproducerの固定bundle起動経路がありますが、実機では未検証です。
+`commands_with_ports`はtest/GUI fixture限定で、通常起動には使いません。標準の`shell-local` capabilityは`allow-resident-port`を許可します。
 操作する担当者向けの[操作側GUIプロトタイプ](operator/README.md)は別入口・別buildです。host shellと実接続の配線は共有しません。
-Go、SSH、sidecar の起動や停止は実装していません。
+Go/SSHの実接続と標準buildのsidecar起動はありません。署名候補のproducer起動経路と区別してください。
 製品接続ゲートと起動方法は変更しません。
 開始と停止は常に無効で、通信終了は未確認のままです。
 

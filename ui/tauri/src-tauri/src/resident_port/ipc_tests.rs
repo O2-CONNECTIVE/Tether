@@ -140,6 +140,150 @@ fn explicit_capability_rejects_other_windows_remote_and_opposite_platform_origin
 
 #[cfg(target_os = "macos")]
 #[test]
+fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_actionable() {
+    use crate::mac_status::ContinuousClock;
+    use std::{
+        fs,
+        path::PathBuf,
+        process::Command,
+        sync::atomic::{AtomicU64, Ordering},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    let clock = ContinuousClock::new().unwrap();
+    let now = clock.now_millis().unwrap();
+    let frame = json!({
+        "protocolVersion": 1,
+        "type": "status",
+        "sourceContinuousMs": now,
+        "snapshot": {
+            "protocolVersion": 1,
+            "source": "resident-owner",
+            "state": "source-observation",
+            "revision": 1,
+            "validForMs": 3000,
+            "standby": "off",
+            "registration": "disconnected",
+            "caller": null,
+            "work": "idle",
+            "cleanup": "confirmed",
+            "canRequestOn": true,
+            "canRequestOff": false,
+            "transition": null
+        }
+    });
+    let deadline = frame["sourceContinuousMs"]
+        .as_u64()
+        .unwrap()
+        .checked_add(frame["snapshot"]["validForMs"].as_u64().unwrap())
+        .unwrap();
+    struct OwnedDirectory(PathBuf);
+    impl OwnedDirectory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "resident-ipc-eof-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for OwnedDirectory {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    struct ReleaseOnDrop(Vec<PathBuf>);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                let _ = fs::write(path, []);
+            }
+        }
+    }
+
+    let directory = OwnedDirectory::new();
+    let ready = directory.0.join("ready");
+    let exit = directory.0.join("exit");
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("wait_for_file() { count=0; while [ ! -e \"$1\" ] && [ \"$count\" -lt 300 ]; do /bin/sleep 0.01; count=$((count + 1)); done; [ -e \"$1\" ]; }; wait_for_file \"$2\" || exit 8; printf '%s\\n' \"$1\"; wait_for_file \"$3\" || exit 9; exit 7")
+        .arg("resident-eof-fixture")
+        .arg(frame.to_string())
+        .arg(ready.to_string_lossy().into_owned())
+        .arg(exit.to_string_lossy().into_owned())
+        .env_clear();
+    let (mut owner, source) =
+        crate::resident_port::duplex::owner::Supervisor::fixture(command).unwrap();
+    let _release_on_drop = ReleaseOnDrop(vec![ready.clone(), exit.clone()]);
+    fs::write(&ready, []).unwrap();
+    let app = app(ResidentPort::bound(source.unwrap()).unwrap());
+    let status = || {
+        read(
+            &app,
+            "main",
+            crate::LOCAL_TEST_ORIGIN,
+            "get_resident_status",
+            json!({"protocolVersion":1}),
+        )
+        .unwrap()
+    };
+    let start = Instant::now();
+    let before = loop {
+        let current = status();
+        if current["state"] == "source-observation" {
+            break current;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "sidecar status was not observed"
+        );
+        thread::sleep(Duration::from_millis(2));
+    };
+    assert_eq!(before["revision"], 1);
+    assert!(before["validForMs"].as_u64().unwrap() > 1000);
+    assert_eq!(before["canRequestOn"], true);
+    assert_eq!(before["canRequestOff"], false);
+
+    let remaining = Duration::from_millis(before["validForMs"].as_u64().unwrap());
+    let after_exit = Instant::now();
+    fs::write(&exit, []).unwrap();
+    let ended = loop {
+        if let Some(result) = owner.poll_join() {
+            break result;
+        }
+        assert!(
+            after_exit.elapsed() < remaining,
+            "status expired by its original deadline"
+        );
+        thread::sleep(Duration::from_millis(2));
+    };
+    assert!(
+        matches!(ended, Ok(crate::resident_port::duplex::owner::End::Reaped(status)) if status.code() == Some(7)),
+        "child result: {ended:?}"
+    );
+    assert!(
+        after_exit.elapsed() < remaining,
+        "sidecar ended after the original status deadline"
+    );
+    let expired = status();
+    let observed_at = clock.now_millis().unwrap();
+    assert!(
+        observed_at < deadline,
+        "environment was too slow to verify EOF expiry before the status deadline"
+    );
+    assert_eq!(expired["revision"], before["revision"]);
+    assert_eq!(expired["validForMs"], 0);
+    assert_eq!(expired["canRequestOn"], false);
+    assert_eq!(expired["canRequestOff"], false);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn async_mock_ipc_receipt_and_later_observation_use_the_same_joined_owner() {
     use std::time::{Duration, Instant};
     let mut fixture = super::port_pipe_tests::Fixture::start();

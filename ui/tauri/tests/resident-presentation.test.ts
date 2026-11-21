@@ -38,9 +38,19 @@ void test('a pending change or a stopping standby is shown as in progress, not a
 void test('the detail line uses Japanese labels and leaks no raw state value', () => {
   assert.equal(presentResident(observed({ standby: 'on', registration: 'authenticated', work: 'running', cleanup: 'pending' }), false).detail,
     '待機: ON / 接続: 認証済み / 作業: 実行中 / 回収: 回収待ち');
-  assert.equal(presentResident(observed({ standby: 'unknown', registration: 'unknown', work: 'unknown', cleanup: 'unknown' }), false).detail,
-    '待機: 未確認 / 接続: 未確認 / 作業: 未確認 / 回収: 未確認');
+  assert.equal(presentResident(observed({ standby: 'unknown', registration: 'unknown', work: 'unknown', cleanup: 'pending' }), false).detail,
+    '待機: 未確認 / 接続: 未確認 / 作業: 未確認 / 回収: 回収待ち');
   assert.equal(/[a-z]/.test(presentResident(observed({ registration: 'connecting', work: 'preparing' }), false).detail), false);
+});
+
+void test('cleanup unknown takes precedence over an observed standby off state', () => {
+  const view = presentResident(observed({ cleanup: 'unknown', canRequestOn: false }), false);
+  assert.deepEqual(view, {
+    heading: '要清掃: 常駐ホストの回収を確認できません',
+    detail: '回収を確かめられないため、停止の成功を示しません。',
+    tone: 'unconfirmed',
+    icon: 'warning',
+  });
 });
 
 // 青は「接続中」を表す。待機ONでも、認証済みの接続を観測するまでは接続済みに見せない。

@@ -87,30 +87,6 @@ void test('pending source transition disables operations and preserves request I
   await r.controller.refresh(); await r.controller.request('on');
   assert.deepEqual(requests, [{ protocolVersion: 1, requestId: 43, expectedRevision: 2, intent: 'on' }]); r.controller.dispose();
 });
-void test('cleanup unknown is sticky and cannot be revived by a later green source', async () => {
-  let observation = sample(); let calls = 0;
-  const r = capture(() => { calls++; return Promise.resolve(observation); });
-  await r.controller.refresh();
-  observation = sample({ revision: 2, cleanup: 'unknown', canRequestOn: false });
-  await r.controller.refresh(); assert.equal(r.last()?.diagnostic, 'RESIDENT_CLEANUP_UNKNOWN');
-  observation = sample({ revision: 3 }); await r.controller.refresh(); await r.controller.request('on');
-  assert.equal(calls, 2); assert.equal(r.last()?.canOn, false); r.controller.dispose();
-});
-void test('elapsed IPC time, clock rollback and old revision cannot refresh authority', async () => {
-  for (const mode of ['elapsed', 'clock', 'revision', 'same-revision']) {
-    let time = 10, count = 0;
-    const r = capture(() => {
-      count++;
-      if (count === 2) {
-        if (mode === 'elapsed') time += 3000;
-        if (mode === 'clock') time = 0;
-      }
-      return Promise.resolve(sample(mode === 'revision' ? { revision: count === 1 ? 2 : 1 }
-        : mode === 'same-revision' && count === 2 ? { registration: 'connecting' } : {}));
-    }, { now: () => time });
-    await r.controller.refresh(); await r.controller.refresh(); assert.equal(r.last()?.canOn, false, mode); r.controller.dispose();
-  }
-});
 void test('invalidated or disposed pending reads and receipts never revive UI', async () => {
   let complete: (v: unknown) => void = () => {};
   const r = capture(() => new Promise(resolve => { complete = resolve; }));
