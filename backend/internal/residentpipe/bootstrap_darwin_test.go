@@ -23,6 +23,45 @@ type panicCloseResource struct{}
 
 func (panicCloseResource) Close(context.Context) error { panic("synthetic close panic") }
 
+type capturedStatus struct {
+	status statusEnvelope
+	line   []byte
+}
+
+func isTerminalUnknownCleanupStatus(status statusEnvelope) bool {
+	return status.Type == "status" && status.Snapshot.Cleanup == "unknown" && status.Snapshot.Registration == "unknown" && !status.Snapshot.CanRequestOn && !status.Snapshot.CanRequestOff
+}
+
+func readStatusesThroughClosed(t *testing.T, reader *bufio.Reader, prefix ...capturedStatus) ([]capturedStatus, closedEnvelope) {
+	t.Helper()
+	statuses := append([]capturedStatus(nil), prefix...)
+	for {
+		line, err := reader.ReadBytes('\n')
+		var header struct {
+			Type string `json:"type"`
+		}
+		if err != nil || json.Unmarshal(line, &header) != nil {
+			t.Fatal("invalid output before closed", string(line), err)
+		}
+		switch header.Type {
+		case "status":
+			var status statusEnvelope
+			if json.Unmarshal(line, &status) != nil {
+				t.Fatal("invalid status before closed", string(line))
+			}
+			statuses = append(statuses, capturedStatus{status, line})
+		case "closed":
+			var closed closedEnvelope
+			if json.Unmarshal(line, &closed) != nil {
+				t.Fatal("invalid closed frame", string(line))
+			}
+			return statuses, closed
+		default:
+			t.Fatal("unexpected frame before closed", header.Type, string(line))
+		}
+	}
+}
+
 func TestBootstrapSelectionIsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		kind  bootstrapKind
@@ -172,10 +211,14 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			if owner.Snapshot().CanRequestOn {
 				t.Fatal("original Standby still accepts requests")
 			}
-			line, err = reader.ReadBytes('\n')
-			var frame closedEnvelope
-			if err != nil || json.Unmarshal(line, &frame) != nil || frame.Type != "closed" || frame.Outcome != "confirmed" || owner.Snapshot().CanRequestOn {
-				t.Fatal("confirmed cleanup emitted an extra status or lost its terminal frame", string(line), err)
+			statuses, frame := readStatusesThroughClosed(t, reader, capturedStatus{status, line})
+			for _, observed := range statuses {
+				if observed.status.Snapshot.Cleanup == "unknown" {
+					t.Fatal("confirmed cleanup emitted an unknown-cleanup status", string(observed.line))
+				}
+			}
+			if frame.Type != "closed" || frame.Outcome != "confirmed" || owner.Snapshot().CanRequestOn {
+				t.Fatal("confirmed cleanup lost its terminal frame", frame)
 			}
 			if err := outW.Close(); err != nil {
 				t.Fatal(err)
@@ -184,6 +227,74 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 				t.Fatal("missing physical output EOF", err)
 			}
 		})
+	}
+}
+
+func TestServeLoopForcedHeartbeatBeforeEOFIsOrdinaryStatus(t *testing.T) {
+	owner := idleProtectedOwner(t)
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inR.Close()
+	defer inW.Close()
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outR.Close()
+	defer outW.Close()
+	pipes := &ownedPipes{int(inR.Fd()), int(outW.Fd())}
+	if unix.SetNonblock(pipes.in, true) != nil || unix.SetNonblock(pipes.out, true) != nil {
+		t.Fatal("pipe setup")
+	}
+	if err := outR.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := make(chan time.Time, 1)
+	heartbeat <- time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	m := mapper{}
+	go func() { done <- serveLoop(ctx, owner, pipes, jsonInput, heartbeat, &m) }()
+	joined := false
+	t.Cleanup(func() {
+		cancel()
+		if !joined {
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Error("heartbeat control loop not joined")
+			}
+		}
+	})
+	reader := bufio.NewReader(outR)
+	readStatus := func() capturedStatus {
+		t.Helper()
+		line, err := reader.ReadBytes('\n')
+		var status statusEnvelope
+		if err != nil || json.Unmarshal(line, &status) != nil || status.Type != "status" {
+			t.Fatal("invalid heartbeat status", string(line), err)
+		}
+		return capturedStatus{status, line}
+	}
+	initial := readStatus()
+	heartbeatStatus := readStatus()
+	if len(heartbeat) != 0 || heartbeatStatus.status.Snapshot.Revision <= initial.status.Snapshot.Revision || isTerminalUnknownCleanupStatus(heartbeatStatus.status) {
+		t.Fatal("forced heartbeat was not an ordinary status before EOF", heartbeatStatus.status)
+	}
+	if err := inW.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		joined = true
+		if !errors.Is(err, os.ErrClosed) {
+			t.Fatal("input EOF was not observed after heartbeat", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("control loop did not observe input EOF")
 	}
 }
 
@@ -244,30 +355,36 @@ func TestBootstrapSharedLifetimeReportsCoordinatorCleanup(t *testing.T) {
 			if err := inW.Close(); err != nil {
 				t.Fatal(err)
 			}
-			line, err = reader.ReadBytes('\n')
-			var terminal statusEnvelope
-			if err != nil || json.Unmarshal(line, &terminal) != nil {
-				t.Fatal("terminal status missing before closed", string(line), err)
+			statuses, closed := readStatusesThroughClosed(t, reader, capturedStatus{status, line})
+			terminalCount := 0
+			var terminal capturedStatus
+			for _, observed := range statuses {
+				if observed.status.Snapshot.Cleanup != "unknown" {
+					continue
+				}
+				terminalCount++
+				terminal = observed
+				if !isTerminalUnknownCleanupStatus(observed.status) {
+					t.Fatal("unknown cleanup status had invalid terminal fields", string(observed.line))
+				}
 			}
-			if terminal.Snapshot.Registration != "unknown" {
-				t.Fatalf("terminal status registration = %q, want unknown: %s", terminal.Snapshot.Registration, string(line))
+			if terminalCount != 1 {
+				t.Fatalf("unknown cleanup status count = %d, want 1", terminalCount)
 			}
-			if terminal.Type != "status" || terminal.Snapshot.Cleanup != "unknown" || terminal.Snapshot.Standby != "unknown" || terminal.Snapshot.Work != "unknown" || terminal.Snapshot.CanRequestOn || terminal.Snapshot.CanRequestOff || terminal.Snapshot.Revision <= status.Snapshot.Revision {
-				t.Fatal("unknown cleanup status missing or invalid before closed", string(line), err)
+			if len(statuses) == 0 || !isTerminalUnknownCleanupStatus(statuses[len(statuses)-1].status) {
+				t.Fatal("closed was not immediately preceded by the terminal status")
+			}
+			if terminal.status.Snapshot.Standby != "unknown" || terminal.status.Snapshot.Work != "unknown" || terminal.status.Snapshot.Revision <= status.Snapshot.Revision {
+				t.Fatal("unknown cleanup status missing or invalid before closed", string(terminal.line))
 			}
 			var statusJSON map[string]json.RawMessage
 			var snapshotJSON map[string]json.RawMessage
-			if json.Unmarshal(line, &statusJSON) != nil || json.Unmarshal(statusJSON["snapshot"], &snapshotJSON) != nil {
-				t.Fatal("invalid terminal status shape", string(line))
+			if json.Unmarshal(terminal.line, &statusJSON) != nil || json.Unmarshal(statusJSON["snapshot"], &snapshotJSON) != nil {
+				t.Fatal("invalid terminal status shape", string(terminal.line))
 			}
 			_, hasForegroundFields := snapshotJSON["standbyUntil"]
 			if hasForegroundFields != (tc.dialect == foregroundInput) {
-				t.Fatal("terminal status used the wrong dialect", string(line))
-			}
-			line, err = reader.ReadBytes('\n')
-			var closed closedEnvelope
-			if err != nil || json.Unmarshal(line, &closed) != nil {
-				t.Fatal("unknown cleanup terminal missing after status", string(line), err)
+				t.Fatal("terminal status used the wrong dialect", string(terminal.line))
 			}
 			if closed.Type != "closed" || closed.Outcome != "unknown" {
 				t.Fatal("coordinator cleanup failure became confirmed", closed)

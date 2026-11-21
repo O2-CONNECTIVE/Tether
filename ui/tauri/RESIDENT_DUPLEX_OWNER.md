@@ -31,7 +31,7 @@ process exitだけで読取を止めず、実stdout EOFまでdrainし、不正sh
 
 既存Trackingは同じlifetimeのrevision・freshness・unresolved intentを保持し、成功writeやreceiptをtransition完了にしません。
 Closeは新規submitを封鎖し、queued/waiting要求をunknownにします。
-Close要求後からterminal前までのstatusもTrackingに観測として保持し、表示用の証跡とします。Close証跡は従来どおり`closed`のoutcomeだけで決まります。
+Close要求後からterminal前までのstatusは、Closureで形・不変条件・source時刻順序を検証した後、Trackingが表示用にbest effortで記録します。記録はrevisionが進むか、同じrevisionで`validForMs`以外が同一の場合だけ行い、操作の対応づけとfreshness検査はしません。記録条件の不一致や記録失敗はstreamを止めません。Close証跡はClosureの検証と`closed`のoutcomeで決まり、表示記録は証跡になりません。
 malformed/partial timeout/short write/receipt不一致は同じownerのfaultとして保持します。
 
 ## guardと残る接続

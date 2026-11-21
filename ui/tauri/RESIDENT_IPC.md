@@ -33,7 +33,7 @@ viewer/app破棄だけを元ownerのClose/回収証明へ変えません。
 HostSnapshotはresident pipeのstatus frameが持つsnapshot、Intentはintent frame、Eventはreceipt・`closed`・`startupRejected`です。
 Tauriの`get_resident_status`はstatusだけを返し、`closed` outcomeと`startupRejected`はRust内部で扱います。
 期限切れ・EOF・異常応答は「未確認」とし、OFF・ON・待機中・成功へ丸めません。`cleanup: unknown`は「要清掃」と表示し、停止成功を示しません。
-Close要求後からterminal前までのstatusは観測として保持しますが、表示用の証跡です。Close証跡は従来どおり`closed`のoutcomeだけで決まります。
+Close要求後からterminal前までのstatusは、Closureで形・不変条件・source時刻順序を検証します。freshnessは見ず、Trackingへの記録はrevisionが進むか、同じrevisionで`validForMs`以外が同一の場合だけ行う表示用のbest effortです。記録条件の不一致や記録失敗はstreamを止めません。Close証跡はClosureの検証と`closed`のoutcomeで決まり、この記録は証跡になりません。
 全停止はGoの`hostlifecycle` coordinatorが判定し、`closed`のoutcomeはその判定から出ます。schemaの正本（#36 DEC-02）は未決です。
 
 source試験は正規の要求/厳密な拒否、別window/remote/opposite-platform origin拒否、受付とmatching観測の分離を検査します。

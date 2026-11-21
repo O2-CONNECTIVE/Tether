@@ -147,17 +147,13 @@ impl<I: Read + Write> Pump<I> {
                     continue;
                 }
                 if shared.closure.requested() {
-                    if let wire::Event::Status {
-                        source_continuous_ms,
-                        ..
-                    } = &event
-                    {
-                        shared
-                            .closure
-                            .post_close_status(*source_continuous_ms, now)?;
-                        let _ = shared.tracking.event(event, now)?;
-                    } else {
-                        shared.closure.event(event, now)?;
+                    let observation = match &event {
+                        wire::Event::Status { snapshot, .. } => snapshot.observation().ok(),
+                        _ => None,
+                    };
+                    shared.closure.event(event, now)?;
+                    if let Some(observation) = observation {
+                        shared.tracking.record_post_close(observation);
                     }
                 } else if let Some(receipt) = shared.tracking.event(event, now)? {
                     if shared.output.is_some() {

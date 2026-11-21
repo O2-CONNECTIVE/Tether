@@ -1,5 +1,6 @@
 use super::super::{exchange::Shared, test_frames::status_line};
 use super::Pump;
+use crate::mac_status::ContinuousClock;
 use serde_json::{json, Value};
 use std::io::Cursor;
 
@@ -37,27 +38,50 @@ fn closing() -> (Pump<Cursor<Vec<u8>>>, Shared) {
 }
 
 #[test]
-fn post_close_revision_rollback_is_rejected() {
+fn post_close_revision_rollback_is_not_recorded_or_a_close_failure() {
     let (mut pump, mut shared) = closing();
-    assert!(feed(
+    feed(
         &mut pump,
         &mut shared,
         &status(1, 101, "confirmed", true, false),
         101,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(shared.current(101).unwrap().revision, 2);
+    feed(
+        &mut pump,
+        &mut shared,
+        &json!({"protocolVersion":1,"type":"closed","sourceContinuousMs":102,"outcome":"confirmed"}).to_string(),
+        102,
+    )
+    .unwrap();
+    shared.ended();
+    assert!(shared.closure.confirmed());
 }
 
 #[test]
-fn post_close_same_revision_content_change_is_rejected() {
+fn post_close_same_revision_content_change_is_not_recorded_or_a_close_failure() {
     let (mut pump, mut shared) = closing();
-    assert!(feed(
+    feed(
         &mut pump,
         &mut shared,
         &status(2, 101, "unknown", false, false),
         101,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(shared.current(101).unwrap()).unwrap()["cleanup"],
+        "confirmed"
+    );
+    feed(
+        &mut pump,
+        &mut shared,
+        &json!({"protocolVersion":1,"type":"closed","sourceContinuousMs":102,"outcome":"confirmed"}).to_string(),
+        102,
+    )
+    .unwrap();
+    shared.ended();
+    assert!(shared.closure.confirmed());
 }
 
 #[test]
@@ -76,4 +100,51 @@ fn actionable_status_after_close_stays_non_actionable() {
     assert_eq!(observed["validForMs"], 0);
     assert_eq!(observed["canRequestOn"], false);
     assert_eq!(observed["canRequestOff"], false);
+}
+
+#[test]
+fn expired_post_close_status_does_not_block_confirmed_terminal_or_eof() {
+    let clock = ContinuousClock::new().unwrap();
+    let mut now = clock.now_millis().unwrap();
+    while now < 5_000 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        now = clock.now_millis().unwrap();
+    }
+
+    let close_at = now - 5_000;
+    let mut setup = Pump::with_io(Cursor::new(Vec::new()));
+    let mut shared = Shared::default();
+    feed(
+        &mut setup,
+        &mut shared,
+        &status(2, close_at - 1, "confirmed", true, false),
+        close_at - 1,
+    )
+    .unwrap();
+    shared.close_control(close_at);
+    shared.closure.half_closed();
+
+    let expired = status(3, close_at + 1_000, "confirmed", true, false);
+    let terminal_source = clock.now_millis().unwrap();
+    let terminal = json!({
+        "protocolVersion":1,
+        "type":"closed",
+        "sourceContinuousMs":terminal_source,
+        "outcome":"confirmed"
+    });
+    let input = format!("{expired}\n{}\n", terminal);
+    let mut pump = Pump::with_io(Cursor::new(input.into_bytes()));
+
+    assert!(!pump.step_io(&mut shared, &clock, now).unwrap());
+    assert!(pump
+        .step_io(&mut shared, &clock, clock.now_millis().unwrap())
+        .unwrap());
+    assert!(shared.closure.confirmed());
+    assert_eq!(
+        shared
+            .current(clock.now_millis().unwrap())
+            .unwrap()
+            .revision,
+        3
+    );
 }

@@ -18,7 +18,8 @@ version、未知/重複field、必須nullable field、safe integer、状態とtr
 
 - Close要求、stdin半閉鎖、freshな単回`closed: confirmed`、EOFがそろう。
 - terminalのsource時刻はClose要求以後で、native/source時計が後退せず、未来や3000ms以上前ではない。
-- Close要求後からterminal前までのstatusは観測として保持する表示用の証跡で、Close証跡にはなりません。Close証跡は従来どおり`closed`のoutcomeだけで決まります。accepted OFF receiptもClose証跡にならず、古い通常statusの表示期限をshutdown全体のtimeoutへ転用しません。
+- Close要求後からterminal前までのstatusは、Closureで形・不変条件・source時刻順序を検証します。freshnessは検査せず、その後のTrackingへの記録はrevisionが進むか、同じrevisionで`validForMs`以外が同一の場合だけ行う表示用のbest effortです。記録条件の不一致や記録失敗はstreamとClose証跡を止めません。
+- Close証跡はClosureの検証と`closed`のoutcomeで決まり、post-Close statusの表示記録は証跡になりません。accepted OFF receiptもClose証跡にならず、古い通常statusの表示期限をshutdown全体のtimeoutへ転用しません。
 - unknown、fault、不正値、duplicate、terminal後の追加frameは失敗を保持する。EOF後の入力でも復活しない。
 
 EOF後event拒否は、従来PumpがEOFで止まる順序をこの内部部品でも強制する追加guardです。

@@ -223,27 +223,46 @@ fn explicit_transport_close_not_viewer_close_keeps_same_child_until_reaped() {
 
 #[test]
 fn close_unknown_status_is_retained_through_closed_and_eof() {
-    let first = status(1, now(), json!(null));
-    let final_status = snapshot(2, "unknown", false, false);
+    let first = status(
+        7,
+        now(),
+        json!({"requestId":7,"intent":"off","outcome":"applied"}),
+    );
+    let mut final_status = snapshot(8, "unknown", false, false);
+    final_status["transition"] = json!({
+        "requestId":7,
+        "intent":"off",
+        "outcome":"unknown"
+    });
     let (mut owner, source) = post_close_child(&first, &final_status, "unknown");
     assert_eq!(
         source
             .first_with_timeout(Duration::from_secs(1))
             .unwrap()
             .revision,
-        1
+        7
     );
 
+    let pending = source.request(request(8, 7)).unwrap();
     owner.request_close_transport();
+    assert_eq!(
+        serde_json::to_value(pending.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap()
+            ["disposition"],
+        "unknown"
+    );
     assert!(matches!(reap(&mut owner), End::Reaped(status) if status.code() == Some(0)));
     assert!(!owner.cleanup_confirmed());
 
     let observed = serde_json::to_value(source.current().unwrap()).unwrap();
     assert_eq!(observed["cleanup"], "unknown");
-    assert_eq!(observed["revision"], 2);
+    assert_eq!(observed["revision"], 8);
     assert_eq!(observed["validForMs"], 0);
     assert_eq!(observed["canRequestOn"], false);
     assert_eq!(observed["canRequestOff"], false);
+    assert_eq!(
+        observed["transition"],
+        json!({"requestId":7,"intent":"off","outcome":"unknown"})
+    );
 }
 
 #[test]

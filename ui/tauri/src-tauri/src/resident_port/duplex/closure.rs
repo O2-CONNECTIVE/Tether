@@ -66,20 +66,6 @@ impl Closure {
         }
         result
     }
-    // Tracking validates and retains post-Close status snapshots. Keep their
-    // source time here so the following terminal still obeys Close ordering.
-    pub(super) fn post_close_status(&mut self, timestamp: u64, now: u64) -> Result<(), ()> {
-        let result = self.tick(now).and_then(|()| {
-            if !self.half_closed || self.failed || self.eof || self.terminal.is_some() {
-                return Err(());
-            }
-            self.source(timestamp, now)
-        });
-        if result.is_err() {
-            self.failed = true;
-        }
-        result
-    }
     fn accept(&mut self, event: Event, now: u64) -> Result<(), ()> {
         if !self.half_closed || self.failed || self.eof || self.terminal.is_some() {
             return Err(());
@@ -105,8 +91,8 @@ impl Closure {
                 }
             }
             // This validation cannot renew shutdown or supply Close proof. Check
-            // shape/invariants, but not freshness here: Pump also routes post-Close
-            // status through Tracking, while actual Close may take 75s.
+            // shape/invariants and source order, but not freshness: actual Close
+            // may take 75s. Tracking records display state separately, best effort.
             Event::Status {
                 snapshot,
                 source_continuous_ms,

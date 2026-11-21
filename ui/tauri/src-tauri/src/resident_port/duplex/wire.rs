@@ -73,20 +73,20 @@ enum State {
     Observation,
 }
 impl Snapshot {
-    pub(super) fn observation(self) -> Result<Observation, ()> {
-        let _ = (self.source, self.state);
+    pub(super) fn observation(&self) -> Result<Observation, ()> {
+        let _ = (&self.source, &self.state);
         let observation = Observation {
             revision: self.revision,
             valid_for_ms: self.valid_for_ms,
             standby: self.standby,
             registration: self.registration,
             registration_reason: self.registration_reason,
-            caller: self.caller,
+            caller: self.caller.clone(),
             work: self.work,
             cleanup: self.cleanup,
             can_request_on: self.can_request_on,
             can_request_off: self.can_request_off,
-            transition: self.transition,
+            transition: self.transition.clone(),
         };
         (self.protocol_version == 1
             && observation.valid()

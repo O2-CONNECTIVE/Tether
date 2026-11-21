@@ -335,15 +335,17 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
     let ready = directory.0.join("ready");
     let initial = json!({
         "protocolVersion":1,"source":"resident-owner","state":"source-observation",
-        "revision":1,"validForMs":3000,"standby":"off","registration":"disconnected",
+        "revision":7,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":true,
-        "canRequestOff":false,"transition":null
+        "canRequestOff":false,
+        "transition":{"requestId":7,"intent":"off","outcome":"applied"}
     });
     let final_status = json!({
         "protocolVersion":1,"source":"resident-owner","state":"source-observation",
-        "revision":2,"validForMs":3000,"standby":"off","registration":"disconnected",
+        "revision":8,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"unknown","canRequestOn":false,
-        "canRequestOff":false,"transition":null
+        "canRequestOff":false,
+        "transition":{"requestId":7,"intent":"off","outcome":"unknown"}
     });
     let mut command = Command::new("/usr/bin/python3");
     command
@@ -356,29 +358,15 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
     let (mut owner, source) =
         crate::resident_port::duplex::owner::Supervisor::fixture(command).unwrap();
     fs::write(&ready, []).unwrap();
-    let app = app(ResidentPort::bound(source.unwrap()).unwrap());
-    let status = || {
-        read(
-            &app,
-            "main",
-            crate::LOCAL_TEST_ORIGIN,
-            "get_resident_status",
-            json!({"protocolVersion":1}),
+    let port = ResidentPort::bound(source.unwrap()).unwrap();
+    let pending = port
+        .request(
+            serde_json::from_value(json!({
+                "protocolVersion":1,"requestId":8,"expectedRevision":7,"intent":"on"
+            }))
+            .unwrap(),
         )
-        .unwrap()
-    };
-    let start = Instant::now();
-    loop {
-        if status()["revision"] == 1 {
-            break;
-        }
-        assert!(
-            start.elapsed() < Duration::from_secs(3),
-            "initial status was not observed"
-        );
-        thread::sleep(Duration::from_millis(2));
-    }
-
+        .unwrap();
     owner.request_close_transport();
     let start = Instant::now();
     let ended = loop {
@@ -395,13 +383,34 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
         ended,
         Ok(crate::resident_port::duplex::owner::End::Reaped(status)) if status.code() == Some(0)
     ));
+    assert_eq!(
+        serde_json::to_value(pending.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap()
+            ["disposition"],
+        "unknown"
+    );
+
+    let app = app(port);
+    let status = || {
+        read(
+            &app,
+            "main",
+            crate::LOCAL_TEST_ORIGIN,
+            "get_resident_status",
+            json!({"protocolVersion":1}),
+        )
+        .unwrap()
+    };
 
     let observed = status();
     assert_eq!(observed["cleanup"], "unknown");
-    assert_eq!(observed["revision"], 2);
+    assert_eq!(observed["revision"], 8);
     assert_eq!(observed["validForMs"], 0);
     assert_eq!(observed["canRequestOn"], false);
     assert_eq!(observed["canRequestOff"], false);
+    assert_eq!(
+        observed["transition"],
+        json!({"requestId":7,"intent":"off","outcome":"unknown"})
+    );
 }
 
 #[cfg(target_os = "macos")]
