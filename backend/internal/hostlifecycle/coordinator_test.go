@@ -485,3 +485,52 @@ func TestStopDuringRollbackDecidesOnceAndClosesNothingAfter(t *testing.T) {
 		t.Fatal("decision changed", r)
 	}
 }
+
+// A close that a rollback left running past its deadline may still use what was
+// acquired before it, even by an earlier start: a later Stop does not close
+// that under it.
+func TestStopDoesNotCloseUnderACloseLeftRunningByARollback(t *testing.T) {
+	rec := &recorder{}
+	x, b := rec.res("x"), rec.res("b")
+	b.hang = make(chan struct{})
+	defer close(b.hang)
+	coord := started(t, New(50*time.Millisecond), x)
+	if err := coord.Start(startCtx(t), Step{Name: "b", Acquire: returns(b, nil)}, Step{Name: "c", Acquire: returns(nil, errors.New("c failed"))}); err == nil {
+		t.Fatal("failed start succeeded")
+	}
+	if r := coord.Stop(); r.Stopped || !slices.Equal(r.NeedsCleanup, []string{"b", "x"}) || x.closes.Load() != 0 {
+		t.Fatal(r, x.closes.Load())
+	}
+}
+
+// The same holds for an acquisition the rollback left running.
+func TestStopDoesNotCloseUnderAnAcquisitionLeftRunningByARollback(t *testing.T) {
+	rec := &recorder{}
+	x := rec.res("x")
+	release := make(chan struct{})
+	defer close(release)
+	coord := started(t, New(50*time.Millisecond), x)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := coord.Start(ctx, Step{Name: "b", Acquire: func(context.Context) (Resource, error) { <-release; return nil, nil }}); err == nil {
+		t.Fatal("start succeeded past its context")
+	}
+	if r := coord.Stop(); r.Stopped || !slices.Equal(r.NeedsCleanup, []string{"b", "x"}) || x.closes.Load() != 0 {
+		t.Fatal(r, x.closes.Load())
+	}
+}
+
+// A release that returned a failure is finished. It holds nothing back, so the
+// Stop still closes what came before it.
+func TestStopClosesUnderAReleaseThatFailedInARollback(t *testing.T) {
+	rec := &recorder{}
+	x, b := rec.res("x"), rec.res("b")
+	b.err = errors.New("release unconfirmed")
+	coord := started(t, New(time.Second), x)
+	if err := coord.Start(startCtx(t), Step{Name: "b", Acquire: returns(b, nil)}, Step{Name: "c", Acquire: returns(nil, errors.New("c failed"))}); err == nil {
+		t.Fatal("failed start succeeded")
+	}
+	if r := coord.Stop(); r.Stopped || !slices.Equal(r.NeedsCleanup, []string{"b"}) || x.closes.Load() != 1 {
+		t.Fatal(r, x.closes.Load())
+	}
+}
