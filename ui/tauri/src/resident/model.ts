@@ -2,7 +2,7 @@ export type Intent = 'on' | 'off';
 type Transition = { requestId: number; intent: Intent; outcome: 'pending' | 'applied' | 'rejected' | 'unknown' };
 type RegistrationReason = 'identity_refused' | 'connection_occupied' | 'gateway_refused';
 export type Observation = { revision: number; validForMs: number; standby: 'off' | 'on' | 'stopping' | 'unknown';
-  registration: 'disconnected' | 'connecting' | 'authenticated' | 'unknown'; caller: string | null;
+  registration: 'disconnected' | 'connecting' | 'reconnecting' | 'authenticated' | 'needs_action' | 'unknown'; caller: string | null;
   registrationReason?: RegistrationReason;
   work: 'idle' | 'preparing' | 'running' | 'stopping' | 'completed' | 'failed' | 'unknown'; cleanup: 'confirmed' | 'pending' | 'unknown';
   canRequestOn: boolean; canRequestOff: boolean; transition: Transition | null };
@@ -34,7 +34,6 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
     registrationReason = value.registrationReason;
   } else if (registration === 'needs_action') return;
   if (registration === 'needs_action' && (standby !== 'on' || work !== 'idle' || cleanup !== 'confirmed' || canRequestOn || !canRequestOff)) return;
-  const displayRegistration = registration === 'reconnecting' || registration === 'needs_action' ? 'disconnected' : registration;
   let transition: Transition | null = null;
   if (value.transition !== null) {
     const t = value.transition;
@@ -49,7 +48,7 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
     || (transition?.outcome === 'unknown' && (canRequestOn || canRequestOff))
     || (transition?.outcome === 'applied' && (cleanup === 'unknown' || (transition.intent === 'on' ? standby !== 'on'
       : !(standby === 'off' && work === 'idle' && cleanup === 'confirmed'))))) return;
-  return { source: 'resident-owner', observation: { revision, validForMs, standby, registration: displayRegistration,
+  return { source: 'resident-owner', observation: { revision, validForMs, standby, registration,
     ...(registrationReason ? { registrationReason } : {}), caller, work, cleanup, canRequestOn, canRequestOff, transition } };
 }
 export function decodeReceipt(value: unknown, id: number, intent: Intent) {
