@@ -261,3 +261,6 @@ print("Total including review regressions: \(checks) passed")
 
 runMapperContract()
 print("Total including mapper contract: \(checks) passed")
+
+runReconnectContract()
+print("Total including reconnect contract: \(checks) passed")

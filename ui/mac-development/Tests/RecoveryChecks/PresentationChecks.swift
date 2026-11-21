@@ -195,4 +195,22 @@ func checkPresentation() {
     permissionController.requestQuit()
     let quittingPermission = permissionController.presentation(at: 5000)
     check(!quittingPermission.canAllow && !quittingPermission.canDeny && !quittingPermission.canExtend, "UI quit request disables permission and extend controls")
+
+    // #466: reconnecting retries by itself; needs_action does not, so it says
+    // what to fix and that OFF then ON retries, instead of "still connecting".
+    func connection(_ registration: String, reason: String? = nil) -> RecoveryPresentation {
+        let owner = Owner("connection"); owner.launched = true
+        let line = String(decoding: recoveryStatus(standby: "on", canOn: false), as: UTF8.self)
+            .replacingOccurrences(of: "\"canRequestOff\":false", with: "\"canRequestOff\":true")
+            .replacingOccurrences(of: "\"registration\":\"disconnected\"", with: "\"registration\":\"\(registration)\"" + (reason.map { ",\"registrationReason\":\"\($0)\"" } ?? ""))
+        owner.feed.ingest(Data(line.utf8), at: 5000)
+        return RecoveryController(owner: owner) { Owner("forbidden") }.presentation(at: 5000)
+    }
+    let reconnecting = connection("reconnecting")
+    check(reconnecting.status == "待機 ON・再接続中" && reconnecting.detail.hasPrefix("接続: 再接続中 ／") && reconnecting.canOff, "UI reconnecting says it is retrying and keeps OFF")
+    for (reason, hint) in [("identity_refused", "ペア登録"), ("connection_occupied", "別の接続"), ("gateway_refused", "gateway")] {
+        let needs = connection("needs_action", reason: reason)
+        check(needs.status == "待機 ON・要対応" && needs.canOff && !needs.canOn, "UI needs_action \(reason) is not shown as still connecting")
+        check(needs.detail.contains(hint) && needs.detail.hasSuffix("待機を OFF にして ON にし直してください。"), "UI needs_action \(reason) says what to fix and how to retry")
+    }
 }

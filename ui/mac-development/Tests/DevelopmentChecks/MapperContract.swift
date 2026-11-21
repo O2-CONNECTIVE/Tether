@@ -73,3 +73,51 @@ func runMapperContract() {
     check(!rejected.fault && rejected.pending == nil && rejected.can("on", at: 1000), "confirmed rejected ON preserves explicit retry contract")
     print("Go mapper contract checks passed; no transport or real host")
 }
+
+// #466: after authentication a dropped connection is reconnecting, and a
+// refusal is needs_action; standby stays ON in both. A fault here makes
+// ResidentProcess close the host on the first network blip.
+func runReconnectContract() {
+    let url = Bundle.module.url(forResource: "mapper-reconnect", withExtension: "jsonl", subdirectory: "Fixtures")!
+    let frames = try! String(contentsOf: url, encoding: .utf8).split(separator: "\n").map { Data($0.utf8) }
+    check(frames.count == 8, "Go reconnect fixture has all phases")
+    func on() -> Feed {
+        var f = Feed(); f.ingest(frames[0], at: 1000)
+        check(f.command("on", at: 1000, hours: 2) == "on 1 1 2\n", "reconnect fixture admits exact ON")
+        f.ingest(frames[1], at: 1000); f.ingest(frames[2], at: 1000)
+        check(!f.fault && f.pending == nil && f.can("off", at: 1000), "Go authenticated ON completes")
+        return f
+    }
+    var f = on(); f.ingest(frames[3], at: 1000)
+    check(!f.fault && f.observation?.standby == "on" && f.observation?.registration == "reconnecting", "Go reconnecting keeps standby ON without a fault")
+    check(f.can("off", at: 1000) && !f.can("on", at: 1000), "reconnecting still offers OFF")
+    f.ingest(frames[4], at: 1000)
+    check(!f.fault && f.observation?.registration == "authenticated", "Go reconnection returns to authenticated")
+    f.ingest(frames[5], at: 1000)
+    check(!f.fault && f.observation?.standby == "on" && f.observation?.registration == "needs_action", "Go needs_action keeps standby ON without a fault")
+    check(f.can("off", at: 1000) && !f.can("on", at: 1000), "needs_action offers OFF, the way to retry")
+    check(f.command("off", at: 1000) == "off 2 5\n", "needs_action admits exact OFF")
+    f.ingest(frames[6], at: 1000); f.ingest(frames[7], at: 1000)
+    check(!f.fault && f.pending == nil && f.observation?.standby == "off" && f.can("on", at: 1000), "OFF ends needs_action and offers ON again")
+    _ = f.requestClose(); f.ingest(terminal(time: 1000), at: 1000)
+    check(f.closeConfirmed && !f.cleanupInvalid, "valid original terminal after reconnect sequence")
+    let needs = String(decoding: frames[5], as: UTF8.self)
+    for reason in ["connection_occupied", "gateway_refused"] {
+        var other = on(); other.ingest(Data(needs.replacingOccurrences(of: "\"identity_refused\"", with: "\"\(reason)\"").utf8), at: 1000)
+        check(!other.fault && other.can("off", at: 1000), "needs_action reason \(reason) is accepted")
+    }
+    // The reason tells the user what to fix, so it comes with needs_action and
+    // nothing else, and only as a value the owner can produce.
+    let reconnecting = String(decoding: frames[3], as: UTF8.self)
+    let malformed = [
+        needs.replacingOccurrences(of: "\"registrationReason\":\"identity_refused\",", with: ""),
+        needs.replacingOccurrences(of: "\"identity_refused\"", with: "\"rate_limited\""),
+        needs.replacingOccurrences(of: "\"identity_refused\"", with: "null"),
+        reconnecting.replacingOccurrences(of: "\"caller\":null", with: "\"registrationReason\":\"gateway_refused\",\"caller\":null")
+    ]
+    for (i, frame) in malformed.enumerated() {
+        check(frame != needs && frame != reconnecting, "reason mutation \(i) exists")
+        var bad = on(); bad.ingest(Data(frame.utf8), at: 1000)
+        check(bad.fault && !bad.can("off", at: 1000), "malformed registration reason \(i) is rejected")
+    }
+}
