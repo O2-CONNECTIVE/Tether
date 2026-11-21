@@ -1318,7 +1318,10 @@ func (s *Standby) monitor(c *standbyCycle, reports chan standbyReport) {
 				}
 			}
 			if !c.authenticated && !time.Now().Before(c.initialUntil) {
+				// Seal and stop in one update: sealed but still ON is standby
+				// unknown on the pipe, which the GUIs read as unconfirmed cleanup (#466).
 				s.observation.AdmissionSealed = true
+				s.observation.Standby = "stopping"
 				if source != nil {
 					source.Close()
 				}
