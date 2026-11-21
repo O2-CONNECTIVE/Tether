@@ -284,6 +284,128 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
 
 #[cfg(target_os = "macos")]
 #[test]
+fn get_resident_status_keeps_close_cleanup_observation_after_unknown_eof() {
+    use std::{
+        fs,
+        path::PathBuf,
+        process::Command,
+        sync::atomic::{AtomicU64, Ordering},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    const SCRIPT: &str = r#"import ctypes,json,os,sys,time
+lib=ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+class TB(ctypes.Structure): _fields_=[("n",ctypes.c_uint32),("d",ctypes.c_uint32)]
+t=TB();assert lib.mach_timebase_info(ctypes.byref(t))==0
+lib.mach_continuous_time.restype=ctypes.c_uint64
+now=lambda:lib.mach_continuous_time()*t.n//t.d//1000000
+while not os.path.exists(sys.argv[1]): time.sleep(0.002)
+def emit(snapshot,stamp=None):
+ stamp=now() if stamp is None else stamp
+ print(json.dumps({"protocolVersion":1,"type":"status","sourceContinuousMs":stamp,"snapshot":snapshot}),flush=True)
+ return stamp
+emit(json.loads(sys.argv[2]))
+for line in sys.stdin: pass
+stamp=now()
+emit(json.loads(sys.argv[3]),stamp)
+print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp,"outcome":sys.argv[4]}),flush=True)
+"#;
+
+    struct OwnedDirectory(PathBuf);
+    impl OwnedDirectory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "resident-ipc-close-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for OwnedDirectory {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    let directory = OwnedDirectory::new();
+    let ready = directory.0.join("ready");
+    let initial = json!({
+        "protocolVersion":1,"source":"resident-owner","state":"source-observation",
+        "revision":1,"validForMs":3000,"standby":"off","registration":"disconnected",
+        "caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":true,
+        "canRequestOff":false,"transition":null
+    });
+    let final_status = json!({
+        "protocolVersion":1,"source":"resident-owner","state":"source-observation",
+        "revision":2,"validForMs":3000,"standby":"off","registration":"disconnected",
+        "caller":null,"work":"idle","cleanup":"unknown","canRequestOn":false,
+        "canRequestOff":false,"transition":null
+    });
+    let mut command = Command::new("/usr/bin/python3");
+    command
+        .args(["-c", SCRIPT])
+        .arg(&ready)
+        .arg(initial.to_string())
+        .arg(final_status.to_string())
+        .arg("unknown")
+        .env_clear();
+    let (mut owner, source) =
+        crate::resident_port::duplex::owner::Supervisor::fixture(command).unwrap();
+    fs::write(&ready, []).unwrap();
+    let app = app(ResidentPort::bound(source.unwrap()).unwrap());
+    let status = || {
+        read(
+            &app,
+            "main",
+            crate::LOCAL_TEST_ORIGIN,
+            "get_resident_status",
+            json!({"protocolVersion":1}),
+        )
+        .unwrap()
+    };
+    let start = Instant::now();
+    loop {
+        if status()["revision"] == 1 {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "initial status was not observed"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+
+    owner.request_close_transport();
+    let start = Instant::now();
+    let ended = loop {
+        if let Some(result) = owner.poll_join() {
+            break result;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "close fixture did not finish"
+        );
+        thread::sleep(Duration::from_millis(2));
+    };
+    assert!(matches!(
+        ended,
+        Ok(crate::resident_port::duplex::owner::End::Reaped(status)) if status.code() == Some(0)
+    ));
+
+    let observed = status();
+    assert_eq!(observed["cleanup"], "unknown");
+    assert_eq!(observed["revision"], 2);
+    assert_eq!(observed["validForMs"], 0);
+    assert_eq!(observed["canRequestOn"], false);
+    assert_eq!(observed["canRequestOff"], false);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn async_mock_ipc_receipt_and_later_observation_use_the_same_joined_owner() {
     use std::time::{Duration, Instant};
     let mut fixture = super::port_pipe_tests::Fixture::start();

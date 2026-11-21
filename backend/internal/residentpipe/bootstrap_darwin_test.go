@@ -172,26 +172,10 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			if owner.Snapshot().CanRequestOn {
 				t.Fatal("original Standby still accepts requests")
 			}
-			found := false
-			for i := 0; i < 8; i++ {
-				line, err = reader.ReadBytes('\n')
-				if err != nil {
-					t.Fatal(err)
-				}
-				var frame closedEnvelope
-				if err := json.Unmarshal(line, &frame); err != nil {
-					t.Fatal(err)
-				}
-				if frame.Type == "closed" {
-					if frame.Outcome != "confirmed" || owner.Snapshot().CanRequestOn {
-						t.Fatal("terminal frame preceded original Close")
-					}
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Fatal("terminal frame missing")
+			line, err = reader.ReadBytes('\n')
+			var frame closedEnvelope
+			if err != nil || json.Unmarshal(line, &frame) != nil || frame.Type != "closed" || frame.Outcome != "confirmed" || owner.Snapshot().CanRequestOn {
+				t.Fatal("confirmed cleanup emitted an extra status or lost its terminal frame", string(line), err)
 			}
 			if err := outW.Close(); err != nil {
 				t.Fatal(err)
@@ -204,89 +188,102 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 }
 
 func TestBootstrapSharedLifetimeReportsCoordinatorCleanup(t *testing.T) {
-	policyPath := idleProtectedPolicy(t)
-	coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
-		return loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := owner.Close(ctx); err != nil {
-			t.Error("same idle owner cleanup", err)
-		}
-	})
-	if err := coord.Start(context.Background(), hostlifecycle.Step{Name: "later", Acquire: func(context.Context) (hostlifecycle.Resource, error) {
-		return panicCloseResource{}, nil
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	inR, inW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer inR.Close()
-	defer inW.Close()
-	outR, outW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer outR.Close()
-	defer outW.Close()
-	pipes := &ownedPipes{int(inR.Fd()), int(outW.Fd())}
-	if unix.SetNonblock(pipes.in, true) != nil || unix.SetNonblock(pipes.out, true) != nil {
-		t.Fatal("pipe setup")
-	}
-	if err := outR.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- runOwnedInput(ctx, coord, owner, pipes, jsonInput) }()
-	reader := bufio.NewReader(outR)
-	line, err := reader.ReadBytes('\n')
-	var status statusEnvelope
-	if err != nil || json.Unmarshal(line, &status) != nil || status.Snapshot.Standby != "off" {
-		t.Fatal("accepted policy did not remain idle", err)
-	}
-	if err := inW.Close(); err != nil {
-		t.Fatal(err)
-	}
-	var closed closedEnvelope
-	for i := 0; i < 8; i++ {
-		line, err = reader.ReadBytes('\n')
-		if err != nil {
-			t.Fatal(err)
-		}
-		var envelope struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(line, &envelope); err != nil {
-			t.Fatal(err)
-		}
-		if envelope.Type == "closed" {
-			if err := json.Unmarshal(line, &closed); err != nil {
+	for _, tc := range []struct {
+		name    string
+		dialect inputDialect
+	}{{"json", jsonInput}, {"foreground", foregroundInput}} {
+		t.Run(tc.name, func(t *testing.T) {
+			policyPath := idleProtectedPolicy(t)
+			coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
+				return loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
+			})
+			if err != nil {
 				t.Fatal(err)
 			}
-			break
-		}
-	}
-	if closed.Type != "closed" || closed.Outcome != "unknown" {
-		t.Fatal("coordinator cleanup failure became confirmed", closed)
-	}
-	if owner.Snapshot().CanRequestOn {
-		t.Fatal("coordinator did not close the original Standby")
-	}
-	if result := coord.Stop(); result.Stopped || len(result.NeedsCleanup) != 1 || result.NeedsCleanup[0] != "later" {
-		t.Fatal("coordinator did not retain the failing resource", result)
-	}
-	select {
-	case err := <-done:
-		t.Fatal("unknown cleanup returned from runOwnedInput", err)
-	case <-time.After(100 * time.Millisecond):
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if err := owner.Close(ctx); err != nil {
+					t.Error("same idle owner cleanup", err)
+				}
+			})
+			if err := coord.Start(context.Background(), hostlifecycle.Step{Name: "later", Acquire: func(context.Context) (hostlifecycle.Resource, error) {
+				return panicCloseResource{}, nil
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			inR, inW, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer inR.Close()
+			defer inW.Close()
+			outR, outW, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer outR.Close()
+			defer outW.Close()
+			pipes := &ownedPipes{int(inR.Fd()), int(outW.Fd())}
+			if unix.SetNonblock(pipes.in, true) != nil || unix.SetNonblock(pipes.out, true) != nil {
+				t.Fatal("pipe setup")
+			}
+			if err := outR.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- runOwnedInput(ctx, coord, owner, pipes, tc.dialect) }()
+			reader := bufio.NewReader(outR)
+			line, err := reader.ReadBytes('\n')
+			var status statusEnvelope
+			if err != nil || json.Unmarshal(line, &status) != nil || status.Snapshot.Standby != "off" {
+				t.Fatal("accepted policy did not remain idle", err)
+			}
+			if err := inW.Close(); err != nil {
+				t.Fatal(err)
+			}
+			line, err = reader.ReadBytes('\n')
+			var terminal statusEnvelope
+			if err != nil || json.Unmarshal(line, &terminal) != nil {
+				t.Fatal("terminal status missing before closed", string(line), err)
+			}
+			if terminal.Snapshot.Registration != "unknown" {
+				t.Fatalf("terminal status registration = %q, want unknown: %s", terminal.Snapshot.Registration, string(line))
+			}
+			if terminal.Type != "status" || terminal.Snapshot.Cleanup != "unknown" || terminal.Snapshot.Standby != "unknown" || terminal.Snapshot.Work != "unknown" || terminal.Snapshot.CanRequestOn || terminal.Snapshot.CanRequestOff || terminal.Snapshot.Revision <= status.Snapshot.Revision {
+				t.Fatal("unknown cleanup status missing or invalid before closed", string(line), err)
+			}
+			var statusJSON map[string]json.RawMessage
+			var snapshotJSON map[string]json.RawMessage
+			if json.Unmarshal(line, &statusJSON) != nil || json.Unmarshal(statusJSON["snapshot"], &snapshotJSON) != nil {
+				t.Fatal("invalid terminal status shape", string(line))
+			}
+			_, hasForegroundFields := snapshotJSON["standbyUntil"]
+			if hasForegroundFields != (tc.dialect == foregroundInput) {
+				t.Fatal("terminal status used the wrong dialect", string(line))
+			}
+			line, err = reader.ReadBytes('\n')
+			var closed closedEnvelope
+			if err != nil || json.Unmarshal(line, &closed) != nil {
+				t.Fatal("unknown cleanup terminal missing after status", string(line), err)
+			}
+			if closed.Type != "closed" || closed.Outcome != "unknown" {
+				t.Fatal("coordinator cleanup failure became confirmed", closed)
+			}
+			if owner.Snapshot().CanRequestOn {
+				t.Fatal("coordinator did not close the original Standby")
+			}
+			if result := coord.Stop(); result.Stopped || len(result.NeedsCleanup) != 1 || result.NeedsCleanup[0] != "later" {
+				t.Fatal("coordinator did not retain the failing resource", result)
+			}
+			select {
+			case err := <-done:
+				t.Fatal("unknown cleanup returned from runOwnedInput", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+		})
 	}
 }
 

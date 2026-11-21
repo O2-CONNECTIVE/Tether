@@ -147,7 +147,18 @@ impl<I: Read + Write> Pump<I> {
                     continue;
                 }
                 if shared.closure.requested() {
-                    shared.closure.event(event, now)?;
+                    if let wire::Event::Status {
+                        source_continuous_ms,
+                        ..
+                    } = &event
+                    {
+                        shared
+                            .closure
+                            .post_close_status(*source_continuous_ms, now)?;
+                        let _ = shared.tracking.event(event, now)?;
+                    } else {
+                        shared.closure.event(event, now)?;
+                    }
                 } else if let Some(receipt) = shared.tracking.event(event, now)? {
                     if shared.output.is_some() {
                         return Err(());
@@ -183,6 +194,9 @@ impl<I: Read + Write> Pump<I> {
     }
 }
 
+#[cfg(test)]
+#[path = "pump_tests.rs"]
+mod pump_tests;
 #[cfg(test)]
 #[path = "timing_tests.rs"]
 mod timing_tests;
