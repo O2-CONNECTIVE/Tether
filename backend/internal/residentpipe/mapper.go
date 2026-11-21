@@ -140,14 +140,14 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 		if t.Outcome == "applied" && ((t.Intent == "on" && !on) || (t.Intent == "off" && !off)) {
 			mine := m.pending != nil && m.pending.RequestID == t.RequestID && m.pending.Intent == t.Intent
 			switch {
-			// An ON this pipe never showed applied can no longer be shown once
-			// its cycle ended: standby never comes back on for that request. It
-			// ends as rejected, the pipe's word for a request that ended without
-			// showing its state, as the owner ends an ON whose cycle ended
-			// before authentication (#420).
-			case t.Intent == "on" && (m.closedOn == t.RequestID || (mine && oneOf(o.Standby, "stopping", "off"))):
+				// An ON this pipe never showed applied cannot be shown after its
+				// cycle ends off. It ends as rejected, the pipe's word for an ON
+				// whose terminal standby state was off (#420).
+			case t.Intent == "on" && (m.closedOn == t.RequestID || (mine && o.Standby == "off")):
 				m.closedOn = t.RequestID
 				s.Transition.Outcome = "rejected"
+			case t.Intent == "on" && mine && o.Standby == "stopping":
+				s.Transition.Outcome = "pending"
 			case mine:
 				s.Transition.Outcome = "pending"
 			default:

@@ -43,7 +43,7 @@ func (c *reconnectSignalConnector) set(snapshot agenttransport.ResidentControlSn
 	}
 }
 
-func TestReconnectSignalForWaitAIsTaggedBeforeAddressChangeAndCannotWakeWaitB(t *testing.T) {
+func TestReconnectSignalRefingerprintsTheNewWaitAfterAddressCollection(t *testing.T) {
 	connector := &reconnectSignalConnector{
 		snapshot: agenttransport.ResidentControlSnapshot{RetryWaiting: true, RetryWaitID: 1},
 		changes:  make(chan struct{}, 1),
@@ -51,6 +51,8 @@ func TestReconnectSignalForWaitAIsTaggedBeforeAddressChangeAndCannotWakeWaitB(t 
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var addresses sync.Once
+	var mu sync.Mutex
+	currentAddress := "192.0.2.2"
 	getAddresses := func() (string, error) {
 		called := 0
 		addresses.Do(func() { called = 1 })
@@ -63,7 +65,9 @@ func TestReconnectSignalForWaitAIsTaggedBeforeAddressChangeAndCannotWakeWaitB(t 
 			close(entered)
 		}
 		<-release
-		return "192.0.2.2", nil
+		mu.Lock()
+		defer mu.Unlock()
+		return currentAddress, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,11 +88,80 @@ func TestReconnectSignalForWaitAIsTaggedBeforeAddressChangeAndCannotWakeWaitB(t 
 	close(release)
 	select {
 	case waitID := <-nudges:
-		if waitID != 1 {
-			t.Fatalf("address observation for wait A carried wait ID %d", waitID)
+		t.Fatalf("address observation crossing wait IDs woke wait %d", waitID)
+	case <-time.After(20 * time.Millisecond):
+	}
+	mu.Lock()
+	currentAddress = "192.0.2.3"
+	mu.Unlock()
+	select {
+	case waitID := <-nudges:
+		if waitID != 2 {
+			t.Fatalf("address change after re-fingerprinting carried wait ID %d", waitID)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("wait A address change did not reach its tagged nudge")
+		t.Fatal("new wait address change did not reach its tagged nudge")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reconnect signal loop did not stop")
+	}
+}
+
+func TestReconnectSignalRefingerprintsAfterInitialWaitIDChanges(t *testing.T) {
+	const poll = 10 * time.Millisecond
+	connector := &reconnectSignalConnector{
+		snapshot: agenttransport.ResidentControlSnapshot{RetryWaiting: true, RetryWaitID: 1},
+		changes:  make(chan struct{}, 1),
+	}
+	var mu sync.Mutex
+	calls, network := 0, "192.0.2.2"
+	rebased := make(chan struct{})
+	getAddresses := func() (string, error) {
+		mu.Lock()
+		calls++
+		call := calls
+		current := network
+		mu.Unlock()
+		if call == 1 {
+			connector.set(agenttransport.ResidentControlSnapshot{RetryWaiting: true, RetryWaitID: 2})
+			return "192.0.2.1", nil
+		}
+		if call == 2 {
+			close(rebased)
+		}
+		return current, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	nudges := make(chan uint64, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		startReconnectSignalsUsing(ctx, connector, getAddresses, poll, func(waitID uint64) { nudges <- waitID })
+	}()
+	select {
+	case <-rebased:
+	case <-time.After(time.Second):
+		t.Fatal("changed wait ID was not fingerprinted again")
+	}
+	select {
+	case waitID := <-nudges:
+		t.Fatalf("the initial fingerprint for wait A woke wait %d", waitID)
+	case <-time.After(5 * poll):
+	}
+	mu.Lock()
+	network = "192.0.2.3"
+	mu.Unlock()
+	select {
+	case waitID := <-nudges:
+		if waitID != 2 {
+			t.Fatalf("network change was tagged with wait ID %d, want 2", waitID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("network change did not nudge the current wait")
 	}
 	cancel()
 	select {

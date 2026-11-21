@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"golang.org/x/sys/unix"
 )
 
@@ -40,7 +41,8 @@ func startReconnectSignalsUsing(ctx context.Context, connector residentConnector
 		return
 	}
 	for {
-		if !connector.Snapshot().RetryWaiting {
+		snapshot, addresses, err := reconnectWaitObservation(connector, addressesFn)
+		if !snapshot.RetryWaiting {
 			select {
 			case <-ctx.Done():
 				return
@@ -49,9 +51,8 @@ func startReconnectSignalsUsing(ctx context.Context, connector residentConnector
 			continue
 		}
 		var detector reconnectWakeDetector
-		addresses, err := addressesFn()
 		detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
-		waitID := connector.Snapshot().RetryWaitID
+		waitID := snapshot.RetryWaitID
 		ticker := time.NewTicker(poll)
 		waiting := true
 		for waiting {
@@ -60,16 +61,20 @@ func startReconnectSignalsUsing(ctx context.Context, connector residentConnector
 				ticker.Stop()
 				return
 			case <-changes:
-				snapshot := connector.Snapshot()
+				snapshot = connector.Snapshot()
 				waiting = snapshot.RetryWaiting
 				if waiting && snapshot.RetryWaitID != waitID {
+					snapshot, addresses, err = reconnectWaitObservation(connector, addressesFn)
+					waiting = snapshot.RetryWaiting
+					if !waiting {
+						continue
+					}
 					waitID = snapshot.RetryWaitID
 					detector = reconnectWakeDetector{}
-					addresses, err = addressesFn()
 					detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
 				}
 			case <-ticker.C:
-				snapshot := connector.Snapshot()
+				snapshot, addresses, err = reconnectWaitObservation(connector, addressesFn)
 				if !snapshot.RetryWaiting {
 					waiting = false
 					continue
@@ -77,11 +82,9 @@ func startReconnectSignalsUsing(ctx context.Context, connector residentConnector
 				if snapshot.RetryWaitID != waitID {
 					waitID = snapshot.RetryWaitID
 					detector = reconnectWakeDetector{}
-					addresses, err = reconnectAddresses()
 					detector.observe(elapsedNow(), time.Now(), addresses, err == nil)
 					continue
 				}
-				addresses, err := addressesFn()
 				if detector.observe(elapsedNow(), time.Now(), addresses, err == nil) {
 					nudge(waitID)
 					waiting = false
@@ -89,6 +92,23 @@ func startReconnectSignalsUsing(ctx context.Context, connector residentConnector
 			}
 		}
 		ticker.Stop()
+	}
+}
+
+func reconnectWaitObservation(connector residentConnector, addressesFn func() (string, error)) (agenttransport.ResidentControlSnapshot, string, error) {
+	for {
+		snapshot := connector.Snapshot()
+		if !snapshot.RetryWaiting {
+			return snapshot, "", nil
+		}
+		addresses, err := addressesFn()
+		current := connector.Snapshot()
+		if !current.RetryWaiting {
+			return current, addresses, err
+		}
+		if current.RetryWaitID == snapshot.RetryWaitID {
+			return snapshot, addresses, err
+		}
 	}
 }
 

@@ -77,13 +77,13 @@ func TestReconnectWakeDetectorUsesInjectedClocksAndNetworkFingerprint(t *testing
 	if detector.observe(base, base, oldNetwork, true) {
 		t.Fatal("baseline produced a wake")
 	}
-	if detector.observe(base.Add(6*time.Second), base.Add(time.Second), oldNetwork, true) {
-		t.Fatal("clock drift at the exact threshold produced a wake")
+	if detector.observe(base.Add(3*time.Second), base.Add(time.Second), oldNetwork, true) {
+		t.Fatal("clock drift at the exact two-second threshold produced a wake")
 	}
-	if !detector.observe(base.Add(12*time.Second+time.Nanosecond), base.Add(2*time.Second), oldNetwork, true) {
-		t.Fatal("sleep-aware clock gap over the threshold did not produce a wake")
+	if !detector.observe(base.Add(7*time.Second), base.Add(2*time.Second), oldNetwork, true) {
+		t.Fatal("three-second sleep-aware clock gap did not produce a wake")
 	}
-	if !detector.observe(base.Add(13*time.Second+time.Nanosecond), base.Add(3*time.Second), newNetwork, true) {
+	if !detector.observe(base.Add(8*time.Second), base.Add(3*time.Second), newNetwork, true) {
 		t.Fatal("changed address fingerprint did not produce a wake")
 	}
 }

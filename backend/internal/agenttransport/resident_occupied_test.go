@@ -103,6 +103,7 @@ func TestResidentHTTPRetryStatuses(t *testing.T) {
 		want   bool
 	}{
 		{http.StatusTooManyRequests, true},
+		{http.StatusBadGateway, true},
 		{http.StatusServiceUnavailable, true},
 		{http.StatusGatewayTimeout, true},
 		{http.StatusBadRequest, false},
@@ -121,26 +122,30 @@ func (f residentRoundTripperFunc) RoundTrip(r *http.Request) (*http.Response, er
 	return f(r)
 }
 
-func TestResidentHTTPGatewayTimeoutRemainsReconnecting(t *testing.T) {
-	r := newResidentRig(t, nil)
-	r.c.transport = func(acquirer) http.RoundTripper {
-		return residentRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: http.StatusGatewayTimeout, Header: make(http.Header), Body: http.NoBody, Request: req}, nil
+func TestResidentHTTPGatewayFailuresRemainReconnecting(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout} {
+		t.Run(fmt.Sprintf("HTTP %d", status), func(t *testing.T) {
+			r := newResidentRig(t, nil)
+			r.c.transport = func(acquirer) http.RoundTripper {
+				return residentRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: status, Header: make(http.Header), Body: http.NoBody, Request: req}, nil
+				})
+			}
+			r.c.waitRetry = func(ctx context.Context, _ time.Duration, _ <-chan struct{}) residentRetryResult {
+				<-ctx.Done()
+				return residentRetryCanceled
+			}
+			done := residentRun(r.c)
+			residentAwaitAlive(t, done, fmt.Sprintf("HTTP %d retry", status), func() bool {
+				snapshot := r.c.Snapshot()
+				return snapshot.RetryWaiting && snapshot.Reconnecting
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := r.c.Close(ctx); err != nil {
+				t.Fatal("closing retrying client", err)
+			}
 		})
-	}
-	r.c.waitRetry = func(ctx context.Context, _ time.Duration, _ <-chan struct{}) residentRetryResult {
-		<-ctx.Done()
-		return residentRetryCanceled
-	}
-	done := residentRun(r.c)
-	residentAwaitAlive(t, done, "HTTP 504 retry", func() bool {
-		snapshot := r.c.Snapshot()
-		return snapshot.RetryWaiting && snapshot.Reconnecting
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := r.c.Close(ctx); err != nil {
-		t.Fatal("closing retrying client", err)
 	}
 }
 

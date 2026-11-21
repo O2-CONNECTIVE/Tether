@@ -24,9 +24,9 @@ gatewayは、同じhost/principalの古いcontrolがまだ枠を持つ間の登�
 |---|---|---|
 | 4000 | relayの接続寿命 | 再接続 |
 | 4013 | 同じhost/principalのcontrolが占有中 | 最初の拒否から60秒以内は再試行し、超過後は`needs_action` / `connection_occupied` |
-| 4014 | 登録済みidentityの拒否、proof不一致、ペア置き換え | `needs_action` / `identity_refused` |
+| 4014 | 登録済みidentityの拒否、proof不一致 | `needs_action` / `identity_refused`。ペア置き換え後の旧鍵側はchallenge署名検証で停止し、現在は`gateway_refused`と区別できない |
 
-gateway停止中の登録は1001で閉じて再接続します。1008は再試行せず、`needs_action` / `gateway_refused`にします。これは4014を知らない古いgatewayの拒否やrelayのframe上限にも適用します。HTTP 429・503・504は再接続し、未知close codeなどの終端応答は`needs_action` / `gateway_refused`です。理由コードはresidentpipe JSONLの`registrationReason`にだけ載せます。要対応は待機を`on`のまま受付をsealedにし、期限が来たら`off`にします。利用者がOFFにした後のONは新しいcycleで再試行し、process再起動でも要対応状態は引き継ぎません。4013を知らない古いMacは、このコードを1008同様に扱って再試行を止めます。
+gateway停止中の登録は1001で閉じて再接続します。1008は再試行せず、`needs_action` / `gateway_refused`にします。これは4014を知らない古いgatewayの拒否やrelayのframe上限にも適用します。HTTP 429・502・503・504は再接続し、未知close codeなどの終端応答は`needs_action` / `gateway_refused`です。理由コードはresidentpipe JSONLの`registrationReason`にだけ載せます。要対応は待機を`on`のまま受付をsealedにし、期限が来たら`off`にします。利用者がOFFにした後のONは新しいcycleで再試行し、process再起動でも要対応状態は引き継ぎません。4013を知らない古いMacは、このコードを1008同様に扱って再試行を止めます。
 
 新しいcontrolは新しいgenerationになります。古いMCP SIDは元のgenerationの結果読取り・取消・releaseの範囲を保持し、新しいworkを許可しません。busyやreplay ledger上限などの先行拒否条件に当たらず世代不一致の判定に達すると、`control_ended`と`reinitialize_required`を返します。新しいgenerationのSIDから古い結果は読めず、古いrequest IDの再実行もできません。新しいworkには新しいinitializeが必要で、そのSIDも4枠を消費します。
 

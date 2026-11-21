@@ -233,7 +233,7 @@ func residentOccupiedExpired(since, now time.Time) bool {
 }
 
 func residentHTTPRetryable(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+	return status == http.StatusTooManyRequests || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 }
 
 // Changes is coalesced notification to re-read Snapshot, not a complete journal.

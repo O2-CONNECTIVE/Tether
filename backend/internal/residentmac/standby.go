@@ -25,7 +25,7 @@ const sleepRefusalReserve = 5 * time.Second
 const sleepReleaseRetryInitial = time.Second
 const sleepReleaseRetryMax = 30 * time.Second
 const reconnectWakePoll = time.Second
-const reconnectWakeThreshold = 5 * time.Second
+const reconnectWakeThreshold = 2 * time.Second
 
 type reconnectWakeDetector struct {
 	active       bool
