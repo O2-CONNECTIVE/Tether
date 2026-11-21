@@ -10,7 +10,7 @@ const standby: Record<Observation['standby'], string> = { off: 'OFF', on: 'ON', 
 const registration: Record<Observation['registration'], string> = { disconnected: '未接続', connecting: '接続を確認中', reconnecting: '再接続中',
   authenticated: '認証済み', needs_action: '要対応', unknown: '未確認' };
 const needsActionDetail: Record<NonNullable<Observation['registrationReason']>, string> = {
-  identity_refused: 'このホストの身元が拒否されました。別の端末に置き換えられた可能性があります。もう一度ペア登録してから、待機をOFFにしてONにし直してください。',
+  identity_refused: 'このホストの身元が拒否されました。別の端末に置き換えられた可能性があります。もう一度ペア登録してから、アプリを終了して起動し直してください。',
   connection_occupied: '別の接続がこのホストを使っています。その接続を終えてから、待機をOFFにしてONにし直してください。',
   gateway_refused: 'サーバーが接続を拒否しました。設定を確認してから、待機をOFFにしてONにし直してください。',
 };

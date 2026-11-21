@@ -69,9 +69,10 @@ void test('standby on while reconnecting is shown as retrying, not as connected 
 });
 
 // 直らない失敗では Go が再試行をやめる。理由ごとに、何をすれば戻るかを利用者に示す。
+// 身元の拒否は、ペア登録し直した後に常駐を起動し直すまで戻らない（起動中の常駐は変わった policy を拒む。docs/host-pairing.md）。
 void test('needs action names the reason and the way back for each refusal', () => {
   const reasons = {
-    identity_refused: 'このホストの身元が拒否されました。別の端末に置き換えられた可能性があります。もう一度ペア登録してから、待機をOFFにしてONにし直してください。',
+    identity_refused: 'このホストの身元が拒否されました。別の端末に置き換えられた可能性があります。もう一度ペア登録してから、アプリを終了して起動し直してください。',
     connection_occupied: '別の接続がこのホストを使っています。その接続を終えてから、待機をOFFにしてONにし直してください。',
     gateway_refused: 'サーバーが接続を拒否しました。設定を確認してから、待機をOFFにしてONにし直してください。',
   } as const;
