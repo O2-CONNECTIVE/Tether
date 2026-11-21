@@ -80,40 +80,56 @@ func runMapperContract() {
 func runReconnectContract() {
     let url = Bundle.module.url(forResource: "mapper-reconnect", withExtension: "jsonl", subdirectory: "Fixtures")!
     let frames = try! String(contentsOf: url, encoding: .utf8).split(separator: "\n").map { Data($0.utf8) }
-    check(frames.count == 8, "Go reconnect fixture has all phases")
+    check(frames.count == 10, "Go reconnect fixture has all phases")
     func on() -> Feed {
         var f = Feed(); f.ingest(frames[0], at: 1000)
         check(f.command("on", at: 1000, hours: 2) == "on 1 1 2\n", "reconnect fixture admits exact ON")
-        f.ingest(frames[1], at: 1000); f.ingest(frames[2], at: 1000)
+        f.ingest(frames[1], at: 1000); f.ingest(frames[2], at: 1000); f.ingest(frames[3], at: 1000)
+        check(!f.fault && !f.cleanupInvalid && f.pending != nil && f.observation?.registration == "reconnecting", "Go initial ON retrying stays pending without a fault")
+        check(!f.can("on", at: 1000) && !f.can("off", at: 1000), "initial ON retrying admits no new request")
+        f.ingest(frames[4], at: 1000)
         check(!f.fault && f.pending == nil && f.can("off", at: 1000), "Go authenticated ON completes")
         return f
     }
-    var f = on(); f.ingest(frames[3], at: 1000)
+    var f = on(); f.ingest(frames[5], at: 1000)
     check(!f.fault && f.observation?.standby == "on" && f.observation?.registration == "reconnecting", "Go reconnecting keeps standby ON without a fault")
     check(f.can("off", at: 1000) && !f.can("on", at: 1000), "reconnecting still offers OFF")
-    f.ingest(frames[4], at: 1000)
+    f.ingest(frames[6], at: 1000)
     check(!f.fault && f.observation?.registration == "authenticated", "Go reconnection returns to authenticated")
-    f.ingest(frames[5], at: 1000)
+    // The owner closes admission in needs_action and rejects extend and allow,
+    // so this view must not offer them or keep showing a granted allowance.
+    var permitted = f
+    check(permitted.command("allow", at: 1000) == "allow 2 6\n", "authenticated standby admits allow")
+    permitted.ingest(receipt("accepted", id: 2, intent: "allow-run"), at: 1000)
+    check(permitted.runAllowed, "accepted allow grants command permission")
+    permitted.ingest(frames[7], at: 1000)
+    check(!permitted.fault && !permitted.runAllowed && !permitted.can("allow", at: 1000) && !permitted.can("extend", at: 1000), "needs_action drops the allowance and offers neither allow nor extend")
+    f.ingest(frames[7], at: 1000)
     check(!f.fault && f.observation?.standby == "on" && f.observation?.registration == "needs_action", "Go needs_action keeps standby ON without a fault")
     check(f.can("off", at: 1000) && !f.can("on", at: 1000), "needs_action offers OFF, the way to retry")
-    check(f.command("off", at: 1000) == "off 2 5\n", "needs_action admits exact OFF")
-    f.ingest(frames[6], at: 1000); f.ingest(frames[7], at: 1000)
+    check(f.command("off", at: 1000) == "off 2 7\n", "needs_action admits exact OFF")
+    f.ingest(frames[8], at: 1000); f.ingest(frames[9], at: 1000)
     check(!f.fault && f.pending == nil && f.observation?.standby == "off" && f.can("on", at: 1000), "OFF ends needs_action and offers ON again")
     _ = f.requestClose(); f.ingest(terminal(time: 1000), at: 1000)
     check(f.closeConfirmed && !f.cleanupInvalid, "valid original terminal after reconnect sequence")
-    let needs = String(decoding: frames[5], as: UTF8.self)
+    let needs = String(decoding: frames[7], as: UTF8.self)
     for reason in ["connection_occupied", "gateway_refused"] {
         var other = on(); other.ingest(Data(needs.replacingOccurrences(of: "\"identity_refused\"", with: "\"\(reason)\"").utf8), at: 1000)
         check(!other.fault && other.can("off", at: 1000), "needs_action reason \(reason) is accepted")
     }
     // The reason tells the user what to fix, so it comes with needs_action and
-    // nothing else, and only as a value the owner can produce.
-    let reconnecting = String(decoding: frames[3], as: UTF8.self)
+    // nothing else, and only as a value the owner can produce. needs_action is
+    // also only standby ON with no work and confirmed cleanup, as the mapper requires.
+    let reconnecting = String(decoding: frames[5], as: UTF8.self)
     let malformed = [
         needs.replacingOccurrences(of: "\"registrationReason\":\"identity_refused\",", with: ""),
         needs.replacingOccurrences(of: "\"identity_refused\"", with: "\"rate_limited\""),
         needs.replacingOccurrences(of: "\"identity_refused\"", with: "null"),
-        reconnecting.replacingOccurrences(of: "\"caller\":null", with: "\"registrationReason\":\"gateway_refused\",\"caller\":null")
+        reconnecting.replacingOccurrences(of: "\"caller\":null", with: "\"registrationReason\":\"gateway_refused\",\"caller\":null"),
+        needs.replacingOccurrences(of: "\"standby\":\"on\"", with: "\"standby\":\"off\"")
+            .replacingOccurrences(of: "\"canRequestOff\":true", with: "\"canRequestOff\":false")
+            .replacingOccurrences(of: "{\"requestId\":1,\"intent\":\"on\",\"outcome\":\"applied\"}", with: "null"),
+        needs.replacingOccurrences(of: "\"work\":\"idle\"", with: "\"work\":\"preparing\"")
     ]
     for (i, frame) in malformed.enumerated() {
         check(frame != needs && frame != reconnecting, "reason mutation \(i) exists")

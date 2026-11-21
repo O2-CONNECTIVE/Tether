@@ -210,7 +210,7 @@ func checkPresentation() {
     check(reconnecting.status == "待機 ON・再接続中" && reconnecting.detail.hasPrefix("接続: 再接続中 ／") && reconnecting.canOff, "UI reconnecting says it is retrying and keeps OFF")
     for (reason, hint) in [("identity_refused", "ペア登録"), ("connection_occupied", "別の接続"), ("gateway_refused", "gateway")] {
         let needs = connection("needs_action", reason: reason)
-        check(needs.status == "待機 ON・要対応" && needs.canOff && !needs.canOn, "UI needs_action \(reason) is not shown as still connecting")
+        check(needs.status == "待機 ON・要対応" && needs.canOff && !needs.canOn && !needs.canExtend && !needs.canAllow, "UI needs_action \(reason) is not shown as still connecting")
         check(needs.detail.contains(hint) && needs.detail.hasSuffix("待機を OFF にして ON にし直してください。"), "UI needs_action \(reason) says what to fix and how to retry")
     }
 }

@@ -81,11 +81,18 @@ func TestDevelopmentReconnectContractGolden(t *testing.T) {
 	appendFrame(receiptEnvelope{1, "receipt", Receipt{1, 1, "on", "accepted"}})
 	o.Revision++
 	o.Standby = "on"
-	o.Registration = "authenticated"
+	o.Registration = "connecting"
 	o.AdmissionSealed = false
 	o.CanRequestOn = false
 	o.CanRequestOff = true
-	o.Transition = &residentmac.StandbyTransition{RequestID: 1, Intent: "on", Outcome: "applied"}
+	o.Transition = &residentmac.StandbyTransition{RequestID: 1, Intent: "on", Outcome: "pending"}
+	observe(o)
+	o.Revision++
+	o.Registration = "reconnecting" // the initial ON retries before any authentication
+	observe(o)
+	o.Revision++
+	o.Registration = "authenticated"
+	o.Transition.Outcome = "applied"
 	observe(o)
 	o.Revision++
 	o.Registration = "reconnecting"
@@ -100,7 +107,7 @@ func TestDevelopmentReconnectContractGolden(t *testing.T) {
 	observe(o)
 	appendFrame(receiptEnvelope{1, "receipt", Receipt{1, 2, "off", "accepted"}})
 	o = fixtureOff()
-	o.Revision = 6
+	o.Revision = 8
 	o.Transition = &residentmac.StandbyTransition{RequestID: 2, Intent: "off", Outcome: "applied"}
 	observe(o)
 	golden, err := os.ReadFile("../../../ui/mac-development/Tests/DevelopmentChecks/Fixtures/mapper-reconnect.jsonl")

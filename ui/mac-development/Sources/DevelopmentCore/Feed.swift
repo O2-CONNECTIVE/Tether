@@ -52,7 +52,8 @@ public struct Feed {
     }
     public func can(_ intent: String, at now: UInt64) -> Bool {
         guard fresh(at: now), !closing, pending == nil, awaitingReceipt == nil, let o = observation else { return false }
-        if intent == "allow" || intent == "extend" { return o.standby == "on" }
+        // The owner closes admission in needs_action and rejects both.
+        if intent == "allow" || intent == "extend" { return o.standby == "on" && o.registration != "needs_action" }
         if intent == "deny" { return o.standby == "on" } // offered even if this view shows none
         return intent == "on" ? o.canOn : intent == "off" && o.canOff
     }
@@ -204,6 +205,7 @@ public struct Feed {
         guard
               !canOn || (standby == "off" && work == "idle" && cleanup == "confirmed"),
               !canOff || standby == "on", !(canOn && canOff),
+              registration != "needs_action" || (standby == "on" && work == "idle" && cleanup == "confirmed"),
               !standbyEndingSoon || standbyUntil != nil else { throw Invalid.input }
         if case .null? = s.fields["transition"] {} else {
             let t = try Object(s.fields["transition"]!, ["requestId", "intent", "outcome"])
@@ -223,6 +225,6 @@ public struct Feed {
             } else if outcome == "pending" { throw Invalid.input }
         }
         observation = Observation(revision: revision, sourceMS: source, standby: standby, registration: registration, work: work, cleanup: cleanup, registrationReason: registrationReason, canOn: canOn, canOff: canOff, standbyUntil: standbyUntil, standbyEndingSoon: standbyEndingSoon, standbyExpired: standbyExpired)
-        if standby != "on" { allowGranted = false }
+        if standby != "on" || registration == "needs_action" { allowGranted = false }
     }
 }
