@@ -91,7 +91,11 @@ func startStandby(lifetime context.Context, load func(context.Context) (*residen
 			return loaded, err
 		},
 	})
-	return coord, owner, err
+	if err != nil {
+		// A load past its budget may still be writing owner; do not read it.
+		return coord, nil, err
+	}
+	return coord, owner, nil
 }
 
 func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy string, dialect inputDialect) error {
