@@ -1,6 +1,6 @@
 export type Intent = 'on' | 'off';
 type Transition = { requestId: number; intent: Intent; outcome: 'pending' | 'applied' | 'rejected' | 'unknown' };
-export type RegistrationReason = 'identity_refused' | 'connection_occupied' | 'gateway_refused';
+type RegistrationReason = 'identity_refused' | 'connection_occupied' | 'gateway_refused';
 export type Observation = { revision: number; validForMs: number; standby: 'off' | 'on' | 'stopping' | 'unknown';
   registration: 'disconnected' | 'connecting' | 'authenticated' | 'unknown'; caller: string | null;
   registrationReason?: RegistrationReason;
