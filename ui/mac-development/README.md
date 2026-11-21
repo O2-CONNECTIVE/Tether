@@ -138,7 +138,8 @@ GUI は「接続を確認中・待機 ON は未確認」と表示して待ちま
 回収証拠を無効化し、以前の fault/close を解除しません。
 
 `backend/internal/residentpipe/development_contract_test.go` は実 mapper と Encode の
-出力を `Tests/DevelopmentChecks/Fixtures/mapper-pending.jsonl` と byte 比較します。
+出力を `Tests/DevelopmentChecks/Fixtures/mapper-pending.jsonl` と
+`Tests/DevelopmentChecks/Fixtures/mapper-reconnect.jsonl` と byte 比較します。
 Swift は同じ公開 fixture を読むため、片側だけの手書きモデルの一致ではありません。
 Go の共通検査と Mac の DevelopmentChecks を両方実行してください。閉じる通知と
 negative mutation は別の合成入力であり、実通信・実 host の回収を証明しません。

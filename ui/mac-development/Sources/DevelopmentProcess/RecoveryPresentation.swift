@@ -31,13 +31,23 @@ extension RecoveryController {
             status = "最新の状態を確認中"
             detail = "新しい状態を受け取るまで ON/OFF は操作できません。"
         } else if let o = f.observation {
-            let connected = o.registration == "authenticated"
+            let connection: String
+            switch o.registration {
+            case "authenticated": connection = "認証済み"
+            case "reconnecting": connection = "再接続中"
+            default: connection = "未確認"
+            }
             if let pending = f.pending {
                 status = o.standby == "unknown" && pending.intent == "on" ? "接続を確認中・待機 ON は未確認" : "待機を \(pending.intent == "on" ? "ON" : "OFF") に変更中"
             } else if o.standby == "stopping" {
                 status = "待機を停止中"
             } else if o.standby == "on" {
-                status = connected ? "待機中" : "待機 ON・接続を確認中"
+                switch o.registration {
+                case "authenticated": status = "待機中"
+                case "reconnecting": status = "待機 ON・再接続中"
+                case "needs_action": status = "待機 ON・要対応"
+                default: status = "待機 ON・接続を確認中"
+                }
                 if let until = o.standbyUntil {
                     let clock = Self.clock(until)
                     status = o.standbyEndingSoon
@@ -49,7 +59,20 @@ extension RecoveryController {
             } else {
                 status = "停止と回収を確認中"
             }
-            detail = f.pending != nil ? "状態変更の結果を確認しています。完了するまで新しい要求はできません。" : "接続: \(connected ? "認証済み" : "未確認") ／ 操作: \(o.work == "idle" ? "なし" : "処理中") ／ 回収: \(o.cleanup == "confirmed" ? "確認済み" : "確認中")"
+            if f.pending != nil {
+                detail = "状態変更の結果を確認しています。完了するまで新しい要求はできません。"
+            } else {
+                switch o.registrationReason {
+                case .some("identity_refused"):
+                    detail = "このホストの身元が拒否されました。別の端末に置き換えられた可能性があります。もう一度ペア登録してから、待機を OFF にして ON にし直してください。"
+                case .some("connection_occupied"):
+                    detail = "別の接続がこのホストを使っています。その接続を終えてから、待機を OFF にして ON にし直してください。"
+                case .some("gateway_refused"):
+                    detail = "gateway が接続を拒否しました。設定を確認してから、待機を OFF にして ON にし直してください。"
+                default:
+                    detail = "接続: \(connection) ／ 操作: \(o.work == "idle" ? "なし" : "処理中") ／ 回収: \(o.cleanup == "confirmed" ? "確認済み" : "確認中")"
+                }
+            }
             if f.pending == nil, o.standby == "off", o.work == "idle", o.cleanup == "confirmed", o.standbyExpired {
                 status = "期限で停止しました"
                 detail = "待機の期限が来たため、待機を OFF にして停止・回収しました。続けるには待機を ON にし、あらためてコマンド実行を許可してください。"

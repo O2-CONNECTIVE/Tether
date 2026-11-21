@@ -4,6 +4,7 @@ public struct Observation {
     public let revision: UInt64
     public let sourceMS: UInt64
     public let standby, registration, work, cleanup: String
+    public let registrationReason: String?
     public let canOn, canOff: Bool
     public let standbyUntil: UInt64? // owner wall-clock end of standby, Unix epoch ms
     public let standbyEndingSoon, standbyExpired: Bool
@@ -169,7 +170,9 @@ public struct Feed {
         }
     }
     private mutating func receiveStatus(_ value: Value, source: UInt64) throws {
-        let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"])
+        let keys = ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"]
+        guard case let .object(fields) = value else { throw Invalid.input }
+        let s = try Object(value, fields["registrationReason"] == nil ? keys : keys + ["registrationReason"])
         guard try s.number("protocolVersion") == 1,
               try s.text("source", ["resident-owner"]) == "resident-owner",
               try s.text("state", ["source-observation"]) == "source-observation",
@@ -181,7 +184,14 @@ public struct Feed {
                   !caller.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw Invalid.input }
         } else if case .null? = s.fields["caller"] {} else { throw Invalid.input }
         let standby = try s.text("standby", ["off", "on", "stopping", "unknown"])
-        let registration = try s.text("registration", ["disconnected", "connecting", "authenticated", "unknown"])
+        let registration = try s.text("registration", ["disconnected", "connecting", "authenticated", "reconnecting", "needs_action", "unknown"])
+        let registrationReason: String?
+        if registration == "needs_action" {
+            registrationReason = try s.text("registrationReason", ["identity_refused", "connection_occupied", "gateway_refused"])
+        } else {
+            guard s.fields["registrationReason"] == nil else { throw Invalid.input }
+            registrationReason = nil
+        }
         let work = try s.text("work", ["idle", "preparing", "running", "stopping", "unknown"])
         let cleanup = try s.text("cleanup", ["confirmed", "pending", "unknown"])
         let canOn = try s.bool("canRequestOn"), canOff = try s.bool("canRequestOff")
@@ -212,7 +222,7 @@ public struct Feed {
                 } else if outcome == "pending" { throw Invalid.input }
             } else if outcome == "pending" { throw Invalid.input }
         }
-        observation = Observation(revision: revision, sourceMS: source, standby: standby, registration: registration, work: work, cleanup: cleanup, canOn: canOn, canOff: canOff, standbyUntil: standbyUntil, standbyEndingSoon: standbyEndingSoon, standbyExpired: standbyExpired)
+        observation = Observation(revision: revision, sourceMS: source, standby: standby, registration: registration, work: work, cleanup: cleanup, registrationReason: registrationReason, canOn: canOn, canOff: canOff, standbyUntil: standbyUntil, standbyEndingSoon: standbyEndingSoon, standbyExpired: standbyExpired)
         if standby != "on" { allowGranted = false }
     }
 }
