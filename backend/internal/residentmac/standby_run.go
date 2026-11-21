@@ -147,7 +147,19 @@ func (s *Standby) admittingLocked() bool {
 // off. The monitor calls it; admission does not wait for it. Sealed standby is
 // already stopping for another reason and publishes no end.
 func (s *Standby) expireStandbyLocked() bool {
-	if s.observation.Standby != "on" || s.observation.AdmissionSealed {
+	if s.observation.Standby != "on" {
+		return false
+	}
+	if s.observation.Registration == "needs_action" && s.observation.Cleanup == "confirmed" {
+		if s.standbyLeftLocked() > 0 {
+			return false
+		}
+		s.observation.StandbyExpired = true
+		s.endNeedsActionLocked()
+		s.changedLocked()
+		return true
+	}
+	if s.observation.AdmissionSealed {
 		return false
 	}
 	left := s.standbyLeftLocked()

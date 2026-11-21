@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -28,6 +30,221 @@ func TestResidentOccupiedCloseStopsAMacThatPredatesIt(t *testing.T) {
 	refusal := fmt.Errorf("failed to get reader: %w", websocket.CloseError{Code: occupiedClose, Reason: "resident control occupied"})
 	if residentRetryable(refusal, false) || residentRetryable(refusal, true) {
 		t.Fatal("the classification older Macs use retries the occupancy refusal")
+	}
+}
+
+func TestResidentIdentityRefusalReportsReasonAndDoesNotRetry(t *testing.T) {
+	r := newResidentRig(t, nil)
+	refuse := residentRefusing(r)
+	refuse.Store(int32(4014))
+
+	err := await(t, residentRun(r.c), 5*time.Second)
+	reason, hasReason := ResidentNeedsActionReason(err)
+	if !errors.Is(err, ErrRefused) || websocket.CloseStatus(err) != websocket.StatusCode(4014) || !hasReason || reason != ResidentFailureIdentityRefused {
+		t.Fatalf("identity refusal did not expose its reason code: close=%d reason=%q err=%v", websocket.CloseStatus(err), reason, err)
+	}
+	if r.m.trips.Load() != 1 || r.c.Connected() {
+		t.Fatal("identity refusal retried or remained connected", r.m.trips.Load())
+	}
+}
+
+func TestResidentPolicyViolationRemainsGatewayRefused(t *testing.T) {
+	r := newResidentRig(t, nil)
+	refuse := residentRefusing(r)
+	refuse.Store(int32(websocket.StatusPolicyViolation))
+
+	err := await(t, residentRun(r.c), 5*time.Second)
+	reason, hasReason := ResidentNeedsActionReason(err)
+	if !hasReason || reason != ResidentFailureGatewayRefused || r.m.trips.Load() != 1 {
+		t.Fatal("1008 did not remain a terminal gateway refusal", err, r.m.trips.Load())
+	}
+}
+
+func TestResidentFailureDisposition(t *testing.T) {
+	closeErr := func(code websocket.StatusCode) error {
+		return fmt.Errorf("received close: %w", websocket.CloseError{Code: code, Reason: "synthetic"})
+	}
+	for _, tc := range []struct {
+		name            string
+		err             error
+		authenticated   bool
+		occupiedExpired bool
+		wantRetry       bool
+		wantReason      ResidentFailureReason
+	}{
+		{"identity close", closeErr(websocket.StatusCode(4014)), false, false, false, ResidentFailureIdentityRefused},
+		{"1008", closeErr(websocket.StatusPolicyViolation), false, false, false, ResidentFailureGatewayRefused},
+		{"4013 within 60 seconds", closeErr(occupiedClose), false, false, true, ""},
+		{"4013 after 60 seconds", closeErr(occupiedClose), false, true, false, ResidentFailureConnectionOccupied},
+		{"429", errResidentUnavailable, false, false, true, ""},
+		{"503", errResidentUnavailable, false, false, true, ""},
+		{"EOF", io.EOF, true, false, true, ""},
+		{"timeout", &net.DNSError{IsTimeout: true, Err: "timeout", Name: "gateway"}, false, false, true, ""},
+		{"normal close", closeErr(websocket.StatusNormalClosure), true, false, true, ""},
+		{"going away", closeErr(websocket.StatusGoingAway), true, false, true, ""},
+		{"internal error", closeErr(websocket.StatusInternalError), true, false, true, ""},
+		{"resident relay expiry", closeErr(websocket.StatusCode(4000)), true, false, true, ""},
+		{"unknown close code", closeErr(websocket.StatusCode(4001)), false, false, false, ResidentFailureGatewayRefused},
+		{"local refusal without 1008", ErrRefused, false, false, false, ResidentFailureGatewayRefused},
+		{"other HTTP response", errors.New("websocket dial returned HTTP 403"), false, false, false, ResidentFailureGatewayRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			retry, reason := residentFailureDisposition(tc.err, tc.authenticated, tc.occupiedExpired)
+			if retry != tc.wantRetry || reason != tc.wantReason {
+				t.Fatalf("residentFailureDisposition() = (%v, %q), want (%v, %q)", retry, reason, tc.wantRetry, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestResidentHTTPRetryStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   bool
+	}{
+		{http.StatusTooManyRequests, true},
+		{http.StatusBadGateway, true},
+		{http.StatusServiceUnavailable, true},
+		{http.StatusGatewayTimeout, true},
+		{http.StatusBadRequest, false},
+		{http.StatusForbidden, false},
+		{http.StatusInternalServerError, false},
+	} {
+		if got := residentHTTPRetryable(tc.status); got != tc.want {
+			t.Errorf("residentHTTPRetryable(%d) = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+type residentRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f residentRoundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestResidentHTTPGatewayFailuresRemainReconnecting(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout} {
+		t.Run(fmt.Sprintf("HTTP %d", status), func(t *testing.T) {
+			r := newResidentRig(t, nil)
+			r.c.transport = func(acquirer) http.RoundTripper {
+				return residentRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: status, Header: make(http.Header), Body: http.NoBody, Request: req}, nil
+				})
+			}
+			r.c.waitRetry = func(ctx context.Context, _ time.Duration, _ <-chan struct{}) residentRetryResult {
+				<-ctx.Done()
+				return residentRetryCanceled
+			}
+			done := residentRun(r.c)
+			residentAwaitAlive(t, done, fmt.Sprintf("HTTP %d retry", status), func() bool {
+				snapshot := r.c.Snapshot()
+				return snapshot.RetryWaiting && snapshot.Reconnecting
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := r.c.Close(ctx); err != nil {
+				t.Fatal("closing retrying client", err)
+			}
+		})
+	}
+}
+
+func TestResidentAttemptDeadlineDuringDialRemainsReconnecting(t *testing.T) {
+	r := newResidentRig(t, nil)
+	r.c.cfg.Budgets.Approval = 20 * time.Millisecond
+	entered := make(chan struct{})
+	r.c.transport = func(acquirer) http.RoundTripper {
+		return residentRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			close(entered)
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		})
+	}
+	r.c.waitRetry = func(ctx context.Context, _ time.Duration, _ <-chan struct{}) residentRetryResult {
+		<-ctx.Done()
+		return residentRetryCanceled
+	}
+	done := residentRun(r.c)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Dial did not enter the blocking RoundTripper")
+	}
+	residentAwaitAlive(t, done, "attempt authentication deadline", func() bool {
+		snapshot := r.c.Snapshot()
+		return snapshot.RetryWaiting && snapshot.Reconnecting
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := r.c.Close(ctx); err != nil {
+		t.Fatal("closing retrying client", err)
+	}
+}
+
+func TestResidentParentCancellationDuringDialDoesNotBecomeNeedsAction(t *testing.T) {
+	r := newResidentRig(t, nil)
+	r.c.cfg.Budgets.Approval = time.Second
+	entered := make(chan struct{})
+	r.c.transport = func(acquirer) http.RoundTripper {
+		return residentRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			close(entered)
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		})
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.c.Run(parent) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("Dial did not enter the blocking RoundTripper")
+	}
+	cancel()
+	err := await(t, done, time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("parent cancellation did not follow the stop path", err)
+	}
+	if _, needsAction := ResidentNeedsActionReason(err); needsAction {
+		t.Fatal("parent cancellation was published as needs action", err)
+	}
+}
+
+func TestResidentOccupiedLimitUsesStrictlyMoreThanSixtySeconds(t *testing.T) {
+	start := time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
+	if residentOccupiedExpired(start, start.Add(60*time.Second)) || !residentOccupiedExpired(start, start.Add(60*time.Second+time.Nanosecond)) {
+		t.Fatal("occupancy limit must expire only after 60 seconds")
+	}
+}
+
+func TestResidentJitterStaysWithinTwentyPercentBelowBase(t *testing.T) {
+	for _, tc := range []struct {
+		value float64
+		want  time.Duration
+	}{
+		{0, 4 * time.Second},
+		{0.5, 4500 * time.Millisecond},
+		{1, 5 * time.Second},
+		{-1, 4 * time.Second},
+		{2, 5 * time.Second},
+	} {
+		if got := residentJitteredDelay(5*time.Second, func() float64 { return tc.value }); got != tc.want {
+			t.Errorf("residentJitteredDelay(%v) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestResidentRetryBackoffPreservesFiveSecondDoublingAndThirtySecondCap(t *testing.T) {
+	for _, tc := range []struct{ current, want time.Duration }{
+		{5 * time.Second, 10 * time.Second},
+		{10 * time.Second, 20 * time.Second},
+		{20 * time.Second, 30 * time.Second},
+		{30 * time.Second, 30 * time.Second},
+	} {
+		if got := nextResidentRetryDelay(tc.current); got != tc.want {
+			t.Errorf("nextResidentRetryDelay(%v) = %v, want %v", tc.current, got, tc.want)
+		}
 	}
 }
 
@@ -172,7 +389,7 @@ func (c *enteredContext) Done() <-chan struct{} {
 }
 
 // Handler.Close marks the handler closed before ending contexts; a waiting
-// registration must then be refused as closed (1008), not as occupied.
+// registration must then be refused as closed, not as occupied.
 func TestResidentReservationWaitingAtCloseIsRefusedAsClosed(t *testing.T) {
 	r := newResidentRig(t, nil)
 	ended, cancel := context.WithCancel(context.Background())
@@ -198,8 +415,40 @@ func TestResidentReservationWaitingAtCloseIsRefusedAsClosed(t *testing.T) {
 	r.h.mu.Lock()
 	delete(r.h.residents, k)
 	r.h.mu.Unlock()
-	if !errors.Is(e, ErrRefused) || errors.Is(e, errResidentOccupied) {
+	if !errors.Is(e, errResidentGatewayClosed) || errors.Is(e, errResidentOccupied) {
 		t.Fatal("registration waiting at close was not refused as closed", e)
+	}
+}
+
+func TestResidentGatewayCloseRaceRemainsRetryable(t *testing.T) {
+	r := newResidentRig(t, nil)
+	previousHook := testHookAfterResidentAuthenticated
+	var closed sync.Once
+	testHookAfterResidentAuthenticated = func() {
+		closed.Do(func() {
+			r.h.mu.Lock()
+			r.h.closed = true
+			r.h.mu.Unlock()
+		})
+	}
+	defer func() { testHookAfterResidentAuthenticated = previousHook }()
+	err, cleanup, authenticated := r.c.attempt(context.Background())
+	if websocket.CloseStatus(err) != websocket.StatusGoingAway || cleanup != nil || authenticated {
+		t.Fatalf("closed gateway did not return retryable 1001: code=%d cleanup=%v authenticated=%v", websocket.CloseStatus(err), cleanup, authenticated)
+	}
+	r.c.waitRetry = func(ctx context.Context, _ time.Duration, _ <-chan struct{}) residentRetryResult {
+		<-ctx.Done()
+		return residentRetryCanceled
+	}
+	done := residentRun(r.c)
+	residentAwaitAlive(t, done, "closed gateway retry", func() bool {
+		snapshot := r.c.Snapshot()
+		return snapshot.RetryWaiting && snapshot.Reconnecting
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := r.c.Close(ctx); err != nil {
+		t.Fatal("closing retrying client", err)
 	}
 }
 
@@ -318,9 +567,9 @@ func TestResidentAuthenticationRestartsTheOccupiedLimit(t *testing.T) {
 func TestResidentIdentityRefusalIsNotRetried(t *testing.T) {
 	r := newResidentRig(t, nil)
 	refuse := residentRefusing(r)
-	refuse.Store(int32(websocket.StatusPolicyViolation))
+	refuse.Store(int32(residentIdentityRefusedClose))
 	e := await(t, residentRun(r.c), 5*time.Second)
-	if !errors.Is(e, ErrRefused) || websocket.CloseStatus(e) != websocket.StatusPolicyViolation || r.m.trips.Load() != 1 {
+	if !errors.Is(e, ErrRefused) || websocket.CloseStatus(e) != residentIdentityRefusedClose || r.m.trips.Load() != 1 {
 		t.Fatal("identity refusal was retried or misreported", e, r.m.trips.Load())
 	}
 }

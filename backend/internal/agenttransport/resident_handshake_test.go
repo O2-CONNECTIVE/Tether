@@ -51,6 +51,32 @@ func residentRawAccept(t *testing.T, r *rawWS, b residentBinding) {
 		t.Fatal("not mutually accepted", e)
 	}
 }
+
+func TestResidentProofMismatchUsesDedicatedCloseCode(t *testing.T) {
+	rig := newResidentRig(t, nil)
+	r, binding := residentRawBegin(t, rig.h)
+	wrongHost := fixtureSigner(t, 0x56)
+	sig, err := sign(wrongHost, wrongHost.PublicKey(), residentTranscript(binding, "host-proof"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.text(residentJSON(map[string]string{"type": "resident_proof", "signature": b64.EncodeToString(sig)}))
+	op, payload, err := r.next(3 * time.Second)
+	if err != nil || op != opClose || len(payload) < 2 {
+		t.Fatalf("identity proof refusal did not close the connection: opcode=%d payload=%x err=%v", op, payload, err)
+	}
+	code := uint16(payload[0])<<8 | uint16(payload[1])
+	if code != 4014 {
+		t.Fatalf("identity proof refusal used close code %d", code)
+	}
+	_ = r.conn.Close()
+	select {
+	case <-r.served:
+	case <-time.After(3 * time.Second):
+		t.Fatal("identity refusal did not finish its original handler")
+	}
+}
+
 func residentRawRefused(t *testing.T, r *rawWS) {
 	t.Helper()
 	for {

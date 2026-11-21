@@ -13,19 +13,20 @@ type Transition struct {
 	Outcome   string `json:"outcome"`
 }
 type Snapshot struct {
-	ProtocolVersion uint64      `json:"protocolVersion"`
-	Source          string      `json:"source"`
-	State           string      `json:"state"`
-	Revision        uint64      `json:"revision"`
-	ValidForMS      uint64      `json:"validForMs"`
-	Standby         string      `json:"standby"`
-	Registration    string      `json:"registration"`
-	Caller          *string     `json:"caller"`
-	Work            string      `json:"work"`
-	Cleanup         string      `json:"cleanup"`
-	CanRequestOn    bool        `json:"canRequestOn"`
-	CanRequestOff   bool        `json:"canRequestOff"`
-	Transition      *Transition `json:"transition"`
+	ProtocolVersion    uint64      `json:"protocolVersion"`
+	Source             string      `json:"source"`
+	State              string      `json:"state"`
+	Revision           uint64      `json:"revision"`
+	ValidForMS         uint64      `json:"validForMs"`
+	Standby            string      `json:"standby"`
+	Registration       string      `json:"registration"`
+	RegistrationReason string      `json:"registrationReason,omitempty"`
+	Caller             *string     `json:"caller"`
+	Work               string      `json:"work"`
+	Cleanup            string      `json:"cleanup"`
+	CanRequestOn       bool        `json:"canRequestOn"`
+	CanRequestOff      bool        `json:"canRequestOff"`
+	Transition         *Transition `json:"transition"`
 }
 
 // standbyEnd is the foreground status's view of when standby ends (#399).
@@ -80,7 +81,14 @@ func oneOf(s string, values ...string) bool {
 	return false
 }
 func validRaw(o residentmac.StandbyObservation) bool {
-	if o.Revision == 0 || o.Revision > MaxInteger || o.Owned < 0 || !oneOf(o.Standby, "off", "on", "stopping", "unknown") || !oneOf(o.Registration, "disconnected", "connecting", "authenticated", "unknown") || !oneOf(o.Work, "idle", "preparing", "running", "stopping", "unknown") || !oneOf(o.Cleanup, "confirmed", "pending", "unknown") {
+	if o.Revision == 0 || o.Revision > MaxInteger || o.Owned < 0 || !oneOf(o.Standby, "off", "on", "stopping", "unknown") || !oneOf(o.Registration, "disconnected", "connecting", "reconnecting", "authenticated", "needs_action", "unknown") || !oneOf(o.Work, "idle", "preparing", "running", "stopping", "unknown") || !oneOf(o.Cleanup, "confirmed", "pending", "unknown") {
+		return false
+	}
+	if o.Registration == "needs_action" {
+		if !oneOf(string(o.RegistrationReason), string(residentmac.RegistrationReasonIdentityRefused), string(residentmac.RegistrationReasonConnectionOccupied), string(residentmac.RegistrationReasonGatewayRefused)) || o.Standby != "on" || !o.AdmissionSealed || o.Cleanup != "confirmed" || o.Work != "idle" || o.Owned != 0 {
+			return false
+		}
+	} else if o.RegistrationReason != "" {
 		return false
 	}
 	if o.Caller != nil {
@@ -119,10 +127,11 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 	if o.Cleanup == "unknown" {
 		m.cleanupUnknown = true
 	}
-	s := Snapshot{ProtocolVersion: 1, Source: "resident-owner", State: "source-observation", Revision: m.revision, ValidForMS: 3000, Standby: o.Standby, Registration: o.Registration, Caller: o.Caller, Work: o.Work, Cleanup: o.Cleanup}
+	s := Snapshot{ProtocolVersion: 1, Source: "resident-owner", State: "source-observation", Revision: m.revision, ValidForMS: 3000, Standby: o.Standby, Registration: o.Registration, RegistrationReason: string(o.RegistrationReason), Caller: o.Caller, Work: o.Work, Cleanup: o.Cleanup}
 	off := o.AdmissionSealed && o.Owned == 0 && o.Cleanup == "confirmed" && o.Work == "idle" && o.Standby == "off"
 	historicalAuth := oneOf(o.Registration, "connecting", "disconnected") && o.TransportGeneration != "" && o.Transition != nil && o.Transition.Intent == "on" && o.Transition.Outcome == "applied"
-	on := !o.AdmissionSealed && (o.Registration == "authenticated" || historicalAuth) && o.Standby == "on" && o.Cleanup != "unknown"
+	needsAction := o.AdmissionSealed && o.Owned == 0 && o.Cleanup == "confirmed" && o.Work == "idle" && o.Standby == "on" && o.Registration == "needs_action"
+	on := needsAction || (!o.AdmissionSealed && (oneOf(o.Registration, "authenticated", "reconnecting") || historicalAuth) && o.Standby == "on" && o.Cleanup != "unknown")
 	if (o.Standby == "off" && !off) || (o.Standby == "on" && !on) {
 		s.Standby = "unknown"
 	}
@@ -131,14 +140,14 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 		if t.Outcome == "applied" && ((t.Intent == "on" && !on) || (t.Intent == "off" && !off)) {
 			mine := m.pending != nil && m.pending.RequestID == t.RequestID && m.pending.Intent == t.Intent
 			switch {
-			// An ON this pipe never showed applied can no longer be shown once
-			// its cycle ended: standby never comes back on for that request. It
-			// ends as rejected, the pipe's word for a request that ended without
-			// showing its state, as the owner ends an ON whose cycle ended
-			// before authentication (#420).
-			case t.Intent == "on" && (m.closedOn == t.RequestID || (mine && oneOf(o.Standby, "stopping", "off"))):
+				// An ON this pipe never showed applied cannot be shown after its
+				// cycle ends off. It ends as rejected, the pipe's word for an ON
+				// whose terminal standby state was off (#420).
+			case t.Intent == "on" && (m.closedOn == t.RequestID || (mine && o.Standby == "off")):
 				m.closedOn = t.RequestID
 				s.Transition.Outcome = "rejected"
+			case t.Intent == "on" && mine && o.Standby == "stopping":
+				s.Transition.Outcome = "pending"
 			case mine:
 				s.Transition.Outcome = "pending"
 			default:

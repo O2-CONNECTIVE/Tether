@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"sync"
@@ -25,6 +26,58 @@ var errResidentUnavailable = errors.New("agenttransport: resident transport unav
 // timeout); this is three times that, so a real duplicate still stops.
 const residentOccupiedLimit = 60 * time.Second
 
+type ResidentFailureReason string
+
+const (
+	ResidentFailureIdentityRefused    ResidentFailureReason = "identity_refused"
+	ResidentFailureConnectionOccupied ResidentFailureReason = "connection_occupied"
+	ResidentFailureGatewayRefused     ResidentFailureReason = "gateway_refused"
+)
+
+// ResidentNeedsActionError marks a terminal connection refusal after the
+// original transport cleanup was confirmed. The reason is a stable code for
+// the owner status; callers supply their own user-facing wording.
+type ResidentNeedsActionError struct {
+	Reason ResidentFailureReason
+	Err    error
+}
+
+func (e *ResidentNeedsActionError) Error() string {
+	if e == nil {
+		return "agenttransport: resident connection needs action"
+	}
+	return "agenttransport: resident connection needs action: " + string(e.Reason)
+}
+
+func (e *ResidentNeedsActionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func ResidentNeedsActionReason(err error) (ResidentFailureReason, bool) {
+	var needs *ResidentNeedsActionError
+	if !errors.As(err, &needs) || needs == nil || !validResidentFailureReason(needs.Reason) {
+		return "", false
+	}
+	return needs.Reason, true
+}
+
+func validResidentFailureReason(reason ResidentFailureReason) bool {
+	return reason == ResidentFailureIdentityRefused || reason == ResidentFailureConnectionOccupied || reason == ResidentFailureGatewayRefused
+}
+
+type residentRetryResult uint8
+
+const (
+	residentRetryElapsed residentRetryResult = iota
+	residentRetryWoken
+	residentRetryCanceled
+)
+
+type residentRetryWait func(context.Context, time.Duration, <-chan struct{}) residentRetryResult
+
 type ResidentClientConfig struct {
 	Endpoint, HostLabel, PrincipalLabel string
 	HostKey                             ssh.Signer
@@ -40,8 +93,13 @@ type ResidentClient struct {
 	transport                           func(acquirer) http.RoundTripper
 	clock                               func() time.Time
 	retryDelay                          time.Duration
+	random                              func() float64
+	waitRetry                           residentRetryWait
+	nudges                              chan struct{}
 	mu                                  sync.Mutex
 	started, connected, cleanupObserved bool
+	retrying, reconnecting              bool
+	retryWaitID                         uint64
 	cancel                              context.CancelFunc
 	done                                chan struct{}
 	cleanupErr                          error
@@ -71,7 +129,7 @@ func NewResidentClient(cfg ResidentClientConfig) (*ResidentClient, error) {
 		return nil, ErrConfig
 	}
 	cfg.PrincipalKey = principal
-	return &ResidentClient{cfg: cfg, transport: nativeTransport, clock: time.Now, retryDelay: 5 * time.Second, done: make(chan struct{}), updates: make(chan struct{}, 1)}, nil
+	return &ResidentClient{cfg: cfg, transport: nativeTransport, clock: time.Now, retryDelay: 5 * time.Second, random: rand.Float64, waitRetry: waitResidentRetry, nudges: make(chan struct{}, 1), done: make(chan struct{}), updates: make(chan struct{}, 1)}, nil
 }
 
 // ResidentControlSnapshot is transport observation, never standby/work authority.
@@ -81,6 +139,8 @@ type ResidentControlSnapshot struct {
 	Revision                                                uint64
 	Generation                                              string
 	Connected, RunFinished, CleanupObserved, CleanupUnknown bool
+	RetryWaiting, Reconnecting                              bool
+	RetryWaitID                                             uint64
 }
 
 func (c *ResidentClient) Snapshot() ResidentControlSnapshot {
@@ -89,7 +149,91 @@ func (c *ResidentClient) Snapshot() ResidentControlSnapshot {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return ResidentControlSnapshot{Revision: c.revision, Generation: c.generation, Connected: c.connected, RunFinished: c.finished, CleanupObserved: c.cleanupObserved, CleanupUnknown: c.cleanupObserved && c.cleanupErr != nil}
+	return ResidentControlSnapshot{Revision: c.revision, Generation: c.generation, Connected: c.connected, RunFinished: c.finished, CleanupObserved: c.cleanupObserved, CleanupUnknown: c.cleanupObserved && c.cleanupErr != nil, RetryWaiting: c.retrying, Reconnecting: c.reconnecting, RetryWaitID: c.retryWaitID}
+}
+
+// Nudge interrupts a resident backoff only while the client is waiting to
+// retry. It never closes an active connection or queues a stale wakeup.
+func (c *ResidentClient) Nudge(waitID uint64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.retrying || c.retryWaitID != waitID {
+		return
+	}
+	select {
+	case c.nudges <- struct{}{}:
+	default:
+	}
+}
+
+func (c *ResidentClient) setRetrying(retrying bool) {
+	c.mu.Lock()
+	if c.retrying != retrying {
+		c.retrying = retrying
+		if retrying && c.retryWaitID < ^uint64(0) {
+			c.retryWaitID++
+		}
+		c.changedLocked()
+	}
+	c.mu.Unlock()
+}
+
+func (c *ResidentClient) setReconnecting(reconnecting bool) {
+	c.mu.Lock()
+	if c.reconnecting != reconnecting {
+		c.reconnecting = reconnecting
+		c.changedLocked()
+	}
+	c.mu.Unlock()
+}
+
+func waitResidentRetry(ctx context.Context, delay time.Duration, nudge <-chan struct{}) residentRetryResult {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return residentRetryCanceled
+	case <-nudge:
+		return residentRetryWoken
+	case <-timer.C:
+		return residentRetryElapsed
+	}
+}
+
+func residentJitteredDelay(delay time.Duration, random func() float64) time.Duration {
+	if random == nil {
+		random = rand.Float64
+	}
+	minimum := delay * 4 / 5
+	spread := delay - minimum
+	v := random()
+	if v < 0 {
+		v = 0
+	} else if v > 1 {
+		v = 1
+	}
+	return minimum + time.Duration(float64(spread)*v)
+}
+
+func nextResidentRetryDelay(delay time.Duration) time.Duration {
+	if delay < 30*time.Second {
+		delay *= 2
+		if delay > 30*time.Second {
+			return 30 * time.Second
+		}
+	}
+	return delay
+}
+
+func residentOccupiedExpired(since, now time.Time) bool {
+	return now.Sub(since) > residentOccupiedLimit
+}
+
+func residentHTTPRetryable(status int) bool {
+	return status == http.StatusTooManyRequests || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 }
 
 // Changes is coalesced notification to re-read Snapshot, not a complete journal.
@@ -143,6 +287,8 @@ func (c *ResidentClient) Run(ctx context.Context) error {
 	defer func() {
 		c.mu.Lock()
 		c.connected = false
+		c.retrying = false
+		c.reconnecting = false
 		c.finished = true
 		c.changedLocked()
 		close(c.done)
@@ -179,6 +325,7 @@ func (c *ResidentClient) Run(ctx context.Context) error {
 		if life.Err() != nil {
 			return life.Err()
 		}
+		occupiedExpired := false
 		if authenticated {
 			occupiedSince = time.Time{}
 		}
@@ -186,29 +333,51 @@ func (c *ResidentClient) Run(ctx context.Context) error {
 			// The gateway still holds an earlier control of this identity.
 			if now := c.clock(); occupiedSince.IsZero() {
 				occupiedSince = now
-			} else if now.Sub(occupiedSince) > residentOccupiedLimit {
-				return errors.Join(ErrRefused, e)
+			} else if residentOccupiedExpired(occupiedSince, now) {
+				occupiedExpired = true
 			}
-		} else if !residentRetryable(e, authenticated) {
-			return errors.Join(ErrRefused, e)
 		}
+		retry, reason := residentFailureDisposition(e, authenticated, occupiedExpired)
+		if !retry {
+			c.setReconnecting(false)
+			return &ResidentNeedsActionError{Reason: reason, Err: errors.Join(ErrRefused, e)}
+		}
+		c.setReconnecting(true)
 		if authenticated {
 			delay = c.retryDelay
 		} // successful control resets transient backoff
-		timer := time.NewTimer(delay)
+		c.setRetrying(true)
+		waited := c.waitRetry(life, residentJitteredDelay(delay, c.random), c.nudges)
+		c.setRetrying(false)
 		select {
-		case <-life.Done():
-			timer.Stop()
-			return life.Err()
-		case <-timer.C:
+		case <-c.nudges:
+		default:
 		}
-		if delay < 30*time.Second {
-			delay *= 2
-			if delay > 30*time.Second {
-				delay = 30 * time.Second
-			}
+		if err := life.Err(); err != nil {
+			return err
 		}
+		if waited == residentRetryCanceled {
+			return context.Canceled
+		}
+		delay = nextResidentRetryDelay(delay)
 	}
+}
+
+func residentFailureDisposition(e error, authenticated, occupiedExpired bool) (bool, ResidentFailureReason) {
+	status := websocket.CloseStatus(e)
+	if status == residentOccupiedClose {
+		if occupiedExpired {
+			return false, ResidentFailureConnectionOccupied
+		}
+		return true, ""
+	}
+	if status == residentIdentityRefusedClose {
+		return false, ResidentFailureIdentityRefused
+	}
+	if residentRetryable(e, authenticated) {
+		return true, ""
+	}
+	return false, ResidentFailureGatewayRefused
 }
 func residentRetryable(e error, authenticated bool) bool {
 	if errors.Is(e, errResidentUnavailable) {
@@ -267,7 +436,10 @@ func (c *ResidentClient) attempt(parent context.Context) (result, cleanup error,
 	link.setWS(ws)
 	observed := link.settle()
 	if e != nil {
-		if resp != nil && (resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusTooManyRequests) {
+		if resp != nil && residentHTTPRetryable(resp.StatusCode) {
+			return errResidentUnavailable, nil, false
+		}
+		if parent.Err() == nil && life.Err() != nil && (errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded)) {
 			return errResidentUnavailable, nil, false
 		}
 		return e, nil, false
@@ -291,6 +463,7 @@ func (c *ResidentClient) attempt(parent context.Context) (result, cleanup error,
 	c.mu.Lock()
 	c.connected = true
 	c.generation = b.generation
+	c.reconnecting = false
 	c.changedLocked()
 	c.mu.Unlock()
 	authenticated = true

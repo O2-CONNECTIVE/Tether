@@ -29,6 +29,35 @@ void test('strict source contract rejects unknown fields, enums and inconsistent
   }
   assert.equal(decodeReceipt({ protocolVersion: 1, requestId: 1, intent: 'on', disposition: 'accepted', extra: 1 }, 1, 'on'), undefined);
 });
+void test('new registration states decode and needs_action still permits OFF', async () => {
+  assert.ok(decodeStatus(sample({ standby: 'on', registration: 'reconnecting', canRequestOn: false, canRequestOff: true,
+    transition: { requestId: 1, intent: 'on', outcome: 'applied' } })));
+  for (const registrationReason of ['identity_refused', 'connection_occupied', 'gateway_refused']) {
+    assert.ok(decodeStatus(sample({ standby: 'on', registration: 'needs_action', registrationReason,
+      canRequestOn: false, canRequestOff: true, transition: { requestId: 1, intent: 'on', outcome: 'applied' } })));
+  }
+  assert.equal(decodeStatus(sample({ standby: 'on', registration: 'needs_action', registrationReason: 'unknown',
+    canRequestOn: false, canRequestOff: true, transition: { requestId: 1, intent: 'on', outcome: 'applied' } })), undefined);
+  assert.equal(decodeStatus(sample({ standby: 'on', registration: 'needs_action', canRequestOn: false, canRequestOff: true,
+    transition: { requestId: 1, intent: 'on', outcome: 'applied' } })), undefined);
+  let observation = sample({ standby: 'on', registration: 'needs_action', registrationReason: 'gateway_refused',
+    canRequestOn: false, canRequestOff: true, transition: { requestId: 1, intent: 'on', outcome: 'applied' } });
+  const requests: unknown[] = [];
+  const r = capture((command, args) => {
+    if (command === 'get_resident_status') return Promise.resolve(observation);
+    requests.push(args.request);
+    observation = sample({ revision: 2, transition: { requestId: 2, intent: 'off', outcome: 'applied' } });
+    return Promise.resolve({ protocolVersion: 1, requestId: args.request.requestId, intent: args.request.intent, disposition: 'accepted' });
+  });
+  await r.controller.refresh();
+  assert.equal(r.last()?.canOff, true);
+  assert.equal(r.last()?.observation?.registration, 'disconnected');
+  assert.equal(r.last()?.observation?.registrationReason, 'gateway_refused');
+  await r.controller.request('off');
+  assert.deepEqual(requests, [{ protocolVersion: 1, requestId: 2, expectedRevision: 1, intent: 'off' }]);
+  assert.equal(r.last()?.canOn, true);
+  r.controller.dispose();
+});
 void test('accepted receipt does not apply ON; matching observation permits OFF with new ID', async () => {
   let observation = sample(); const requests: unknown[] = [];
   const r = capture((command, args) => {

@@ -15,12 +15,23 @@ values!(Standby {
     Stopping,
     Unknown
 });
-values!(Registration {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Registration {
     Disconnected,
     Connecting,
+    Reconnecting,
     Authenticated,
-    Unknown
-});
+    NeedsAction,
+    Unknown,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RegistrationReason {
+    IdentityRefused,
+    ConnectionOccupied,
+    GatewayRefused,
+}
 values!(Work {
     Idle,
     Preparing,
@@ -55,6 +66,8 @@ pub(crate) struct Observation {
     pub(super) valid_for_ms: u32,
     pub(super) standby: Standby,
     pub(super) registration: Registration,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) registration_reason: Option<RegistrationReason>,
     pub(super) caller: Option<String>,
     pub(super) work: Work,
     pub(super) cleanup: Cleanup,
@@ -91,6 +104,17 @@ impl Observation {
             && (!self.can_request_off
                 || (self.standby == Standby::On && self.cleanup != Cleanup::Unknown))
             && (self.cleanup != Cleanup::Unknown || (!self.can_request_on && !self.can_request_off))
+            && (match self.registration {
+                Registration::NeedsAction => {
+                    self.registration_reason.is_some()
+                        && self.standby == Standby::On
+                        && self.work == Work::Idle
+                        && self.cleanup == Cleanup::Confirmed
+                        && !self.can_request_on
+                        && self.can_request_off
+                }
+                _ => self.registration_reason.is_none(),
+            })
             && self.transition.as_ref().is_none_or(|t| {
                 t.request_id > 0
                     && t.request_id <= SAFE_INTEGER

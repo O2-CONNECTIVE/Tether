@@ -19,6 +19,10 @@ import (
 // before the accepted response. It makes the key-rotation race deterministic.
 var testHookAfterResidentReserved func()
 
+// testHookAfterResidentAuthenticated runs before reserving the resident slot.
+// It makes the handler-close race deterministic after HTTP admission.
+var testHookAfterResidentAuthenticated func()
+
 // ResidentPrincipal is supplied by the protected normal gateway composition.
 // A signer enables identity-only resident authentication, never an execution grant.
 type ResidentPrincipal struct {
@@ -107,6 +111,9 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 	if e != nil {
 		return
 	}
+	if testHookAfterResidentAuthenticated != nil {
+		testHookAfterResidentAuthenticated()
+	}
 	peer = &residentPeer{handler: h, registrar: h.registrar, binding: b, ctx: life, cancel: cancel, ws: ws, link: c, key: key, signer: signer, gate: make(chan struct{}, 1), seen: map[string]bool{}, intents: map[string]agentgateway.ResidentWorkBinding{}, finished: make(chan struct{})}
 	peer.gate <- struct{}{}
 	reserve, stopReserve := context.WithTimeout(life, h.budgets.Registration)
@@ -115,8 +122,10 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 	if e != nil {
 		if errors.Is(e, errResidentOccupied) {
 			_ = ws.Close(residentOccupiedClose, "resident control occupied")
+		} else if errors.Is(e, errResidentGatewayClosed) {
+			_ = ws.Close(websocket.StatusGoingAway, "resident gateway closed")
 		} else {
-			_ = ws.Close(websocket.StatusPolicyViolation, "resident identity refused")
+			_ = ws.Close(websocket.StatusPolicyViolation, "resident registration refused")
 		}
 		peer = nil
 		return
@@ -127,7 +136,7 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 	currentHostKey, currentHostWire := h.hostKey(b.host)
 	if currentHostKey == nil || !bytes.Equal(currentHostWire, b.hostKey) {
 		// peer stays set: the deferred cleanup releases the reserved slot.
-		_ = ws.Close(websocket.StatusPolicyViolation, "resident identity refused")
+		_ = ws.Close(residentIdentityRefusedClose, "resident identity refused")
 		return
 	}
 	sig, e := sign(signer, signer.PublicKey(), residentTranscript(b, "gateway-accepted"))
@@ -156,7 +165,7 @@ func (h *Handler) serveResident(w http.ResponseWriter, r *http.Request, a *admis
 func (h *Handler) authenticateResident(ctx context.Context, ws *websocket.Conn) (bound residentBinding, hostKey ssh.PublicKey, principalSigner ssh.Signer, result error) {
 	defer func() {
 		if errors.Is(result, ErrRefused) {
-			_ = ws.Close(websocket.StatusPolicyViolation, "resident identity refused")
+			_ = ws.Close(residentIdentityRefusedClose, "resident identity refused")
 		}
 	}()
 	var b residentBinding
@@ -442,10 +451,15 @@ func (h *Handler) configureResidents(ps []ResidentPrincipal) error {
 // observed here, so this refusal closes with residentOccupiedClose and the Mac
 // retries it for a bounded time. It never replaces the live peer.
 var errResidentOccupied = errors.New("agenttransport: resident control occupied")
+var errResidentGatewayClosed = errors.New("agenttransport: resident gateway closed")
 
 // residentOccupiedClose is in the private 4000-4999 range because the Worker
 // relay passes that range unchanged; 1013 would reach the Mac as 1011.
 const residentOccupiedClose websocket.StatusCode = 4013
+
+// residentIdentityRefusedClose is a dedicated identity refusal code. Like
+// residentOccupiedClose, it survives the Cloudflare probe relay unchanged.
+const residentIdentityRefusedClose websocket.StatusCode = 4014
 
 func (h *Handler) reserveResident(ctx context.Context, p *residentPeer) error {
 	k := residentMapKey(p.binding.host, p.binding.principal)
@@ -457,7 +471,10 @@ func (h *Handler) reserveResident(ctx context.Context, p *residentPeer) error {
 		return nil
 	}
 	h.mu.Unlock()
-	if closed || old == nil {
+	if closed {
+		return errResidentGatewayClosed
+	}
+	if old == nil {
 		return ErrRefused
 	}
 	if old.ctx.Err() == nil {
@@ -468,7 +485,7 @@ func (h *Handler) reserveResident(ctx context.Context, p *residentPeer) error {
 	defer h.mu.Unlock()
 	switch {
 	case h.closed:
-		return ErrRefused
+		return errResidentGatewayClosed
 	case waited != nil:
 		return errors.Join(errResidentOccupied, waited)
 	case h.residents[k] != nil:

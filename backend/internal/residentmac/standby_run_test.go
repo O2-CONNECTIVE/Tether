@@ -2,13 +2,230 @@ package residentmac
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/workerowner"
 )
+
+type terminalStandbyConnector struct {
+	done   chan struct{}
+	once   sync.Once
+	result error
+}
+
+func (c *terminalStandbyConnector) Run(context.Context) error {
+	c.once.Do(func() { close(c.done) })
+	return c.result
+}
+func (c *terminalStandbyConnector) Accept(ctx context.Context) (*agenttransport.ResidentSourceLease, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.done:
+		return nil, agenttransport.ErrClosed
+	}
+}
+func (c *terminalStandbyConnector) Stop()                       { c.once.Do(func() { close(c.done) }) }
+func (c *terminalStandbyConnector) Close(context.Context) error { return nil }
+func (c *terminalStandbyConnector) Snapshot() agenttransport.ResidentControlSnapshot {
+	return agenttransport.ResidentControlSnapshot{}
+}
+
+func terminalRefusalConnector() *terminalStandbyConnector {
+	return &terminalStandbyConnector{done: make(chan struct{}), result: &agenttransport.ResidentNeedsActionError{Reason: agenttransport.ResidentFailureIdentityRefused, Err: agenttransport.ErrRefused}}
+}
+
+type statusStandbyConnector struct {
+	mu       sync.Mutex
+	snapshot agenttransport.ResidentControlSnapshot
+}
+
+func (c *statusStandbyConnector) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (c *statusStandbyConnector) Accept(ctx context.Context) (*agenttransport.ResidentSourceLease, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (*statusStandbyConnector) Stop()                       {}
+func (*statusStandbyConnector) Close(context.Context) error { return nil }
+func (c *statusStandbyConnector) Snapshot() agenttransport.ResidentControlSnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.snapshot
+}
+func (c *statusStandbyConnector) setSnapshot(snapshot agenttransport.ResidentControlSnapshot) {
+	c.mu.Lock()
+	c.snapshot = snapshot
+	c.mu.Unlock()
+}
+
+func TestReconnectWakeDetectorUsesInjectedClocksAndNetworkFingerprint(t *testing.T) {
+	base := time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
+	oldNetwork := reconnectNetworkFingerprint([]string{"en0/192.0.2.10", "en1/198.51.100.4"})
+	if oldNetwork != reconnectNetworkFingerprint([]string{"en1/198.51.100.4", "en0/192.0.2.10"}) {
+		t.Fatal("interface enumeration order changed the network fingerprint")
+	}
+	newNetwork := reconnectNetworkFingerprint([]string{"en0/203.0.113.8"})
+	var detector reconnectWakeDetector
+	if detector.observe(base, base, oldNetwork, true) {
+		t.Fatal("baseline produced a wake")
+	}
+	if detector.observe(base.Add(3*time.Second), base.Add(time.Second), oldNetwork, true) {
+		t.Fatal("clock drift at the exact two-second threshold produced a wake")
+	}
+	if !detector.observe(base.Add(7*time.Second), base.Add(2*time.Second), oldNetwork, true) {
+		t.Fatal("three-second sleep-aware clock gap did not produce a wake")
+	}
+	if !detector.observe(base.Add(8*time.Second), base.Add(3*time.Second), newNetwork, true) {
+		t.Fatal("changed address fingerprint did not produce a wake")
+	}
+}
+
+func TestRegistrationStatusMovesFromConnectingThroughReconnectToAuthenticated(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		control       agenttransport.ResidentControlSnapshot
+		authenticated bool
+		want          string
+	}{
+		{"first attempt", agenttransport.ResidentControlSnapshot{}, false, "connecting"},
+		{"temporary failure waiting", agenttransport.ResidentControlSnapshot{RetryWaiting: true, Reconnecting: true}, false, "reconnecting"},
+		{"temporary failure dialing", agenttransport.ResidentControlSnapshot{Reconnecting: true}, false, "reconnecting"},
+		{"known session reconnecting", agenttransport.ResidentControlSnapshot{}, true, "reconnecting"},
+		{"authenticated", agenttransport.ResidentControlSnapshot{Connected: true}, true, "authenticated"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := registrationStatus(tc.control, tc.authenticated); got != tc.want {
+				t.Fatalf("registrationStatus() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStandbyMonitorPublishesReconnectThenAuthentication(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := newStandby()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		connector := new(statusStandbyConnector)
+		cycle := &standbyCycle{ctx: ctx, cancel: cancel, owner: workerowner.New(time.Second), done: make(chan struct{}), initialUntil: time.Now().Add(initialAuthentication), connector: connector}
+		s.mu.Lock()
+		s.cycle = cycle
+		s.observation.Standby = "on"
+		s.observation.Registration = "connecting"
+		s.observation.AdmissionSealed = false
+		s.observation.Transition = &StandbyTransition{RequestID: 1, Intent: "on", Outcome: "pending"}
+		s.endStandbyInLocked(2 * time.Hour)
+		s.changedLocked()
+		s.mu.Unlock()
+		go s.monitor(cycle, make(chan standbyReport, 1))
+
+		settle()
+		if o := s.Snapshot(); o.Registration != "connecting" {
+			t.Fatal("first connection did not remain connecting", o)
+		}
+		connector.setSnapshot(agenttransport.ResidentControlSnapshot{RetryWaiting: true, Reconnecting: true})
+		settle()
+		if o := s.Snapshot(); o.Registration != "reconnecting" {
+			t.Fatal("temporary failure was not published as reconnecting", o)
+		}
+		connector.setSnapshot(agenttransport.ResidentControlSnapshot{Connected: true, Generation: "fresh-generation"})
+		settle()
+		if o := s.Snapshot(); o.Registration != "authenticated" || o.Transition == nil || o.Transition.Outcome != "applied" {
+			t.Fatal("new authenticated connection was not published", o)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+func TestStandbyKeepsNeedsActionAfterCleanConnectorExit(t *testing.T) {
+	s, _, calls := idleStandby(t)
+	connector := terminalRefusalConnector()
+	s.makeConnector = func(context.Context) (residentConnector, error) {
+		calls.Add(1)
+		return connector, nil
+	}
+	if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
+		t.Fatal(r)
+	}
+	eventually(t, func() bool { return s.Snapshot().Registration == "needs_action" })
+	o := s.Snapshot()
+	if o.Standby != "on" || o.RegistrationReason != RegistrationReasonIdentityRefused || !o.AdmissionSealed || o.Cleanup != "confirmed" || !o.CanRequestOff || o.CanRequestOn {
+		t.Fatal("clean terminal refusal did not retain an ON needs-action state", o)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("terminal refusal created another connector", calls.Load())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := s.Close(ctx); err != nil {
+		t.Fatal("closing the process-local standby failed", err)
+	}
+	if o := s.Snapshot(); o.Standby != "off" || o.Registration != "disconnected" || o.RegistrationReason != "" {
+		t.Fatal("closing retained a process-local needs-action state", o)
+	}
+}
+
+func TestNeedsActionExpiresUsingInjectedClock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, _, _ := idleStandby(t)
+		clock := &stepClock{base: time.Now()}
+		s.clock = clock.now
+		refusal := terminalRefusalConnector()
+		s.makeConnector = func(context.Context) (residentConnector, error) { return refusal, nil }
+		if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
+			t.Fatal(r)
+		}
+		settle()
+		if o := s.Snapshot(); o.Standby != "on" || o.Registration != "needs_action" {
+			t.Fatal("clean terminal refusal was not retained before the end", o)
+		}
+		clock.awake(2 * time.Hour)
+		settle()
+		if o := s.Snapshot(); o.Standby != "off" || o.Registration != "disconnected" || o.RegistrationReason != "" || !o.StandbyExpired || !o.CanRequestOn {
+			t.Fatal("needs-action standby did not turn off at its deadline", o)
+		}
+	})
+}
+
+func TestNeedsActionRequiresOffBeforeOnRetries(t *testing.T) {
+	s, _, calls := idleStandby(t)
+	first := terminalRefusalConnector()
+	second := &idleConnector{done: make(chan struct{}), gate: make(chan struct{})}
+	t.Cleanup(func() { close(second.gate) })
+	s.makeConnector = func(context.Context) (residentConnector, error) {
+		if calls.Add(1) == 1 {
+			return first, nil
+		}
+		return second, nil
+	}
+	if r := s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "accepted" {
+		t.Fatal(r)
+	}
+	eventually(t, func() bool { return s.Snapshot().Registration == "needs_action" })
+	if r := s.RequestOn(2, s.Snapshot().Revision, 2*time.Hour); r.Disposition != "rejected" || calls.Load() != 1 {
+		t.Fatal("ON alone retried a needs-action cycle", r, calls.Load())
+	}
+	if r := s.RequestOff(3, s.Snapshot().Revision); r.Disposition != "accepted" {
+		t.Fatal("OFF did not clear a needs-action cycle", r)
+	}
+	o := s.Snapshot()
+	if o.Standby != "off" || o.Registration != "disconnected" || o.RegistrationReason != "" || !o.CanRequestOn {
+		t.Fatal("OFF did not clear the reason and release ON", o)
+	}
+	if r := s.RequestOn(4, o.Revision, 2*time.Hour); r.Disposition != "accepted" {
+		t.Fatal("ON after OFF did not start a new cycle", r)
+	}
+	eventually(t, func() bool { return calls.Load() == 2 })
+}
 
 // The standby lengths a person can pick (#399). Nothing else.
 var listedStandbyLengths = []time.Duration{2 * time.Hour, 4 * time.Hour, 8 * time.Hour, 12 * time.Hour, 24 * time.Hour}

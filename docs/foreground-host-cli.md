@@ -55,6 +55,10 @@ GUI用JSONL入口にはありません。延長は待機の遷移ではなく、
 4. 同じIDの `receipt` がacceptedでも完了ではない。`status.snapshot.transition` の
    同じID / intent / appliedと、対応するstandby・registration・cleanupを確認する。
    staleを新しいIDで盲目的に再送せず、最新statusと既存作業を確認する。
+   `registration` は初回の `connecting`、一時障害後の `reconnecting`、認証済みの
+   `authenticated`、停止する拒否の `needs_action` を区別します。`needs_action` では
+   `registrationReason` が `identity_refused` / `connection_occupied` / `gateway_refused` のいずれかで、
+   standbyは `on` のまま受付をsealedにし、OFFだけを許します。OFFを適用した後のONで再試行します。
 5. OFFは新規受付を閉じ、所有作業の停止と回収を待つ。`close` はadapterを永久終了する
    要求で、同じownerのCloseを1回だけ呼ぶ。close以降の同chunk / 次chunkは実行しない。
    OFF確認、close受付、closed-confirmed、実pipe EOF、元child Waitは別の事象。

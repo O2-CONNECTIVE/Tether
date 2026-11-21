@@ -40,11 +40,9 @@ func onEnded() residentmac.StandbyObservation {
 
 // #420: the pipe looks at the owner when it changes, but can miss a step. If
 // the Mac sleeps right after standby authenticated and wakes past its end, or
-// the native source fails to open right after authentication, the pipe sees
-// the ON pending and next sees its cycle over. Standby never comes back on for
-// that request, so the ON can never be shown applied. The request must still
-// end: Rust and the product GUI keep it pending, and refuse every later request,
-// until a status with the same ID says applied or rejected.
+// the native source fails to open right after authentication, the pipe can see
+// the ON pending and next see its cycle stopping. It waits for the terminal
+// standby state before deciding whether that ON applied.
 func TestOnUnseenUntilItsCycleEndedIsRejected(t *testing.T) {
 	rejected := &Transition{RequestID: 1, Intent: "on", Outcome: "rejected"}
 	for name, seen := range map[string][]residentmac.StandbyObservation{
@@ -70,9 +68,16 @@ func TestOnUnseenUntilItsCycleEndedIsRejected(t *testing.T) {
 			var s statusEnvelope
 			for _, o := range seen {
 				s = observe(o)
-				if !reflect.DeepEqual(s.Snapshot.Transition, rejected) || s.Snapshot.Standby != o.Standby || s.Snapshot.CanRequestOff {
-					t.Fatal("an ON whose cycle ended stayed pending", s)
+				want := "rejected"
+				if o.Standby == "stopping" {
+					want = "pending"
 				}
+				if s.Snapshot.Transition == nil || s.Snapshot.Transition.Outcome != want || s.Snapshot.Standby != o.Standby || s.Snapshot.CanRequestOff {
+					t.Fatal("ON result did not wait for the terminal standby state", s)
+				}
+			}
+			if !reflect.DeepEqual(s.Snapshot.Transition, rejected) {
+				t.Fatal("an ON whose cycle ended off was not rejected", s)
 			}
 			if !s.Snapshot.CanRequestOn || m.pending != nil || m.poisoned {
 				t.Fatal("standby off did not admit the next ON", s)
@@ -83,6 +88,41 @@ func TestOnUnseenUntilItsCycleEndedIsRejected(t *testing.T) {
 				t.Fatal("the heartbeat dropped the rejection", s)
 			}
 		})
+	}
+}
+
+// A quick authentication can apply ON between pipe polls. The next observed
+// owner state may already be stopping and needs_action; keep its ID pending
+// through stopping, then publish applied once the owner settles on standby ON.
+func TestAppliedONMissedBeforeStoppingEndsAppliedOnNeedsAction(t *testing.T) {
+	var m mapper
+	observe := func(o residentmac.StandbyObservation, now uint64) statusEnvelope {
+		t.Helper()
+		s, err := m.observe(o, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	observe(fixtureOff(), 100)
+	if s := observe(onPending(), 200); s.Snapshot.Transition.Outcome != "pending" {
+		t.Fatal("ON was not pending before the short authentication", s)
+	}
+	if s := observe(onStopping(), 300); s.Snapshot.Transition == nil || s.Snapshot.Transition.Outcome != "pending" || m.pending == nil {
+		t.Fatal("stopping ended ON before cleanup settled", s)
+	}
+	needsAction := onStopping()
+	needsAction.Revision = 5
+	needsAction.Standby = "on"
+	needsAction.Registration = "needs_action"
+	needsAction.RegistrationReason = residentmac.RegistrationReasonGatewayRefused
+	needsAction.Work = "idle"
+	needsAction.Cleanup = "confirmed"
+	needsAction.CanRequestOff = true
+	s := observe(needsAction, 400)
+	want := &Transition{RequestID: 1, Intent: "on", Outcome: "applied"}
+	if !reflect.DeepEqual(s.Snapshot.Transition, want) || !s.Snapshot.CanRequestOff || m.pending != nil || m.closedOn == 1 {
+		t.Fatal("needs_action cycle did not end ON as applied", s, m.pending, m.closedOn)
 	}
 }
 
