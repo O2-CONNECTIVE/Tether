@@ -209,6 +209,35 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 	return statusEnvelope{1, "status", now, s}, nil
 }
 
+// terminalUnknownStatus projects the last mapped view after Stop could not
+// confirm cleanup. It does not ask the owner for another snapshot.
+func (m *mapper) terminalUnknownStatus(now uint64) (statusEnvelope, error) {
+	if m.revision == 0 || m.revision == MaxInteger || now > MaxInteger || now < m.observedAt {
+		return statusEnvelope{}, ErrProtocol
+	}
+	m.revision++
+	s := m.view
+	s.Revision = m.revision
+	s.Standby = "unknown"
+	s.Registration = "unknown"
+	s.RegistrationReason = ""
+	s.Work = "unknown"
+	s.Cleanup = "unknown"
+	s.CanRequestOn = false
+	s.CanRequestOff = false
+	if s.Transition != nil {
+		transition := *s.Transition
+		transition.Outcome = "unknown"
+		s.Transition = &transition
+	}
+	m.cleanupUnknown = true
+	m.poisoned = true
+	m.end = standbyEnd{StandbyExpired: m.end.StandbyExpired}
+	m.view = s
+	m.observedAt = now
+	return statusEnvelope{1, "status", now, s}, nil
+}
+
 // frame is the status line for this mapper's dialect.
 func (m *mapper) frame(s statusEnvelope) any {
 	if !m.foreground {

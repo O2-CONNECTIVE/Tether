@@ -57,7 +57,8 @@ func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 	done := make(chan error, 1)
 	// A nil heartbeat channel cannot publish. The second frame must therefore
 	// come from the real status dispatch on the same original idle owner.
-	go func() { done <- serveLoop(ctx, owner, p, foregroundInput, nil) }()
+	m := mapper{}
+	go func() { done <- serveLoop(ctx, owner, p, foregroundInput, nil, &m) }()
 	joined := false
 	t.Cleanup(func() {
 		cancel()

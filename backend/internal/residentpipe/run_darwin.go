@@ -137,13 +137,28 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 
 // Both entry points transfer the same loaded owner here exactly once.
 func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, owner *residentmac.Standby, pipes *ownedPipes, dialect inputDialect) error {
-	e := safeServeInput(lifetime, owner, pipes, dialect)
+	m := mapper{foreground: dialect == foregroundInput}
+	e := safeServeInput(lifetime, owner, pipes, dialect, &m)
 	result := coord.Stop()
 	var closeErr error
+	var terminalErr error
 	if !result.Stopped {
 		closeErr = residentmac.ErrStandbyUnknown
+		now, statusErr := continuousMS()
+		if statusErr == nil {
+			status, err := m.terminalUnknownStatus(now)
+			if err == nil {
+				var b []byte
+				b, err = Encode(m.frame(status))
+				if err == nil {
+					err = pipes.writeLine(b)
+				}
+			}
+			statusErr = err
+		}
+		terminalErr = statusErr
 	}
-	terminalErr := writeClosed(pipes, closeErr)
+	terminalErr = errors.Join(terminalErr, writeClosed(pipes, closeErr))
 	if closeErr != nil {
 		retainForever(coord, owner) // keep the original objects reachable
 	}
@@ -163,25 +178,26 @@ func ownedResult(served, closeErr, terminalErr error) error {
 	return errors.Join(served, closeErr, terminalErr)
 }
 func serve(owner *residentmac.Standby, p *ownedPipes) error {
-	return serveInput(context.Background(), owner, p, jsonInput)
+	m := mapper{}
+	return serveInput(context.Background(), owner, p, jsonInput, &m)
 }
 
-func serveInput(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect) error {
+func serveInput(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect, m *mapper) error {
 	heartbeat := time.NewTicker(time.Second)
 	defer heartbeat.Stop()
-	return serveLoop(lifetime, owner, p, dialect, heartbeat.C)
+	return serveLoop(lifetime, owner, p, dialect, heartbeat.C, m)
 }
 
 // Scheduling-only private seam: a component test can hold heartbeat delivery
 // to prove that a status command itself publishes. It grants no new authority.
-func serveLoop(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect, heartbeat <-chan time.Time) error {
-	m := mapper{foreground: dialect == foregroundInput}
+func serveLoop(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect, heartbeat <-chan time.Time, m *mapper) error {
+	m.foreground = dialect == foregroundInput
 	publish := func() error {
 		now, e := continuousMS()
 		if e != nil {
 			return e
 		}
-		return publishObservation(&m, p, owner.Snapshot(), now)
+		return publishObservation(m, p, owner.Snapshot(), now)
 	}
 	if e := publish(); e != nil {
 		return e
@@ -299,16 +315,17 @@ func writeClosed(p *ownedPipes, closeErr error) error {
 
 // Recoverable panics are transport faults, never evidence of cleanup.
 func safeServe(owner *residentmac.Standby, p *ownedPipes) (err error) {
-	return safeServeInput(context.Background(), owner, p, jsonInput)
+	m := mapper{}
+	return safeServeInput(context.Background(), owner, p, jsonInput, &m)
 }
 
-func safeServeInput(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect) (err error) {
+func safeServeInput(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect, m *mapper) (err error) {
 	defer func() {
 		if recover() != nil {
 			err = ErrProtocol
 		}
 	}()
-	return serveInput(lifetime, owner, p, dialect)
+	return serveInput(lifetime, owner, p, dialect, m)
 }
 func publishObservation(m *mapper, p *ownedPipes, o residentmac.StandbyObservation, now uint64) error {
 	s, e := m.observe(o, now)

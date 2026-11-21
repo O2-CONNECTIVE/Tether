@@ -89,6 +89,23 @@ impl Tracking {
         self.failed |= result.is_err();
         result
     }
+    pub(super) fn record_post_close(&mut self, observation: Observation) {
+        // Late status is display-only: do not correlate intents or check freshness.
+        let acceptable = self.latest.as_ref().is_none_or(|(previous, _)| {
+            observation.revision > previous.revision
+                || (observation.revision == previous.revision && {
+                    let mut previous = previous.clone();
+                    previous.valid_for_ms = observation.valid_for_ms;
+                    previous == observation
+                })
+        });
+        // Unknown cleanup never reverts; keep it visible to a later reader.
+        if !acceptable || (self.cleanup_unknown && observation.cleanup != Cleanup::Unknown) {
+            return;
+        }
+        self.cleanup_unknown |= observation.cleanup == Cleanup::Unknown;
+        self.latest = Some((observation, 0));
+    }
     fn status(&mut self, observation: Observation, timestamp: u64, now: u64) -> Result<(), ()> {
         let deadline = timestamp
             .checked_add(u64::from(observation.valid_for_ms))

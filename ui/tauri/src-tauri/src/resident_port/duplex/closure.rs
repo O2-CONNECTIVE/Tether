@@ -90,9 +90,9 @@ impl Closure {
                     self.failed = true;
                 }
             }
-            // These ordinary observations cannot renew shutdown or supply Close
-            // proof. Validate shape/invariants, but not their 3s freshness: actual
-            // Close may take 75s. The proof reader has no overall 3s timeout.
+            // This validation cannot renew shutdown or supply Close proof. Check
+            // shape/invariants and source order, but not freshness: actual Close
+            // may take 75s. Tracking records display state separately, best effort.
             Event::Status {
                 snapshot,
                 source_continuous_ms,

@@ -147,7 +147,14 @@ impl<I: Read + Write> Pump<I> {
                     continue;
                 }
                 if shared.closure.requested() {
+                    let observation = match &event {
+                        wire::Event::Status { snapshot, .. } => snapshot.observation().ok(),
+                        _ => None,
+                    };
                     shared.closure.event(event, now)?;
+                    if let Some(observation) = observation {
+                        shared.tracking.record_post_close(observation);
+                    }
                 } else if let Some(receipt) = shared.tracking.event(event, now)? {
                     if shared.output.is_some() {
                         return Err(());
@@ -183,6 +190,9 @@ impl<I: Read + Write> Pump<I> {
     }
 }
 
+#[cfg(test)]
+#[path = "pump_tests.rs"]
+mod pump_tests;
 #[cfg(test)]
 #[path = "timing_tests.rs"]
 mod timing_tests;

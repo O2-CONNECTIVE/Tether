@@ -4,7 +4,7 @@ use super::{
     test_frames::{intent_request as request, status_line as status},
 };
 use crate::mac_status::ContinuousClock;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,6 +31,34 @@ fn receipt(id: u64) -> String {
     json!({"protocolVersion":1,"type":"receipt","receipt":{
     "protocolVersion":1,"requestId":id,"intent":"on","disposition":"accepted"}})
     .to_string()
+}
+fn snapshot(revision: u64, cleanup: &str, can_on: bool, can_off: bool) -> Value {
+    let mut frame: Value = serde_json::from_str(&status(revision, now(), json!(null))).unwrap();
+    frame["snapshot"]["cleanup"] = json!(cleanup);
+    frame["snapshot"]["canRequestOn"] = json!(can_on);
+    frame["snapshot"]["canRequestOff"] = json!(can_off);
+    frame["snapshot"].clone()
+}
+fn post_close_child(
+    first: &str,
+    snapshot: &Value,
+    outcome: &str,
+) -> (Supervisor, super::owner::BoundDuplex) {
+    const EMIT: &str = r#"import ctypes,json,sys
+lib=ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+class TB(ctypes.Structure): _fields_=[("n",ctypes.c_uint32),("d",ctypes.c_uint32)]
+t=TB();assert lib.mach_timebase_info(ctypes.byref(t))==0
+lib.mach_continuous_time.restype=ctypes.c_uint64
+now=lambda:lib.mach_continuous_time()*t.n//t.d//1000000
+stamp=now()
+print(json.dumps({"protocolVersion":1,"type":"status","sourceContinuousMs":stamp,"snapshot":json.loads(sys.argv[1])}),flush=True)
+print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp,"outcome":sys.argv[2]}),flush=True)
+"#;
+    let script = format!(
+        "printf '%s\\n' '{}'; IFS= read -r line; /usr/bin/python3 -c '{}' '{}' '{}'",
+        first, EMIT, snapshot, outcome
+    );
+    child(&script)
 }
 #[test]
 fn same_owned_child_delivers_receipt_and_buffered_terminal_status() {
@@ -191,6 +219,67 @@ fn explicit_transport_close_not_viewer_close_keeps_same_child_until_reaped() {
     assert!(matches!(reap(&mut owner),End::Reaped(status) if status.code()==Some(8)));
     assert!(!owner.cleanup_confirmed()); // A normal status is not post-Close proof.
     assert_eq!(source.current().unwrap().valid_for_ms, 0);
+}
+
+#[test]
+fn close_unknown_status_is_retained_through_closed_and_eof() {
+    let first = status(
+        7,
+        now(),
+        json!({"requestId":7,"intent":"off","outcome":"applied"}),
+    );
+    let mut final_status = snapshot(8, "unknown", false, false);
+    final_status["transition"] = json!({
+        "requestId":7,
+        "intent":"off",
+        "outcome":"unknown"
+    });
+    let (mut owner, source) = post_close_child(&first, &final_status, "unknown");
+    assert_eq!(
+        source
+            .first_with_timeout(Duration::from_secs(1))
+            .unwrap()
+            .revision,
+        7
+    );
+
+    let pending = source.request(request(8, 7)).unwrap();
+    owner.request_close_transport();
+    assert_eq!(
+        serde_json::to_value(pending.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap()
+            ["disposition"],
+        "unknown"
+    );
+    assert!(matches!(reap(&mut owner), End::Reaped(status) if status.code() == Some(0)));
+    assert!(!owner.cleanup_confirmed());
+
+    let observed = serde_json::to_value(source.current().unwrap()).unwrap();
+    assert_eq!(observed["cleanup"], "unknown");
+    assert_eq!(observed["revision"], 8);
+    assert_eq!(observed["validForMs"], 0);
+    assert_eq!(observed["canRequestOn"], false);
+    assert_eq!(observed["canRequestOff"], false);
+    assert_eq!(
+        observed["transition"],
+        json!({"requestId":7,"intent":"off","outcome":"unknown"})
+    );
+}
+
+#[test]
+fn actionable_close_status_is_retained_but_never_enables_actions() {
+    let first = status(1, now(), json!(null));
+    let final_status = snapshot(2, "confirmed", true, false);
+    let (mut owner, source) = post_close_child(&first, &final_status, "confirmed");
+    source.first_with_timeout(Duration::from_secs(1)).unwrap();
+
+    owner.request_close_transport();
+    assert!(matches!(reap(&mut owner), End::Reaped(status) if status.code() == Some(0)));
+
+    let observed = serde_json::to_value(source.current().unwrap()).unwrap();
+    assert_eq!(observed["revision"], 2);
+    assert_eq!(observed["validForMs"], 0);
+    assert_eq!(observed["canRequestOn"], false);
+    assert_eq!(observed["canRequestOff"], false);
 }
 
 #[test]
