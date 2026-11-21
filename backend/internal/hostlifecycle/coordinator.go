@@ -8,7 +8,6 @@ package hostlifecycle
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -21,7 +20,8 @@ type Resource interface {
 }
 
 // Step acquires one resource. A non-nil Resource returned with an error is a
-// partial acquisition; the ledger still takes it.
+// partial acquisition; the ledger still takes it. Each step must return a
+// distinct resource; returning the same resource from two steps closes it twice.
 type Step struct {
 	Name    string
 	Acquire func(ctx context.Context) (Resource, error)
@@ -37,44 +37,47 @@ var (
 	// ErrStopped refuses a start once a stop has begun.
 	ErrStopped = errors.New("hostlifecycle: stopped")
 	// ErrNeedsCleanup refuses a start while a release is unconfirmed.
-	ErrNeedsCleanup = errors.New("hostlifecycle: a release is unconfirmed")
+	ErrNeedsCleanup   = errors.New("hostlifecycle: a release is unconfirmed")
+	errAcquireAborted = errors.New("hostlifecycle: acquisition ended without returning")
 )
 
 type entryState uint8
 
 const (
 	entryAcquiring entryState = iota + 1
-	entryActive
+	entryHeld
 	entryClosing
 	entryNeedsCleanup
 )
 
 type ledgerEntry struct {
-	name            string
-	resource        Resource
-	state           entryState
-	acquireDone     chan struct{}
-	acquireErr      error
-	acquirePanicked bool
+	name           string
+	resource       Resource
+	state          entryState
+	acquireDone    chan struct{}
+	acquireErr     error
+	acquireAborted bool
+	cancel         context.CancelFunc
 }
 
-type rollbackRun struct {
-	entries []*ledgerEntry
-	done    chan struct{}
+type callResult struct {
+	resource Resource
+	err      error
+	abnormal bool
 }
 
 type Coordinator struct {
-	mu            sync.Mutex
-	startMu       sync.Mutex
-	budget        time.Duration
-	ledger        []*ledgerEntry
-	stopStarted   bool
-	stopCh        chan struct{}
-	stopDone      chan struct{}
-	stopResult    Result
-	acquiring     *ledgerEntry
-	acquireCancel context.CancelFunc
-	rollbackDone  chan struct{}
+	mu           sync.Mutex
+	budget       time.Duration
+	ledger       []*ledgerEntry
+	starting     bool
+	startDone    chan struct{}
+	stopping     bool
+	stopDeadline time.Time
+	stopSignal   chan struct{}
+	decided      bool
+	stopDone     chan struct{}
+	stopResult   Result
 }
 
 // New returns a coordinator that closes within budget, both when a start
@@ -84,43 +87,45 @@ func New(budget time.Duration) *Coordinator {
 		panic("hostlifecycle: non-positive budget")
 	}
 	return &Coordinator{
-		budget:   budget,
-		stopCh:   make(chan struct{}),
-		stopDone: make(chan struct{}),
+		budget:     budget,
+		stopSignal: make(chan struct{}),
+		stopDone:   make(chan struct{}),
 	}
 }
 
 // Start acquires steps in order. On the first error it closes what was
 // acquired, in reverse, and returns that error.
 func (c *Coordinator) Start(ctx context.Context, steps ...Step) error {
-	c.startMu.Lock()
-	defer c.startMu.Unlock()
-
 	c.mu.Lock()
-	if c.stopStarted {
+	if c.stopping {
 		c.mu.Unlock()
 		return ErrStopped
 	}
-	if c.hasStartBarrierLocked() {
+	if c.starting || c.hasStartBarrierLocked() {
 		c.mu.Unlock()
 		return ErrNeedsCleanup
 	}
+	c.starting = true
+	done := make(chan struct{})
+	c.startDone = done
 	c.mu.Unlock()
 
+	err := c.startSteps(ctx, steps)
+	c.finishStart(done)
+	return err
+}
+
+func (c *Coordinator) startSteps(ctx context.Context, steps []Step) error {
 	owned := make([]*ledgerEntry, 0, len(steps))
 	for _, step := range steps {
 		if err := ctx.Err(); err != nil {
-			return c.failStart("", err, owned)
+			return c.failStart(err, owned, false)
 		}
 
 		c.mu.Lock()
-		if c.stopStarted {
+		if c.stopping {
 			c.mu.Unlock()
 			return ErrStopped
-		}
-		if c.hasStartBarrierLocked() {
-			c.mu.Unlock()
-			return ErrNeedsCleanup
 		}
 		entry := &ledgerEntry{
 			name:        step.Name,
@@ -128,114 +133,193 @@ func (c *Coordinator) Start(ctx context.Context, steps ...Step) error {
 			acquireDone: make(chan struct{}),
 		}
 		stepCtx, cancel := context.WithCancel(ctx)
+		entry.cancel = cancel
 		c.ledger = append(c.ledger, entry)
-		c.acquiring = entry
-		c.acquireCancel = cancel
+		owned = append(owned, entry)
 		c.mu.Unlock()
 
-		owned = append(owned, entry)
-		go c.acquire(stepCtx, cancel, entry, step)
+		result := callAsync(func() (Resource, error) {
+			return step.Acquire(stepCtx)
+		})
+		go c.recordAcquisition(entry, result)
 
 		select {
 		case <-entry.acquireDone:
 		case <-ctx.Done():
-			select {
-			case <-entry.acquireDone:
-			default:
-			}
-		case <-c.stopCh:
+		case <-c.stopSignal:
 		}
 
 		c.mu.Lock()
-		stopped := c.stopStarted
+		stopping := c.stopping
 		completed := channelClosed(entry.acquireDone)
 		acquireErr := entry.acquireErr
-		panicked := entry.acquirePanicked
+		acquireAborted := entry.acquireAborted
 		c.mu.Unlock()
 
-		if stopped {
-			if panicked {
-				acquireErr = fmt.Errorf("hostlifecycle: step %q acquisition panicked", step.Name)
-			}
-			if acquireErr != nil {
-				return errors.Join(ErrStopped, fmt.Errorf("hostlifecycle: step %q: %w", step.Name, acquireErr))
+		stepErr := acquireErr
+		if stepErr == nil && acquireAborted {
+			stepErr = errAcquireAborted
+		}
+		if stopping {
+			if stepErr != nil {
+				return stepErr
 			}
 			return ErrStopped
 		}
-		if !completed {
-			return c.failStart("", ctx.Err(), owned)
+		if completed {
+			if stepErr != nil {
+				return c.failStart(stepErr, owned, true)
+			}
+			if err := ctx.Err(); err != nil {
+				return c.failStart(err, owned, false)
+			}
+			continue
 		}
 		if err := ctx.Err(); err != nil {
-			return c.failStart("", err, owned)
+			return c.failStart(err, owned, false)
 		}
-		if panicked {
-			acquireErr = fmt.Errorf("hostlifecycle: step %q acquisition panicked", step.Name)
-		}
-		if acquireErr != nil {
-			return c.failStart(step.Name, acquireErr, owned)
-		}
+		return ErrStopped
 	}
 	return nil
 }
 
-// Stop seals the coordinator, cancels an acquisition in progress, and closes
+// Stop seals the coordinator, cancels acquisitions in progress, and closes
 // the ledger in reverse acquisition order within the budget. It decides once.
 func (c *Coordinator) Stop() Result {
-	deadline := time.Now().Add(c.budget)
 	c.mu.Lock()
-	if c.stopStarted {
+	if c.stopping {
 		done := c.stopDone
 		c.mu.Unlock()
 		<-done
 		return c.copyStopResult()
 	}
-	c.stopStarted = true
-	close(c.stopCh)
-	if c.acquireCancel != nil {
-		c.acquireCancel()
-	}
-	var pending []*ledgerEntry
+	c.stopping = true
+	c.stopDeadline = time.Now().Add(c.budget)
+	close(c.stopSignal)
+	deadline := c.stopDeadline
+	startDone := c.startDone
+	var cancels []context.CancelFunc
 	for _, entry := range c.ledger {
-		if entry.state == entryAcquiring {
-			pending = append(pending, entry)
+		if entry.state == entryAcquiring && entry.cancel != nil {
+			cancels = append(cancels, entry.cancel)
+			entry.cancel = nil
 		}
 	}
-	rollbackDone := c.rollbackDone
 	c.mu.Unlock()
 
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
-	for _, entry := range pending {
-		if !waitForDone(ctx, entry.acquireDone) {
-			c.markLedgerNeedsCleanup()
-			return c.finishStop()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	if startDone != nil {
+		waitUntil(deadline, startDone)
+	}
+	for {
+		c.mu.Lock()
+		var pending *ledgerEntry
+		for _, entry := range c.ledger {
+			if entry.state == entryAcquiring {
+				pending = entry
+				break
+			}
 		}
-	}
-	if rollbackDone != nil && !waitForDone(ctx, rollbackDone) {
-		c.markLedgerNeedsCleanup()
-		return c.finishStop()
-	}
-	if ctx.Err() != nil {
-		c.markLedgerNeedsCleanup()
-		return c.finishStop()
+		c.mu.Unlock()
+		if pending == nil {
+			break
+		}
+		if !waitUntil(deadline, pending.acquireDone) && !time.Now().Before(deadline) {
+			break
+		}
 	}
 
 	c.mu.Lock()
-	entries := append([]*ledgerEntry(nil), c.ledger...)
+	entries := reverseEntries(c.ledger)
 	c.mu.Unlock()
-	for i := len(entries) - 1; i >= 0; i-- {
-		if ctx.Err() != nil {
-			c.markLedgerNeedsCleanup()
-			break
-		}
-		entry := entries[i]
-		c.mu.Lock()
-		if entry.state == entryNeedsCleanup {
-			c.mu.Unlock()
-			continue
-		}
-		if entry.state != entryActive || entry.resource == nil {
+	c.closeEntries(entries, deadline)
+	return c.finishStop()
+}
+
+func (c *Coordinator) recordAcquisition(entry *ledgerEntry, result <-chan callResult) {
+	outcome := <-result
+	c.mu.Lock()
+	entry.resource = outcome.resource
+	entry.acquireErr = outcome.err
+	entry.acquireAborted = outcome.abnormal
+	if entry.state == entryAcquiring {
+		switch {
+		case c.stopping && !time.Now().Before(c.stopDeadline):
 			entry.state = entryNeedsCleanup
+		case outcome.resource != nil:
+			entry.state = entryHeld
+		case outcome.abnormal:
+			entry.state = entryNeedsCleanup
+		default:
+			c.removeEntryLocked(entry)
+		}
+	}
+	cancel := entry.cancel
+	entry.cancel = nil
+	close(entry.acquireDone)
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (c *Coordinator) failStart(err error, owned []*ledgerEntry, acquisitionFailure bool) error {
+	c.mu.Lock()
+	stopping := c.stopping
+	deadline := time.Now().Add(c.budget)
+	c.mu.Unlock()
+	if stopping {
+		if acquisitionFailure {
+			return err
+		}
+		return ErrStopped
+	}
+
+	if !c.waitForAcquisitions(owned, deadline) {
+		c.markNeedsCleanup(owned)
+		return err
+	}
+	c.closeEntries(c.trackedReverse(owned), deadline)
+	return err
+}
+
+func (c *Coordinator) waitForAcquisitions(entries []*ledgerEntry, deadline time.Time) bool {
+	for {
+		c.mu.Lock()
+		effectiveDeadline := c.effectiveDeadlineLocked(deadline)
+		if c.decided || !time.Now().Before(effectiveDeadline) {
+			c.markNeedsCleanupLocked(entries)
+			c.mu.Unlock()
+			return false
+		}
+		var pending *ledgerEntry
+		for _, entry := range entries {
+			if entry.state == entryAcquiring && c.containsEntryLocked(entry) {
+				pending = entry
+				break
+			}
+		}
+		c.mu.Unlock()
+		if pending == nil {
+			return true
+		}
+		waitUntil(effectiveDeadline, pending.acquireDone)
+	}
+}
+
+// closeEntries receives entries in reverse acquisition order.
+func (c *Coordinator) closeEntries(entries []*ledgerEntry, deadline time.Time) {
+	for i, entry := range entries {
+		c.mu.Lock()
+		effectiveDeadline := c.effectiveDeadlineLocked(deadline)
+		if c.decided || !time.Now().Before(effectiveDeadline) {
+			c.markNeedsCleanupLocked(entries[i:])
+			c.mu.Unlock()
+			return
+		}
+		if entry.state != entryHeld {
 			c.mu.Unlock()
 			continue
 		}
@@ -243,195 +327,146 @@ func (c *Coordinator) Stop() Result {
 		resource := entry.resource
 		c.mu.Unlock()
 
-		closeDone := make(chan error, 1)
-		go func() { closeDone <- safeClose(resource, ctx) }()
-		var closeErr error
+		ctx, cancel := context.WithDeadline(context.Background(), effectiveDeadline)
+		result := callAsync(func() (Resource, error) {
+			return nil, resource.Close(ctx)
+		})
+		var outcome callResult
+		completed := false
 		select {
-		case closeErr = <-closeDone:
-			if ctx.Err() != nil {
-				c.markLedgerNeedsCleanup()
-				break
-			}
-			c.finishClose(entry, closeErr)
+		case outcome = <-result:
+			completed = true
 		case <-ctx.Done():
-			c.markLedgerNeedsCleanup()
 		}
-		if ctx.Err() != nil {
-			break
-		}
-	}
-	return c.finishStop()
-}
+		cancel()
 
-func (c *Coordinator) acquire(ctx context.Context, cancel context.CancelFunc, entry *ledgerEntry, step Step) {
-	resource, err, panicked := safeAcquire(ctx, step.Acquire)
-	cancel()
-	c.mu.Lock()
-	entry.acquireErr = err
-	entry.acquirePanicked = panicked
-	if resource != nil {
-		entry.resource = resource
-	}
-	if entry.state != entryNeedsCleanup {
-		switch {
-		case panicked:
-			entry.state = entryNeedsCleanup
-		case resource == nil:
-			c.removeEntryLocked(entry)
-		default:
-			entry.state = entryActive
-		}
-	}
-	if c.acquiring == entry {
-		c.acquiring = nil
-		c.acquireCancel = nil
-	}
-	close(entry.acquireDone)
-	c.mu.Unlock()
-}
-
-func safeAcquire(ctx context.Context, acquire func(context.Context) (Resource, error)) (resource Resource, err error, panicked bool) {
-	defer func() {
-		if recover() != nil {
-			resource = nil
-			err = errors.New("acquisition panicked")
-			panicked = true
-		}
-	}()
-	resource, err = acquire(ctx)
-	if isNilResource(resource) {
-		resource = nil
-	}
-	return resource, err, false
-}
-
-func safeClose(resource Resource, ctx context.Context) (err error) {
-	defer func() {
-		if recover() != nil {
-			err = errors.New("close panicked")
-		}
-	}()
-	return resource.Close(ctx)
-}
-
-func isNilResource(resource Resource) bool {
-	if resource == nil {
-		return true
-	}
-	v := reflect.ValueOf(resource)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
-		return v.IsNil()
-	default:
-		return false
-	}
-}
-
-func (c *Coordinator) failStart(name string, err error, owned []*ledgerEntry) error {
-	c.mu.Lock()
-	if c.stopStarted {
-		c.mu.Unlock()
-		if err == nil {
-			return ErrStopped
-		}
-		return errors.Join(ErrStopped, err)
-	}
-	run := c.beginRollbackLocked(owned)
-	c.mu.Unlock()
-	c.runRollback(run)
-	if name != "" && err != nil {
-		return fmt.Errorf("hostlifecycle: step %q: %w", name, err)
-	}
-	return err
-}
-
-func (c *Coordinator) beginRollbackLocked(owned []*ledgerEntry) *rollbackRun {
-	entries := make([]*ledgerEntry, 0, len(owned))
-	for _, entry := range owned {
-		if entry.state == entryActive && entry.resource != nil {
-			entry.state = entryClosing
-			entries = append(entries, entry)
-		}
-	}
-	if len(entries) == 0 {
-		return nil
-	}
-	done := make(chan struct{})
-	c.rollbackDone = done
-	return &rollbackRun{entries: entries, done: done}
-}
-
-func (c *Coordinator) runRollback(run *rollbackRun) {
-	if run == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), c.budget)
-	defer cancel()
-	for i := len(run.entries) - 1; i >= 0; i-- {
-		if ctx.Err() != nil {
-			c.markNeedsCleanup(run.entries[:i+1])
-			break
-		}
-		entry := run.entries[i]
 		c.mu.Lock()
-		resource := entry.resource
+		effectiveDeadline = c.effectiveDeadlineLocked(deadline)
+		if c.decided || entry.state != entryClosing || !time.Now().Before(effectiveDeadline) {
+			c.markNeedsCleanupLocked(entries[i:])
+			c.mu.Unlock()
+			return
+		}
+		if !completed {
+			c.markNeedsCleanupLocked(entries[i:])
+			c.mu.Unlock()
+			return
+		}
+		if outcome.abnormal || outcome.err != nil {
+			entry.state = entryNeedsCleanup
+		} else {
+			c.removeEntryLocked(entry)
+		}
 		c.mu.Unlock()
-		closeDone := make(chan error, 1)
-		go func() { closeDone <- safeClose(resource, ctx) }()
-		select {
-		case err := <-closeDone:
-			if ctx.Err() != nil {
-				c.markNeedsCleanup(run.entries[:i+1])
-				break
-			}
-			c.finishClose(entry, err)
-		case <-ctx.Done():
-			c.markNeedsCleanup(run.entries[:i+1])
-		}
-		if ctx.Err() != nil {
-			break
-		}
 	}
+}
+
+func callAsync(call func() (Resource, error)) <-chan callResult {
+	result := make(chan callResult, 1)
+	go func() {
+		var outcome callResult
+		returned := false
+		defer func() {
+			_ = recover()
+			if !returned {
+				outcome.abnormal = true
+			}
+			if isNilResource(outcome.resource) {
+				outcome.resource = nil
+			}
+			result <- outcome
+		}()
+		outcome.resource, outcome.err = call()
+		returned = true
+	}()
+	return result
+}
+
+func (c *Coordinator) finishStart(done chan struct{}) {
 	c.mu.Lock()
-	if c.rollbackDone == run.done {
-		c.rollbackDone = nil
-		close(run.done)
+	if c.startDone == done {
+		c.starting = false
+		c.startDone = nil
+		close(done)
 	}
 	c.mu.Unlock()
 }
 
-func (c *Coordinator) finishClose(entry *ledgerEntry, err error) {
+func (c *Coordinator) finishStop() Result {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if entry.state == entryNeedsCleanup {
-		return
+	c.decided = true
+	needs := make([]string, 0, len(c.ledger))
+	for i := len(c.ledger) - 1; i >= 0; i-- {
+		entry := c.ledger[i]
+		entry.state = entryNeedsCleanup
+		needs = append(needs, entry.name)
 	}
-	if err == nil {
-		c.removeEntryLocked(entry)
-		return
-	}
-	entry.state = entryNeedsCleanup
+	c.stopResult = Result{Stopped: len(c.ledger) == 0, NeedsCleanup: needs}
+	result := cloneResult(c.stopResult)
+	close(c.stopDone)
+	c.mu.Unlock()
+	return result
 }
 
-func (c *Coordinator) markNeedsCleanup(entries []*ledgerEntry) {
+func (c *Coordinator) copyStopResult() Result {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, entry := range entries {
-		entry.state = entryNeedsCleanup
-	}
+	return cloneResult(c.stopResult)
 }
 
-func (c *Coordinator) markLedgerNeedsCleanup() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, entry := range c.ledger {
-		entry.state = entryNeedsCleanup
+func (c *Coordinator) effectiveDeadlineLocked(deadline time.Time) time.Time {
+	if c.stopping && c.stopDeadline.Before(deadline) {
+		return c.stopDeadline
 	}
+	return deadline
 }
 
 func (c *Coordinator) hasStartBarrierLocked() bool {
 	for _, entry := range c.ledger {
-		if entry.state == entryAcquiring || entry.state == entryClosing || entry.state == entryNeedsCleanup {
+		if entry.state == entryAcquiring || entry.state == entryNeedsCleanup {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Coordinator) trackedReverse(entries []*ledgerEntry) []*ledgerEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var reversed []*ledgerEntry
+	for i := len(entries) - 1; i >= 0; i-- {
+		if c.containsEntryLocked(entries[i]) {
+			reversed = append(reversed, entries[i])
+		}
+	}
+	return reversed
+}
+
+func reverseEntries(entries []*ledgerEntry) []*ledgerEntry {
+	reversed := make([]*ledgerEntry, len(entries))
+	for i := range entries {
+		reversed[len(entries)-1-i] = entries[i]
+	}
+	return reversed
+}
+
+func (c *Coordinator) markNeedsCleanup(entries []*ledgerEntry) {
+	c.mu.Lock()
+	c.markNeedsCleanupLocked(entries)
+	c.mu.Unlock()
+}
+
+func (c *Coordinator) markNeedsCleanupLocked(entries []*ledgerEntry) {
+	for _, entry := range entries {
+		if c.containsEntryLocked(entry) {
+			entry.state = entryNeedsCleanup
+		}
+	}
+}
+
+func (c *Coordinator) containsEntryLocked(entry *ledgerEntry) bool {
+	for _, candidate := range c.ledger {
+		if candidate == entry {
 			return true
 		}
 	}
@@ -449,33 +484,17 @@ func (c *Coordinator) removeEntryLocked(entry *ledgerEntry) {
 	}
 }
 
-func (c *Coordinator) finishStop() Result {
-	c.mu.Lock()
-	needs := make([]string, 0)
-	for i := len(c.ledger) - 1; i >= 0; i-- {
-		if c.ledger[i].state == entryNeedsCleanup {
-			needs = append(needs, c.ledger[i].name)
-		} else {
-			c.ledger[i].state = entryNeedsCleanup
-			needs = append(needs, c.ledger[i].name)
-		}
+func isNilResource(resource Resource) bool {
+	if resource == nil {
+		return true
 	}
-	c.stopResult = Result{Stopped: len(needs) == 0, NeedsCleanup: needs}
-	result := cloneResult(c.stopResult)
-	c.mu.Unlock()
-	close(c.stopDone)
-	return result
-}
-
-func (c *Coordinator) copyStopResult() Result {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return cloneResult(c.stopResult)
-}
-
-func cloneResult(result Result) Result {
-	result.NeedsCleanup = append([]string(nil), result.NeedsCleanup...)
-	return result
+	v := reflect.ValueOf(resource)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 func channelClosed(channel <-chan struct{}) bool {
@@ -487,11 +506,21 @@ func channelClosed(channel <-chan struct{}) bool {
 	}
 }
 
-func waitForDone(ctx context.Context, done <-chan struct{}) bool {
-	select {
-	case <-done:
-		return true
-	case <-ctx.Done():
+func waitUntil(deadline time.Time, done <-chan struct{}) bool {
+	if !time.Now().Before(deadline) {
 		return false
 	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-done:
+		return time.Now().Before(deadline)
+	case <-timer.C:
+		return false
+	}
+}
+
+func cloneResult(result Result) Result {
+	result.NeedsCleanup = append([]string(nil), result.NeedsCleanup...)
+	return result
 }
