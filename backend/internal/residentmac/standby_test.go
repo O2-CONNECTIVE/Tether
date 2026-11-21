@@ -22,6 +22,7 @@ type idleConnector struct {
 	connected    atomic.Bool
 	hadAuth      atomic.Bool
 	reconnecting atomic.Bool
+	inAccept     atomic.Bool
 }
 
 func (c *idleConnector) Run(ctx context.Context) error {
@@ -31,6 +32,7 @@ func (c *idleConnector) Run(ctx context.Context) error {
 }
 func (c *idleConnector) Accept(ctx context.Context) (*agenttransport.ResidentSourceLease, error) {
 	if c.acceptGate != nil {
+		c.inAccept.Store(true)
 		<-c.acceptGate
 		return nil, context.Canceled
 	}
@@ -171,17 +173,20 @@ func TestStandbyInitialAuthenticationEndsPendingOnWithoutServiceLifetime(t *test
 func TestStandbyInitialAuthenticationTimeoutSealsAndStopsTogether(t *testing.T) {
 	s, c, _ := idleStandby(t)
 	c.acceptGate = make(chan struct{}) // hold the run loop so only the monitor's update is visible
+	release := sync.OnceFunc(func() { close(c.acceptGate) })
+	t.Cleanup(release) // runs before idleStandby's Close
 	c.reconnecting.Store(true)
 	s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour)
-	eventually(t, func() bool { return s.Snapshot().Registration == "reconnecting" })
+	eventually(t, func() bool { return c.inAccept.Load() && s.Snapshot().Registration == "reconnecting" })
 	s.mu.Lock()
 	s.cycle.initialUntil = time.Now().Add(-time.Second)
 	s.mu.Unlock()
 	eventually(t, func() bool { return s.Snapshot().AdmissionSealed })
-	if o := s.Snapshot(); o.Standby != "stopping" || o.Work != "idle" || o.Cleanup != "confirmed" || o.Transition == nil || o.Transition.Outcome != "pending" {
+	// The connection is still being closed: cleanup is pending, not confirmed.
+	if o := s.Snapshot(); o.Standby != "stopping" || o.Work != "stopping" || o.Cleanup != "pending" || o.Transition == nil || o.Transition.Outcome != "pending" {
 		t.Fatal("sealed initial ON published without stopping", o)
 	}
-	close(c.acceptGate)
+	release()
 	close(c.gate)
 	eventually(t, func() bool { return s.Snapshot().Standby == "off" })
 	if o := s.Snapshot(); o.Transition.Intent != "on" || o.Transition.Outcome != "rejected" || !o.CanRequestOn {

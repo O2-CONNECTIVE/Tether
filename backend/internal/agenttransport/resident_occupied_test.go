@@ -91,6 +91,7 @@ func TestResidentFailureDisposition(t *testing.T) {
 		{"dial ENETDOWN", sockErr("connect", syscall.ENETDOWN), false, false, true, ""},
 		{"dial EHOSTDOWN", sockErr("connect", syscall.EHOSTDOWN), false, false, true, ""},
 		{"read ENETRESET", sockErr("read", syscall.ENETRESET), true, false, true, ""},
+		{"dial EADDRNOTAVAIL", sockErr("connect", syscall.EADDRNOTAVAIL), true, false, true, ""},
 		{"normal close", closeErr(websocket.StatusNormalClosure), true, false, true, ""},
 		{"going away", closeErr(websocket.StatusGoingAway), true, false, true, ""},
 		{"internal error", closeErr(websocket.StatusInternalError), true, false, true, ""},
