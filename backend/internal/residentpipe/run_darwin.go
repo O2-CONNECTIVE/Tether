@@ -5,12 +5,14 @@ package residentpipe
 import (
 	"context"
 	"errors"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostlifecycle"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 )
 
 const LoadBudget = 10 * time.Second
@@ -80,8 +82,20 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 		return e
 	}
 	defer pipes.close()
+	coord := hostlifecycle.New(CloseBudget)
 	ctx, cancel := context.WithTimeout(lifetime, LoadBudget)
-	owner, e := loadBootstrap(ctx, kind, protectedPolicy)
+	var owner *residentmac.Standby
+	e = coord.Start(ctx, hostlifecycle.Step{
+		Name: "standby",
+		Acquire: func(ctx context.Context) (hostlifecycle.Resource, error) {
+			loaded, err := loadBootstrap(ctx, kind, protectedPolicy)
+			owner = loaded
+			if loaded == nil {
+				return nil, err
+			}
+			return loaded, err
+		},
+	})
 	cancel()
 	if e != nil {
 		if maclaunch.IsStartupPolicyRejected(e) {
@@ -92,15 +106,17 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 		}
 		return e
 	}
-	return runOwnedInput(lifetime, owner, pipes, dialect)
+	return runOwnedInput(lifetime, coord, owner, pipes, dialect)
 }
 
-// Both bootstraps transfer the same loaded owner here exactly once.
-func runOwnedInput(lifetime context.Context, owner *residentmac.Standby, pipes *ownedPipes, dialect inputDialect) error {
+// Both entry points transfer the same loaded owner here exactly once.
+func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, owner *residentmac.Standby, pipes *ownedPipes, dialect inputDialect) error {
 	e := safeServeInput(lifetime, owner, pipes, dialect)
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), CloseBudget)
-	closeErr := closeOnce(owner, closeCtx)
-	closeCancel() // exactly once
+	result := coord.Stop()
+	var closeErr error
+	if !result.Stopped {
+		closeErr = residentmac.ErrStandbyUnknown
+	}
 	terminalErr := writeClosed(pipes, closeErr)
 	if closeErr != nil {
 		// Unknown is retained in this process indefinitely: no replacement, retry,
@@ -108,9 +124,11 @@ func runOwnedInput(lifetime context.Context, owner *residentmac.Standby, pipes *
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
+			runtime.KeepAlive(coord)
 			runtime.KeepAlive(owner)
 		}
 	}
+	runtime.KeepAlive(coord)
 	runtime.KeepAlive(owner)
 	return ownedResult(e, closeErr, terminalErr)
 }
@@ -273,15 +291,6 @@ func safeServeInput(lifetime context.Context, owner *residentmac.Standby, p *own
 	}()
 	return serveInput(lifetime, owner, p, dialect)
 }
-func closeOnce(owner *residentmac.Standby, ctx context.Context) (err error) {
-	defer func() {
-		if recover() != nil {
-			err = residentmac.ErrStandbyUnknown
-		}
-	}()
-	return owner.Close(ctx)
-}
-
 func publishObservation(m *mapper, p *ownedPipes, o residentmac.StandbyObservation, now uint64) error {
 	s, e := m.observe(o, now)
 	if e != nil {

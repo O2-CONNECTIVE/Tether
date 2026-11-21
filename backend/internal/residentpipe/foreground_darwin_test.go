@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostlifecycle"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 	"golang.org/x/sys/unix"
 )
 
@@ -29,6 +31,12 @@ func TestForegroundContextCancellationClosesSameOwner(t *testing.T) {
 func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 	t.Helper()
 	owner := idleProtectedOwner(t)
+	coord := hostlifecycle.New(CloseBudget)
+	if err := coord.Start(context.Background(), hostlifecycle.Step{Name: "standby", Acquire: func(context.Context) (hostlifecycle.Resource, error) {
+		return owner, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -172,11 +180,13 @@ func foregroundIdleControlAndClose(t *testing.T, canceled bool) {
 	if after := owner.Snapshot(); after.Revision != before.Revision || after.Standby != "off" || after.Owned != 0 {
 		t.Fatal("input after close affected original owner", after)
 	}
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), time.Second)
-	defer closeCancel()
-	result := closeOnce(owner, closeCtx)
-	if result != nil || writeClosed(p, result) != nil {
-		t.Fatal("same idle owner close failed", result)
+	result := coord.Stop()
+	var closeErr error
+	if !result.Stopped {
+		closeErr = residentmac.ErrStandbyUnknown
+	}
+	if closeErr != nil || writeClosed(p, closeErr) != nil {
+		t.Fatal("same idle owner close failed", closeErr)
 	}
 	var closed closedEnvelope
 	read(&closed)

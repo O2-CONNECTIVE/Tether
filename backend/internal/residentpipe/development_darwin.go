@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostlifecycle"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 )
 
@@ -27,11 +28,23 @@ func runDevelopmentInput(lifetime context.Context) error {
 		return err
 	}
 	defer pipes.close()
+	coord := hostlifecycle.New(CloseBudget)
 	loadCtx, cancel := context.WithTimeout(lifetime, LoadBudget)
-	owner, err := residentmac.LoadDevelopmentStandby(loadCtx)
+	var owner *residentmac.Standby
+	err = coord.Start(loadCtx, hostlifecycle.Step{
+		Name: "standby",
+		Acquire: func(ctx context.Context) (hostlifecycle.Resource, error) {
+			loaded, err := residentmac.LoadDevelopmentStandby(ctx)
+			owner = loaded
+			if loaded == nil {
+				return nil, err
+			}
+			return loaded, err
+		},
+	})
 	cancel()
 	if err != nil {
 		return err
 	} // no invented startup-rejection receipt
-	return runOwnedInput(lifetime, owner, pipes, foregroundInput)
+	return runOwnedInput(lifetime, coord, owner, pipes, foregroundInput)
 }

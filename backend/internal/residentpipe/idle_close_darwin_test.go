@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostlifecycle"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 	"golang.org/x/crypto/ssh"
@@ -109,6 +110,12 @@ func idleProtectedOwner(t *testing.T) *residentmac.Standby {
 // before writing its terminal result. No authenticated work is exercised.
 func TestIdleStandbyClosePrecedesTerminalPipeFrame(t *testing.T) {
 	owner := idleProtectedOwner(t)
+	coord := hostlifecycle.New(CloseBudget)
+	if err := coord.Start(context.Background(), hostlifecycle.Step{Name: "standby", Acquire: func(context.Context) (hostlifecycle.Resource, error) {
+		return owner, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -197,13 +204,12 @@ func TestIdleStandbyClosePrecedesTerminalPipeFrame(t *testing.T) {
 	if !errors.Is(served, os.ErrClosed) {
 		t.Fatal(served)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	result := closeOnce(owner, ctx)
-	if result != nil {
-		t.Fatal(result)
+	result := coord.Stop()
+	var closeErr error
+	if !result.Stopped {
+		closeErr = residentmac.ErrStandbyUnknown
 	}
-	if err := writeClosed(p, result); err != nil {
+	if err := writeClosed(p, closeErr); err != nil {
 		t.Fatal(err)
 	}
 	var closed closedEnvelope
@@ -233,13 +239,21 @@ func TestUnconfirmedCloseCannotWriteConfirmedFrame(t *testing.T) {
 	}
 	defer r.Close()
 	defer w.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	result := closeOnce(nil, ctx)
-	if result == nil {
-		t.Fatal("missing owner became confirmed")
+	coord := hostlifecycle.New(time.Second)
+	if err := coord.Start(context.Background(), hostlifecycle.Step{Name: "panic", Acquire: func(context.Context) (hostlifecycle.Resource, error) {
+		return panicCloseResource{}, nil
+	}}); err != nil {
+		t.Fatal(err)
 	}
-	if err := writeClosed(&ownedPipes{-1, int(w.Fd())}, result); err != nil {
+	result := coord.Stop()
+	if result.Stopped || len(result.NeedsCleanup) != 1 || result.NeedsCleanup[0] != "panic" {
+		t.Fatal("panicking resource became confirmed", result)
+	}
+	var closeErr error
+	if !result.Stopped {
+		closeErr = residentmac.ErrStandbyUnknown
+	}
+	if err := writeClosed(&ownedPipes{-1, int(w.Fd())}, closeErr); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -253,7 +267,7 @@ func TestUnconfirmedCloseCannotWriteConfirmedFrame(t *testing.T) {
 	if err := json.Unmarshal(line, &closed); err != nil || closed.Outcome != "unknown" {
 		t.Fatal(closed, err)
 	}
-	if err := writeClosed(&ownedPipes{-1, -1}, result); err == nil {
+	if err := writeClosed(&ownedPipes{-1, -1}, closeErr); err == nil {
 		t.Fatal("failed terminal write became success")
 	}
 }
