@@ -13,13 +13,15 @@ import (
 
 // Only idle control lifecycle is faked. No receiver/native grant is forged.
 type idleConnector struct {
-	done      chan struct{}
-	gate      chan struct{}
-	once      sync.Once
-	closes    atomic.Int32
-	closeErr  error
-	connected atomic.Bool
-	hadAuth   atomic.Bool
+	done         chan struct{}
+	gate         chan struct{}
+	acceptGate   chan struct{} // when set, Accept ignores ctx until closed and holds the cycle's run loop
+	once         sync.Once
+	closes       atomic.Int32
+	closeErr     error
+	connected    atomic.Bool
+	hadAuth      atomic.Bool
+	reconnecting atomic.Bool
 }
 
 func (c *idleConnector) Run(ctx context.Context) error {
@@ -28,6 +30,10 @@ func (c *idleConnector) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 func (c *idleConnector) Accept(ctx context.Context) (*agenttransport.ResidentSourceLease, error) {
+	if c.acceptGate != nil {
+		<-c.acceptGate
+		return nil, context.Canceled
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
@@ -42,7 +48,7 @@ func (c *idleConnector) Close(ctx context.Context) error {
 	}
 }
 func (c *idleConnector) Snapshot() agenttransport.ResidentControlSnapshot {
-	v := agenttransport.ResidentControlSnapshot{Connected: c.connected.Load()}
+	v := agenttransport.ResidentControlSnapshot{Connected: c.connected.Load(), Reconnecting: c.reconnecting.Load()}
 	if v.Connected || c.hadAuth.Load() {
 		v.Generation = "fake-authenticated-history-display-only"
 	}
@@ -155,6 +161,30 @@ func TestStandbyInitialAuthenticationEndsPendingOnWithoutServiceLifetime(t *test
 	eventually(t, func() bool { return s.Snapshot().Standby == "off" })
 	o := s.Snapshot()
 	if o.Transition.Intent != "on" || o.Transition.Outcome != "rejected" || o.Registration != "disconnected" || !o.CanRequestOn {
+		t.Fatal(o)
+	}
+}
+// #466: the initial ON that runs out seals admission and starts stopping in the
+// same update. Sealed but still ON reaches the pipe as standby unknown, which
+// the GUIs accept only while registration is connecting; a retrying initial ON
+// is reconnecting, so they read it as cleanup they cannot confirm.
+func TestStandbyInitialAuthenticationTimeoutSealsAndStopsTogether(t *testing.T) {
+	s, c, _ := idleStandby(t)
+	c.acceptGate = make(chan struct{}) // hold the run loop so only the monitor's update is visible
+	c.reconnecting.Store(true)
+	s.RequestOn(1, s.Snapshot().Revision, 2*time.Hour)
+	eventually(t, func() bool { return s.Snapshot().Registration == "reconnecting" })
+	s.mu.Lock()
+	s.cycle.initialUntil = time.Now().Add(-time.Second)
+	s.mu.Unlock()
+	eventually(t, func() bool { return s.Snapshot().AdmissionSealed })
+	if o := s.Snapshot(); o.Standby != "stopping" || o.Work != "idle" || o.Cleanup != "confirmed" || o.Transition == nil || o.Transition.Outcome != "pending" {
+		t.Fatal("sealed initial ON published without stopping", o)
+	}
+	close(c.acceptGate)
+	close(c.gate)
+	eventually(t, func() bool { return s.Snapshot().Standby == "off" })
+	if o := s.Snapshot(); o.Transition.Intent != "on" || o.Transition.Outcome != "rejected" || !o.CanRequestOn {
 		t.Fatal(o)
 	}
 }
