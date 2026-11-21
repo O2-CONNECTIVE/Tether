@@ -6,7 +6,7 @@
 ## 二つの構成を区別する
 
 通常の`run()`はresident status/intent commandを登録し、標準`tauri.conf.json`が選ぶ`shell-local` capabilityは`allow-resident-port`を許可します。
-通常起動のsourceは`Unbound`でsidecarを起動しません。sidecarを所有するのは#456のPR Dです。
+通常起動のsourceは`Unbound`でsidecarを起動しません。sidecarの所有は#456の後続で配線します。
 このpermissionはcommandの呼び出しだけを許し、source binding・認証・操作権限を有効にしません。
 
 明示的な`commands_with_ports`は既存の具体的`ResidentPort`を受けるprivate builderです。
