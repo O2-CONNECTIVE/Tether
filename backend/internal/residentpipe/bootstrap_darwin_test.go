@@ -94,13 +94,20 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 		cancel  bool
 	}{{"json-eof", jsonInput, false}, {"foreground-close", foregroundInput, false}, {"foreground-cancel", foregroundInput, true}} {
 		t.Run(tc.name, func(t *testing.T) {
-			owner := idleProtectedOwner(t)
-			coord := hostlifecycle.New(CloseBudget)
-			if err := coord.Start(context.Background(), hostlifecycle.Step{Name: "standby", Acquire: func(context.Context) (hostlifecycle.Resource, error) {
-				return owner, nil
-			}}); err != nil {
+			policyPath := idleProtectedPolicy(t)
+			coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
+				return loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
+			})
+			if err != nil {
 				t.Fatal(err)
 			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if err := owner.Close(ctx); err != nil {
+					t.Error("same idle owner cleanup", err)
+				}
+			})
 			inR, inW, err := os.Pipe()
 			if err != nil {
 				t.Fatal(err)
@@ -162,6 +169,9 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("shared lifetime did not finish")
 			}
+			if owner.Snapshot().CanRequestOn {
+				t.Fatal("original Standby still accepts requests")
+			}
 			found := false
 			for i := 0; i < 8; i++ {
 				line, err = reader.ReadBytes('\n')
@@ -194,12 +204,23 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 }
 
 func TestBootstrapSharedLifetimeReportsCoordinatorCleanup(t *testing.T) {
-	owner := idleProtectedOwner(t)
-	coord := hostlifecycle.New(CloseBudget)
-	if err := coord.Start(context.Background(),
-		hostlifecycle.Step{Name: "standby", Acquire: func(context.Context) (hostlifecycle.Resource, error) { return owner, nil }},
-		hostlifecycle.Step{Name: "later", Acquire: func(context.Context) (hostlifecycle.Resource, error) { return panicCloseResource{}, nil }},
-	); err != nil {
+	policyPath := idleProtectedPolicy(t)
+	coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
+		return loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := owner.Close(ctx); err != nil {
+			t.Error("same idle owner cleanup", err)
+		}
+	})
+	if err := coord.Start(context.Background(), hostlifecycle.Step{Name: "later", Acquire: func(context.Context) (hostlifecycle.Resource, error) {
+		return panicCloseResource{}, nil
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	inR, inW, err := os.Pipe()

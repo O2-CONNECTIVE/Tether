@@ -57,6 +57,7 @@ type ledgerEntry struct {
 	acquireDone    chan struct{}
 	acquireErr     error
 	acquireAborted bool
+	pastDeadline   bool
 	cancel         context.CancelFunc
 }
 
@@ -248,6 +249,7 @@ func (c *Coordinator) recordAcquisition(entry *ledgerEntry, result <-chan callRe
 		switch {
 		case c.stopping && !time.Now().Before(c.stopDeadline):
 			entry.state = entryNeedsCleanup
+			entry.pastDeadline = true
 		case outcome.resource != nil:
 			entry.state = entryHeld
 		case outcome.abnormal:
@@ -278,7 +280,6 @@ func (c *Coordinator) failStart(err error, owned []*ledgerEntry, acquisitionFail
 	}
 
 	if !c.waitForAcquisitions(owned, deadline) {
-		c.markNeedsCleanup(owned)
 		return err
 	}
 	c.closeEntries(c.trackedReverse(owned), deadline)
@@ -288,8 +289,11 @@ func (c *Coordinator) failStart(err error, owned []*ledgerEntry, acquisitionFail
 func (c *Coordinator) waitForAcquisitions(entries []*ledgerEntry, deadline time.Time) bool {
 	for {
 		c.mu.Lock()
-		effectiveDeadline := c.effectiveDeadlineLocked(deadline)
-		if c.decided || !time.Now().Before(effectiveDeadline) {
+		if c.decided {
+			c.mu.Unlock()
+			return false
+		}
+		if !time.Now().Before(deadline) {
 			c.markNeedsCleanupLocked(entries)
 			c.mu.Unlock()
 			return false
@@ -305,7 +309,7 @@ func (c *Coordinator) waitForAcquisitions(entries []*ledgerEntry, deadline time.
 		if pending == nil {
 			return true
 		}
-		waitUntil(effectiveDeadline, pending.acquireDone)
+		waitUntil(deadline, pending.acquireDone)
 	}
 }
 
@@ -313,8 +317,16 @@ func (c *Coordinator) waitForAcquisitions(entries []*ledgerEntry, deadline time.
 func (c *Coordinator) closeEntries(entries []*ledgerEntry, deadline time.Time) {
 	for i, entry := range entries {
 		c.mu.Lock()
-		effectiveDeadline := c.effectiveDeadlineLocked(deadline)
-		if c.decided || !time.Now().Before(effectiveDeadline) {
+		if c.decided {
+			c.mu.Unlock()
+			return
+		}
+		if !time.Now().Before(deadline) {
+			c.markNeedsCleanupLocked(entries[i:])
+			c.mu.Unlock()
+			return
+		}
+		if entry.state == entryNeedsCleanup && entry.pastDeadline {
 			c.markNeedsCleanupLocked(entries[i:])
 			c.mu.Unlock()
 			return
@@ -327,7 +339,7 @@ func (c *Coordinator) closeEntries(entries []*ledgerEntry, deadline time.Time) {
 		resource := entry.resource
 		c.mu.Unlock()
 
-		ctx, cancel := context.WithDeadline(context.Background(), effectiveDeadline)
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
 		result := callAsync(func() (Resource, error) {
 			return nil, resource.Close(ctx)
 		})
@@ -337,13 +349,16 @@ func (c *Coordinator) closeEntries(entries []*ledgerEntry, deadline time.Time) {
 		case outcome = <-result:
 			completed = true
 		case <-ctx.Done():
+			select {
+			case outcome = <-result:
+				completed = true
+			default:
+			}
 		}
 		cancel()
 
 		c.mu.Lock()
-		effectiveDeadline = c.effectiveDeadlineLocked(deadline)
-		if c.decided || entry.state != entryClosing || !time.Now().Before(effectiveDeadline) {
-			c.markNeedsCleanupLocked(entries[i:])
+		if c.decided || entry.state != entryClosing {
 			c.mu.Unlock()
 			return
 		}
@@ -356,6 +371,11 @@ func (c *Coordinator) closeEntries(entries []*ledgerEntry, deadline time.Time) {
 			entry.state = entryNeedsCleanup
 		} else {
 			c.removeEntryLocked(entry)
+		}
+		if !time.Now().Before(deadline) {
+			c.markNeedsCleanupLocked(entries[i+1:])
+			c.mu.Unlock()
+			return
 		}
 		c.mu.Unlock()
 	}
@@ -414,13 +434,6 @@ func (c *Coordinator) copyStopResult() Result {
 	return cloneResult(c.stopResult)
 }
 
-func (c *Coordinator) effectiveDeadlineLocked(deadline time.Time) time.Time {
-	if c.stopping && c.stopDeadline.Before(deadline) {
-		return c.stopDeadline
-	}
-	return deadline
-}
-
 func (c *Coordinator) hasStartBarrierLocked() bool {
 	for _, entry := range c.ledger {
 		if entry.state == entryAcquiring || entry.state == entryNeedsCleanup {
@@ -450,15 +463,12 @@ func reverseEntries(entries []*ledgerEntry) []*ledgerEntry {
 	return reversed
 }
 
-func (c *Coordinator) markNeedsCleanup(entries []*ledgerEntry) {
-	c.mu.Lock()
-	c.markNeedsCleanupLocked(entries)
-	c.mu.Unlock()
-}
-
 func (c *Coordinator) markNeedsCleanupLocked(entries []*ledgerEntry) {
 	for _, entry := range entries {
 		if c.containsEntryLocked(entry) {
+			if entry.state == entryAcquiring || entry.state == entryClosing {
+				entry.pastDeadline = true
+			}
 			entry.state = entryNeedsCleanup
 		}
 	}

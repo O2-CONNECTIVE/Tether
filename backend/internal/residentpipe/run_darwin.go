@@ -73,6 +73,27 @@ func loadBootstrap(ctx context.Context, kind bootstrapKind, protectedPolicy stri
 	return residentmac.LoadStandby(ctx, protectedPolicy)
 }
 
+// startStandby loads the one original owner as the first step of a new
+// coordinator. Both entry points and their tests acquire through it.
+func startStandby(lifetime context.Context, load func(context.Context) (*residentmac.Standby, error)) (*hostlifecycle.Coordinator, *residentmac.Standby, error) {
+	coord := hostlifecycle.New(CloseBudget)
+	loadCtx, cancel := context.WithTimeout(lifetime, LoadBudget)
+	defer cancel()
+	var owner *residentmac.Standby
+	err := coord.Start(loadCtx, hostlifecycle.Step{
+		Name: "standby",
+		Acquire: func(ctx context.Context) (hostlifecycle.Resource, error) {
+			loaded, err := load(ctx)
+			owner = loaded
+			if loaded == nil {
+				return nil, err
+			}
+			return loaded, err
+		},
+	})
+	return coord, owner, err
+}
+
 func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy string, dialect inputDialect) error {
 	if lifetime == nil || lifetime.Err() != nil || (dialect != jsonInput && dialect != foregroundInput) || !kind.valid(protectedPolicy) {
 		return ErrProtocol
@@ -82,21 +103,9 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 		return e
 	}
 	defer pipes.close()
-	coord := hostlifecycle.New(CloseBudget)
-	ctx, cancel := context.WithTimeout(lifetime, LoadBudget)
-	var owner *residentmac.Standby
-	e = coord.Start(ctx, hostlifecycle.Step{
-		Name: "standby",
-		Acquire: func(ctx context.Context) (hostlifecycle.Resource, error) {
-			loaded, err := loadBootstrap(ctx, kind, protectedPolicy)
-			owner = loaded
-			if loaded == nil {
-				return nil, err
-			}
-			return loaded, err
-		},
+	coord, owner, e := startStandby(lifetime, func(ctx context.Context) (*residentmac.Standby, error) {
+		return loadBootstrap(ctx, kind, protectedPolicy)
 	})
-	cancel()
 	if e != nil {
 		if maclaunch.IsStartupPolicyRejected(e) {
 			if writeErr := writeStartupRejected(pipes); writeErr != nil {
