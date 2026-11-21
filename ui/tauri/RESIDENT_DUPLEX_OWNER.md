@@ -2,9 +2,11 @@
 
 公開済みwire/Close前提を、既存の具体Pump・Shared・Supervisorへ接続するsourceです。
 通常の`run()`は`ResidentState::startup()`のstateを`commands_with_state`へ渡し、resident status/intent commandを登録します。
-標準buildは`Unbound`でsidecarを起動せず、statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`、intent receiptは`unavailable`です。
+標準buildは`resident_native_source` cfgを有効にせず、sourceは`Unbound`でsidecarを起動しません。statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`、intent receiptは`unavailable`です。
+macOS標準buildでは`Unbound`の`request_exit()`がtrueとなり、`ExitRequested`を保留しません。
+macOSで`resident_native_source` cfgを明示した構成では、`NativeSession`が`NativeOuterOwner`を保持します。`run()`は`ExitRequested`時にownerの判定がfalseなら`prevent_exit()`を呼び、outer monitorの安全な結果と実joinを待ちます。
 このsourceを信頼したproducer起動から標準stateへ接続する作業は「#456 の後続」です。trusted launch factoryは未接続です。
-実producer、鍵やprotected policy、GUIのON/OFF/Quitを起動・有効化しません。
+実producer、鍵やprotected policy、GUIのON/OFFは起動・有効化しません。
 
 ## 構築の境界
 
@@ -38,8 +40,8 @@ production Dropはwire Close証跡・実EOF・exit0・IO/supervisor joinを要�
 unknownでは親を保持し、reapだけで解放しません。この層の`cleanup_confirmed`は、信頼済producerからのauthorityを別途確立して使う内部結果です。
 任意のwire bytes、fixture成功、process exitを実認証やアプリ終了許可へ昇格させません。
 
-後続はprotected producer準備を持つsealed launcherから通常stateへ接続し、StandbyOwner/ExitGateのouter monitor joinとguarded QuitをGUIへ結ぶ作業です。
-それらの結合と実Mac GUI/producer/ON/OFF/退出は未実証です。
+protected producer準備を持つsealed launcherから通常stateへ接続する作業は「#456 の後続」です。outer monitor joinとguarded QuitのGUI経路は、明示的な`resident_native_source` cfgのmacOS構成に接続済みです。
+実Mac GUI/producer/ON/OFF/退出は未実証です。
 #199のEOF guardは継続し、凍結private callerでは到達しない単体防御という静的所見を変更しません。private実行候補は未編集です。
 
 ## 試験の範囲

@@ -1,7 +1,6 @@
 # 明示的なresident IPCのsource接続
 
-このsourceは未統合#200/#201/#202のstackに依存します。
-#200 Windows session-create阻害とstacked CI未実行を維持し、main適用済みとは扱いません。
+#200の実IOと同じChildの終了所有はmainに統合済みです（merge commit `32b6377`）。この文書はresident IPCのsource接続と内部contractを記録します。
 
 ## 二つの構成を区別する
 

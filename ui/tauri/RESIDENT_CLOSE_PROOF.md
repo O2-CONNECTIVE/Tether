@@ -2,6 +2,7 @@
 
 標準の`run()`は`commands_with_state`を使い、`get_resident_status`と`request_resident_intent`を登録します。
 標準buildのUnbound statusはmacOSで`source-unavailable`、Windowsなど非対応OSで`unsupported`です。intent receiptは`unavailable`で、producerへは送信されません。
+標準buildは`resident_native_source` cfgを有効にせず、`ResidentState`のsourceは`Unbound`です。macOS標準buildの`request_exit()`はtrueとなり、`ExitRequested`を保留しません。macOSでこのcfgを明示した構成では`NativeSession`が`NativeOuterOwner`を保持し、`run()`の`ExitRequested`はouter ownerの判定がfalseの間`prevent_exit()`で退出を保留します。
 この文書は内部`resident_port`のwire復号・状態整合・post-Close証跡部分を扱います。
 [具体duplex owner](RESIDENT_DUPLEX_OWNER.md)はportとStatus/Receiptの内部IOへ接続しています。信頼した起動から通常stateへつなぐ作業は「#456 の後続」です。
 ON/OFFのwire dataだけでは、本人同意や実行許可を成立させません。
@@ -28,8 +29,8 @@ EOF後event拒否は、従来PumpがEOFで止まる順序をこの内部部品�
 
 既存の`Pump::step/consume`は同じChildから取得したstdin/stdoutを所有し、実半閉鎖・bounded framing・実EOFをClosureへ伝えます。
 既存の`Supervisor::record`は、同じproducerからのauthoritative Close、実EOF、exact Child Wait、reader/writerを含むIOとsupervisor joinを区別して検査します。
-さらに`StandbyOwner/ExitGate`はouter monitorの実joinを待ち、unknownを保持します。
-Pump/Supervisorとstartup rejectionの別証跡は内部実装へ接続しています。trusted producer準備/protected policy、outer monitorとguarded Quitは未接続です。
+明示構成の`NativeOuterOwner/ExitGate`はouter monitorの実joinを待ち、unknownを保持します。
+Pump/Supervisorとstartup rejectionの別証跡は内部実装へ接続しています。明示的な`resident_native_source` cfgのmacOS構成ではouter monitorとguarded Quitも接続済みです。trusted producer準備/protected policyから通常起動へつなぐ作業は「#456 の後続」です。
 単純なprocess exitやreap gateを、resident全体の回収証明へ昇格させません。
 
 ## 確認範囲

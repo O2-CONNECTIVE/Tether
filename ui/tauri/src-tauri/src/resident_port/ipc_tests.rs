@@ -151,7 +151,8 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
         time::{Duration, Instant},
     };
 
-    let now = ContinuousClock::new().unwrap().now_millis().unwrap();
+    let clock = ContinuousClock::new().unwrap();
+    let now = clock.now_millis().unwrap();
     let frame = json!({
         "protocolVersion": 1,
         "type": "status",
@@ -172,6 +173,11 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
             "transition": null
         }
     });
+    let deadline = frame["sourceContinuousMs"]
+        .as_u64()
+        .unwrap()
+        .checked_add(frame["snapshot"]["validForMs"].as_u64().unwrap())
+        .unwrap();
     struct OwnedDirectory(PathBuf);
     impl OwnedDirectory {
         fn new() -> Self {
@@ -205,7 +211,7 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
-        .arg("while [ ! -e \"$2\" ]; do /bin/sleep 0.002; done; printf '%s\\n' \"$1\"; while [ ! -e \"$3\" ]; do /bin/sleep 0.002; done; exit 7")
+        .arg("wait_for_file() { count=0; while [ ! -e \"$1\" ] && [ \"$count\" -lt 300 ]; do /bin/sleep 0.01; count=$((count + 1)); done; [ -e \"$1\" ]; }; wait_for_file \"$2\" || exit 8; printf '%s\\n' \"$1\"; wait_for_file \"$3\" || exit 9; exit 7")
         .arg("resident-eof-fixture")
         .arg(frame.to_string())
         .arg(ready.to_string_lossy().into_owned())
@@ -265,6 +271,11 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
         "sidecar ended after the original status deadline"
     );
     let expired = status();
+    let observed_at = clock.now_millis().unwrap();
+    assert!(
+        observed_at < deadline,
+        "environment was too slow to verify EOF expiry before the status deadline"
+    );
     assert_eq!(expired["revision"], before["revision"]);
     assert_eq!(expired["validForMs"], 0);
     assert_eq!(expired["canRequestOn"], false);
