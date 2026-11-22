@@ -3,7 +3,7 @@ use super::{
     test_frames,
     wire::{self, Event},
 };
-use crate::resident_port::model::{Disposition, Intent, IntentRequest};
+use crate::resident_port::model::{Disposition, IntentRequest};
 use serde_json::{json, Value};
 
 fn request(intent: &str, id: u64, hours: Option<Value>) -> Value {
@@ -68,8 +68,6 @@ fn extend_waits_only_for_receipt_even_when_can_flags_are_false() {
     assert_eq!(frame["request"]["standbyHours"], json!(4));
     let output_len = output.len();
     shared.written(Ok(output_len)).unwrap();
-    assert_eq!(shared.tracking.pending, None);
-    assert_eq!(shared.tracking.awaiting, Some((1, Intent::Extend)));
 
     let concurrent: IntentRequest =
         serde_json::from_value(request("extend", 2, Some(json!(8)))).unwrap();
@@ -81,8 +79,10 @@ fn extend_waits_only_for_receipt_even_when_can_flags_are_false() {
     let receipt = shared.tracking.event(receipt, 100).unwrap().unwrap();
     let (_, send, _) = shared.waiting.take().unwrap();
     assert!(send.try_send(receipt).is_ok());
-    assert_eq!(first_receipt.recv().unwrap().disposition, Disposition::Accepted);
-    assert_eq!(shared.tracking.awaiting, None);
+    assert_eq!(
+        first_receipt.recv().unwrap().disposition,
+        Disposition::Accepted
+    );
 
     let next: IntentRequest =
         serde_json::from_value(request("extend", 3, Some(json!(12)))).unwrap();

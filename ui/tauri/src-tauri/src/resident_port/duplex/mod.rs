@@ -21,10 +21,10 @@ mod tracking_tests;
 #[cfg(test)]
 mod closure_tests;
 #[cfg(test)]
-mod test_frames;
-#[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod standby_end_tests;
 #[cfg(test)]
 mod standby_intent_tests;
+#[cfg(test)]
+mod test_frames;
+#[cfg(test)]
+mod tests;

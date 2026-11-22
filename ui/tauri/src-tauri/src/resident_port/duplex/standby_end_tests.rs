@@ -1,4 +1,4 @@
-use super::{test_frames, wire::{self, Event}};
+use super::{test_frames, wire::Event};
 use crate::resident_port::model::SAFE_INTEGER;
 use serde_json::{json, Value};
 

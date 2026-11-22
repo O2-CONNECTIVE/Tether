@@ -17,10 +17,16 @@ func TestAppliedOnOutlivesItsCycle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, c, clock := clockedStandbyOn(t, 2*time.Hour)
 		applied := StandbyTransition{RequestID: 1, Intent: "on", Outcome: "applied"}
+		if s.StandbyExpired() {
+			t.Fatal("new standby cycle already marked expired")
+		}
 		clock.asleep(2 * time.Hour)
 		settle()
 		if o := s.Snapshot(); o.Standby != "stopping" || !o.StandbyExpired || o.Transition == nil || *o.Transition != applied {
 			t.Fatal("the end rewrote the ON or did not stop standby", o)
+		}
+		if !s.StandbyExpired() {
+			t.Fatal("expiry was not available before cleanup")
 		}
 		close(c.gate)
 		eventually(t, func() bool {

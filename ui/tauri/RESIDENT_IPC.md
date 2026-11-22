@@ -23,6 +23,7 @@ Tauriの当該版はconfigの親directoryから標準名を読むため、test c
 
 `get_resident_status`はstrict request versionを検査し、同じportの観測だけを返します。
 `request_resident_intent`は既存admissionへ一度だけsubmitし、既存Tauri async runtimeのblocking workerでReceipt receiverを待ちます。
+Tauriへは`request`をJSON文字列で渡します。Rustは文書を直接デシリアライズして、重複キーや未知のキーを拒みます。
 UI thread上で待たず、送信者切断はunknown、task失敗は固定unavailable errorにします。
 自動retry・再bind・観測の楽観更新・receiptからのON/OFF確定はありません。
 後続のmatching transition、freshness、cleanupとreceiptは別に扱います。
@@ -41,6 +42,7 @@ Close要求後からterminal前までのstatusは、Closureで形・不変条件
 1〜2^53−1の整数で、`standbyEndingSoon: true`なら`null`にできません。未知の鍵、欠落、
 型違い、範囲外の値は拒みます。期限の値はGoが出し、RustとTSは計算・補完しません。
 Close後に検証・記録するstatusも同じ3鍵を使います。
+回収を確認できない場合の終端statusには、Goが最後に確定した期限切れの有無を載せます。
 
 intentは`on`・`off`・`extend`です。`standbyHours`は`2`・`4`・`8`・`12`・`24`だけを
 受け、`on`では省略時にGoの既定2時間、`extend`では必須、`off`では禁止です。

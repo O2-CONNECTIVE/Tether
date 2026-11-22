@@ -14,7 +14,8 @@ void test('resident controls use shared IPC and wait for applied observations', 
         work: 'idle', cleanup: 'confirmed', canRequestOn: !on, canRequestOff: on, transition,
         standbyUntil: on ? 1_900_000_000_000 : null, standbyEndingSoon: false, standbyExpired: false });
       if (command !== 'request_resident_intent') return Promise.reject(new Error('unexpected operation'));
-      const request = args.request as { requestId: number; expectedRevision: number; intent: 'on' | 'off' };
+      if (typeof args.request !== 'string') return Promise.reject(new Error('expected an intent document'));
+      const request = JSON.parse(args.request) as { requestId: number; expectedRevision: number; intent: 'on' | 'off' };
       if (request.expectedRevision !== revision || request.requestId !== (on ? 2 : 1)) return Promise.reject(new Error('invalid request'));
       document.documentElement.dataset.residentCalls = String(request.requestId);
       setTimeout(() => { on = request.intent === 'on'; registration = on ? 'connecting' : 'disconnected';

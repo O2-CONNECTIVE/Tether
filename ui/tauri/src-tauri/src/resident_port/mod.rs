@@ -31,9 +31,12 @@ pub(crate) fn get_resident_status(
 }
 #[tauri::command]
 pub(crate) async fn request_resident_intent(
-    request: IntentRequest,
+    request: String,
     state: tauri::State<'_, std::sync::Arc<ResidentState>>,
 ) -> Result<Receipt, &'static str> {
+    // Deserialize the intent document directly so its field checks see every key.
+    let request: IntentRequest =
+        serde_json::from_str(&request).map_err(|_| "INVALID_RESIDENT_INTENT")?;
     let fallback = request.clone();
     let response = state.port().request(request)?;
     // Wait only on the existing owned receipt channel, never on the UI thread.

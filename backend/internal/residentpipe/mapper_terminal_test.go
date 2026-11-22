@@ -23,7 +23,7 @@ func TestTerminalUnknownStatusProjectsLastObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	terminal, err := m.terminalUnknownStatus(200)
+	terminal, err := m.terminalUnknownStatus(200, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,5 +46,23 @@ func TestTerminalUnknownStatusProjectsLastObservation(t *testing.T) {
 	}
 	if _, ok := envelope.Snapshot["registrationReason"]; ok {
 		t.Fatal("terminal unknown registration retained a reason", string(b))
+	}
+}
+
+func TestTerminalUnknownStatusUsesLatestStandbyExpiry(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		var m mapper
+		previous := fixtureOff()
+		previous.StandbyExpired = !expired
+		if _, err := m.observe(previous, 100); err != nil {
+			t.Fatal(err)
+		}
+		terminal, err := m.terminalUnknownStatus(200, expired)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := terminal.Snapshot; got.StandbyExpired != expired || got.Cleanup != "unknown" {
+			t.Fatalf("terminal status did not preserve latest expiry %t and unknown cleanup: %+v", expired, got)
+		}
 	}
 }

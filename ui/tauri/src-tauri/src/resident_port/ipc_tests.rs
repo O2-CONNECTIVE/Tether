@@ -30,6 +30,11 @@ fn read(
             .build()
             .unwrap()
     });
+    let request = if command == "request_resident_intent" {
+        Value::String(request.to_string())
+    } else {
+        request
+    };
     tauri::test::get_ipc_response(
         &window,
         tauri::webview::InvokeRequest {
@@ -100,6 +105,8 @@ fn explicit_ipc_rejects_invalid_schema_and_has_no_binding_or_policy_command() {
         ("expectedRevision", json!(9_007_199_254_740_992_u64)),
         ("intent", json!("restart")),
         ("protocolVersion", json!(2)),
+        ("standbyHours", json!(null)),
+        ("standbyHours", json!(3)),
     ] {
         let mut request = intent();
         request[field] = value;

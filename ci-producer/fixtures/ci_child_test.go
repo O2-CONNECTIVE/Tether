@@ -220,17 +220,9 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 	switch kind {
 	case "status":
 		var e statusEnvelope
-		var decoded error
 		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"}
 		flags := []string{"canRequestOn", "canRequestOff", "standbyEndingSoon", "standbyExpired"}
-		if p.foreground {
-			var f foregroundStatusEnvelope
-			decoded = ciStrictFrame(raw, &f)
-			e = statusEnvelope{f.ProtocolVersion, f.Type, f.SourceContinuousMS, f.Snapshot}
-		} else {
-			decoded = ciStrictFrame(raw, &e)
-		}
-		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || decoded != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
+		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || ciStrictFrame(raw, &e) != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
 			return ErrProtocol
 		}
 		var body map[string]json.RawMessage
@@ -347,7 +339,12 @@ func (p *ciChild) requestWithDiagnostics(intent string) (uint64, *int64, error) 
 	}
 	p.nextID++
 	id := p.nextID
-	raw, e := Encode(intentEnvelope{1, "intent", Intent{1, id, s.Revision, intent, 0}})
+	request := jsonIntentRequest{ProtocolVersion: 1, RequestID: id, ExpectedRevision: s.Revision, Intent: intent}
+	if intent == "extend" {
+		hours := uint64(2)
+		request.StandbyHours = &hours
+	}
+	raw, e := Encode(intentEnvelope{1, "intent", request})
 	if e != nil {
 		return id, nil, e
 	}

@@ -146,7 +146,7 @@ func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, o
 		closeErr = residentmac.ErrStandbyUnknown
 		now, statusErr := continuousMS()
 		if statusErr == nil {
-			status, err := m.terminalUnknownStatus(now)
+			status, err := m.terminalUnknownStatus(now, owner.StandbyExpired())
 			if err == nil {
 				var b []byte
 				b, err = Encode(m.frame(status))
