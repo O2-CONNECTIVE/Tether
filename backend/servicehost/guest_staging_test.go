@@ -12,10 +12,10 @@ import (
 )
 
 type guestOwnerFixture struct {
-	service                     *Service
-	prepares, closes, finalizes atomic.Int32
-	saved                       GuestStagingTicket
-	descriptor                  GuestStagingDescriptor
+	service                              *Service
+	prepares, confirmedCloses, finalizes atomic.Int32
+	saved                                GuestStagingTicket
+	descriptor                           GuestStagingDescriptor
 }
 
 func TestGuestStagingTypedNilOwnerCannotBind(t *testing.T) {
@@ -41,7 +41,6 @@ func (o *guestOwnerFixture) PrepareNeverCreatedGuest(context.Context, GuestStagi
 	return ErrProvisioningUnconfigured
 }
 func (o *guestOwnerFixture) CloseNeverCreatedGuest(ctx context.Context, ticket GuestStagingTicket, lease *serviceready.InspectionLease) error {
-	o.closes.Add(1)
 	if lease != nil {
 		return ErrRuntimeUnconfirmed
 	}
@@ -49,11 +48,16 @@ func (o *guestOwnerFixture) CloseNeverCreatedGuest(ctx context.Context, ticket G
 	if err != nil {
 		return err
 	}
-	o.saved, o.descriptor = ticket, d
 	if err := ticket.RevokeNeverCreated(ctx, o, d.Namespace, ""); err != nil {
 		return err
 	}
-	return ticket.ConfirmNeverCreated(ctx, o, d.Namespace, "")
+	if err := ticket.ConfirmNeverCreated(ctx, o, d.Namespace, ""); err != nil {
+		return err
+	}
+	// The owner can retry an unconfirmed attempt before this acknowledgement.
+	o.saved, o.descriptor = ticket, d
+	o.confirmedCloses.Add(1)
+	return nil
 }
 func (o *guestOwnerFixture) Finalize(_ context.Context, p InnerCleanupProof) error {
 	if !p.Confirms(o.service) {
@@ -122,8 +126,15 @@ func TestGuestStagingOwnerBindsOnlySameUnusedOuterAndKeepsMissingEndpointClosed(
 		t.Fatal("ticket changed exact Service provenance")
 	}
 	ns := o.descriptor.Namespace
-	if ns.Epoch == ([32]byte{}) || ns.Intent == ([32]byte{}) || ns.Generation != 1 || o.closes.Load() != 1 || o.finalizes.Load() != 1 || !s.executionClosed || s.executionAdmissions != 0 || s.Snapshot().Generation != 0 || s.Snapshot().HasAuthority {
-		t.Fatal("guest namespace or never-created cleanup lost owner binding")
+	if ns.Epoch == ([32]byte{}) || ns.Intent == ([32]byte{}) || ns.Generation != 1 {
+		t.Fatalf("guest namespace: epoch=%t intent=%t generation=%d", ns.Epoch != ([32]byte{}), ns.Intent != ([32]byte{}), ns.Generation)
+	}
+	if closes, finalizes := o.confirmedCloses.Load(), o.finalizes.Load(); closes != 1 || finalizes != 1 {
+		t.Fatalf("confirmed guest closes=%d outer finalizations=%d, want one each", closes, finalizes)
+	}
+	snapshot := s.Snapshot()
+	if !s.executionClosed || s.executionAdmissions != 0 || snapshot.Generation != 0 || snapshot.HasAuthority {
+		t.Fatalf("guest execution: closed=%t admissions=%d generation=%d authority=%t", s.executionClosed, s.executionAdmissions, snapshot.Generation, snapshot.HasAuthority)
 	}
 	if _, err := o.saved.DescriptorFor(ctx, o); err == nil {
 		t.Fatal("cleanup ticket reopened acquisition")
