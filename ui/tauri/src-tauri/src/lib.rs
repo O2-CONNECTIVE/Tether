@@ -6,6 +6,10 @@ mod mac_status;
 
 #[cfg(target_os = "macos")]
 mod mac_menu_bar;
+#[cfg(target_os = "macos")]
+mod mac_quit;
+#[cfg(target_os = "macos")]
+mod mac_quit_dialog;
 
 #[cfg(all(target_os = "macos", resident_native_source))]
 #[allow(
@@ -191,7 +195,10 @@ pub fn run() {
     );
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder.on_window_event(mac_menu_bar::window_event);
+    let builder = builder
+        .menu(mac_quit_dialog::app_menu)
+        .manage(mac_quit::Quit::default())
+        .on_window_event(mac_menu_bar::window_event);
     let app = commands_with_state(
         builder,
         ShellRuntime::default(),
@@ -251,16 +258,8 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     {
         let exit_code = app.run_return(|handle, event| {
-            use tauri::Manager;
-            match event {
-                tauri::RunEvent::ExitRequested { api, .. }
-                    if !handle
-                        .state::<std::sync::Arc<resident_port::ResidentState>>()
-                        .request_exit() =>
-                {
-                    api.prevent_exit()
-                }
-                _ => {}
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                mac_quit::exit_requested(handle, &api);
             }
         });
         // run_return avoids process::exit bypassing the outer guard. An unexpected
