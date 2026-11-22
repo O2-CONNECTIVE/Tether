@@ -9,18 +9,26 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
     let transition: { requestId: number; intent: 'on' | 'off'; outcome: 'applied' } | null = null;
     window.__TAURI__ = { core: { invoke: (command, args) => {
       if (command === 'get_status_presentation') return Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' });
-      if (command === 'get_resident_status') return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation',
-        revision, validForMs: 3000, standby: on ? 'on' : 'off', registration, caller: null,
-        work: 'idle', cleanup: 'confirmed', canRequestOn: !on, canRequestOff: on, transition,
-        standbyUntil: on ? deadline : null, standbyEndingSoon: on && endingSoon, standbyExpired: false });
+      if (command === 'get_resident_status') {
+        const status = { protocolVersion: 1, source: 'resident-owner', state: 'source-observation',
+          revision, validForMs: 3000, standby: on ? 'on' : 'off', registration, caller: null,
+          work: 'idle', cleanup: 'confirmed', canRequestOn: !on, canRequestOff: on, transition,
+          standbyUntil: on ? deadline : null, standbyEndingSoon: on && endingSoon, standbyExpired: false };
+        if (document.documentElement.dataset.holdPoll !== 'true') return Promise.resolve(status);
+        document.documentElement.dataset.pollHeld = 'true';
+        return new Promise(resolve => { window.addEventListener('test-release-poll', () => resolve(status), { once: true }); });
+      }
       if (command !== 'request_resident_intent') return Promise.reject(new Error('unexpected operation'));
       if (typeof args.request !== 'string') return Promise.reject(new Error('expected an intent document'));
       const request = JSON.parse(args.request) as { requestId: number; expectedRevision: number; intent: 'on' | 'off' | 'extend'; standbyHours?: number };
       if (request.expectedRevision !== revision || request.requestId !== ++requestId) return Promise.reject(new Error('invalid request'));
       document.documentElement.dataset.lastResidentIntent = `${request.intent}:${request.standbyHours ?? 'none'}`;
       const { intent } = request;
+      if (intent === 'extend' && requestId === 3) {
+        return Promise.resolve({ protocolVersion: 1, requestId, intent, disposition: 'rejected' });
+      }
       if (intent === 'extend') {
-        setTimeout(() => { deadline = 1_900_007_200_000; endingSoon = false; revision++; }, 800);
+        window.addEventListener('test-renew-deadline', () => { deadline = 1_900_007_200_000; endingSoon = false; revision++; }, { once: true });
       } else {
         setTimeout(() => { on = intent === 'on'; registration = on ? 'connecting' : 'disconnected';
           if (on) setTimeout(() => { registration = 'authenticated'; revision++; }, 800);
@@ -34,6 +42,8 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
   await standby.waitFor({ timeout: 3000 });
   assert.equal(await standby.getAttribute('aria-checked'), 'false');
   assert.equal(await page.getByLabel('待機時間').isVisible(), false);
+  const notice = page.locator('.resident-standby [role="status"]');
+  assert.equal(await notice.count(), 1);
   await page.getByText('詳細設定', { exact: true }).click();
   assert.equal(await page.getByLabel('待機時間').inputValue(), '2');
   await page.getByLabel('待機時間').selectOption('4');
@@ -57,8 +67,19 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
   await page.getByRole('button', { name: '今から4時間に延長' }).click();
   assert.equal(await page.locator('html').getAttribute('data-last-resident-intent'), 'extend:4');
   assert.equal(await deadline.getAttribute('datetime'), previous);
+  await page.evaluate(() => window.dispatchEvent(new Event('test-renew-deadline')));
   await page.waitForSelector(`#resident-panel time[datetime="${renewed}"]`);
   assert.equal(await page.getByText('待機期限まで残り10分以内です。').isVisible(), false);
+  await page.getByRole('button', { name: '今から4時間に更新' }).click();
+  await notice.getByText('期限を更新できませんでした。表示された期限を確認してください。').waitFor();
+  await page.evaluate(() => { document.documentElement.dataset.holdPoll = 'true'; });
+  await page.waitForFunction(() => document.documentElement.dataset.pollHeld === 'true');
+  assert.equal(await standby.isDisabled(), true);
+  assert.match(await notice.innerText(), /期限を更新できませんでした/);
+  await page.evaluate(() => {
+    document.documentElement.dataset.holdPoll = 'false';
+    window.dispatchEvent(new Event('test-release-poll'));
+  });
   await standby.click();
   await page.waitForSelector('#resident-switch[aria-checked="false"][aria-disabled="false"]');
   assert.match(await page.locator('#resident-heading').innerText(), /OFFを確認/);

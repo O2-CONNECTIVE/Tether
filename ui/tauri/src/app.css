@@ -12,6 +12,7 @@
 .resident-standby { display: grid; gap: var(--sys-space-md); padding-block-start: var(--sys-space-lg); border-block-start: 1px solid var(--sys-border-subtle); }
 .resident-standby__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sys-space-sm) var(--sys-space-md); }
 .resident-standby__notice { color: var(--sys-warning-fg); font-size: var(--sys-type-caption); }
+.resident-standby__notice:empty { position: absolute; }
 .resident-standby__settings > * + * { margin-block-start: var(--sys-space-sm); }
 .resident-standby__settings summary { cursor: pointer; font-weight: var(--sys-weight-heading); }
 .resident-standby__settings .input { width: auto; font: inherit; }

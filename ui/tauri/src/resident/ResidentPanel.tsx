@@ -29,7 +29,8 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
   const canSwitch = isOn ? state.canOff : isOff && state.canOn;
   const deadline = isOn && o.standbyUntil !== null ? new Date(o.standbyUntil) : null;
   const hasDeadline = deadline !== null && Number.isFinite(deadline.getTime());
-  const extendRejected = state.lastRequestIntent === 'extend' && state.lastReceipt !== 'accepted' && !state.busy;
+  const extendRejected = state.lastRequestIntent === 'extend' && state.lastReceipt !== 'accepted'
+    && state.diagnostic !== 'RESIDENT_EXTENDING';
   return <Card id="resident-panel" aria-labelledby="resident-heading"
     data-resident-receipt={state.lastReceipt ?? 'none'} data-resident-request-id={state.lastRequestId}
     data-resident-registration={o?.registration ?? 'unknown'} data-resident-standby={o?.standby ?? 'unknown'}
@@ -64,8 +65,10 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
           今から{hours}時間に{o?.standbyEndingSoon ? '延長' : '更新'}
         </Button>
       </div>}
-      {hasDeadline && o?.standbyEndingSoon && <p className="resident-standby__notice" role="status">待機期限まで残り10分以内です。</p>}
-      {hasDeadline && extendRejected && <p className="resident-standby__notice" role="status">期限を更新できませんでした。表示された期限を確認してください。</p>}
+      <div className="resident-standby__notice" role="status">
+        {hasDeadline && o?.standbyEndingSoon && <p>待機期限まで残り10分以内です。</p>}
+        {hasDeadline && extendRejected && <p>期限を更新できませんでした。表示された期限を確認してください。</p>}
+      </div>
       <p className="caption">待機ONは作業の許可ではありません。</p>
       <details className="resident-standby__settings">
         <summary>詳細設定</summary>

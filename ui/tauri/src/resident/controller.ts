@@ -91,7 +91,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
     if (requestId >= Number.MAX_SAFE_INTEGER) return fail('RESIDENT_REQUEST_EXHAUSTED');
     const id = ++requestId, generation = ++epoch;
     if (intent !== 'extend') pending = { id, intent };
-    busy = true; clearTimeout(poll); publish('RESIDENT_INTENT_PENDING');
+    busy = true; clearTimeout(poll); publish(intent === 'extend' ? 'RESIDENT_EXTENDING' : 'RESIDENT_INTENT_PENDING');
     try {
       const receipt = decodeReceipt(await call('request_resident_intent', { request: { protocolVersion: 1, requestId: id,
         expectedRevision: revision, intent, ...(standbyHours === undefined || intent === 'off' ? {} : { standbyHours }) } }), id, intent);
