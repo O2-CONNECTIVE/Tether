@@ -55,7 +55,9 @@ void test('cleanup unknown is sticky and cannot be revived by a later green sour
   await r.controller.refresh();
   observation = sample({ revision: 2, cleanup: 'unknown', canRequestOn: false });
   await r.controller.refresh(); assert.equal(r.last()?.diagnostic, 'RESIDENT_CLEANUP_UNKNOWN');
-  observation = sample({ revision: 3 }); await r.controller.refresh(); await r.controller.request('on');
+  observation = sample({ revision: 3 });
+  await r.controller.setPageVisible(false); await r.controller.setPageVisible(true);
+  await r.controller.refresh(); await r.controller.request('on');
   assert.equal(calls, 2); assert.equal(r.last()?.canOn, false); r.controller.dispose();
 });
 void test('cleanup uncertainty is shown as needs cleanup, never generic unconfirmed or success', async () => {
@@ -152,4 +154,86 @@ void test('elapsed IPC time, clock rollback and old revision cannot refresh auth
     }, { now: () => time });
     await r.controller.refresh(); await r.controller.refresh(); assert.equal(r.last()?.canOn, false, mode); r.controller.dispose();
   }
+});
+
+void test('showing a hidden view requires an observation requested after showing it', async () => {
+  const replies: ((value: unknown) => void)[] = [];
+  const r = capture(command => {
+    assert.equal(command, 'get_resident_status');
+    return new Promise(resolve => { replies.push(resolve); });
+  });
+  try {
+    const initial = r.controller.refresh();
+    replies[0](sample()); await initial;
+    assert.equal(r.last()?.canOn, true);
+    const beforeHide = r.controller.refresh();
+    await r.controller.setPageVisible(false);
+    await r.controller.request('on'); await r.controller.refresh();
+    assert.equal(replies.length, 2);
+    assert.equal(r.last()?.observation, null);
+
+    const afterShow = r.controller.setPageVisible(true);
+    assert.equal(replies.length, 3);
+    replies[1](sample({ revision: 2 })); await beforeHide;
+    assert.equal(r.last()?.canOn, false);
+    assert.equal(r.last()?.observation, null);
+    replies[2](sample({ revision: 3 })); await afterShow;
+    assert.equal(r.last()?.canOn, true);
+    assert.equal(r.last()?.observation?.revision, 3);
+  } finally { r.controller.dispose(); }
+});
+
+void test('hide and show preserve the original request when its receipt is pending', async () => {
+  let reads = 0;
+  let observation = sample();
+  let finishOn: (value: unknown) => void = () => {};
+  const ids: (number | undefined)[] = [];
+  const r = capture((command, { request }) => {
+    if (command === 'get_resident_status') { reads++; return Promise.resolve(observation); }
+    ids.push(request.requestId);
+    if (request.intent === 'on') return new Promise(resolve => { finishOn = resolve; });
+    return Promise.resolve({ protocolVersion: 1, requestId: request.requestId, intent: 'off', disposition: 'rejected' });
+  });
+  try {
+    await r.controller.refresh();
+    const write = r.controller.request('on');
+    await r.controller.setPageVisible(false);
+    await r.controller.setPageVisible(true);
+    assert.equal(reads, 1);
+    assert.equal(r.last()?.pending, true);
+    await r.controller.request('on');
+    assert.deepEqual(ids, [1]);
+    observation = sample({ revision: 2, standby: 'on', registration: 'authenticated', canRequestOn: false, canRequestOff: true,
+      transition: { requestId: 1, intent: 'on', outcome: 'applied' } });
+    finishOn({ protocolVersion: 1, requestId: 1, intent: 'on', disposition: 'accepted' }); await write;
+    assert.equal(reads, 2);
+    assert.equal(r.last()?.canOff, true);
+    await r.controller.request('off');
+    assert.deepEqual(ids, [1, 2]);
+  } finally { r.controller.dispose(); }
+});
+
+void test('a standby extension receipt received while hidden does not refresh or enable actions', async () => {
+  let reads = 0, writes = 0;
+  let finishExtend: (value: unknown) => void = () => {};
+  const r = capture(command => {
+    if (command === 'get_resident_status') return Promise.resolve(sample({
+      revision: ++reads, standby: 'on', registration: 'authenticated', canRequestOn: false, canRequestOff: true, standbyUntil: 1_900_000_000_000,
+    }));
+    writes++;
+    return new Promise(resolve => { finishExtend = resolve; });
+  });
+  try {
+    await r.controller.refresh();
+    const write = r.controller.request('extend', 4);
+    await r.controller.setPageVisible(false);
+    finishExtend({ protocolVersion: 1, requestId: 1, intent: 'extend', disposition: 'accepted' }); await write;
+    assert.equal(reads, 1);
+    assert.equal(r.last()?.observation, null);
+    await r.controller.setPageVisible(true);
+    assert.equal(reads, 2);
+    assert.equal(writes, 1);
+    assert.equal(r.last()?.lastRequestId, 1);
+    assert.equal(r.last()?.canOff, true);
+  } finally { r.controller.dispose(); }
 });

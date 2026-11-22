@@ -106,7 +106,9 @@ void test('timeout and mismatched receipt poison the view without automatic retr
       return command === 'get_resident_status' ? Promise.resolve(sample()) : timeout ? new Promise(() => {})
         : Promise.resolve({ protocolVersion: 1, requestId: 99, intent: 'on', disposition: 'accepted' });
     }, { timeoutMs: 10 });
-    await r.controller.refresh(); await r.controller.request('on'); await r.controller.refresh(); await settle();
+    await r.controller.refresh(); await r.controller.request('on');
+    await r.controller.setPageVisible(false); await r.controller.setPageVisible(true);
+    await r.controller.refresh(); await settle();
     assert.equal(r.last()?.diagnostic, 'RESIDENT_INTENT_UNCONFIRMED'); assert.equal(count, 2); r.controller.dispose();
   }
 });

@@ -32,31 +32,58 @@ async function run(mode: string) {
     if (intent === 'off' && mode === 'rejected-off') { dataset.residentReceipt = 'rejected'; dataset.residentTransitionOutcome = 'rejected'; }
     if (intent === 'off' && mode === 'unaccepted') dataset.residentReceipt = 'unavailable';
   }
+  const document = Object.assign(new EventTarget(), {
+    hidden: false, visibilityState: 'visible',
+    querySelector: (selector: string) => selector === '#resident-panel' ? { dataset }
+      : selector === '#resident-switch' ? standbySwitch : null,
+  });
+  const window = Object.assign(new EventTarget(), {
+    __TAURI__: { event: { emit: (_: string, event: string) => {
+      events.push(event);
+      if (event === 'on-applied' && mode !== 'no-hidden-event') {
+        document.hidden = true; document.visibilityState = 'hidden';
+        document.dispatchEvent(new Event('visibilitychange'));
+      }
+      if (event === 'window-hidden' && mode !== 'no-reopen-event') {
+        document.hidden = false; document.visibilityState = 'visible';
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.dispatchEvent(new Event('tether-fixture-window-reopened'));
+        if (mode === 'spontaneous-off') {
+          dataset.residentStandby = 'off'; dataset.residentRegistration = 'disconnected';
+        }
+        if (mode === 'wrong-reopen-id') dataset.residentRequestId = String(sequence + 1);
+        if (mode === 'no-reopen-observation') dataset.residentRevision = '0';
+      }
+      return Promise.resolve();
+    } } },
+  });
   await runInNewContext(driver, {
     performance: { now: () => now },
     setTimeout: (callback: () => void, delay: number) => { now += delay; queueMicrotask(callback); },
-    document: { querySelector: (selector: string) => selector === '#resident-panel' ? { dataset }
-      : selector === '#resident-switch' ? standbySwitch : null },
-    window: { __TAURI__: { event: { emit: (_: string, event: string) => {
-      events.push(event);
-      if (event === 'on-applied' && mode === 'spontaneous-off') {
-        dataset.residentStandby = 'off'; dataset.residentRegistration = 'disconnected';
-      }
-      return Promise.resolve();
-    } } } },
+    document, window,
   });
   return { events, onClicks, offClicks };
 }
 void test('GUI driver requires its own ON and OFF accepted/applied identities, not predicted counters', async () => {
-  assert.deepEqual(await run('normal'), { events: ['initializer-started', 'on-applied', 'off-applied', 'passed'], onClicks: 1, offClicks: 1 });
-  assert.deepEqual(await run('stale-once'), { events: ['initializer-started', 'on-applied', 'off-applied', 'passed'], onClicks: 2, offClicks: 1 });
+  const events = ['initializer-started', 'on-applied', 'window-hidden', 'off-applied', 'passed'];
+  assert.deepEqual(await run('normal'), { events, onClicks: 1, offClicks: 1 });
+  assert.deepEqual(await run('stale-once'), { events, onClicks: 2, offClicks: 1 });
 });
 void test('GUI driver rejects target-enabled without OFF and mismatched or missing receipt proof', async () => {
-  for (const mode of ['spontaneous-off', 'wrong-transition', 'unaccepted', 'rejected-off']) {
+  for (const mode of ['wrong-transition', 'unaccepted', 'rejected-off']) {
     const result = await run(mode);
     assert.match(result.events.at(-1) ?? '', /^failed:off:/, mode);
     assert.equal(result.events.includes('passed'), false, mode);
-    assert.equal(result.offClicks, mode === 'spontaneous-off' ? 0 : 1, mode);
+    assert.equal(result.offClicks, 1, mode);
+  }
+});
+
+void test('GUI driver requires the hidden event, native reopen and matching ON before it clicks OFF', async () => {
+  for (const mode of ['no-hidden-event', 'no-reopen-event', 'wrong-reopen-id', 'no-reopen-observation', 'spontaneous-off']) {
+    const result = await run(mode);
+    const hidden = mode === 'no-hidden-event' ? [] : ['window-hidden'];
+    assert.deepEqual(result.events, ['initializer-started', 'on-applied', ...hidden, 'failed:reopen:phase-timeout'], mode);
+    assert.equal(result.offClicks, 0, mode);
   }
 });
 

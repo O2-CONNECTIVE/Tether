@@ -14,14 +14,17 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
   const controller = useRef<ReturnType<typeof createResidentController> | null>(null);
   useEffect(() => {
     const instance = createResidentController({ invoke, onChange: setState });
-    controller.current = instance; void instance.refresh();
+    controller.current = instance;
+    const visibility = () => { void instance.setPageVisible(document.visibilityState === 'visible'); };
+    if (document.visibilityState === 'visible') void instance.refresh();
+    else visibility();
     const invalidate = () => instance.invalidate();
-    document.addEventListener('visibilitychange', invalidate);
+    document.addEventListener('visibilitychange', visibility);
     window.addEventListener('pagehide', invalidate);
     const restore = (event: PageTransitionEvent) => { if (event.persisted) invalidate(); };
     window.addEventListener('pageshow', restore);
     return () => { instance.dispose(); controller.current = null;
-      document.removeEventListener('visibilitychange', invalidate);
+      document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', invalidate); window.removeEventListener('pageshow', restore); };
   }, [invoke]);
   if (!state.visible) return null;

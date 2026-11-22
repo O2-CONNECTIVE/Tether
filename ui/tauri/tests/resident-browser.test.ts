@@ -156,3 +156,40 @@ void test('sleep prevention and the lid note use fresh owner status', async () =
   await sleep.getByText('未確認', { exact: true }).waitFor();
   await page.close();
 });
+
+void test('the same resident view resumes fresh status after hiding, while page restoration stays sealed', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.addInitScript(() => {
+      let revision = 1;
+      window.addEventListener('test-resident-visibility', event => {
+        const value = (event as CustomEvent<DocumentVisibilityState>).detail;
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value });
+        if (value === 'visible') revision++;
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      window.__TAURI__ = { core: { invoke: command => Promise.resolve(command === 'get_resident_status'
+        ? { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision, validForMs: 3000,
+          standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed',
+          canRequestOn: true, canRequestOff: false, transition: null, standbyUntil: null, standbyEndingSoon: false,
+          standbyExpired: false, sleepPrevention: 'inactive' }
+        : { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }) } };
+    });
+    await page.goto(url);
+    const setVisibility = (value: DocumentVisibilityState) => page.evaluate(state => {
+      window.dispatchEvent(new CustomEvent('test-resident-visibility', { detail: state }));
+    }, value);
+    await page.waitForSelector('#resident-switch[aria-disabled="false"]');
+    await setVisibility('hidden');
+    await page.waitForSelector('#resident-switch[aria-disabled="true"]:not([aria-checked])');
+    await setVisibility('visible');
+    await page.waitForSelector('#resident-panel[data-resident-revision="2"] #resident-switch[aria-disabled="false"]', { timeout: 5000 });
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    });
+    await setVisibility('hidden'); await setVisibility('visible');
+    await page.waitForSelector('#resident-switch[aria-disabled="true"]:not([aria-checked])');
+    assert.equal(await page.locator('#resident-diagnostic').innerText(), 'RESIDENT_VIEW_INVALIDATED');
+  } finally { await page.close(); }
+});

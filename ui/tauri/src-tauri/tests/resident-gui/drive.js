@@ -59,7 +59,29 @@
       if (performance.now() >= authenticatedUntil) fail('auth-timeout');
       await new Promise(resolve => setTimeout(resolve, 50));
     }
+    let hidden = false, reopened = false;
+    const onId = document.querySelector('#resident-panel')?.dataset.residentRequestId;
+    const observeVisibility = () => {
+      if (!hidden && document.hidden) {
+        hidden = true;
+        void emit('window-hidden').catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', observeVisibility);
+    window.addEventListener('tether-fixture-window-reopened', () => { reopened = true; }, { once: true });
     await emit('on-applied');
+    stage = 'reopen';
+    const reopenedUntil = performance.now() + 15000;
+    for (;;) {
+      const status = document.querySelector('#resident-panel')?.dataset;
+      const button = document.querySelector('#resident-switch');
+      if (hidden && reopened && document.visibilityState === 'visible' && status?.residentStandby === 'on'
+        && status.residentRequestId === onId && Number(status.residentRevision) > 0
+        && button?.disabled === false && button.getAttribute('aria-disabled') !== 'true') break;
+      if (performance.now() >= reopenedUntil) fail('phase-timeout');
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    document.removeEventListener('visibilitychange', observeVisibility);
     stage = 'off';
     await phase('off');
     await emit('off-applied');

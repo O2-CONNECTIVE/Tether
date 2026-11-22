@@ -14,6 +14,7 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
     caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false, transition: null,
     standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive' };
   const events: string[] = [], receipts: string[] = [], order: string[] = [];
+  let expectReopenRead = false;
   const dataset: Record<string, string> = {};
   const standbySwitch = {
     disabled: true,
@@ -29,7 +30,10 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
         residentTransitionIntent: o?.transition?.intent ?? 'none', residentTransitionOutcome: o?.transition?.outcome ?? 'none' });
       standbySwitch.disabled = !state.canOn && !state.canOff;
     }, invoke: (command, { request: r }) => {
-      if (command === 'get_resident_status') return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', ...observation });
+      if (command === 'get_resident_status') {
+        if (expectReopenRead) { order.push('read:reopen'); expectReopenRead = false; }
+        return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', ...observation });
+      }
       const id = r.requestId!, intent = r.intent!;
       if (intent !== 'on' && intent !== 'off') throw new Error('unexpected test intent');
       let disposition: string;
@@ -58,12 +62,33 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
       receipts.push(`${intent}:${id}:${disposition}`); order.push(`receipt:${id}:${disposition}`);
       return Promise.resolve({ protocolVersion: 1, requestId: id, intent, disposition });
     } });
+  const document = Object.assign(new EventTarget(), {
+    hidden: false, visibilityState: 'visible',
+    querySelector: (s: string) => s === '#resident-panel' ? { dataset } : s === '#resident-switch' ? standbySwitch : null,
+  });
+  document.addEventListener('visibilitychange', () => { void controller.setPageVisible(!document.hidden); });
+  const window = Object.assign(new EventTarget(), {
+    __TAURI__: { event: { emit: (_: string, value: string) => {
+      events.push(value);
+      if (value === 'on-applied') {
+        document.hidden = true; document.visibilityState = 'hidden';
+        document.dispatchEvent(new Event('visibilitychange'));
+      }
+      if (value === 'window-hidden') {
+        assert.equal(standbySwitch.disabled, true);
+        document.hidden = false; document.visibilityState = 'visible';
+        expectReopenRead = true;
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.dispatchEvent(new Event('tether-fixture-window-reopened'));
+      }
+      return Promise.resolve();
+    } } },
+  });
   try {
     await controller.refresh();
     await runInNewContext(driver, {
       performance: { now: () => now }, setTimeout: (f: () => void, ms: number) => { now += ms; queueMicrotask(f); },
-      document: { querySelector: (s: string) => s === '#resident-panel' ? { dataset } : s === '#resident-switch' ? standbySwitch : null },
-      window: { __TAURI__: { event: { emit: (_: string, value: string) => { events.push(value); return Promise.resolve(); } } } },
+      document, window,
     });
     return { events, receipts, order, ownerOffCalls };
   } finally { controller.dispose(); }
@@ -82,6 +107,7 @@ void test('modeled pre-owner stale schedule requires same-ID rejection before it
   const fixed = await replay('ordered-stale');
   assert.equal(fixed.events.at(-1), 'passed');
   assert.deepEqual(fixed.receipts, ['on:1:accepted', 'off:2:stale', 'off:3:accepted']);
+  assert.deepEqual(fixed.order.slice(0, 3), ['receipt:1:accepted', 'read:reopen', 'evidence:2']);
   assert.ok(fixed.order.indexOf('evidence:2') < fixed.order.indexOf('receipt:2:stale'));
   assert.equal(fixed.ownerOffCalls, 1);
 });

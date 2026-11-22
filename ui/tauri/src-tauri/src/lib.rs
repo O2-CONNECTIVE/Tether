@@ -4,6 +4,9 @@
 )]
 mod mac_status;
 
+#[cfg(target_os = "macos")]
+mod mac_menu_bar;
+
 #[cfg(all(target_os = "macos", resident_native_source))]
 #[allow(
     dead_code,
@@ -186,8 +189,11 @@ pub fn run() {
     let lifetime = resident_port::ResidentLifetime::new(
         resident_port::ResidentState::startup().expect("failed to start resident owner thread"),
     );
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_window_event(mac_menu_bar::window_event);
     let app = commands_with_state(
-        tauri::Builder::default(),
+        builder,
         ShellRuntime::default(),
         StatusPresentation::default(),
         lifetime.state(),
@@ -232,6 +238,8 @@ pub fn run() {
             startup_diagnostics::Stage::BuildError
         });
         result?;
+        #[cfg(target_os = "macos")]
+        mac_menu_bar::install(app.handle())?;
         #[cfg(any(test, feature = "startup-diagnostics"))]
         startup.record(startup_diagnostics::Stage::SetupReturn);
         Ok(())

@@ -4,9 +4,9 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[5]
-PHASES = ('init', 'on', 'auth', 'off', 'complete')
+PHASES = ('init', 'on', 'auth', 'reopen', 'off', 'complete')
 REASONS = ('identity', 'receipt', 'transition', 'retry-budget', 'phase-timeout',
-           'auth-timeout', 'bridge-timeout', 'unexpected')
+           'auth-timeout', 'bridge-timeout', 'window', 'unexpected')
 
 
 class DiagnosticContract(unittest.TestCase):
