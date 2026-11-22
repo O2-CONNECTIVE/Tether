@@ -546,6 +546,9 @@ func TestSleepTakeWaitExpiresBeforeWorkDeadline(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Take did not start")
 	}
+	if got := h.standby.SleepPrevention(); got != SleepPreventionUnknown {
+		t.Fatalf("sleep prevention during acquisition = %q", got)
+	}
 	wait := waitManualSleepTimer(t, clock)
 	if wait != sleepTakeWait {
 		t.Fatalf("Take wait = %s, want the bounded %s acquisition wait", wait, sleepTakeWait)
@@ -668,7 +671,11 @@ func TestReleaseFailureRetriesUntilReleased(t *testing.T) {
 	fake := &fakeSleepAssertion{releaseErr: failure, releaseFailures: 1, releaseResults: make(chan error, 4)}
 	h := newSleepHarness(t, StandbyConfig{}, fake)
 	clock := newManualSleepClock(time.Now())
+	initial := h.standby.Snapshot()
 	acquireSleepWithManualClock(t, h, clock)
+	if got := h.standby.SleepPrevention(); got != SleepPreventionActive {
+		t.Fatalf("sleep prevention after acquisition = %q", got)
+	}
 	h.standby.finishSleepAdmission(h.cycle.owner)
 	if delay := waitManualSleepTimer(t, clock); delay != sleepReleaseRetryInitial {
 		t.Fatalf("first release retry delay = %s, want %s", delay, sleepReleaseRetryInitial)
@@ -685,6 +692,9 @@ func TestReleaseFailureRetriesUntilReleased(t *testing.T) {
 	if !errors.Is(recorded, failure) {
 		t.Fatalf("release failure was not retained: %v", recorded)
 	}
+	if got := h.standby.SleepPrevention(); got != SleepPreventionUnknown {
+		t.Fatalf("sleep prevention after release failure = %q", got)
+	}
 	fake.mu.Lock()
 	fake.releaseFailures = 0
 	fake.mu.Unlock()
@@ -696,6 +706,12 @@ func TestReleaseFailureRetriesUntilReleased(t *testing.T) {
 		t.Fatalf("retry did not release the assertion: takes=%d releases=%d held=%d", takes, releases, held)
 	}
 	waitSleepWorkerExit(t, h.standby)
+	if got := h.standby.SleepPrevention(); got != SleepPreventionInactive {
+		t.Fatalf("sleep prevention after release = %q", got)
+	}
+	if got := h.standby.Snapshot(); got.Revision != initial.Revision {
+		t.Fatalf("sleep observation changed admission revision: %d → %d", initial.Revision, got.Revision)
+	}
 }
 
 func TestReleaseRetryBackoffCapsAtThirtySeconds(t *testing.T) {
@@ -833,6 +849,9 @@ func TestCloseReturnsCollectionResultWhileReleaseIsBlocked(t *testing.T) {
 	case <-fake.releaseStarted:
 	case <-time.After(time.Second):
 		t.Fatal("Close did not schedule the release")
+	}
+	if got := standby.SleepPrevention(); got != SleepPreventionUnknown {
+		t.Fatalf("sleep prevention during release = %q", got)
 	}
 	if observation := standby.Snapshot(); observation.Cleanup != "confirmed" {
 		t.Fatalf("confirmed collection became Unknown: %+v", observation)

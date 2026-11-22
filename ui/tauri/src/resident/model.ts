@@ -9,7 +9,8 @@ export type Observation = { revision: number; validForMs: number; standby: 'off'
   registrationReason?: RegistrationReason;
   work: 'idle' | 'preparing' | 'running' | 'stopping' | 'completed' | 'failed' | 'unknown'; cleanup: 'confirmed' | 'pending' | 'unknown';
   canRequestOn: boolean; canRequestOff: boolean; transition: Transition | null;
-  standbyUntil: number | null; standbyEndingSoon: boolean; standbyExpired: boolean };
+  standbyUntil: number | null; standbyEndingSoon: boolean; standbyExpired: boolean;
+  sleepPrevention: 'inactive' | 'active' | 'unknown' };
 type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner'; observation: Observation | null };
 export type ResidentInvoke = (command: 'get_resident_status' | 'request_resident_intent', args: { request: {
   protocolVersion: 1; requestId?: number; expectedRevision?: number; intent?: RequestIntent; standbyHours?: StandbyHours } }) => Promise<unknown>;
@@ -23,18 +24,19 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
   if (value.source === 'unsupported' && keys(value, 'protocolVersion,source')) return { source: 'unsupported' };
   if (value.source !== 'resident-owner') return;
   if (value.state === 'source-unavailable' && keys(value, 'protocolVersion,source,state')) return { source: 'resident-owner', observation: null };
-  const observationKeys = 'protocolVersion,source,state,revision,validForMs,standby,registration,caller,work,cleanup,canRequestOn,canRequestOff,transition,standbyUntil,standbyEndingSoon,standbyExpired';
+  const observationKeys = 'protocolVersion,source,state,revision,validForMs,standby,registration,caller,work,cleanup,canRequestOn,canRequestOff,transition,standbyUntil,standbyEndingSoon,standbyExpired,sleepPrevention';
   const hasRegistrationReason = Object.hasOwn(value, 'registrationReason');
   if (value.state !== 'source-observation' || !keys(value, hasRegistrationReason ? `${observationKeys},registrationReason` : observationKeys)) return;
   const { revision, validForMs, standby, registration, caller, work, cleanup, canRequestOn, canRequestOff,
-    standbyUntil, standbyEndingSoon, standbyExpired } = value;
+    standbyUntil, standbyEndingSoon, standbyExpired, sleepPrevention } = value;
   if (!integer(revision, 1) || !integer(validForMs) || validForMs > 3000 || !oneOf(standby, ['off', 'on', 'stopping', 'unknown'])
     || !oneOf(registration, ['disconnected', 'connecting', 'reconnecting', 'authenticated', 'needs_action', 'unknown'])
     || !(caller === null || (typeof caller === 'string' && [...caller].length > 0 && [...caller].length <= 80 && !/\p{Cc}/u.test(caller)))
     || !oneOf(work, ['idle', 'preparing', 'running', 'stopping', 'completed', 'failed', 'unknown'])
     || !oneOf(cleanup, ['confirmed', 'pending', 'unknown']) || typeof canRequestOn !== 'boolean' || typeof canRequestOff !== 'boolean'
     || !(standbyUntil === null || integer(standbyUntil, 1)) || typeof standbyEndingSoon !== 'boolean'
-    || (standbyEndingSoon && standbyUntil === null) || typeof standbyExpired !== 'boolean') return;
+    || (standbyEndingSoon && standbyUntil === null) || typeof standbyExpired !== 'boolean'
+    || !oneOf(sleepPrevention, ['inactive', 'active', 'unknown'])) return;
   let registrationReason: RegistrationReason | undefined;
   if (hasRegistrationReason) {
     if (registration !== 'needs_action' || !oneOf(value.registrationReason, ['identity_refused', 'connection_occupied', 'gateway_refused'])) return;
@@ -57,7 +59,7 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
       : !(standby === 'off' && work === 'idle' && cleanup === 'confirmed'))))) return;
   return { source: 'resident-owner', observation: { revision, validForMs, standby, registration,
     ...(registrationReason ? { registrationReason } : {}), caller, work, cleanup, canRequestOn, canRequestOff, transition,
-    standbyUntil, standbyEndingSoon, standbyExpired } };
+    standbyUntil, standbyEndingSoon, standbyExpired, sleepPrevention } };
 }
 export function decodeReceipt(value: unknown, id: number, intent: RequestIntent) {
   if (!record(value) || !keys(value, 'protocolVersion,requestId,intent,disposition') || value.protocolVersion !== 1

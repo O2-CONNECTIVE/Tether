@@ -8,7 +8,7 @@ func check(_ value: @autoclosure () -> Bool, _ name: String) {
 }
 func status(_ revision: Int = 1, time: Int = 1000, standby: String = "off", transition: String = "null", until: String = "null", ending: Bool = false, expired: Bool = false) -> Data {
     Data("""
-    {"protocolVersion":1,"type":"status","sourceContinuousMs":\(time),"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":\(revision),"validForMs":3000,"standby":"\(standby)","registration":"\(standby == "on" ? "authenticated" : "disconnected")","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":\(standby == "off"),"canRequestOff":\(standby == "on"),"transition":\(transition),"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired)}}
+    {"protocolVersion":1,"type":"status","sourceContinuousMs":\(time),"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":\(revision),"validForMs":3000,"standby":"\(standby)","registration":"\(standby == "on" ? "authenticated" : "disconnected")","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":\(standby == "off"),"canRequestOff":\(standby == "on"),"transition":\(transition),"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired),"sleepPrevention":"inactive"}}
     """.utf8)
 }
 func receipt(_ disposition: String, id: Int = 1, intent: String = "on") -> Data {
@@ -165,7 +165,7 @@ check(!stopped.runAllowed, "a later standby ON does not bring an old allowance b
 var faulted = standingBy(); _ = faulted.command("allow", at: 1000)
 faulted.ingest(runReceipt(2, "allow-run", "accepted"), at: 1000); faulted.fail()
 check(!faulted.runAllowed, "a fault never shows an open allowance")
-// The three keys are always present and strictly typed.
+// The new status keys are always present and strictly typed.
 let plain = String(decoding: status(until: until), as: UTF8.self)
 for bad in [
     plain.replacingOccurrences(of: ",\"standbyUntil\":\(until)", with: ""),
@@ -176,13 +176,22 @@ for bad in [
     plain.replacingOccurrences(of: "\"standbyUntil\":\(until)", with: "\"standbyUntil\":1.5"),
     plain.replacingOccurrences(of: "\"standbyEndingSoon\":false", with: "\"standbyEndingSoon\":null"),
     plain.replacingOccurrences(of: "\"standbyExpired\":false", with: "\"standbyExpired\":0"),
+    plain.replacingOccurrences(of: ",\"sleepPrevention\":\"inactive\"", with: ""),
+    plain.replacingOccurrences(of: "\"sleepPrevention\":\"inactive\"", with: "\"sleepPrevention\":true"),
+    plain.replacingOccurrences(of: "\"sleepPrevention\":\"inactive\"", with: "\"sleepPrevention\":\"unrecognized\""),
     String(decoding: status(ending: true), as: UTF8.self), // ending soon needs an end time
 ] {
     var badFeed = Feed(); badFeed.ingest(Data(bad.utf8), at: 1000)
-    check(badFeed.fault && badFeed.observation == nil, "malformed standby keys rejected")
+    check(badFeed.fault && badFeed.observation == nil, "malformed status keys rejected")
 }
 var withKeys = Feed(); withKeys.ingest(status(until: until, ending: true, expired: true), at: 1000)
 check(!withKeys.fault && withKeys.observation?.standbyEndingSoon == true && withKeys.observation?.standbyExpired == true, "standby keys accepted")
+for sleep in ["active", "unknown"] {
+    var feed = Feed()
+    let sample = plain.replacingOccurrences(of: "\"sleepPrevention\":\"inactive\"", with: "\"sleepPrevention\":\"\(sleep)\"")
+    feed.ingest(Data(sample.utf8), at: 1000)
+    check(!feed.fault && feed.observation != nil, "sleep prevention states accepted")
+}
 
 // The record of what ran. The gateway signs only a hash, so this list is how
 // the person at the Mac sees the command text. A damaged line is shown as

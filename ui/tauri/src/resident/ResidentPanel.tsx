@@ -5,6 +5,9 @@ import { createResidentController, initialResidentState } from './controller.ts'
 import { standbyHoursOptions, type ResidentInvoke, type StandbyHours } from './model.ts';
 import { presentResident } from './presentation.ts';
 import { StatusContent } from '../host-status/StatusContent.tsx';
+
+const sleepStatus = { active: '作動中', inactive: '作動なし', unknown: '未確認' } as const;
+
 export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }) {
   const [state, setState] = useState(initialResidentState);
   const [hours, setHours] = useState<StandbyHours>(2);
@@ -70,6 +73,12 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
         {hasDeadline && extendRejected && <p>期限を更新できませんでした。表示された期限を確認してください。</p>}
       </div>
       <p className="caption">待機ONは作業の許可ではありません。</p>
+      <div>
+        <p id="resident-sleep-status" className="caption" role="status">
+          スリープ防止 <strong>{sleepStatus[o?.sleepPrevention ?? 'unknown']}</strong>
+        </p>
+        <p className="caption">Macの蓋を閉じるとスリープします。</p>
+      </div>
       <details className="resident-standby__settings">
         <summary>詳細設定</summary>
         <div className="field">

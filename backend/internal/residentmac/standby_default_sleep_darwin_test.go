@@ -23,6 +23,9 @@ func TestDefaultSleepAssertionAppearsInPmsetOnlyDuringOwnedWork(t *testing.T) {
 		t.Fatal("owned work did not start")
 	}
 	waitForPmsetAssertion(t, true)
+	if got := h.standby.SleepPrevention(); got != SleepPreventionActive {
+		t.Fatalf("sleep prevention after successful native acquisition = %q", got)
+	}
 
 	close(session.finish)
 	eventuallySleep(t, func() bool { return h.cycle.owner.Snapshot().Owned == 0 })
@@ -33,6 +36,9 @@ func TestDefaultSleepAssertionAppearsInPmsetOnlyDuringOwnedWork(t *testing.T) {
 		return !h.standby.sleepHeld
 	})
 	waitForPmsetAssertion(t, false)
+	if got := h.standby.SleepPrevention(); got != SleepPreventionInactive {
+		t.Fatalf("sleep prevention after successful native release = %q", got)
+	}
 }
 
 func waitForPmsetAssertion(t *testing.T, want bool) {

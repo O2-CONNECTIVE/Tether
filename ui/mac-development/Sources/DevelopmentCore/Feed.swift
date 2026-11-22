@@ -139,7 +139,7 @@ public struct Feed {
     private func isPendingOnSnapshot(_ value: Value) -> Bool {
         do {
             guard let p = pending, p.intent == "on", awaitingReceipt == nil else { return false }
-            let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"])
+            let s = try Object(value, ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired", "sleepPrevention"])
             guard try s.number("protocolVersion") == 1,
                   try s.text("source", ["resident-owner"]) == "resident-owner",
                   try s.text("state", ["source-observation"]) == "source-observation",
@@ -171,7 +171,7 @@ public struct Feed {
         }
     }
     private mutating func receiveStatus(_ value: Value, source: UInt64) throws {
-        let keys = ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"]
+        let keys = ["protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired", "sleepPrevention"]
         guard case let .object(fields) = value else { throw Invalid.input }
         let s = try Object(value, fields["registrationReason"] == nil ? keys : keys + ["registrationReason"])
         guard try s.number("protocolVersion") == 1,
@@ -199,6 +199,7 @@ public struct Feed {
         let standbyUntil: UInt64?
         if case .null? = s.fields["standbyUntil"] { standbyUntil = nil } else { standbyUntil = try s.number("standbyUntil") }
         let standbyEndingSoon = try s.bool("standbyEndingSoon"), standbyExpired = try s.bool("standbyExpired")
+        _ = try s.text("sleepPrevention", ["inactive", "active", "unknown"])
         if cleanup == "unknown" || (standby == "unknown" && !isPendingOnSnapshot(value)) || work == "unknown" {
             invalidateCleanup("owner-cleanup-unknown"); throw Invalid.input
         }

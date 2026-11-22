@@ -42,6 +42,12 @@ Close要求後からterminal前までのstatusは、Closureで形・不変条件
 1〜2^53−1の整数で、`standbyEndingSoon: true`なら`null`にできません。未知の鍵、欠落、
 型違い、範囲外の値は拒みます。期限の値はGoが出し、RustとTSは計算・補完しません。
 Close後に検証・記録するstatusも同じ3鍵を使います。
+
+製品statusの`status.snapshot`には`sleepPrevention`も必須です。
+`active`はGoがmacOSのシステム idle sleep 防止を保持している状態、`inactive`は保持していない状態、
+`unknown`は保持や解除の状態を確認できないことを表します。
+RustとTSは値を検査して表示に渡します。待機や作業の状態から値を補完しません。
+防止中も画面のスリープや蓋を閉じたときのスリープは防ぎません。
 回収を確認できない場合の終端statusには、Goが最後に確定した期限切れの有無を載せます。
 
 intentは`on`・`off`・`extend`です。`standbyHours`は`2`・`4`・`8`・`12`・`24`だけを

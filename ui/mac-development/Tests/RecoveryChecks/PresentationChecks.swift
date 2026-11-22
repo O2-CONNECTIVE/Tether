@@ -4,7 +4,7 @@ import DevelopmentCore
 
 func recoveryStatus(standby: String = "off", work: String = "idle", cleanup: String = "confirmed", canOn: Bool = true, until: String = "null", ending: Bool = false, expired: Bool = false) -> Data {
     Data("""
-    {"protocolVersion":1,"type":"status","sourceContinuousMs":5000,"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":1,"validForMs":3000,"standby":"\(standby)","registration":"disconnected","caller":null,"work":"\(work)","cleanup":"\(cleanup)","canRequestOn":\(canOn),"canRequestOff":false,"transition":null,"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired)}}
+    {"protocolVersion":1,"type":"status","sourceContinuousMs":5000,"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":1,"validForMs":3000,"standby":"\(standby)","registration":"disconnected","caller":null,"work":"\(work)","cleanup":"\(cleanup)","canRequestOn":\(canOn),"canRequestOff":false,"transition":null,"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired),"sleepPrevention":"\(cleanup == "unknown" ? "unknown" : "inactive")"}}
     """.utf8)
 }
 
@@ -121,7 +121,7 @@ func checkPresentation() {
     check(!pending.detail.contains("受け付けました"), "UI pending before receipt does not invent acceptance")
     transition.feed.ingest(Data("{\"protocolVersion\":1,\"type\":\"receipt\",\"receipt\":{\"protocolVersion\":1,\"requestId\":1,\"intent\":\"on\",\"disposition\":\"accepted\"}}".utf8), at: 5000)
     transition.feed.ingest(Data("""
-    {"protocolVersion":1,"type":"status","sourceContinuousMs":5000,"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":2,"validForMs":3000,"standby":"unknown","registration":"connecting","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":false,"canRequestOff":false,"transition":{"requestId":1,"intent":"on","outcome":"pending"},"standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false}}
+    {"protocolVersion":1,"type":"status","sourceContinuousMs":5000,"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":2,"validForMs":3000,"standby":"unknown","registration":"connecting","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":false,"canRequestOff":false,"transition":{"requestId":1,"intent":"on","outcome":"pending"},"standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,"sleepPrevention":"inactive"}}
     """.utf8), at: 5000)
     let connecting = transitionController.presentation(at: 5000)
     check(!transition.feed.fault && connecting.status == "接続を確認中・待機 ON は未確認", "UI accepted pending unknown standby is connecting, not cleanup unknown")

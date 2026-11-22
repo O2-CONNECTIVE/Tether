@@ -6,7 +6,7 @@ import { decodeStatus, type Observation } from '../src/resident/model.ts';
 const observed = (changes: Partial<Observation> = {}): Observation => ({
   revision: 1, validForMs: 5000, standby: 'off', registration: 'disconnected', caller: 'none',
   work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false, transition: null,
-  standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, ...changes
+  standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive', ...changes
 });
 
 // 状態が読めないときに、接続や待機ONと同じ見た目を出すと、利用者が安全だと誤解する。
@@ -96,7 +96,7 @@ void test('needs action names the reason and the way back for each refusal', () 
 void test('the decoder keeps reconnecting and needs action apart from disconnected all the way to the screen', () => {
   const raw = { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1, validForMs: 3000, standby: 'on',
     caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: false, canRequestOff: true, transition: { requestId: 1, intent: 'on', outcome: 'applied' },
-    standbyUntil: 1_900_000_000_000, standbyEndingSoon: false, standbyExpired: false };
+    standbyUntil: 1_900_000_000_000, standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive' };
   const status = (change: Record<string, unknown>) => {
     const decoded = decodeStatus({ ...raw, ...change });
     assert.ok(decoded?.source === 'resident-owner' && decoded.observation);

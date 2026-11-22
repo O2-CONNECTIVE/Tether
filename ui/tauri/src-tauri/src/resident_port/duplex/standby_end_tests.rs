@@ -58,6 +58,31 @@ fn status_checks_standby_end_types_and_safe_integer_bounds() {
 }
 
 #[test]
+fn status_requires_and_carries_sleep_prevention() {
+    for state in ["inactive", "active", "unknown"] {
+        let mut frame = test_frames::status(100);
+        frame["snapshot"]["sleepPrevention"] = json!(state);
+        let Event::Status { snapshot, .. } = test_frames::event(&frame) else {
+            panic!("expected status");
+        };
+        let observation = serde_json::to_value(snapshot.observation().unwrap()).unwrap();
+        assert_eq!(observation["sleepPrevention"], json!(state));
+    }
+
+    let mut missing = test_frames::status(100);
+    missing["snapshot"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sleepPrevention");
+    assert!(!accepted(missing));
+    for value in [json!(null), json!(true), json!("unconfirmed")] {
+        let mut invalid = test_frames::status(100);
+        invalid["snapshot"]["sleepPrevention"] = value;
+        assert!(!accepted(invalid));
+    }
+}
+
+#[test]
 fn expired_reason_survives_unknown_cleanup_status() {
     let mut poisoned = test_frames::status(100);
     poisoned["snapshot"]["validForMs"] = json!(0);

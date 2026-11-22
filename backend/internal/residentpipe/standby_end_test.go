@@ -39,7 +39,7 @@ func TestStatusCarriesTheStandbyEnd(t *testing.T) {
 	}
 	got := statusSnapshot(t, s)
 	if !exactKeys(got, "protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller",
-		"work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired") {
+		"work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired", "sleepPrevention") {
 		t.Fatal("status keys", got)
 	}
 	if string(got["standbyUntil"]) != "1900000000000" || string(got["standbyEndingSoon"]) != "true" || string(got["standbyExpired"]) != "false" || string(got["standby"]) != `"on"` {

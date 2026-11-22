@@ -46,6 +46,11 @@ values!(Cleanup {
     Pending,
     Unknown
 });
+values!(SleepPrevention {
+    Inactive,
+    Active,
+    Unknown
+});
 values!(TransitionOutcome {
     Pending,
     Applied,
@@ -77,6 +82,7 @@ pub(crate) struct Observation {
     pub(super) standby_until: Option<u64>,
     pub(super) standby_ending_soon: bool,
     pub(super) standby_expired: bool,
+    pub(super) sleep_prevention: SleepPrevention,
 }
 impl Observation {
     pub(super) fn unresolved(&self) -> Option<(u64, Intent)> {
