@@ -1,5 +1,6 @@
 //! Confirm a person’s Quit before requesting the original owner’s Close.
 use crate::resident_port::{ExitProgress, ResidentState};
+use dispatch2::DispatchQueue;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -63,9 +64,9 @@ pub(super) fn request(app: &AppHandle) {
         return;
     }
     let handle = app.clone();
-    if app.run_on_main_thread(move || confirm(handle)).is_err() {
-        quit.update(Phase::Confirming, Phase::Idle);
-    }
+    // AppKit's modal loop can dispatch Cocoa events. Leave the Tauri/Tao
+    // callback (and its locks) before entering that loop.
+    DispatchQueue::main().exec_async(move || confirm(handle));
 }
 
 fn confirm(app: AppHandle) {
@@ -77,23 +78,21 @@ fn confirm(app: AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let confirmed = owner.request_exit()
             || wait_for_proof(|| owner.exit_progress(), Instant::now() + WAIT_FOR_PROOF);
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || finish(&handle, confirmed));
+        DispatchQueue::main().exec_async(move || finish(&app, confirmed));
     });
 }
 
 fn wait_for_proof(mut poll: impl FnMut() -> ExitProgress, deadline: Instant) -> bool {
-    loop {
+    while Instant::now() < deadline {
         match poll() {
-            ExitProgress::Confirmed => return true,
+            ExitProgress::Confirmed => return Instant::now() < deadline,
             ExitProgress::Unconfirmed => return false,
             ExitProgress::Waiting => {}
         }
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-            return false;
-        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
         std::thread::sleep(remaining.min(Duration::from_millis(100)));
     }
+    false
 }
 
 fn finish(app: &AppHandle, confirmed: bool) {
@@ -171,5 +170,18 @@ mod tests {
             Instant::now() + Duration::from_secs(10),
         ));
         assert!(!wait_for_proof(|| ExitProgress::Waiting, Instant::now()));
+    }
+
+    #[test]
+    fn no_exit_when_confirmation_would_first_be_read_after_expiry() {
+        let mut polled = false;
+        assert!(!wait_for_proof(
+            || {
+                polled = true;
+                ExitProgress::Confirmed
+            },
+            Instant::now(),
+        ));
+        assert!(!polled);
     }
 }

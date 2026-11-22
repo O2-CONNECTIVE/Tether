@@ -15,6 +15,7 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = { version = "=0.3.1", default-features = false, features = ["alloc"] }
 objc2 = "=0.6.5"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSActionCell", "NSAlert", "NSApplication", "NSButton", "NSButtonCell", "NSCell", "NSControl", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSString"] }
