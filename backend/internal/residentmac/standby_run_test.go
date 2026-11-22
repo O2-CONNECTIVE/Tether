@@ -217,6 +217,7 @@ func TestNeedsActionRequiresOffBeforeOnRetries(t *testing.T) {
 	if r := s.RequestOff(3, s.Snapshot().Revision); r.Disposition != "accepted" {
 		t.Fatal("OFF did not clear a needs-action cycle", r)
 	}
+	eventually(t, func() bool { return s.Snapshot().CanRequestOn })
 	o := s.Snapshot()
 	if o.Standby != "off" || o.Registration != "disconnected" || o.RegistrationReason != "" || !o.CanRequestOn {
 		t.Fatal("OFF did not clear the reason and release ON", o)
