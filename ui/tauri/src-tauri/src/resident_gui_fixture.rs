@@ -6,11 +6,11 @@ use crate::standby_lifecycle::{Outcome, StandbyOwner};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::Listener;
+use tauri::{Listener, Manager};
 
 const TEST: &str = "TestCIResidentGUIWiring";
 fn event(stage: &'static str) {
@@ -52,6 +52,7 @@ fn failure_class(payload: &str) -> (&'static str, &'static str) {
         "init" => "init",
         "on" => "on",
         "auth" => "auth",
+        "reopen" => "reopen",
         "off" => "off",
         "complete" => "complete",
         _ => return ("event", "sequence"),
@@ -64,6 +65,7 @@ fn failure_class(payload: &str) -> (&'static str, &'static str) {
         "phase-timeout" => "phase-timeout",
         "auth-timeout" => "auth-timeout",
         "bridge-timeout" => "bridge-timeout",
+        "window" => "window",
         "unexpected" => "unexpected",
         _ => return ("event", "sequence"),
     };
@@ -82,6 +84,38 @@ fn retain() -> ! {
     loop {
         thread::park_timeout(Duration::from_secs(3600));
     }
+}
+fn wait_until(mut check: impl FnMut() -> bool) -> bool {
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until {
+        if check() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+fn check_menu_bar(app: &tauri::AppHandle, webview_hidden: &AtomicBool) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    if window.close().is_err()
+        || !wait_until(|| {
+            matches!(window.is_visible(), Ok(false)) && webview_hidden.load(Ordering::SeqCst)
+        })
+    {
+        return false;
+    }
+    event("menu-bar-window-hidden");
+    if crate::mac_menu_bar::show_main_window(app).is_err()
+        || !wait_until(|| matches!(window.is_visible(), Ok(true)))
+    {
+        return false;
+    }
+    event("menu-bar-window-reopened");
+    window
+        .eval("window.dispatchEvent(new Event('tether-fixture-window-reopened'))")
+        .is_ok()
 }
 fn report(path: &PathBuf, invocation: &str, passed: bool) {
     let value = serde_json::json!({
@@ -178,8 +212,12 @@ pub(super) fn run() {
     event("source-bound");
     let verdict = Arc::new(AtomicU8::new(0));
     let observed = verdict.clone();
+    let on_applied = Arc::new(AtomicBool::new(false));
+    let received_on = on_applied.clone();
+    let webview_hidden = Arc::new(AtomicBool::new(false));
+    let received_hidden = webview_hidden.clone();
     let builder = crate::commands_with_ports(
-        tauri::Builder::default(),
+        tauri::Builder::default().on_window_event(crate::mac_menu_bar::window_event),
         crate::ShellRuntime::default(),
         crate::StatusPresentation::default(),
         port,
@@ -203,8 +241,17 @@ pub(super) fn run() {
                     failure_event("event", "lock");
                     return;
                 };
+                if message.payload() == "\"window-hidden\""
+                    && *state == 2
+                    && !received_hidden.swap(true, Ordering::SeqCst)
+                {
+                    return;
+                }
                 let stage = advance(&mut state, message.payload());
                 event(stage);
+                if stage == "on-applied" {
+                    received_on.store(true, Ordering::SeqCst);
+                }
                 if stage == "driver-failed" {
                     let (phase, reason) = failure_class(message.payload());
                     failure_event(phase, reason);
@@ -250,6 +297,7 @@ pub(super) fn run() {
                 tauri::webview::PageLoadEvent::Finished => event("page-finished"),
             })
             .build()?;
+            crate::mac_menu_bar::install(app.handle())?;
             window.show()?;
             event("webview-created");
             Ok(())
@@ -282,6 +330,13 @@ pub(super) fn run() {
     let monitor = thread::spawn(move || {
         let until = Instant::now() + Duration::from_secs(60);
         while observed.load(Ordering::SeqCst) == 0 && Instant::now() < until {
+            if on_applied.swap(false, Ordering::SeqCst)
+                && !check_menu_bar(&request, &webview_hidden)
+            {
+                failure_event("reopen", "window");
+                observed.store(2, Ordering::SeqCst);
+                break;
+            }
             thread::sleep(Duration::from_millis(20));
         }
         event("monitor-exit-request");
@@ -318,7 +373,7 @@ mod tests {
     use super::{advance, failure_class};
     #[test]
     fn fixed_failure_classes_never_accept_payload_values_or_restore_success() {
-        for phase in ["init", "on", "auth", "off", "complete"] {
+        for phase in ["init", "on", "auth", "reopen", "off", "complete"] {
             for reason in [
                 "identity",
                 "receipt",
@@ -327,6 +382,7 @@ mod tests {
                 "phase-timeout",
                 "auth-timeout",
                 "bridge-timeout",
+                "window",
                 "unexpected",
             ] {
                 let payload = format!("\"failed:{phase}:{reason}\"");

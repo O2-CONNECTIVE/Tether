@@ -8,7 +8,8 @@ export const initialResidentState = (): ResidentState => ({ visible: false, obse
 interface Options { invoke: ResidentInvoke | undefined; onChange: (state: ResidentState) => void; now?: () => number; timeoutMs?: number; pollMs?: number }
 export function createResidentController({ invoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: Options) {
   let state = initialResidentState();
-  let disposed = false, sealed = false, busy = false;
+  let disposed = false, sealed = false, pageVisible = true;
+  let operation: 'status' | 'intent' | null = null;
   let cleanupLatched = false;
   let epoch = 0, requestId = 0, revision = 0, until = 0, lastClock = 0;
   let pending: { id: number; intent: Intent } | undefined;
@@ -18,7 +19,8 @@ export function createResidentController({ invoke, onChange, now = () => perform
   const publish = (diagnostic: string, cleanupUnknown = false) => {
     if (disposed) return;
     cleanupLatched ||= cleanupUnknown;
-    const fresh = !sealed && Number.isFinite(clock()) && lastClock < until;
+    const fresh = !sealed && pageVisible && Number.isFinite(clock()) && lastClock < until;
+    const busy = operation !== null;
     const canOff = fresh && !busy && !pending && observation?.canRequestOff === true;
     state = { visible: state.visible, observation: fresh ? observation : null, busy, pending: !!pending,
       canOn: fresh && !busy && !pending && observation?.canRequestOn === true,
@@ -29,17 +31,17 @@ export function createResidentController({ invoke, onChange, now = () => perform
     onChange(state);
   };
   const stopTimers = () => { clearTimeout(poll); clearTimeout(expiry); };
-  const fail = (diagnostic: string, cleanupUnknown = false) => { sealed = true; epoch++; busy = false; stopTimers(); publish(diagnostic, cleanupUnknown); };
+  const fail = (diagnostic: string, cleanupUnknown = false) => { sealed = true; epoch++; operation = null; stopTimers(); publish(diagnostic, cleanupUnknown); };
   const call = async (command: Parameters<ResidentInvoke>[0], args: Parameters<ResidentInvoke>[1]) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try { return await Promise.race([invoke?.(command, args), new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
     })]); } finally { clearTimeout(timer); }
   };
-  const schedule = () => { if (!disposed && !sealed && state.visible) poll = setTimeout(() => { void refresh(); }, pollMs); };
+  const schedule = () => { if (!disposed && !sealed && pageVisible && state.visible) poll = setTimeout(() => { void refresh(); }, pollMs); };
   async function refresh() {
-    if (disposed || sealed || busy || !invoke) return;
-    clearTimeout(poll); busy = true;
+    if (disposed || sealed || !pageVisible || operation || !invoke) return;
+    clearTimeout(poll); operation = 'status';
     const generation = ++epoch, started = clock();
     publish('RESIDENT_CHECKING');
     try {
@@ -47,7 +49,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
       if (disposed || sealed || generation !== epoch) return;
       const received = clock(), decoded = decodeStatus(value);
       if (!decoded || !Number.isFinite(started) || !Number.isFinite(received) || received - started >= timeoutMs) return fail('RESIDENT_INVALID_RESPONSE');
-      busy = false;
+      operation = null;
       if (decoded.source === 'unsupported') {
         if (state.visible) return fail('RESIDENT_SOURCE_CHANGED');
         publish('RESIDENT_UNSUPPORTED'); return;
@@ -83,22 +85,22 @@ export function createResidentController({ invoke, onChange, now = () => perform
     } catch { if (!disposed && !sealed && generation === epoch) fail('RESIDENT_RESPONSE_UNCONFIRMED'); }
   }
   async function request(intent: RequestIntent, standbyHours?: StandbyHours) {
-    if (disposed || sealed || busy || pending || !observation || !invoke) return;
-    const t = clock();
-    if (!Number.isFinite(t) || t >= until) return fail('RESIDENT_OBSERVATION_EXPIRED');
+    if (disposed || sealed || !pageVisible || operation || pending || !observation || !invoke) return;
+    const t = clock(), observedUntil = until;
+    if (!Number.isFinite(t) || t >= observedUntil) return fail('RESIDENT_OBSERVATION_EXPIRED');
     const canRequest = { on: state.canOn, off: state.canOff, extend: state.canExtend };
     if (!canRequest[intent] || (intent === 'extend' && standbyHours === undefined)) return;
     if (requestId >= Number.MAX_SAFE_INTEGER) return fail('RESIDENT_REQUEST_EXHAUSTED');
     const id = ++requestId, generation = ++epoch;
     if (intent !== 'extend') pending = { id, intent };
-    busy = true; clearTimeout(poll); publish(intent === 'extend' ? 'RESIDENT_EXTENDING' : 'RESIDENT_INTENT_PENDING');
+    operation = 'intent'; clearTimeout(poll); publish(intent === 'extend' ? 'RESIDENT_EXTENDING' : 'RESIDENT_INTENT_PENDING');
     try {
       const receipt = decodeReceipt(await call('request_resident_intent', { request: { protocolVersion: 1, requestId: id,
         expectedRevision: revision, intent, ...(standbyHours === undefined || intent === 'off' ? {} : { standbyHours }) } }), id, intent);
       if (disposed || sealed || generation !== epoch) return;
       const received = clock();
-      if (!Number.isFinite(received) || received - t >= timeoutMs || received >= until) return fail('RESIDENT_INTENT_UNCONFIRMED');
-      busy = false;
+      if (!Number.isFinite(received) || received - t >= timeoutMs || received >= observedUntil) return fail('RESIDENT_INTENT_UNCONFIRMED');
+      operation = null;
       if (!receipt || receipt === 'unknown') return fail('RESIDENT_INTENT_UNCONFIRMED');
       state.lastReceipt = receipt; state.lastRequestIntent = intent; state.lastRequestId = id;
       if (receipt !== 'accepted') pending = undefined;
@@ -106,7 +108,16 @@ export function createResidentController({ invoke, onChange, now = () => perform
       await refresh();
     } catch { if (!disposed && !sealed && generation === epoch) fail('RESIDENT_INTENT_UNCONFIRMED'); }
   }
-  return { refresh, request, invalidate: () => fail('RESIDENT_VIEW_INVALIDATED'), dispose: () => {
+  async function setPageVisible(visible: boolean) {
+    if (disposed || sealed || pageVisible === visible) return;
+    pageVisible = visible;
+    if (visible) return refresh();
+    until = 0; stopTimers();
+    // Drop the old read, but let the original mutation finish with its own receipt.
+    if (operation === 'status') { epoch++; operation = null; }
+    publish('RESIDENT_CHECKING');
+  }
+  return { refresh, request, setPageVisible, invalidate: () => fail('RESIDENT_VIEW_INVALIDATED'), dispose: () => {
     disposed = true; sealed = true; epoch++; stopTimers();
   } };
 }
