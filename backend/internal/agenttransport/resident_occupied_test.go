@@ -464,6 +464,82 @@ func TestResidentGatewayCloseRaceRemainsRetryable(t *testing.T) {
 	}
 }
 
+func TestResidentHandlerCloseBeforeReservationRemainsRetryable(t *testing.T) {
+	previousHook := testHookAfterResidentAuthenticated
+	t.Cleanup(func() { testHookAfterResidentAuthenticated = previousHook })
+	// Keep both registration timers later than the test's shutdown deadline.
+	budgets := testBudgets()
+	budgets.Registration = 10 * time.Second
+	budgets.Approval = 30 * time.Second
+	r := newResidentRig(t, func(cfg *ResidentClientConfig) { cfg.Budgets = budgets })
+	r.h.budgets = budgets
+	authenticated, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	reached := sync.OnceFunc(func() { close(authenticated) })
+	testHookAfterResidentAuthenticated = func() {
+		reached()
+		<-resume
+	}
+	r.c.waitRetry = func(ctx context.Context, _ time.Duration, _ <-chan struct{}) residentRetryResult {
+		<-ctx.Done()
+		return residentRetryCanceled
+	}
+
+	done := residentRun(r.c)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := waitFor(ctx, authenticated); err != nil {
+		t.Fatal("gateway did not reach the reservation boundary", err)
+	}
+	var ends memPairEnds
+	select {
+	case ends = <-r.m.pairs:
+	default:
+		t.Fatal("missing original transport at the reservation boundary")
+	}
+	if ends.client.isClosed() || ends.server.isClosed() || r.h.ctx.Err() != nil {
+		t.Fatal("original transport or gateway already closed before shutdown")
+	}
+	gatewayDone := make(chan error, 1)
+	go func() { gatewayDone <- r.h.Close(ctx) }()
+	// Hold reservation until shutdown closes this socket, before it can send 1001.
+	if err := waitFor(ctx, ends.server.closedCh); err != nil {
+		t.Fatal("gateway did not close the original transport", err)
+	}
+	if r.h.ctx.Err() == nil {
+		t.Fatal("original transport closed before gateway shutdown")
+	}
+	release()
+	if err := await(t, gatewayDone, 3*time.Second); err != nil {
+		t.Fatal("closing gateway", err)
+	}
+	if err := waitFor(ctx, ends.served); err != nil {
+		t.Fatal("original resident handler did not finish", err)
+	}
+
+	residentAwaitAlive(t, done, "gateway shutdown retry", func() bool {
+		state := r.c.Snapshot()
+		return state.Reconnecting && state.RetryWaiting
+	})
+	state := r.c.Snapshot()
+	if !state.CleanupObserved || state.CleanupUnknown || !ends.client.isClosed() {
+		t.Fatalf("original transport was not cleanly closed before retry: %+v", state)
+	}
+	if state.Connected || state.Generation != "" || residentGeneration(r.h) != "" || r.rec.count.Load() != 0 {
+		t.Fatalf("shutdown admitted the resident or registered work: %+v", state)
+	}
+	if err := r.c.Close(ctx); err != nil {
+		t.Fatal("closing retrying client", err)
+	}
+	if err := await(t, done, time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatal("unexpected client result after explicit close", err)
+	}
+	if got := r.m.trips.Load(); got != 1 {
+		t.Fatalf("dial attempts while retry was held = %d, want 1", got)
+	}
+}
+
 // Only an authentication restarts the limit; other failures between occupancy
 // refusals must not, or a duplicate meeting them would never stop.
 func TestResidentOccupiedLimitIsNotRestartedByOtherFailures(t *testing.T) {
