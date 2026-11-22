@@ -131,7 +131,7 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 		name    string
 		dialect inputDialect
 		cancel  bool
-	}{{"json-eof", jsonInput, false}, {"foreground-close", foregroundInput, false}, {"foreground-cancel", foregroundInput, true}} {
+	}{{"json-eof", jsonInput, false}, {"json-cancel", jsonInput, true}, {"foreground-close", foregroundInput, false}, {"foreground-cancel", foregroundInput, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			policyPath := idleProtectedPolicy(t)
 			coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
