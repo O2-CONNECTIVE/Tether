@@ -30,16 +30,21 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
       if (intent === 'extend') {
         window.addEventListener('test-renew-deadline', () => { deadline = 1_900_007_200_000; endingSoon = false; revision++; }, { once: true });
       } else {
-        setTimeout(() => { on = intent === 'on'; registration = on ? 'connecting' : 'disconnected';
-          if (on) setTimeout(() => { registration = 'authenticated'; revision++; }, 800);
-          revision++; transition = { requestId: request.requestId, intent, outcome: 'applied' }; }, 300);
+        window.addEventListener('test-apply-standby', () => {
+          on = intent === 'on';
+          registration = on ? 'connecting' : 'disconnected';
+          if (on) window.addEventListener('test-authenticate-resident', () => {
+            registration = 'authenticated'; revision++;
+          }, { once: true });
+          revision++; transition = { requestId: request.requestId, intent, outcome: 'applied' };
+        }, { once: true });
       }
       return Promise.resolve({ protocolVersion: 1, requestId: request.requestId, intent: request.intent, disposition: 'accepted' });
     } } };
   });
   await page.goto(url);
   const standby = page.getByRole('switch', { name: '待機', exact: true });
-  await standby.waitFor({ timeout: 3000 });
+  await standby.waitFor();
   assert.equal(await standby.getAttribute('aria-checked'), 'false');
   assert.equal(await page.getByLabel('待機時間').isVisible(), false);
   const notice = page.locator('.resident-standby__notice[role="status"]');
@@ -49,13 +54,16 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
   await page.getByLabel('待機時間').selectOption('4');
   await page.waitForSelector('#resident-switch[aria-disabled="false"]');
   await standby.press('Space');
+  await page.waitForSelector('html[data-last-resident-intent="on:4"]');
   assert.equal(await standby.isDisabled(), true);
   assert.equal(await standby.getAttribute('aria-checked'), 'false');
   assert.match(await page.locator('#resident-heading').innerText(), /変更を確認中/);
+  await page.evaluate(() => window.dispatchEvent(new Event('test-apply-standby')));
   await page.waitForSelector('#resident-switch[aria-checked="true"][aria-disabled="false"]');
   assert.equal(await page.locator('html').getAttribute('data-last-resident-intent'), 'on:4');
   assert.match(await page.locator('#resident-heading').innerText(), /ONを確認/);
   assert.match(await page.locator('#resident-state').innerText(), /接続: 接続を確認中/);
+  await page.evaluate(() => window.dispatchEvent(new Event('test-authenticate-resident')));
   await page.waitForFunction(() => document.querySelector('#resident-panel')?.getAttribute('data-resident-registration') === 'authenticated');
   assert.match(await page.locator('#resident-state').innerText(), /接続: 認証済み/);
   const deadline = page.locator('#resident-panel time');
@@ -81,6 +89,8 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
     window.dispatchEvent(new Event('test-release-poll'));
   });
   await standby.click();
+  await page.waitForSelector('html[data-last-resident-intent="off:none"]');
+  await page.evaluate(() => window.dispatchEvent(new Event('test-apply-standby')));
   await page.waitForSelector('#resident-switch[aria-checked="false"][aria-disabled="false"]');
   assert.match(await page.locator('#resident-heading').innerText(), /OFFを確認/);
   assert.match(await page.locator('#resident-state').innerText(), /接続: 未接続/);
@@ -135,7 +145,7 @@ void test('sleep prevention and the lid note use fresh owner status', async () =
   });
   await page.goto(url);
   const sleep = page.locator('#resident-sleep-status');
-  await sleep.getByText('作動中', { exact: true }).waitFor({ timeout: 3000 });
+  await sleep.getByText('作動中', { exact: true }).waitFor();
   assert.equal(await page.getByText('Macの蓋を閉じるとスリープします。').isVisible(), true);
   assert.equal(await page.getByRole('switch').count(), 1);
   for (const [value, label] of [['inactive', '作動なし'], ['unknown', '未確認'], ['active', '作動中']]) {
