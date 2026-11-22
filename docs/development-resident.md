@@ -36,7 +36,9 @@ protocol error です。`extend <request_id> <expected_revision> <hours>` は、
 表した `standbyUntil`（Unix ミリ秒、受付が閉じていれば `null`。壁時計を戻すと、経過時間で
 切れる早い方の時刻に変わります）、期限の10分前からの `standbyEndingSoon`、期限で
 止まったことを示す `standbyExpired`（次の ON で `false`。回収が unknown になっても残ります）を
-持ちます。foreground と製品 JSON の `status.snapshot` は同じ3鍵を含みます。
+持ちます。foreground と製品 JSON の `status.snapshot` はこれらの期限の鍵に加え、
+Go が観測したスリープ防止の状態 `sleepPrevention`（`inactive` / `active` / `unknown`）を含みます。
+取得・解除中や解除の結果が未確認の場合は `unknown` です。
 
 所有作業の受付中または Owner が作業を保持している間、macOS のシステム idle sleep を防ぎます。
 回収確認後に assertion を解放します。待機 ON だけでは取得せず、`AllowSleepDuringWork: true`

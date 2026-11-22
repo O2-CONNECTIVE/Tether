@@ -63,9 +63,9 @@ close
    要求で、同じownerのCloseを1回だけ呼ぶ。close以降の同chunk / 次chunkは実行しない。
    OFF確認、close受付、closed-confirmed、実pipe EOF、元child Waitは別の事象。
 
-stdoutは既存の `status` / `receipt` / `closed` JSONL契約に、`status.snapshot` の `standbyUntil`・
-`standbyEndingSoon`・`standbyExpired`（[development-resident](development-resident.md)）を足した形です。
-製品 JSON 方言の `status.snapshot` も同じ3鍵を含み、どちらもGoが出した値をそのまま運びます。
+stdoutの `status.snapshot` は `standbyUntil`・`standbyEndingSoon`・`standbyExpired` と、
+スリープ防止の状態 `sleepPrevention` を含みます（[development-resident](development-resident.md)）。
+製品 JSON 方言の `status.snapshot` も同じ鍵を含み、どちらもGoが出した値をそのまま運びます。
 JSONL入口でCLI行を受けたり、CLI入口で任意JSONを受けたりはしません。
 `close` に別receiptはなく、元ownerの結果に従うclosed frameで報告します。
 SIGINT / SIGTERM / SIGHUPも同じ回収経路へ入り、signal起因の終了は非0です。
