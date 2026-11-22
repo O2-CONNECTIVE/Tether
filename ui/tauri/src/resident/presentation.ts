@@ -7,7 +7,13 @@ export interface ResidentPresentation {
   icon: 'checking' | 'neutral' | 'warning' | 'active';
 }
 const standby: Record<Observation['standby'], string> = { off: 'OFF', on: 'ON', stopping: '停止中', unknown: '未確認' };
-const registration: Record<Observation['registration'], string> = { disconnected: '未接続', connecting: '接続を確認中', authenticated: '認証済み', unknown: '未確認' };
+const registration: Record<Observation['registration'], string> = { disconnected: '未接続', connecting: '接続を確認中', reconnecting: '再接続中',
+  authenticated: '認証済み', needs_action: '要対応', unknown: '未確認' };
+const needsActionDetail: Record<NonNullable<Observation['registrationReason']>, string> = {
+  identity_refused: 'このホストの身元が拒否されました。別の端末に置き換えられた可能性があります。もう一度ペア登録してから、アプリを終了して起動し直してください。',
+  connection_occupied: '別の接続がこのホストを使っています。その接続を終えてから、待機をOFFにしてONにし直してください。',
+  gateway_refused: 'サーバーが接続を拒否しました。設定を確認してから、待機をOFFにしてONにし直してください。',
+};
 const work: Record<Observation['work'], string> = { idle: '作業なし', preparing: '準備中', running: '実行中', stopping: '停止中', completed: '完了', failed: '失敗', unknown: '未確認' };
 const cleanup: Record<Observation['cleanup'], string> = { confirmed: '回収確認済み', pending: '回収待ち', unknown: '要清掃' };
 // Pure display mapping. It grants nothing: missing evidence stays unconfirmed,
@@ -19,8 +25,13 @@ export function presentResident(o: Observation | null, pending: boolean, cleanup
   const detail = `待機: ${standby[o.standby]} / 接続: ${registration[o.registration]} / 作業: ${work[o.work]} / 回収: ${cleanup[o.cleanup]}`;
   if (pending) return { heading: '待機の変更を確認中', detail, tone: 'neutral', icon: 'checking' };
   // 青は「接続中」。待機ONでも認証済みの接続を観測するまでは接続済みに見せない。
-  if (o.standby === 'on') return o.registration === 'authenticated' ? { heading: '待機ONを確認', detail, tone: 'connected', icon: 'active' }
-    : { heading: '待機ONを確認', detail, tone: 'neutral', icon: 'checking' };
+  if (o.standby === 'on') {
+    if (o.registration === 'authenticated') return { heading: '待機ONを確認', detail, tone: 'connected', icon: 'active' };
+    if (o.registration === 'reconnecting') return { heading: '待機ON・再接続中', detail, tone: 'neutral', icon: 'checking' };
+    if (o.registration === 'needs_action') return { heading: '待機ON・要対応',
+      detail: o.registrationReason ? needsActionDetail[o.registrationReason] : detail, tone: 'unconfirmed', icon: 'warning' };
+    return { heading: '待機ONを確認', detail, tone: 'neutral', icon: 'checking' };
+  }
   if (o.standby === 'off') return { heading: '待機OFFを確認', detail, tone: 'neutral', icon: 'neutral' };
   return { heading: '待機停止を確認中', detail, tone: 'stopping', icon: 'checking' };
 }

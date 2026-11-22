@@ -51,7 +51,8 @@ void test('new registration states decode and needs_action still permits OFF', a
   });
   await r.controller.refresh();
   assert.equal(r.last()?.canOff, true);
-  assert.equal(r.last()?.observation?.registration, 'disconnected');
+  // 要対応を「未接続」に潰さない（#451）。画面は理由とともに要対応を出す。
+  assert.equal(r.last()?.observation?.registration, 'needs_action');
   assert.equal(r.last()?.observation?.registrationReason, 'gateway_refused');
   await r.controller.request('off');
   assert.deepEqual(requests, [{ protocolVersion: 1, requestId: 2, expectedRevision: 1, intent: 'off' }]);

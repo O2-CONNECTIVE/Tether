@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { presentResident } from '../src/resident/presentation.ts';
-import type { Observation } from '../src/resident/model.ts';
+import { decodeStatus, type Observation } from '../src/resident/model.ts';
 
 const observed = (changes: Partial<Observation> = {}): Observation => ({
   revision: 1, validForMs: 5000, standby: 'off', registration: 'disconnected', caller: 'none',
@@ -59,4 +59,41 @@ void test('standby on without an authenticated registration is not shown as conn
     const view = presentResident(observed({ standby: 'on', registration }), false);
     assert.deepEqual([view.tone, view.icon, view.heading], ['neutral', 'checking', '待機ONを確認']);
   }
+});
+
+// 一時的な切断は Go が再試行を続ける。接続済み（青）にも、利用者の操作が要る「要対応」にも見せない。
+void test('standby on while reconnecting is shown as retrying, not as connected or as needing action', () => {
+  const view = presentResident(observed({ standby: 'on', registration: 'reconnecting', work: 'stopping', cleanup: 'pending' }), false);
+  assert.deepEqual([view.tone, view.icon, view.heading], ['neutral', 'checking', '待機ON・再接続中']);
+  assert.equal(view.detail, '待機: ON / 接続: 再接続中 / 作業: 停止中 / 回収: 回収待ち');
+});
+
+// 直らない失敗では Go が再試行をやめる。理由ごとに、何をすれば戻るかを利用者に示す。
+// 身元の拒否は、ペア登録し直した後に常駐を起動し直すまで戻らない（起動中の常駐は変わった policy を拒む。docs/host-pairing.md）。
+void test('needs action names the reason and the way back for each refusal', () => {
+  const reasons = {
+    identity_refused: 'このホストの身元が拒否されました。別の端末に置き換えられた可能性があります。もう一度ペア登録してから、アプリを終了して起動し直してください。',
+    connection_occupied: '別の接続がこのホストを使っています。その接続を終えてから、待機をOFFにしてONにし直してください。',
+    gateway_refused: 'サーバーが接続を拒否しました。設定を確認してから、待機をOFFにしてONにし直してください。',
+  } as const;
+  for (const [registrationReason, detail] of Object.entries(reasons)) {
+    const view = presentResident(observed({ standby: 'on', registration: 'needs_action',
+      registrationReason: registrationReason as keyof typeof reasons, canRequestOn: false, canRequestOff: true }), false);
+    assert.deepEqual(view, { heading: '待機ON・要対応', detail, tone: 'unconfirmed', icon: 'warning' });
+  }
+});
+
+// 読み手が再接続中と要対応を「未接続」に潰すと、画面は Go の区別を出せない。受け取りから表示までを通して確かめる。
+void test('the decoder keeps reconnecting and needs action apart from disconnected all the way to the screen', () => {
+  const raw = { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1, validForMs: 3000, standby: 'on',
+    caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: false, canRequestOff: true, transition: { requestId: 1, intent: 'on', outcome: 'applied' } };
+  const status = (change: Record<string, unknown>) => {
+    const decoded = decodeStatus({ ...raw, ...change });
+    assert.ok(decoded?.source === 'resident-owner' && decoded.observation);
+    return decoded.observation;
+  };
+  assert.equal(presentResident(status({ registration: 'reconnecting' }), false).heading, '待機ON・再接続中');
+  const needsAction = status({ registration: 'needs_action', registrationReason: 'connection_occupied' });
+  assert.deepEqual([needsAction.registration, needsAction.registrationReason], ['needs_action', 'connection_occupied']);
+  assert.equal(presentResident(needsAction, false).heading, '待機ON・要対応');
 });
