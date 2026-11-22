@@ -45,22 +45,26 @@ def run():
     actual_files = {p.relative_to(app).as_posix() for p in app.rglob('*') if p.is_file()}
     if actual_files != expected_files:
         raise ValueError('assembled GUI file inventory mismatch')
+    plist_data = builder.layout.files.read_regular(app / 'Contents/Info.plist', 64 * 1024)
+    if builder.source.digest(plist_data) != record['infoPlistSha256']:
+        raise ValueError('assembled GUI plist mismatch')
+    plist = plistlib.loads(plist_data)
     for role, relative in builder.layout.ASSEMBLY_IMAGES.items():
         data = builder.layout.files.read_regular(app / relative, builder.layout.LIMIT)
         if record['images'][role] != {'path': relative, 'sha256': builder.source.digest(data), 'bytes': len(data)}:
             raise ValueError('assembled GUI image mismatch')
         if (app / relative).stat().st_mode & 0o111:
             raise ValueError('retained GUI image is executable')
-    if builder.source.digest((app / 'Contents/Info.plist').read_bytes()) != record['infoPlistSha256']:
-        raise ValueError('assembled GUI plist mismatch')
+        if role == 'gui':
+            identity = builder.layout.embedded_info_plist_identity(data, 'darwin-arm64', plist)
     matched = builder.layout.verify_assembly(app, 'darwin-arm64', builder.summary(record)['imageHashes'])
     if matched != record['linkLayout']:
         raise ValueError('actual GUI link layout mismatch')
-    plist = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
     if plist['LSMinimumSystemVersion'] != matched['minimumMacOSDeclared']:
         raise ValueError('actual GUI minimum OS mismatch')
     print(json.dumps({'check': 'mac-gui-candidate-build', **builder.summary(record),
                       'appAssembled': True, 'imageExecuted': False, 'producerIncluded': True,
+                      'embeddedInfoPlistIdentity': identity,
                       'productionGateClosed': True}))
 
 

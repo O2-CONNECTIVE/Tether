@@ -30,6 +30,8 @@ copy前のimage hashを固定し、組立後bytesと[link-layout検査](mac-gui-
 
 [Mac native source CI](../.github/workflows/mac-native-source.yml) の独立laneが実buildと記録・組立bytes・非実行mode・link-layoutを再照合します。同じlaneでGUI/SwiftとGoの公開依存を事前取得し、三imageをoffline buildします。producer単独buildとnative fixture laneも維持します。保存artifactはJSONのみで、app/imageはupload、署名、notarize、登録、起動しません。OS信頼設定やcredentialに変更はありません。
 
+`gui-build.json` の `embeddedInfoPlistIdentity` は、同じハッシュの GUI 実行ファイルの `__TEXT,__info_plist` を読み、`CFBundleIdentifier`、`CFBundleExecutable`、`CFBundlePackageType` を外側の `Contents/Info.plist` と照合した結果です。`absent` はセクションなし、`match` は3項目の一致、`mismatch` は値の不一致、`invalid` はセクションや plist の形式不正または必要項目の欠落を示します。分類だけを出力します。候補の利用可否と macOS の通知受入は別の判定です。
+
 ```sh
 python -m unittest scripts.tests.test_mac_gui_candidate_build -v
 python -OO -m unittest scripts.tests.test_mac_gui_candidate_build -v
