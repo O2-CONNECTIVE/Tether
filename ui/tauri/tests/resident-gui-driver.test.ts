@@ -9,9 +9,10 @@ async function run(mode: string) {
   const dataset: Record<string, string> = { residentRequestId: '0', residentRevision: '1', residentReceipt: 'none',
     residentStandby: 'off', residentRegistration: 'disconnected', residentTransitionId: '0',
     residentTransitionIntent: 'none', residentTransitionOutcome: 'none' };
-  const buttons = {
-    '#resident-on': { disabled: false, click: () => click('on') },
-    '#resident-off': { disabled: true, click: () => click('off') },
+  const standbySwitch = {
+    disabled: false,
+    getAttribute: (name: string) => name === 'aria-checked' ? String(dataset.residentStandby === 'on') : null,
+    click: () => click(dataset.residentStandby === 'on' ? 'off' : 'on'),
   };
   function click(intent: 'on' | 'off') {
     if (intent === 'on') onClicks++; else offClicks++;
@@ -27,8 +28,6 @@ async function run(mode: string) {
       dataset.residentReceipt = 'stale'; dataset.residentStandby = 'off';
       dataset.residentRegistration = 'disconnected'; dataset.residentTransitionOutcome = 'rejected'; return;
     }
-    buttons['#resident-on'].disabled = intent === 'on';
-    buttons['#resident-off'].disabled = intent === 'off';
     if (intent === 'off' && mode === 'wrong-transition') dataset.residentTransitionId = String(sequence - 1);
     if (intent === 'off' && mode === 'rejected-off') { dataset.residentReceipt = 'rejected'; dataset.residentTransitionOutcome = 'rejected'; }
     if (intent === 'off' && mode === 'unaccepted') dataset.residentReceipt = 'unavailable';
@@ -37,11 +36,10 @@ async function run(mode: string) {
     performance: { now: () => now },
     setTimeout: (callback: () => void, delay: number) => { now += delay; queueMicrotask(callback); },
     document: { querySelector: (selector: string) => selector === '#resident-panel' ? { dataset }
-      : buttons[selector as keyof typeof buttons] },
+      : selector === '#resident-switch' ? standbySwitch : null },
     window: { __TAURI__: { event: { emit: (_: string, event: string) => {
       events.push(event);
       if (event === 'on-applied' && mode === 'spontaneous-off') {
-        buttons['#resident-on'].disabled = false; buttons['#resident-off'].disabled = true;
         dataset.residentStandby = 'off'; dataset.residentRegistration = 'disconnected';
       }
       return Promise.resolve();
@@ -68,21 +66,22 @@ async function classify(mode: string) {
   const dataset: Record<string, string> = { residentRequestId: '0', residentRevision: mode === 'identity' ? '0' : '1',
     residentReceipt: 'none', residentStandby: 'off', residentRegistration: 'disconnected',
     residentTransitionId: '0', residentTransitionIntent: 'none', residentTransitionOutcome: 'none' };
-  const button = { disabled: false, click() {
+  const button = { disabled: false,
+    getAttribute: (name: string) => name === 'aria-checked' ? String(dataset.residentStandby === 'on') : null,
+    click() {
     clicks++;
     if (mode === 'unexpected') throw new Error('https://secret.invalid/private-value');
     if (mode === 'phase-timeout') { button.disabled = true; return; }
     dataset.residentRequestId = String(clicks); dataset.residentRevision = String(clicks + 1);
     dataset.residentReceipt = mode === 'receipt' ? 'unavailable' : mode === 'retry-budget' ? 'stale' : 'accepted';
     dataset.residentTransitionId = String(clicks); dataset.residentTransitionIntent = 'on';
-    dataset.residentTransitionOutcome = mode === 'transition' ? 'unknown' : 'applied';
-    dataset.residentStandby = 'on';
-    button.disabled = mode !== 'retry-budget';
+    dataset.residentTransitionOutcome = mode === 'transition' ? 'unknown' : mode === 'retry-budget' ? 'rejected' : 'applied';
+    if (mode !== 'retry-budget') dataset.residentStandby = 'on';
   } };
   await runInNewContext(driver, {
     performance: { now: () => now }, setTimeout: (f: () => void, ms: number) => { now += ms; queueMicrotask(f); },
     document: { querySelector: (s: string) => s === '#resident-panel' ? { dataset }
-      : s === '#resident-on' ? button : { disabled: mode !== 'auth-timeout' } },
+      : s === '#resident-switch' ? button : null },
     window: { __TAURI__: { event: { emit: (_: string, v: string) => { events.push(v); return Promise.resolve(); } } } },
   });
   return { events, clicks };

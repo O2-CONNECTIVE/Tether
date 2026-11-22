@@ -27,11 +27,15 @@ export function presentResident(o: Observation | null, pending: boolean, cleanup
   // 青は「接続中」。待機ONでも認証済みの接続を観測するまでは接続済みに見せない。
   if (o.standby === 'on') {
     if (o.registration === 'authenticated') return { heading: '待機ONを確認', detail, tone: 'connected', icon: 'active' };
-    if (o.registration === 'reconnecting') return { heading: '待機ON・再接続中', detail, tone: 'neutral', icon: 'checking' };
+    if (o.registration === 'reconnecting') return { heading: '待機ON・再接続中',
+      detail: `${detail}。待機と期限は続き、切断前の作業は停止・回収します。`, tone: 'neutral', icon: 'checking' };
     if (o.registration === 'needs_action') return { heading: '待機ON・要対応',
-      detail: o.registrationReason ? needsActionDetail[o.registrationReason] : detail, tone: 'unconfirmed', icon: 'warning' };
+      detail: `自動での再接続を停止しました。${o.registrationReason ? needsActionDetail[o.registrationReason] : detail}`, tone: 'unconfirmed', icon: 'warning' };
     return { heading: '待機ONを確認', detail, tone: 'neutral', icon: 'checking' };
   }
-  if (o.standby === 'off') return { heading: '待機OFFを確認', detail, tone: 'neutral', icon: 'neutral' };
+  if (o.standby === 'off') return { heading: o.standbyExpired && o.cleanup === 'confirmed' && o.work === 'idle'
+    ? '待機は期限で停止しました' : '待機OFFを確認', detail, tone: 'neutral', icon: 'neutral' };
+  if (o.standby === 'stopping' && o.standbyExpired) return {
+    heading: '待機期限に達しました。停止を確認中', detail, tone: 'stopping', icon: 'checking' };
   return { heading: '待機停止を確認中', detail, tone: 'stopping', icon: 'checking' };
 }
