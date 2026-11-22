@@ -1,7 +1,7 @@
 //! Disposable CI only: real WebView/IPC/owned pipes, real Go Standby with synthetic loopback trust only.
 //! This does not activate the Mac27 sealed native launcher or enroll a host.
 use crate::resident_gui_probe as probe;
-use crate::resident_port::{duplex::owner::Supervisor, ResidentPort};
+use crate::resident_port::{duplex::owner::Supervisor, ResidentPort, ResidentState};
 use crate::standby_lifecycle::{Outcome, StandbyOwner};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -22,7 +22,9 @@ fn advance(state: &mut u8, payload: &str) -> &'static str {
             "\"initializer-started\"" => Some((0, 1, "initializer-started")),
             "\"on-applied\"" => Some((1, 2, "on-applied")),
             "\"off-applied\"" => Some((2, 3, "off-applied")),
-            "\"passed\"" => Some((3, 4, "driver-passed")),
+            "\"menu-on-applied\"" => Some((3, 4, "menu-on-applied")),
+            "\"menu-off-applied\"" => Some((4, 5, "menu-off-applied")),
+            "\"passed\"" => Some((5, 6, "driver-passed")),
             _ => None,
         }
     } else {
@@ -34,7 +36,7 @@ fn advance(state: &mut u8, payload: &str) -> &'static str {
             return label;
         }
     }
-    *state = 5;
+    *state = u8::MAX;
     "driver-failed"
 }
 // Only closed enums are projected; payloads, exceptions and runtime values never leave CI.
@@ -54,6 +56,7 @@ fn failure_class(payload: &str) -> (&'static str, &'static str) {
         "auth" => "auth",
         "reopen" => "reopen",
         "off" => "off",
+        "menu-stop" => "menu-stop",
         "complete" => "complete",
         _ => return ("event", "sequence"),
     };
@@ -95,18 +98,7 @@ fn wait_until(mut check: impl FnMut() -> bool) -> bool {
     }
     false
 }
-fn check_menu_bar(app: &tauri::AppHandle, webview_hidden: &AtomicBool) -> bool {
-    let Some(window) = app.get_webview_window("main") else {
-        return false;
-    };
-    if window.close().is_err()
-        || !wait_until(|| {
-            matches!(window.is_visible(), Ok(false)) && webview_hidden.load(Ordering::SeqCst)
-        })
-    {
-        return false;
-    }
-    event("menu-bar-window-hidden");
+fn reopen_main(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> bool {
     if crate::mac_menu_bar::show_main_window(app).is_err()
         || !wait_until(|| matches!(window.is_visible(), Ok(true)))
     {
@@ -116,6 +108,64 @@ fn check_menu_bar(app: &tauri::AppHandle, webview_hidden: &AtomicBool) -> bool {
     window
         .eval("window.dispatchEvent(new Event('tether-fixture-window-reopened'))")
         .is_ok()
+}
+
+fn stop_hidden_standby(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> bool {
+    let owner = app.state::<Arc<ResidentState>>();
+    let read = || serde_json::to_value(owner.port().current()).unwrap_or_default();
+    let on = read();
+    let (Some(on_id), Some(on_revision)) = (
+        on["transition"]["requestId"].as_u64(),
+        on["revision"].as_u64(),
+    ) else {
+        return false;
+    };
+    if on["standby"] != "on"
+        || on["registration"] != "authenticated"
+        || on["transition"]["outcome"] != "applied"
+        || crate::mac_menu_bar::menu_event(
+            app,
+            tauri::menu::MenuEvent {
+                id: crate::mac_menu_bar::STOP_STANDBY.into(),
+            },
+        )
+        .is_err()
+    {
+        return false;
+    }
+    if !wait_until(|| {
+        let off = read();
+        off["revision"]
+            .as_u64()
+            .is_some_and(|revision| revision > on_revision)
+            && off["standby"] == "off"
+            && off["cleanup"] == "confirmed"
+            && off["canRequestOn"] == true
+            && off["transition"]["requestId"].as_u64() == on_id.checked_add(1)
+            && off["transition"]["intent"] == "off"
+            && off["transition"]["outcome"] == "applied"
+    }) || !matches!(window.is_visible(), Ok(false))
+    {
+        return false;
+    }
+    event("menu-stop-applied-while-hidden");
+    true
+}
+
+fn check_menu_bar(app: &tauri::AppHandle, webview_hidden: &AtomicBool, stop: bool) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    webview_hidden.store(false, Ordering::SeqCst);
+    if window.close().is_err()
+        || !wait_until(|| {
+            matches!(window.is_visible(), Ok(false)) && webview_hidden.load(Ordering::SeqCst)
+        })
+    {
+        return false;
+    }
+    event("menu-bar-window-hidden");
+    (!stop || stop_hidden_standby(app, &window)) && reopen_main(app, &window)
 }
 fn report(path: &PathBuf, invocation: &str, passed: bool) {
     let value = serde_json::json!({
@@ -212,8 +262,8 @@ pub(super) fn run() {
     event("source-bound");
     let verdict = Arc::new(AtomicU8::new(0));
     let observed = verdict.clone();
-    let on_applied = Arc::new(AtomicBool::new(false));
-    let received_on = on_applied.clone();
+    let window_action = Arc::new(AtomicU8::new(0));
+    let received_on = window_action.clone();
     let webview_hidden = Arc::new(AtomicBool::new(false));
     let received_hidden = webview_hidden.clone();
     let builder = crate::commands_with_ports(
@@ -242,24 +292,26 @@ pub(super) fn run() {
                     return;
                 };
                 if message.payload() == "\"window-hidden\""
-                    && *state == 2
+                    && matches!(*state, 2 | 4)
                     && !received_hidden.swap(true, Ordering::SeqCst)
                 {
                     return;
                 }
                 let stage = advance(&mut state, message.payload());
                 event(stage);
-                if stage == "on-applied" {
-                    received_on.store(true, Ordering::SeqCst);
+                match stage {
+                    "on-applied" => received_on.store(1, Ordering::SeqCst),
+                    "menu-on-applied" => received_on.store(2, Ordering::SeqCst),
+                    _ => {}
                 }
                 if stage == "driver-failed" {
                     let (phase, reason) = failure_class(message.payload());
                     failure_event(phase, reason);
                 }
-                if *state == 4 {
+                if *state == 6 {
                     result.store(1, Ordering::SeqCst);
                 }
-                if *state == 5 {
+                if *state == u8::MAX {
                     result.store(2, Ordering::SeqCst);
                 }
             });
@@ -270,6 +322,7 @@ pub(super) fn run() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("Tether — カレントの検証版（合成CI）")
+            .initialization_script("window.__tetherFixtureMenuStop = true")
             .initialization_script(include_str!("../tests/resident-gui/drive.js"))
             .on_navigation(|url| {
                 let allowed = probe::navigation_allowed(url);
@@ -330,10 +383,9 @@ pub(super) fn run() {
     let monitor = thread::spawn(move || {
         let until = Instant::now() + Duration::from_secs(60);
         while observed.load(Ordering::SeqCst) == 0 && Instant::now() < until {
-            if on_applied.swap(false, Ordering::SeqCst)
-                && !check_menu_bar(&request, &webview_hidden)
-            {
-                failure_event("reopen", "window");
+            let action = window_action.swap(0, Ordering::SeqCst);
+            if action != 0 && !check_menu_bar(&request, &webview_hidden, action == 2) {
+                failure_event(if action == 2 { "menu-stop" } else { "reopen" }, "window");
                 observed.store(2, Ordering::SeqCst);
                 break;
             }
@@ -373,7 +425,15 @@ mod tests {
     use super::{advance, failure_class};
     #[test]
     fn fixed_failure_classes_never_accept_payload_values_or_restore_success() {
-        for phase in ["init", "on", "auth", "reopen", "off", "complete"] {
+        for phase in [
+            "init",
+            "on",
+            "auth",
+            "reopen",
+            "off",
+            "menu-stop",
+            "complete",
+        ] {
             for reason in [
                 "identity",
                 "receipt",
@@ -389,9 +449,9 @@ mod tests {
                 assert_eq!(failure_class(&payload), (phase, reason));
                 let mut state = 1;
                 assert_eq!(advance(&mut state, &payload), "driver-failed");
-                assert_eq!(state, 5);
+                assert_eq!(state, u8::MAX);
                 advance(&mut state, "\"on-applied\"");
-                assert_eq!(state, 5);
+                assert_eq!(state, u8::MAX);
             }
         }
         for payload in [
@@ -411,22 +471,29 @@ mod tests {
             "\"initializer-started\"",
             "\"on-applied\"",
             "\"off-applied\"",
+            "\"menu-on-applied\"",
+            "\"menu-off-applied\"",
             "\"passed\"",
         ];
         let mut state = 0;
         for message in events {
             advance(&mut state, message);
         }
-        assert_eq!(state, 4);
-        advance(&mut state, events[3]);
-        assert_eq!(state, 5);
+        assert_eq!(state, 6);
+        advance(&mut state, events[5]);
+        assert_eq!(state, u8::MAX);
+        let mut without_menu_stop = 3;
+        assert_eq!(
+            advance(&mut without_menu_stop, "\"passed\""),
+            "driver-failed"
+        );
         for bad in ["\"passed\"", "\"failed\"", "{}", &"x".repeat(65)] {
             let mut state = 0;
             advance(&mut state, bad);
             for message in events {
                 advance(&mut state, message);
             }
-            assert_eq!(state, 5);
+            assert_eq!(state, u8::MAX);
         }
     }
 }

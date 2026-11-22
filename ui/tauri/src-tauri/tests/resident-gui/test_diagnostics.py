@@ -4,7 +4,7 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[5]
-PHASES = ('init', 'on', 'auth', 'reopen', 'off', 'complete')
+PHASES = ('init', 'on', 'auth', 'reopen', 'off', 'menu-stop', 'complete')
 REASONS = ('identity', 'receipt', 'transition', 'retry-budget', 'phase-timeout',
            'auth-timeout', 'bridge-timeout', 'window', 'unexpected')
 
@@ -29,7 +29,7 @@ class DiagnosticContract(unittest.TestCase):
             self.assertIn(f'"{token}" => "{token}"', projection)
         self.assertIn('eprintln!("GUI_FIXTURE_FAILURE={phase}:{reason}")', projection)
         self.assertNotIn('eprintln!("{payload}', rust)
-        self.assertIn('*state = 5;\n    "driver-failed"', rust)
+        self.assertIn('*state = u8::MAX;\n    "driver-failed"', rust)
         self.assertIn('result.store(2, Ordering::SeqCst)', rust)
         self.assertIn('owner.gate.outcome() == Some(Outcome::Confirmed)', rust)
         self.assertIn('std::hint::black_box(&owner);\n        retain();', rust)

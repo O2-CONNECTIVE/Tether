@@ -1,25 +1,40 @@
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuEvent, MenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, Window, WindowEvent,
 };
 
 const TRAY: &str = "host-menu-bar";
 const OPEN_WINDOW: &str = "host-menu-bar-open-window";
+pub(super) const STOP_STANDBY: &str = "host-menu-bar-stop-standby";
 
 pub(super) fn install(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, OPEN_WINDOW, "ウィンドウを開く", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open])?;
+    let stop = MenuItem::with_id(app, STOP_STANDBY, "待機を止める", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &stop])?;
     TrayIconBuilder::with_id(TRAY)
         .title("Tether")
         .menu(&menu)
         .on_menu_event(|app, event| {
-            if event.id().as_ref() == OPEN_WINDOW {
-                let _ = show_main_window(app);
-            }
+            let _ = menu_event(app, event);
         })
         .build(app)?;
     Ok(())
+}
+
+pub(super) fn menu_event(app: &AppHandle, event: MenuEvent) -> tauri::Result<()> {
+    match event.id().as_ref() {
+        OPEN_WINDOW => show_main_window(app),
+        STOP_STANDBY => {
+            let window = app
+                .get_webview_window("main")
+                .ok_or(tauri::Error::WindowNotFound)?;
+            // A payload-free UI signal for the existing local controller. It
+            // carries no status, authorization or request identifier.
+            window.eval("window.dispatchEvent(new Event('tether-resident-stop'))")
+        }
+        _ => Ok(()),
+    }
 }
 
 pub(super) fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
