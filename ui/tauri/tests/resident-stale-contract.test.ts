@@ -11,7 +11,8 @@ const driver = readFileSync(new URL('../src-tauri/tests/resident-gui/drive.js', 
 async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' | 'unknown') {
   let lastId = 0, pending: number | null = null, firstOff = true, now = 0, ownerOffCalls = 0;
   let observation: Observation = { revision: 1, validForMs: 3000, standby: 'off', registration: 'disconnected',
-    caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false, transition: null };
+    caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false, transition: null,
+    standbyUntil: null, standbyEndingSoon: false, standbyExpired: false };
   const events: string[] = [], receipts: string[] = [], order: string[] = [];
   const dataset: Record<string, string> = {};
   const buttons = {
@@ -29,6 +30,7 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
     }, invoke: (command, { request: r }) => {
       if (command === 'get_resident_status') return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', ...observation });
       const id = r.requestId!, intent = r.intent!;
+      if (intent !== 'on' && intent !== 'off') throw new Error('unexpected test intent');
       let disposition: string;
       if (id <= lastId || r.expectedRevision !== observation.revision) disposition = 'stale';
       else if (pending !== null) disposition = 'rejected';
@@ -68,7 +70,8 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
 function applied(intent: Intent, id: number, revision: number): Observation {
   return { revision, validForMs: 3000, standby: intent, registration: intent === 'on' ? 'authenticated' : 'disconnected',
     caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: intent === 'off', canRequestOff: intent === 'on',
-    transition: { requestId: id, intent, outcome: 'applied' } };
+    transition: { requestId: id, intent, outcome: 'applied' }, standbyUntil: intent === 'on' ? 1_900_000_000_000 : null,
+    standbyEndingSoon: false, standbyExpired: false };
 }
 void test('modeled pre-owner stale schedule requires same-ID rejection before its receipt', async () => {
   const old = await replay('old-stale');

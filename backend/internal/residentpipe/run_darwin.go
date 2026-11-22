@@ -137,7 +137,7 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 
 // Both entry points transfer the same loaded owner here exactly once.
 func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, owner *residentmac.Standby, pipes *ownedPipes, dialect inputDialect) error {
-	m := mapper{foreground: dialect == foregroundInput}
+	var m mapper
 	e := safeServeInput(lifetime, owner, pipes, dialect, &m)
 	result := coord.Stop()
 	var closeErr error
@@ -146,10 +146,10 @@ func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, o
 		closeErr = residentmac.ErrStandbyUnknown
 		now, statusErr := continuousMS()
 		if statusErr == nil {
-			status, err := m.terminalUnknownStatus(now)
+			status, err := m.terminalUnknownStatus(now, owner.StandbyExpired())
 			if err == nil {
 				var b []byte
-				b, err = Encode(m.frame(status))
+				b, err = Encode(status)
 				if err == nil {
 					err = pipes.writeLine(b)
 				}
@@ -191,7 +191,6 @@ func serveInput(lifetime context.Context, owner *residentmac.Standby, p *ownedPi
 // Scheduling-only private seam: a component test can hold heartbeat delivery
 // to prove that a status command itself publishes. It grants no new authority.
 func serveLoop(lifetime context.Context, owner *residentmac.Standby, p *ownedPipes, dialect inputDialect, heartbeat <-chan time.Time, m *mapper) error {
-	m.foreground = dialect == foregroundInput
 	publish := func() error {
 		now, e := continuousMS()
 		if e != nil {
@@ -332,7 +331,7 @@ func publishObservation(m *mapper, p *ownedPipes, o residentmac.StandbyObservati
 	if e != nil {
 		return e
 	}
-	b, e := Encode(m.frame(s))
+	b, e := Encode(s)
 	if e != nil {
 		return e
 	}

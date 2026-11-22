@@ -2,8 +2,7 @@ package residentmac
 
 import "time"
 
-// DefaultStandbyFor is the standby length for an ON that names none: the
-// product's JSON entry cannot name one until #410 (#399).
+// DefaultStandbyFor is the standby length for an ON that names none (#399).
 const DefaultStandbyFor = 2 * time.Hour
 
 // StandbyEndingNotice is how long before its end standby warns the Mac's UI

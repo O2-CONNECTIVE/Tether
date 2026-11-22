@@ -219,22 +219,10 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 	}
 	switch kind {
 	case "status":
-		// Only the foreground (development) dialect's status shows when standby
-		// ends; the JSON dialect's keeps its exact product keys.
 		var e statusEnvelope
-		var decoded error
-		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition"}
-		flags := []string{"canRequestOn", "canRequestOff"}
-		if p.foreground {
-			var f foregroundStatusEnvelope
-			decoded = ciStrictFrame(raw, &f)
-			e = statusEnvelope{f.ProtocolVersion, f.Type, f.SourceContinuousMS, f.Snapshot.Snapshot}
-			keys = append(keys, "standbyUntil", "standbyEndingSoon", "standbyExpired")
-			flags = append(flags, "standbyEndingSoon", "standbyExpired")
-		} else {
-			decoded = ciStrictFrame(raw, &e)
-		}
-		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || decoded != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
+		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"}
+		flags := []string{"canRequestOn", "canRequestOff", "standbyEndingSoon", "standbyExpired"}
+		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || ciStrictFrame(raw, &e) != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
 			return ErrProtocol
 		}
 		var body map[string]json.RawMessage
@@ -249,7 +237,7 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 			}
 		}
 		x := e.Snapshot
-		if x.ProtocolVersion != 1 || x.Source != "resident-owner" || x.State != "source-observation" || x.Revision <= p.snapshot.Revision || x.Revision > MaxInteger || x.ValidForMS != 3000 || !oneOf(x.Standby, "off", "on", "stopping", "unknown") || !oneOf(x.Registration, "disconnected", "connecting", "authenticated", "unknown") || !oneOf(x.Work, "idle", "preparing", "running", "stopping", "unknown") || !oneOf(x.Cleanup, "confirmed", "pending", "unknown") {
+		if x.ProtocolVersion != 1 || x.Source != "resident-owner" || x.State != "source-observation" || x.Revision <= p.snapshot.Revision || x.Revision > MaxInteger || x.ValidForMS != 3000 || !oneOf(x.Standby, "off", "on", "stopping", "unknown") || !oneOf(x.Registration, "disconnected", "connecting", "authenticated", "unknown") || !oneOf(x.Work, "idle", "preparing", "running", "stopping", "unknown") || !oneOf(x.Cleanup, "confirmed", "pending", "unknown") || (x.StandbyUntil != nil && (*x.StandbyUntil == 0 || *x.StandbyUntil > MaxInteger)) || (x.StandbyEndingSoon && x.StandbyUntil == nil) {
 			return ErrProtocol
 		}
 		if x.Transition != nil {
@@ -351,7 +339,12 @@ func (p *ciChild) requestWithDiagnostics(intent string) (uint64, *int64, error) 
 	}
 	p.nextID++
 	id := p.nextID
-	raw, e := Encode(intentEnvelope{1, "intent", Intent{1, id, s.Revision, intent, 0}})
+	request := jsonIntentRequest{ProtocolVersion: 1, RequestID: id, ExpectedRevision: s.Revision, Intent: intent}
+	if intent == "extend" {
+		hours := uint64(2)
+		request.StandbyHours = &hours
+	}
+	raw, e := Encode(intentEnvelope{1, "intent", request})
 	if e != nil {
 		return id, nil, e
 	}

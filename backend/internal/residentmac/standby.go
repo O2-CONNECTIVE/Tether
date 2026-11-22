@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
@@ -125,6 +126,7 @@ type Standby struct {
 	reportStandby func(*agenttransport.ResidentSourceLease, agentgateway.ResidentStandby)
 	updates       chan struct{}
 	observation   StandbyObservation
+	expired       atomic.Bool
 	lastRequest   uint64
 	cycle         *standbyCycle
 	closed        bool
@@ -663,6 +665,13 @@ func (s *Standby) Snapshot() StandbyObservation {
 	defer s.mu.Unlock()
 	return cloneObservation(s.observation)
 }
+
+// StandbyExpired reports the last published expiry without waiting for a lock
+// held by an owner that may still be stopping.
+func (s *Standby) StandbyExpired() bool {
+	return s.expired.Load()
+}
+
 func (s *Standby) Changes() <-chan struct{} {
 	if s == nil {
 		return nil
@@ -689,6 +698,7 @@ func (s *Standby) changedLocked() {
 	}
 	s.observation.CanRequestOn = !s.closed && s.observation.Standby == "off" && s.observation.Cleanup == "confirmed"
 	s.observation.CanRequestOff = !s.closed && s.observation.Standby == "on"
+	s.expired.Store(s.observation.StandbyExpired)
 	select {
 	case s.updates <- struct{}{}:
 	default:

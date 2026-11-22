@@ -92,7 +92,7 @@ fn ordinary_shell_resident_commands_remain_unbound_and_binding_is_absent() {
         ),
         (
             "request_resident_intent",
-            intent(),
+            Value::String(intent().to_string()),
             json!({"protocolVersion":1,"requestId":1,"intent":"on","disposition":"unavailable"}),
         ),
     ] {

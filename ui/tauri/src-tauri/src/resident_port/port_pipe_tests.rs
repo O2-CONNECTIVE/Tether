@@ -17,14 +17,14 @@ class TB(ctypes.Structure): _fields_=[('n',ctypes.c_uint32),('d',ctypes.c_uint32
 t=TB();assert lib.mach_timebase_info(ctypes.byref(t))==0
 lib.mach_continuous_time.restype=ctypes.c_uint64
 now=lambda:lib.mach_continuous_time()*t.n//t.d//1000000
-s={'protocolVersion':1,'source':'resident-owner','state':'source-observation','revision':1,'validForMs':3000,'standby':'off','registration':'disconnected','caller':None,'work':'idle','cleanup':'confirmed','canRequestOn':True,'canRequestOff':False,'transition':None}
+s={'protocolVersion':1,'source':'resident-owner','state':'source-observation','revision':1,'validForMs':3000,'standby':'off','registration':'disconnected','caller':None,'work':'idle','cleanup':'confirmed','canRequestOn':True,'canRequestOff':False,'transition':None,'standbyUntil':None,'standbyEndingSoon':False,'standbyExpired':False}
 def status(): print(json.dumps({'protocolVersion':1,'type':'status','sourceContinuousMs':now(),'snapshot':s}),flush=True)
 status()
 for i,line in enumerate(sys.stdin):
  r=json.loads(line)['request']
  print(json.dumps({'protocolVersion':1,'type':'receipt','receipt':{'protocolVersion':1,'requestId':r['requestId'],'intent':r['intent'],'disposition':'accepted'}}),flush=True)
  while not os.path.exists(os.path.join(sys.argv[1],str(i))): time.sleep(0.002)
- s.update(revision=s['revision']+1,standby='on' if r['intent']=='on' else 'off',canRequestOn=r['intent']=='off',canRequestOff=r['intent']=='on',transition={'requestId':r['requestId'],'intent':r['intent'],'outcome':'applied'})
+ s.update(revision=s['revision']+1,standby='on' if r['intent']=='on' else 'off',canRequestOn=r['intent']=='off',canRequestOff=r['intent']=='on',standbyUntil=1900000000000 if r['intent']=='on' else None,standbyEndingSoon=False,standbyExpired=False,transition={'requestId':r['requestId'],'intent':r['intent'],'outcome':'applied'})
  status()
 print(json.dumps({'protocolVersion':1,'type':'closed','sourceContinuousMs':now(),'outcome':'confirmed'}),flush=True)
 "#;
@@ -151,6 +151,9 @@ fn accepted_on_and_off_receipts_do_not_replace_matching_owner_observations() {
         "transition",
         "canRequestOn",
         "canRequestOff",
+        "standbyUntil",
+        "standbyEndingSoon",
+        "standbyExpired",
     ] {
         assert_eq!(
             before_on[key], after_on_receipt[key],

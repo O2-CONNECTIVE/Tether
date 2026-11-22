@@ -80,8 +80,7 @@ func TestForegroundCommandsRejectAmbiguity(t *testing.T) {
 }
 
 func TestControlDialectsRemainSeparate(t *testing.T) {
-	// The product's JSON on cannot name a length until #410; it gets the
-	// default two hours, so product standby has an end too (#399).
+	// A product ON without a duration gets the default two hours (#399).
 	got, err := decodeControl([]byte(goodIntent), jsonInput)
 	if err != nil || got.kind != controlIntent || got.intent.RequestID != 1 || got.intent.Intent != "on" || got.intent.StandbyFor != 2*time.Hour {
 		t.Fatal(got, err)
@@ -90,8 +89,8 @@ func TestControlDialectsRemainSeparate(t *testing.T) {
 	if got, err = decodeControl([]byte(off), jsonInput); err != nil || got.intent.Intent != "off" || got.intent.StandbyFor != 0 {
 		t.Fatal(got, err)
 	}
-	// Nor can it extend standby or open the allowance: those stay with the
-	// person at the Mac.
+	// Product JSON requires a duration for extend and keeps the allowance
+	// verbs exclusive to the foreground dialect.
 	for _, intent := range []string{"extend", "allow-run", "deny-run"} {
 		if _, err := decodeControl([]byte(strings.Replace(goodIntent, `"intent":"on"`, `"intent":"`+intent+`"`, 1)), jsonInput); err == nil {
 			t.Fatal("JSON entry accepted", intent)

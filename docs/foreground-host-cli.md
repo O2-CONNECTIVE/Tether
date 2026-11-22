@@ -42,8 +42,8 @@ close
 `<hours>` は `2`・`4`・`8`・`12`・`24` のどれかで、それ以外の値や綴り（`02`、`3`、時間なし）は
 拒否します。待機はその時間で、OFFと同じく新規受付を閉じて所有作業の停止と回収に進みます
 （[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399)）。`extend` は待機中の期限を
-その時点から選んだ時間に置き換えます。延長はこの入口（開発用の常駐と同じ方言）だけで、
-GUI用JSONL入口にはありません。延長は待機の遷移ではなく、結果は `receipt` だけで返ります。
+その時点から選んだ時間に置き換えます。製品 JSONL も `standbyHours` で同じ長さを指定でき、
+`on` では省略時2時間、`extend` では必須です。延長は待機の遷移ではなく、結果は `receipt` だけで返ります。
 
 1. 起動後の `status` JSONLを読む。`sourceContinuousMs` は同じMacのsleepを含む時計、
    `snapshot.validForMs` は3000ms。古いstatusを現在の接続や受付可否として使わない。
@@ -65,6 +65,7 @@ GUI用JSONL入口にはありません。延長は待機の遷移ではなく、
 
 stdoutは既存の `status` / `receipt` / `closed` JSONL契約に、`status.snapshot` の `standbyUntil`・
 `standbyEndingSoon`・`standbyExpired`（[development-resident](development-resident.md)）を足した形です。
+製品 JSON 方言の `status.snapshot` も同じ3鍵を含み、どちらもGoが出した値をそのまま運びます。
 JSONL入口でCLI行を受けたり、CLI入口で任意JSONを受けたりはしません。
 `close` に別receiptはなく、元ownerの結果に従うclosed frameで報告します。
 SIGINT / SIGTERM / SIGHUPも同じ回収経路へ入り、signal起因の終了は非0です。

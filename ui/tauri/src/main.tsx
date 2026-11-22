@@ -6,7 +6,9 @@ import '../design/tokens.css';
 import '../design/components.css';
 import './app.css';
 
-declare global { interface Window { __TAURI__?: { core?: { invoke?: AppInvoke & ResidentInvoke } } } }
+type NativeResidentInvoke = (command: Parameters<ResidentInvoke>[0],
+  args: { request: Parameters<ResidentInvoke>[1]['request'] | string }) => ReturnType<ResidentInvoke>;
+declare global { interface Window { __TAURI__?: { core?: { invoke?: AppInvoke & NativeResidentInvoke } } } }
 // The sole native IO adapter. UI and controller receive this dependency explicitly.
 const nativeInvoke = window.__TAURI__?.core?.invoke;
 const invoke: AppInvoke | undefined = typeof nativeInvoke === 'function'
@@ -14,5 +16,6 @@ const invoke: AppInvoke | undefined = typeof nativeInvoke === 'function'
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing application root');
 const residentInvoke: ResidentInvoke | undefined = typeof nativeInvoke === 'function'
-  ? (command, args) => nativeInvoke(command, args) : undefined;
+  ? (command, args) => nativeInvoke(command, command === 'request_resident_intent'
+    ? { request: JSON.stringify(args.request) } : args) : undefined;
 createRoot(root).render(<App invoke={invoke} residentInvoke={residentInvoke} />);

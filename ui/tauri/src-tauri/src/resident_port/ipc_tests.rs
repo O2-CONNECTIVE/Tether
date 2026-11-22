@@ -30,6 +30,11 @@ fn read(
             .build()
             .unwrap()
     });
+    let request = if command == "request_resident_intent" {
+        Value::String(request.to_string())
+    } else {
+        request
+    };
     tauri::test::get_ipc_response(
         &window,
         tauri::webview::InvokeRequest {
@@ -100,6 +105,8 @@ fn explicit_ipc_rejects_invalid_schema_and_has_no_binding_or_policy_command() {
         ("expectedRevision", json!(9_007_199_254_740_992_u64)),
         ("intent", json!("restart")),
         ("protocolVersion", json!(2)),
+        ("standbyHours", json!(null)),
+        ("standbyHours", json!(3)),
     ] {
         let mut request = intent();
         request[field] = value;
@@ -170,7 +177,10 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
             "cleanup": "confirmed",
             "canRequestOn": true,
             "canRequestOff": false,
-            "transition": null
+            "transition": null,
+            "standbyUntil": null,
+            "standbyEndingSoon": false,
+            "standbyExpired": false
         }
     });
     let deadline = frame["sourceContinuousMs"]
@@ -338,6 +348,7 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
         "revision":7,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":true,
         "canRequestOff":false,
+        "standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,
         "transition":{"requestId":7,"intent":"off","outcome":"applied"}
     });
     let final_status = json!({
@@ -345,6 +356,7 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
         "revision":8,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"unknown","canRequestOn":false,
         "canRequestOff":false,
+        "standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,
         "transition":{"requestId":7,"intent":"off","outcome":"unknown"}
     });
     let mut command = Command::new("/usr/bin/python3");
