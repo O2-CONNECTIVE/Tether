@@ -14,8 +14,8 @@ async function run(mode: string) {
     getAttribute: (name: string) => name === 'aria-checked' ? String(dataset.residentStandby === 'on') : null,
     click: () => click(dataset.residentStandby === 'on' ? 'off' : 'on'),
   };
-  function click(intent: 'on' | 'off') {
-    if (intent === 'on') onClicks++; else offClicks++;
+  function click(intent: 'on' | 'off', menu = false) {
+    if (intent === 'on') onClicks++; else if (!menu) offClicks++;
     dataset.residentRequestId = String(++sequence);
     dataset.residentRevision = String(Number(dataset.residentRevision) + 1);
     dataset.residentReceipt = 'accepted';
@@ -37,14 +37,22 @@ async function run(mode: string) {
     querySelector: (selector: string) => selector === '#resident-panel' ? { dataset }
       : selector === '#resident-switch' ? standbySwitch : null,
   });
+  const withMenu = mode === 'menu-stop' || mode === 'missing-menu-stop';
+  let menu = false;
   const window = Object.assign(new EventTarget(), {
+    __tetherFixtureMenuStop: withMenu,
     __TAURI__: { event: { emit: (_: string, event: string) => {
       events.push(event);
-      if (event === 'on-applied' && mode !== 'no-hidden-event') {
+      if ((event === 'on-applied' || event === 'menu-on-applied') && mode !== 'no-hidden-event') {
+        menu = event === 'menu-on-applied';
         document.hidden = true; document.visibilityState = 'hidden';
         document.dispatchEvent(new Event('visibilitychange'));
       }
       if (event === 'window-hidden' && mode !== 'no-reopen-event') {
+        if (menu && mode === 'menu-stop') {
+          assert.equal(document.hidden, true);
+          click('off', true);
+        }
         document.hidden = false; document.visibilityState = 'visible';
         document.dispatchEvent(new Event('visibilitychange'));
         window.dispatchEvent(new Event('tether-fixture-window-reopened'));
@@ -68,6 +76,14 @@ void test('GUI driver requires its own ON and OFF accepted/applied identities, n
   const events = ['initializer-started', 'on-applied', 'window-hidden', 'off-applied', 'passed'];
   assert.deepEqual(await run('normal'), { events, onClicks: 1, offClicks: 1 });
   assert.deepEqual(await run('stale-once'), { events, onClicks: 2, offClicks: 1 });
+});
+void test('GUI driver requires menu OFF under the next request ID after the ordinary OFF pass', async () => {
+  const events = ['initializer-started', 'on-applied', 'window-hidden', 'off-applied',
+    'menu-on-applied', 'window-hidden', 'menu-off-applied', 'passed'];
+  assert.deepEqual(await run('menu-stop'), { events, onClicks: 2, offClicks: 1 });
+  assert.deepEqual(await run('missing-menu-stop'), {
+    events: [...events.slice(0, 6), 'failed:menu-stop:phase-timeout'], onClicks: 2, offClicks: 1,
+  });
 });
 void test('GUI driver rejects target-enabled without OFF and mismatched or missing receipt proof', async () => {
   for (const mode of ['wrong-transition', 'unaccepted', 'rejected-off']) {

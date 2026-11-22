@@ -9,7 +9,7 @@ interface Options { invoke: ResidentInvoke | undefined; onChange: (state: Reside
 export function createResidentController({ invoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: Options) {
   let state = initialResidentState();
   let disposed = false, sealed = false, pageVisible = true;
-  let operation: 'status' | 'intent' | null = null;
+  let operation: 'status' | 'menu-status' | 'intent' | null = null;
   let cleanupLatched = false;
   let epoch = 0, requestId = 0, revision = 0, until = 0, lastClock = 0;
   let pending: { id: number; intent: Intent } | undefined;
@@ -41,7 +41,10 @@ export function createResidentController({ invoke, onChange, now = () => perform
   const schedule = () => { if (!disposed && !sealed && pageVisible && state.visible) poll = setTimeout(() => { void refresh(); }, pollMs); };
   async function refresh() {
     if (disposed || sealed || !pageVisible || operation || !invoke) return;
-    clearTimeout(poll); operation = 'status';
+    await readStatus('status');
+  }
+  async function readStatus(read: 'status' | 'menu-status') {
+    clearTimeout(poll); operation = read;
     const generation = ++epoch, started = clock();
     publish('RESIDENT_CHECKING');
     try {
@@ -49,7 +52,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
       if (disposed || sealed || generation !== epoch) return;
       const received = clock(), decoded = decodeStatus(value);
       if (!decoded || !Number.isFinite(started) || !Number.isFinite(received) || received - started >= timeoutMs) return fail('RESIDENT_INVALID_RESPONSE');
-      operation = null;
+      if (read === 'status') operation = null;
       if (decoded.source === 'unsupported') {
         if (state.visible) return fail('RESIDENT_SOURCE_CHANGED');
         publish('RESIDENT_UNSUPPORTED'); return;
@@ -63,8 +66,8 @@ export function createResidentController({ invoke, onChange, now = () => perform
       if (next.revision < revision || (next.revision === revision && observation
         && JSON.stringify({ ...next, validForMs: 0 }) !== JSON.stringify({ ...observation, validForMs: 0 }))) return fail('RESIDENT_REVISION_INVALID');
       if (next.cleanup === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN', true);
-      until = started + next.validForMs;
-      if (received >= until) return fail('RESIDENT_OBSERVATION_EXPIRED');
+      const observedUntil = started + next.validForMs;
+      if (received >= observedUntil) return fail('RESIDENT_OBSERVATION_EXPIRED');
       revision = next.revision; observation = next;
       const t = next.transition;
       if (t) requestId = Math.max(requestId, t.requestId);
@@ -79,6 +82,8 @@ export function createResidentController({ invoke, onChange, now = () => perform
         && !next.canRequestOn && !next.canRequestOff;
       if ((next.standby === 'unknown' && !pendingOn) || t?.outcome === 'unknown') return fail('RESIDENT_STATE_UNKNOWN');
       if (pending && t?.requestId === pending.id && t.intent === pending.intent && (t.outcome === 'applied' || t.outcome === 'rejected')) pending = undefined;
+      if (read === 'menu-status') return { observation: next, until: observedUntil };
+      until = observedUntil;
       clearTimeout(expiry);
       expiry = setTimeout(() => fail('RESIDENT_OBSERVATION_EXPIRED'), Math.max(0, until - received));
       publish(pending ? 'RESIDENT_INTENT_PENDING' : 'RESIDENT_OBSERVED'); schedule();
@@ -90,6 +95,9 @@ export function createResidentController({ invoke, onChange, now = () => perform
     if (!Number.isFinite(t) || t >= observedUntil) return fail('RESIDENT_OBSERVATION_EXPIRED');
     const canRequest = { on: state.canOn, off: state.canOff, extend: state.canExtend };
     if (!canRequest[intent] || (intent === 'extend' && standbyHours === undefined)) return;
+    await submitIntent(intent, standbyHours, t, observedUntil);
+  }
+  async function submitIntent(intent: RequestIntent, standbyHours: StandbyHours | undefined, t: number, observedUntil: number) {
     if (requestId >= Number.MAX_SAFE_INTEGER) return fail('RESIDENT_REQUEST_EXHAUSTED');
     const id = ++requestId, generation = ++epoch;
     if (intent !== 'extend') pending = { id, intent };
@@ -108,6 +116,22 @@ export function createResidentController({ invoke, onChange, now = () => perform
       await refresh();
     } catch { if (!disposed && !sealed && generation === epoch) fail('RESIDENT_INTENT_UNCONFIRMED'); }
   }
+  async function stopFromMenu() {
+    if (disposed || sealed || (operation && operation !== 'status') || !invoke) return;
+    const offWasPending = pending?.intent === 'off';
+    // Replace an ordinary read and hold the controls through the one-shot menu read.
+    until = 0; stopTimers();
+    const result = await readStatus('menu-status');
+    if (disposed || sealed) return;
+    if (!offWasPending && !pending && result?.observation.standby === 'on' && result.observation.canRequestOff) {
+      const started = clock();
+      if (!Number.isFinite(started) || started >= result.until) return fail('RESIDENT_OBSERVATION_EXPIRED');
+      return submitIntent('off', undefined, started, result.until);
+    }
+    operation = null;
+    if (pageVisible) return refresh();
+    publish(pending ? 'RESIDENT_INTENT_PENDING' : state.diagnostic);
+  }
   async function setPageVisible(visible: boolean) {
     if (disposed || sealed || pageVisible === visible) return;
     pageVisible = visible;
@@ -117,7 +141,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
     if (operation === 'status') { epoch++; operation = null; }
     publish('RESIDENT_CHECKING');
   }
-  return { refresh, request, setPageVisible, invalidate: () => fail('RESIDENT_VIEW_INVALIDATED'), dispose: () => {
+  return { refresh, request, stopFromMenu, setPageVisible, invalidate: () => fail('RESIDENT_VIEW_INVALIDATED'), dispose: () => {
     disposed = true; sealed = true; epoch++; stopTimers();
   } };
 }

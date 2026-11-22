@@ -95,6 +95,26 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
   assert.match(await page.locator('#resident-heading').innerText(), /OFFを確認/);
   assert.match(await page.locator('#resident-state').innerText(), /接続: 未接続/);
   assert.equal(await page.locator('html').getAttribute('data-last-resident-intent'), 'off:none');
+  await standby.click();
+  await page.waitForSelector('html[data-last-resident-intent="on:4"]');
+  await page.evaluate(() => window.dispatchEvent(new Event('test-apply-standby')));
+  await page.waitForSelector('#resident-switch[aria-checked="true"][aria-disabled="false"]');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('tether-resident-stop'));
+    window.dispatchEvent(new Event('tether-resident-stop'));
+  });
+  await page.waitForSelector('html[data-last-resident-intent="off:none"]');
+  assert.equal(await page.locator('#resident-switch').getAttribute('aria-disabled'), 'true');
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('test-apply-standby'));
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForSelector('#resident-switch[aria-checked="false"][aria-disabled="false"]');
+  assert.equal(await page.locator('#resident-panel').getAttribute('data-resident-request-id'), '6');
+  assert.equal(await page.locator('#resident-panel').getAttribute('data-resident-transition-id'), '6');
   await page.setViewportSize({ width: 320, height: 1000 });
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

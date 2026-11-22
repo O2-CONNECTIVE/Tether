@@ -49,18 +49,18 @@
     }
     fail('phase-timeout');
   };
-  try {
-    await emit('initializer-started');
-    stage = 'on';
-    await phase('on');
+  const waitForAuthentication = async () => {
     stage = 'auth';
     const authenticatedUntil = performance.now() + 20000;
     while (document.querySelector('#resident-panel')?.dataset.residentRegistration !== 'authenticated') {
       if (performance.now() >= authenticatedUntil) fail('auth-timeout');
       await new Promise(resolve => setTimeout(resolve, 50));
     }
+  };
+  const hideAndReopen = async menuStop => {
     let hidden = false, reopened = false;
-    const onId = document.querySelector('#resident-panel')?.dataset.residentRequestId;
+    const onId = Number(document.querySelector('#resident-panel')?.dataset.residentRequestId);
+    if (!Number.isSafeInteger(onId) || onId < 1) fail('identity');
     const observeVisibility = () => {
       if (!hidden && document.hidden) {
         hidden = true;
@@ -69,22 +69,41 @@
     };
     document.addEventListener('visibilitychange', observeVisibility);
     window.addEventListener('tether-fixture-window-reopened', () => { reopened = true; }, { once: true });
-    await emit('on-applied');
-    stage = 'reopen';
+    stage = menuStop ? 'menu-stop' : 'reopen';
+    await emit(menuStop ? 'menu-on-applied' : 'on-applied');
     const reopenedUntil = performance.now() + 15000;
     for (;;) {
       const status = document.querySelector('#resident-panel')?.dataset;
       const button = document.querySelector('#resident-switch');
-      if (hidden && reopened && document.visibilityState === 'visible' && status?.residentStandby === 'on'
-        && status.residentRequestId === onId && Number(status.residentRevision) > 0
-        && button?.disabled === false && button.getAttribute('aria-disabled') !== 'true') break;
+      const matched = menuStop
+        ? status?.residentStandby === 'off' && Number(status.residentRequestId) === onId + 1
+          && status.residentReceipt === 'accepted' && Number(status.residentTransitionId) === onId + 1
+          && status.residentTransitionIntent === 'off' && status.residentTransitionOutcome === 'applied'
+        : status?.residentStandby === 'on' && Number(status.residentRequestId) === onId;
+      if (hidden && reopened && document.visibilityState === 'visible' && matched
+        && Number(status.residentRevision) > 0 && button?.disabled === false
+        && button.getAttribute('aria-disabled') !== 'true') break;
       if (performance.now() >= reopenedUntil) fail('phase-timeout');
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     document.removeEventListener('visibilitychange', observeVisibility);
+  };
+  try {
+    await emit('initializer-started');
+    stage = 'on';
+    await phase('on');
+    await waitForAuthentication();
+    await hideAndReopen(false);
     stage = 'off';
     await phase('off');
     await emit('off-applied');
+    if (window.__tetherFixtureMenuStop === true) {
+      stage = 'on';
+      await phase('on');
+      await waitForAuthentication();
+      await hideAndReopen(true);
+      await emit('menu-off-applied');
+    }
     stage = 'complete';
     await emit('passed');
   } catch {

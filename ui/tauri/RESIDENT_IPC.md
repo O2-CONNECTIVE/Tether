@@ -29,6 +29,10 @@ UI thread上で待たず、送信者切断はunknown、task失敗は固定unavai
 後続のmatching transition、freshness、cleanupとreceiptは別に扱います。
 viewer/app破棄だけを元ownerのClose/回収証明へ変えません。
 
+Mac のメニューバーの「待機を止める」は、既存の main WebView に値を持たない合図を届けます。
+同じコントローラーが新しい状態を取得し、画面の操作と共通の要求 ID と受付を使って OFF を送ります。
+隠れた画面は隠れたままで、受付後は同じ要求 ID の適用と回収の観測が必要です。
+
 ## 画面との最小の境界
 
 HostSnapshotはresident pipeのstatus frameが持つsnapshot、Intentはintent frame、Eventはreceipt・`closed`・`startupRejected`です。

@@ -19,12 +19,15 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
     if (document.visibilityState === 'visible') void instance.refresh();
     else visibility();
     const invalidate = () => instance.invalidate();
+    const stop = () => { void instance.stopFromMenu(); };
     document.addEventListener('visibilitychange', visibility);
+    window.addEventListener('tether-resident-stop', stop);
     window.addEventListener('pagehide', invalidate);
     const restore = (event: PageTransitionEvent) => { if (event.persisted) invalidate(); };
     window.addEventListener('pageshow', restore);
     return () => { instance.dispose(); controller.current = null;
       document.removeEventListener('visibilitychange', visibility);
+      window.removeEventListener('tether-resident-stop', stop);
       window.removeEventListener('pagehide', invalidate); window.removeEventListener('pageshow', restore); };
   }, [invoke]);
   if (!state.visible) return null;
