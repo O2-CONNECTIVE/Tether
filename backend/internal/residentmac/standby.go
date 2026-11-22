@@ -711,12 +711,27 @@ func (s *Standby) changedLocked() {
 	if s.observation.AdmissionSealed {
 		s.observation.StandbyUntil, s.observation.StandbyEndingSoon = time.Time{}, false
 	}
-	s.observation.CanRequestOn = !s.closed && s.observation.Standby == "off" && s.observation.Cleanup == "confirmed"
+	s.observation.CanRequestOn = s.canRequestOnLocked()
 	s.observation.CanRequestOff = !s.closed && s.observation.Standby == "on"
 	s.expired.Store(s.observation.StandbyExpired)
 	select {
 	case s.updates <- struct{}{}:
 	default:
+	}
+}
+
+func (s *Standby) canRequestOnLocked() bool {
+	if s.closed || s.observation.Standby != "off" || s.observation.Cleanup != "confirmed" {
+		return false
+	}
+	if s.cycle == nil {
+		return true
+	}
+	select {
+	case <-s.cycle.done:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1062,14 +1077,17 @@ func (s *Standby) run(c *standbyCycle) {
 			s.observation.Transition.Outcome = "rejected"
 		}
 	}
-	s.changedLocked()
-	s.mu.Unlock()
 	if expiryContext != nil {
+		s.changedLocked()
+		s.mu.Unlock()
 		s.monitorNeedsActionExpiry(c, expiryContext)
 		c.expiryCancel()
+		s.mu.Lock()
 	}
-	s.mu.Lock()
 	close(c.done) // all original joins and needs-action expiry precede Close completion/re-ON
+	if expiryContext == nil || s.canRequestOnLocked() {
+		s.changedLocked()
+	}
 	s.mu.Unlock()
 }
 
