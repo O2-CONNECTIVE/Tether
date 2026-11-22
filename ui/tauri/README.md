@@ -97,6 +97,7 @@ OS app icon は識別用の暫定資材で、Lucide の操作アイコンとは�
 専用 readonly Windows CI は Node 24.22.1、公式 Rust 1.99.1 を固定します。
 Rust 直接依存は Tauri 2.12.5、tauri-build 2.7.4、serde 1.0.229、serde_json 1.0.154 と、Windows 限定の windows-sys 0.61.2（MIT OR Apache-2.0）です。
 Mac の終了確認は、既存ロック版の dispatch2 0.3.1、objc2 0.6.5、objc2-app-kit と objc2-foundation 各 0.3.2 を直接使います。
+Mac の期限通知は、UserNotifications の固定 binding（objc2-user-notifications 0.3.2、block2 0.6.2）を使います。
 承認済み toolchain のある環境だけ、frontend build 後に実行します。
 
 ```bash

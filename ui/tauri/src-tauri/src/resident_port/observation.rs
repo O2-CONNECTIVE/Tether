@@ -57,6 +57,14 @@ values!(TransitionOutcome {
     Rejected,
     Unknown
 });
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StandbyDeadline {
+    pub(crate) request_id: u64,
+    pub(crate) unix_ms: u64,
+    pub(crate) ending_soon: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Transition {

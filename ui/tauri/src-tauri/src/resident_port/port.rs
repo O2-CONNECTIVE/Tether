@@ -26,6 +26,14 @@ impl ResidentPort {
         }
         Status::unbound()
     }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn has_source(&self) -> bool {
+        self.bound.is_some()
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn standby_deadline(&self) -> Option<super::observation::StandbyDeadline> {
+        self.bound.as_ref()?.standby_deadline()
+    }
     // Receipt is acceptance only, not a replacement observation. The future
     // async IPC caller must await this receiver off the UI thread.
     pub(crate) fn request(

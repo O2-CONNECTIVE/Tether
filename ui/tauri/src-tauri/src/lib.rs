@@ -4,8 +4,12 @@
 )]
 mod mac_status;
 
+#[cfg(all(target_os = "macos", not(resident_gui_fixture)))]
+mod mac_deadline_notice;
 #[cfg(target_os = "macos")]
 mod mac_menu_bar;
+#[cfg(all(target_os = "macos", not(resident_gui_fixture)))]
+mod mac_notifications;
 #[cfg(target_os = "macos")]
 mod mac_quit;
 #[cfg(target_os = "macos")]
@@ -257,11 +261,13 @@ pub fn run() {
     app.run(|_handle, _event| {}); // Preserve the existing non-Mac runtime path.
     #[cfg(target_os = "macos")]
     {
+        let notice = mac_deadline_notice::Watcher::start(lifetime.state());
         let exit_code = app.run_return(|handle, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 mac_quit::exit_requested(handle, &api);
             }
         });
+        drop(notice);
         // run_return avoids process::exit bypassing the outer guard. An unexpected
         // return (including a nonzero code) still needs this original finish proof.
         drop(lifetime);

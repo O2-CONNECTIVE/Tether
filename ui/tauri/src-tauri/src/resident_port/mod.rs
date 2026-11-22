@@ -2,6 +2,8 @@
 pub(crate) mod duplex;
 mod model;
 mod observation;
+#[cfg(all(target_os = "macos", not(resident_gui_fixture)))]
+pub(crate) use observation::StandbyDeadline;
 
 use model::{IntentRequest, Receipt, Status};
 

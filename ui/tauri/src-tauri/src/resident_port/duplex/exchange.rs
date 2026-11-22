@@ -46,6 +46,16 @@ impl Shared {
         }
         Some(status)
     }
+    #[cfg(target_os = "macos")]
+    pub(super) fn standby_deadline(
+        &mut self,
+        now: u64,
+    ) -> Option<super::super::observation::StandbyDeadline> {
+        if self.closure.requested() {
+            return None;
+        }
+        self.tracking.standby_deadline(now)
+    }
     pub(super) fn written(&mut self, result: std::io::Result<usize>) -> Result<(), ()> {
         let exact = self
             .output
