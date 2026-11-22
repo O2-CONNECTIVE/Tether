@@ -28,7 +28,8 @@ def main():
     state = dict(protocolVersion=1, source='resident-owner', state='source-observation',
                  revision=0, validForMs=3000, standby='off', registration='disconnected',
                  caller=None, work='idle', cleanup='confirmed', canRequestOn=True,
-                 canRequestOff=False, transition=None)
+                 canRequestOff=False, transition=None, standbyUntil=None,
+                 standbyEndingSoon=False, standbyExpired=False)
 
     def status():
         print(status_frame(state, now()), flush=True)
@@ -57,6 +58,8 @@ def main():
             state.update(standby=intent,
                          registration='authenticated' if intent == 'on' else 'disconnected',
                          canRequestOn=intent == 'off', canRequestOff=intent == 'on',
+                         standbyUntil=1_900_000_000_000 if intent == 'on' else None,
+                         standbyEndingSoon=False,
                          transition=dict(requestId=expected, intent=intent, outcome='applied'))
             status()
             break

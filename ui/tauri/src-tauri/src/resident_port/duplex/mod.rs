@@ -24,3 +24,7 @@ mod closure_tests;
 mod test_frames;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod standby_end_tests;
+#[cfg(test)]
+mod standby_intent_tests;

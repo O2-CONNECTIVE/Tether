@@ -26,15 +26,17 @@ ON だけでは command/path/env を client が指定する入口はありませ
 （[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399)）。`<hours>` は
 `2`・`4`・`8`・`12`・`24` のどれかで、それ以外の値や綴り（`02`、`3`、時間なし）は
 protocol error です。`extend <request_id> <expected_revision> <hours>` は、待機中の
-期限をその時点から選んだ時間に置き換えます。延長はこの操作だけです。製品の JSON の
-方言には延長の入口がなく、その `on` には既定の2時間が付きます。期限は経過時間と
+期限をその時点から選んだ時間に置き換えます。製品 JSON の `standbyHours` は
+`2`・`4`・`8`・`12`・`24`のどれかです。`on` は省略でき、省略時は既定の2時間です。
+製品 JSON の `extend` は `standbyHours` が必須で、
+`off` には付けられません。`allow-run` / `deny-run` は製品 JSON では受けません。期限は経過時間と
 壁時計の早い方で切れ、スリープ中も進みます。期限が来ると、待機 OFF と同じく受付を
 閉じ、所有作業を止めて回収します。延長は待機の状態遷移ではないので `transition` には
-出ません。foreground の `status` の snapshot だけが、待機が終わる時刻を今の壁時計で
+出ません。`status.snapshot` は、待機が終わる時刻を今の壁時計で
 表した `standbyUntil`（Unix ミリ秒、受付が閉じていれば `null`。壁時計を戻すと、経過時間で
 切れる早い方の時刻に変わります）、期限の10分前からの `standbyEndingSoon`、期限で
 止まったことを示す `standbyExpired`（次の ON で `false`。回収が unknown になっても残ります）を
-持ちます。JSON の方言の `status` は変えていません。
+持ちます。foreground と製品 JSON の `status.snapshot` は同じ3鍵を含みます。
 
 所有作業の受付中または Owner が作業を保持している間、macOS のシステム idle sleep を防ぎます。
 回収確認後に assertion を解放します。待機 ON だけでは取得せず、`AllowSleepDuringWork: true`

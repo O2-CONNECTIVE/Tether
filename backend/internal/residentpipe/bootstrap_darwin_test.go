@@ -382,9 +382,10 @@ func TestBootstrapSharedLifetimeReportsCoordinatorCleanup(t *testing.T) {
 			if json.Unmarshal(terminal.line, &statusJSON) != nil || json.Unmarshal(statusJSON["snapshot"], &snapshotJSON) != nil {
 				t.Fatal("invalid terminal status shape", string(terminal.line))
 			}
-			_, hasForegroundFields := snapshotJSON["standbyUntil"]
-			if hasForegroundFields != (tc.dialect == foregroundInput) {
-				t.Fatal("terminal status used the wrong dialect", string(terminal.line))
+			for _, key := range []string{"standbyUntil", "standbyEndingSoon", "standbyExpired"} {
+				if _, ok := snapshotJSON[key]; !ok {
+					t.Fatal("terminal status missed standby field", key, string(terminal.line))
+				}
 			}
 			if closed.Type != "closed" || closed.Outcome != "unknown" {
 				t.Fatal("coordinator cleanup failure became confirmed", closed)

@@ -61,6 +61,10 @@ pub(super) struct Snapshot {
     can_request_off: bool,
     #[serde(deserialize_with = "Option::deserialize")]
     transition: Option<Transition>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    standby_until: Option<u64>,
+    standby_ending_soon: bool,
+    standby_expired: bool,
 }
 #[derive(Deserialize)]
 enum Source {
@@ -87,6 +91,9 @@ impl Snapshot {
             can_request_on: self.can_request_on,
             can_request_off: self.can_request_off,
             transition: self.transition.clone(),
+            standby_until: self.standby_until,
+            standby_ending_soon: self.standby_ending_soon,
+            standby_expired: self.standby_expired,
         };
         (self.protocol_version == 1
             && observation.valid()

@@ -74,6 +74,9 @@ pub(crate) struct Observation {
     pub(super) can_request_on: bool,
     pub(super) can_request_off: bool,
     pub(super) transition: Option<Transition>,
+    pub(super) standby_until: Option<u64>,
+    pub(super) standby_ending_soon: bool,
+    pub(super) standby_expired: bool,
 }
 impl Observation {
     pub(super) fn unresolved(&self) -> Option<(u64, Intent)> {
@@ -92,6 +95,10 @@ impl Observation {
         self.revision > 0
             && self.revision <= SAFE_INTEGER
             && self.valid_for_ms <= 3000
+            && self
+                .standby_until
+                .is_none_or(|until| until > 0 && until <= SAFE_INTEGER)
+            && (!self.standby_ending_soon || self.standby_until.is_some())
             && self.caller.as_ref().is_none_or(|s| {
                 !s.is_empty() && s.chars().count() <= 80 && !s.chars().any(char::is_control)
             })
@@ -118,6 +125,7 @@ impl Observation {
             && self.transition.as_ref().is_none_or(|t| {
                 t.request_id > 0
                     && t.request_id <= SAFE_INTEGER
+                    && t.intent != Intent::Extend
                     && (t.outcome != TransitionOutcome::Unknown
                         || (!self.can_request_on && !self.can_request_off))
                     && (t.outcome != TransitionOutcome::Applied
@@ -129,6 +137,7 @@ impl Observation {
                                         && self.work == Work::Idle
                                         && self.cleanup == Cleanup::Confirmed
                                 }
+                                Intent::Extend => false,
                             }))
             })
     }

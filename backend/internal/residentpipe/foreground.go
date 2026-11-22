@@ -33,8 +33,8 @@ type controlCommand struct {
 func decodeControl(line []byte, dialect inputDialect) (controlCommand, error) {
 	if dialect == jsonInput {
 		r, err := Decode(line)
-		// The product's JSON on cannot name a length until #410 (#399).
-		if err == nil && r.Intent == "on" {
+		// Omitted JSON ON length keeps the two-hour default (#399).
+		if err == nil && r.Intent == "on" && r.StandbyFor == 0 {
 			r.StandbyFor = residentmac.DefaultStandbyFor
 		}
 		return controlCommand{kind: controlIntent, intent: r}, err

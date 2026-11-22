@@ -180,7 +180,7 @@ func TestIdleStandbyClosePrecedesTerminalPipeFrame(t *testing.T) {
 		t.Fatal(status)
 	}
 	// OFF while already idle is a rejected intent, never an ON/connection.
-	intent, err := Encode(intentEnvelope{1, "intent", Intent{1, 1, status.Snapshot.Revision, "off", 0}})
+	intent, err := Encode(intentEnvelope{1, "intent", jsonIntentRequest{1, 1, status.Snapshot.Revision, "off", nil}})
 	if err != nil {
 		t.Fatal(err)
 	}

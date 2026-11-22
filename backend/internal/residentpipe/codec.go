@@ -21,14 +21,20 @@ type Intent struct {
 	ExpectedRevision uint64 `json:"expectedRevision"`
 	Intent           string `json:"intent"`
 	// StandbyFor is how long an on or extend intent keeps standby on, and zero
-	// otherwise. Only the foreground dialect names it; the JSON dialect's on
-	// gets the default (#399).
+	// otherwise. The JSON dialect defaults an omitted on to two hours (#399).
 	StandbyFor time.Duration `json:"-"`
 }
+type jsonIntentRequest struct {
+	ProtocolVersion  uint64  `json:"protocolVersion"`
+	RequestID        uint64  `json:"requestId"`
+	ExpectedRevision uint64  `json:"expectedRevision"`
+	Intent           string  `json:"intent"`
+	StandbyHours     *uint64 `json:"standbyHours,omitempty"`
+}
 type intentEnvelope struct {
-	ProtocolVersion uint64 `json:"protocolVersion"`
-	Type            string `json:"type"`
-	Request         Intent `json:"request"`
+	ProtocolVersion uint64            `json:"protocolVersion"`
+	Type            string            `json:"type"`
+	Request         jsonIntentRequest `json:"request"`
 }
 type Receipt struct {
 	ProtocolVersion uint64 `json:"protocolVersion"`
@@ -98,13 +104,31 @@ func Decode(line []byte) (Intent, error) {
 	if d.Decode(&envelope) != nil {
 		return Intent{}, ErrProtocol
 	}
-	r := envelope.Request
+	wireRequest := envelope.Request
+	r := Intent{ProtocolVersion: wireRequest.ProtocolVersion, RequestID: wireRequest.RequestID,
+		ExpectedRevision: wireRequest.ExpectedRevision, Intent: wireRequest.Intent}
 	// Required-field presence must not be confused with legitimate zero revision.
 	var root map[string]json.RawMessage
 	_ = json.Unmarshal(line, &root)
 	var request map[string]json.RawMessage
 	_ = json.Unmarshal(root["request"], &request)
-	if !exactKeys(root, "protocolVersion", "type", "request") || !exactKeys(request, "protocolVersion", "requestId", "expectedRevision", "intent") || bytes.Equal(bytes.TrimSpace(request["expectedRevision"]), []byte("null")) || envelope.ProtocolVersion != 1 || envelope.Type != "intent" || r.ProtocolVersion != 1 || r.RequestID == 0 || (r.Intent != "on" && r.Intent != "off") {
+	_, hasStandbyHours := request["standbyHours"]
+	baseRequest := exactKeys(request, "protocolVersion", "requestId", "expectedRevision", "intent")
+	requestWithHours := exactKeys(request, "protocolVersion", "requestId", "expectedRevision", "intent", "standbyHours")
+	if !exactKeys(root, "protocolVersion", "type", "request") || (!baseRequest && !requestWithHours) || bytes.Equal(bytes.TrimSpace(request["expectedRevision"]), []byte("null")) || envelope.ProtocolVersion != 1 || envelope.Type != "intent" || r.ProtocolVersion != 1 || r.RequestID == 0 || (r.Intent != "on" && r.Intent != "off" && r.Intent != "extend") {
+		return Intent{}, ErrProtocol
+	}
+	if hasStandbyHours {
+		if bytes.Equal(bytes.TrimSpace(request["standbyHours"]), []byte("null")) || wireRequest.StandbyHours == nil || r.Intent == "off" {
+			return Intent{}, ErrProtocol
+		}
+		switch *wireRequest.StandbyHours {
+		case 2, 4, 8, 12, 24:
+			r.StandbyFor = time.Duration(*wireRequest.StandbyHours) * time.Hour
+		default:
+			return Intent{}, ErrProtocol
+		}
+	} else if r.Intent == "extend" {
 		return Intent{}, ErrProtocol
 	}
 	return r, nil

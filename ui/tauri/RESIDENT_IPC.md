@@ -36,6 +36,18 @@ Tauriの`get_resident_status`はstatusだけを返し、`closed` outcomeと`star
 Close要求後からterminal前までのstatusは、Closureで形・不変条件・source時刻順序を検証します。freshnessは見ず、Trackingへの記録はrevisionが進むか、同じrevisionで`validForMs`以外が同一の場合だけ行う表示用のbest effortです。記録条件の不一致や記録失敗はstreamを止めません。Close証跡はClosureの検証と`closed`のoutcomeで決まり、この記録は証跡になりません。
 全停止はGoの`hostlifecycle` coordinatorが判定し、`closed`のoutcomeはその判定から出ます。schemaの正本（#36 DEC-02）は未決です。
 
+製品statusの`status.snapshot`には`standbyUntil`（Unixミリ秒または`null`）、
+`standbyEndingSoon`、`standbyExpired`を必須で含めます。`standbyUntil`は`null`または
+1〜2^53−1の整数で、`standbyEndingSoon: true`なら`null`にできません。未知の鍵、欠落、
+型違い、範囲外の値は拒みます。期限の値はGoが出し、RustとTSは計算・補完しません。
+Close後に検証・記録するstatusも同じ3鍵を使います。
+
+intentは`on`・`off`・`extend`です。`standbyHours`は`2`・`4`・`8`・`12`・`24`だけを
+受け、`on`では省略時にGoの既定2時間、`extend`では必須、`off`では禁止です。
+`allow-run` / `deny-run`は製品JSONでは受けません。receiptはrequestと同じ`requestId`・
+`intent`で照合します。`extend`はGoでtransitionを作らずreceiptだけを返し、
+`Transition.intent`は`on`・`off`のままです。
+
 source試験は正規の要求/厳密な拒否、別window/remote/opposite-platform origin拒否、受付とmatching観測の分離を検査します。
 同じ自己所有fixtureの実stdin/stdout、Close/EOF、exact Child Wait、単一IO/supervisor workerとouter monitorの実join、temp削除を維持します。
 fixtureはregistration=disconnectedであり、実producer/auth/GUIの実証ではありません。

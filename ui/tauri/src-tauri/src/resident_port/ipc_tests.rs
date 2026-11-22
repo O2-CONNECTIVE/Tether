@@ -170,7 +170,10 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
             "cleanup": "confirmed",
             "canRequestOn": true,
             "canRequestOff": false,
-            "transition": null
+            "transition": null,
+            "standbyUntil": null,
+            "standbyEndingSoon": false,
+            "standbyExpired": false
         }
     });
     let deadline = frame["sourceContinuousMs"]
@@ -338,6 +341,7 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
         "revision":7,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":true,
         "canRequestOff":false,
+        "standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,
         "transition":{"requestId":7,"intent":"off","outcome":"applied"}
     });
     let final_status = json!({
@@ -345,6 +349,7 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
         "revision":8,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"unknown","canRequestOn":false,
         "canRequestOff":false,
+        "standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,
         "transition":{"requestId":7,"intent":"off","outcome":"unknown"}
     });
     let mut command = Command::new("/usr/bin/python3");

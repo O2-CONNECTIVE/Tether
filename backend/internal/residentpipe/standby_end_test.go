@@ -24,12 +24,11 @@ func statusSnapshot(t *testing.T, m *mapper, s statusEnvelope) map[string]json.R
 	return snapshot
 }
 
-// Only the foreground (development) dialect can pick or extend when standby
-// ends, so only its status line shows that end (#399): the wall-clock end the
+// Both dialects show when standby ends (#399, #451): the wall-clock end the
 // GUI shows as "until hh:mm", the warning from ten minutes before it, and that
-// the last cycle ended because standby ran out. The JSON (product) line keeps
-// its exact keys until #410, so its consumers are unchanged.
-func TestForegroundStatusCarriesTheStandbyEnd(t *testing.T) {
+// the last cycle ended because standby ran out. The host GUI reads the JSON
+// (product) line, so it carries the same three keys as the foreground one.
+func TestStatusCarriesTheStandbyEnd(t *testing.T) {
 	end := time.UnixMilli(1_900_000_000_000)
 	on := fixtureOff()
 	on.Revision, on.Standby, on.Registration, on.AdmissionSealed, on.CanRequestOn, on.CanRequestOff = 2, "on", "authenticated", false, false, true
@@ -63,17 +62,27 @@ func TestForegroundStatusCarriesTheStandbyEnd(t *testing.T) {
 	if s, err = product.observe(on, 10); err != nil {
 		t.Fatal(err)
 	}
-	if got = statusSnapshot(t, &product, s); !exactKeys(got, productSnapshotKeys...) {
-		t.Fatal("product status changed shape", got)
+	got = statusSnapshot(t, &product, s)
+	if !exactKeys(got, append(append([]string{}, productSnapshotKeys...), "standbyUntil", "standbyEndingSoon", "standbyExpired")...) {
+		t.Fatal("product status keys", got)
+	}
+	if string(got["standbyUntil"]) != "1900000000000" || string(got["standbyEndingSoon"]) != "true" || string(got["standbyExpired"]) != "false" {
+		t.Fatal("product status lost the standby end", got)
 	}
 }
 
 // Unknown hides when standby ends, a claim about admission. Why it stopped
 // was settled before its cleanup went unknown, so the status keeps it.
-func TestPoisonedForegroundStatusShowsNoStandbyEnd(t *testing.T) {
+func TestPoisonedStatusShowsNoStandbyEnd(t *testing.T) {
+	for _, foreground := range []bool{true, false} {
+		poisonedStatusShowsNoStandbyEnd(t, foreground)
+	}
+}
+func poisonedStatusShowsNoStandbyEnd(t *testing.T, foreground bool) {
+	t.Helper()
 	o := fixtureOff()
 	o.Revision, o.Standby, o.Work, o.Cleanup, o.StandbyExpired = 2, "stopping", "stopping", "pending", true
-	m := mapper{foreground: true}
+	m := mapper{foreground: foreground}
 	s, err := m.observe(o, 10)
 	if err != nil {
 		t.Fatal(err)

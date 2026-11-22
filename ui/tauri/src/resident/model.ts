@@ -1,14 +1,16 @@
 export type Intent = 'on' | 'off';
+export type RequestIntent = Intent | 'extend';
 type Transition = { requestId: number; intent: Intent; outcome: 'pending' | 'applied' | 'rejected' | 'unknown' };
 type RegistrationReason = 'identity_refused' | 'connection_occupied' | 'gateway_refused';
 export type Observation = { revision: number; validForMs: number; standby: 'off' | 'on' | 'stopping' | 'unknown';
   registration: 'disconnected' | 'connecting' | 'reconnecting' | 'authenticated' | 'needs_action' | 'unknown'; caller: string | null;
   registrationReason?: RegistrationReason;
   work: 'idle' | 'preparing' | 'running' | 'stopping' | 'completed' | 'failed' | 'unknown'; cleanup: 'confirmed' | 'pending' | 'unknown';
-  canRequestOn: boolean; canRequestOff: boolean; transition: Transition | null };
+  canRequestOn: boolean; canRequestOff: boolean; transition: Transition | null;
+  standbyUntil: number | null; standbyEndingSoon: boolean; standbyExpired: boolean };
 type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner'; observation: Observation | null };
 export type ResidentInvoke = (command: 'get_resident_status' | 'request_resident_intent', args: { request: {
-  protocolVersion: 1; requestId?: number; expectedRevision?: number; intent?: Intent } }) => Promise<unknown>;
+  protocolVersion: 1; requestId?: number; expectedRevision?: number; intent?: RequestIntent; standbyHours?: 2 | 4 | 8 | 12 | 24 } }) => Promise<unknown>;
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const keys = (v: Record<string, unknown>, names: string) => Object.keys(v).sort().join(',') === names.split(',').sort().join(',');
 const integer = (v: unknown, min = 0): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= min;
@@ -19,15 +21,18 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
   if (value.source === 'unsupported' && keys(value, 'protocolVersion,source')) return { source: 'unsupported' };
   if (value.source !== 'resident-owner') return;
   if (value.state === 'source-unavailable' && keys(value, 'protocolVersion,source,state')) return { source: 'resident-owner', observation: null };
-  const observationKeys = 'protocolVersion,source,state,revision,validForMs,standby,registration,caller,work,cleanup,canRequestOn,canRequestOff,transition';
+  const observationKeys = 'protocolVersion,source,state,revision,validForMs,standby,registration,caller,work,cleanup,canRequestOn,canRequestOff,transition,standbyUntil,standbyEndingSoon,standbyExpired';
   const hasRegistrationReason = Object.hasOwn(value, 'registrationReason');
   if (value.state !== 'source-observation' || !keys(value, hasRegistrationReason ? `${observationKeys},registrationReason` : observationKeys)) return;
-  const { revision, validForMs, standby, registration, caller, work, cleanup, canRequestOn, canRequestOff } = value;
+  const { revision, validForMs, standby, registration, caller, work, cleanup, canRequestOn, canRequestOff,
+    standbyUntil, standbyEndingSoon, standbyExpired } = value;
   if (!integer(revision, 1) || !integer(validForMs) || validForMs > 3000 || !oneOf(standby, ['off', 'on', 'stopping', 'unknown'])
     || !oneOf(registration, ['disconnected', 'connecting', 'reconnecting', 'authenticated', 'needs_action', 'unknown'])
     || !(caller === null || (typeof caller === 'string' && [...caller].length > 0 && [...caller].length <= 80 && !/\p{Cc}/u.test(caller)))
     || !oneOf(work, ['idle', 'preparing', 'running', 'stopping', 'completed', 'failed', 'unknown'])
-    || !oneOf(cleanup, ['confirmed', 'pending', 'unknown']) || typeof canRequestOn !== 'boolean' || typeof canRequestOff !== 'boolean') return;
+    || !oneOf(cleanup, ['confirmed', 'pending', 'unknown']) || typeof canRequestOn !== 'boolean' || typeof canRequestOff !== 'boolean'
+    || !(standbyUntil === null || integer(standbyUntil, 1)) || typeof standbyEndingSoon !== 'boolean'
+    || (standbyEndingSoon && standbyUntil === null) || typeof standbyExpired !== 'boolean') return;
   let registrationReason: RegistrationReason | undefined;
   if (hasRegistrationReason) {
     if (registration !== 'needs_action' || !oneOf(value.registrationReason, ['identity_refused', 'connection_occupied', 'gateway_refused'])) return;
@@ -49,9 +54,10 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
     || (transition?.outcome === 'applied' && (cleanup === 'unknown' || (transition.intent === 'on' ? standby !== 'on'
       : !(standby === 'off' && work === 'idle' && cleanup === 'confirmed'))))) return;
   return { source: 'resident-owner', observation: { revision, validForMs, standby, registration,
-    ...(registrationReason ? { registrationReason } : {}), caller, work, cleanup, canRequestOn, canRequestOff, transition } };
+    ...(registrationReason ? { registrationReason } : {}), caller, work, cleanup, canRequestOn, canRequestOff, transition,
+    standbyUntil, standbyEndingSoon, standbyExpired } };
 }
-export function decodeReceipt(value: unknown, id: number, intent: Intent) {
+export function decodeReceipt(value: unknown, id: number, intent: RequestIntent) {
   if (!record(value) || !keys(value, 'protocolVersion,requestId,intent,disposition') || value.protocolVersion !== 1
     || value.requestId !== id || value.intent !== intent
     || !oneOf(value.disposition, ['unavailable', 'accepted', 'rejected', 'stale', 'unknown'])) return;

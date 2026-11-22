@@ -11,7 +11,8 @@ void test('resident controls use shared IPC and wait for applied observations', 
       if (command === 'get_status_presentation') return Promise.resolve({ protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' });
       if (command === 'get_resident_status') return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation',
         revision, validForMs: 3000, standby: on ? 'on' : 'off', registration, caller: null,
-        work: 'idle', cleanup: 'confirmed', canRequestOn: !on, canRequestOff: on, transition });
+        work: 'idle', cleanup: 'confirmed', canRequestOn: !on, canRequestOff: on, transition,
+        standbyUntil: on ? 1_900_000_000_000 : null, standbyEndingSoon: false, standbyExpired: false });
       if (command !== 'request_resident_intent') return Promise.reject(new Error('unexpected operation'));
       const request = args.request as { requestId: number; expectedRevision: number; intent: 'on' | 'off' };
       if (request.expectedRevision !== revision || request.requestId !== (on ? 2 : 1)) return Promise.reject(new Error('invalid request'));
@@ -53,7 +54,7 @@ void test('cleanup unknown disables resident controls and is shown as needs clea
       ? { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }
       : { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1, validForMs: 3000,
         standby: 'unknown', registration: 'unknown', caller: 'private-fixture-name', work: 'unknown', cleanup: 'unknown',
-        canRequestOn: false, canRequestOff: false, transition: null }) } };
+        canRequestOn: false, canRequestOff: false, transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: false }) } };
   });
   await page.goto(url); await page.waitForSelector('#resident-panel');
   assert.equal(await page.locator('#resident-on').isDisabled(), true); assert.equal(await page.locator('#resident-off').isDisabled(), true);

@@ -6,7 +6,8 @@ pub(super) fn status(source: u64) -> Value {
         "snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation",
         "revision":1,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":true,
-        "canRequestOff":false,"transition":null}})
+        "canRequestOff":false,"transition":null,"standbyUntil":null,
+        "standbyEndingSoon":false,"standbyExpired":false}})
 }
 pub(super) fn terminal(source: u64, outcome: &str) -> Value {
     json!({"protocolVersion":1,"type":"closed","sourceContinuousMs":source,"outcome":outcome})

@@ -219,18 +219,14 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 	}
 	switch kind {
 	case "status":
-		// Only the foreground (development) dialect's status shows when standby
-		// ends; the JSON dialect's keeps its exact product keys.
 		var e statusEnvelope
 		var decoded error
-		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition"}
-		flags := []string{"canRequestOn", "canRequestOff"}
+		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired"}
+		flags := []string{"canRequestOn", "canRequestOff", "standbyEndingSoon", "standbyExpired"}
 		if p.foreground {
 			var f foregroundStatusEnvelope
 			decoded = ciStrictFrame(raw, &f)
-			e = statusEnvelope{f.ProtocolVersion, f.Type, f.SourceContinuousMS, f.Snapshot.Snapshot}
-			keys = append(keys, "standbyUntil", "standbyEndingSoon", "standbyExpired")
-			flags = append(flags, "standbyEndingSoon", "standbyExpired")
+			e = statusEnvelope{f.ProtocolVersion, f.Type, f.SourceContinuousMS, f.Snapshot}
 		} else {
 			decoded = ciStrictFrame(raw, &e)
 		}
@@ -249,7 +245,7 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 			}
 		}
 		x := e.Snapshot
-		if x.ProtocolVersion != 1 || x.Source != "resident-owner" || x.State != "source-observation" || x.Revision <= p.snapshot.Revision || x.Revision > MaxInteger || x.ValidForMS != 3000 || !oneOf(x.Standby, "off", "on", "stopping", "unknown") || !oneOf(x.Registration, "disconnected", "connecting", "authenticated", "unknown") || !oneOf(x.Work, "idle", "preparing", "running", "stopping", "unknown") || !oneOf(x.Cleanup, "confirmed", "pending", "unknown") {
+		if x.ProtocolVersion != 1 || x.Source != "resident-owner" || x.State != "source-observation" || x.Revision <= p.snapshot.Revision || x.Revision > MaxInteger || x.ValidForMS != 3000 || !oneOf(x.Standby, "off", "on", "stopping", "unknown") || !oneOf(x.Registration, "disconnected", "connecting", "authenticated", "unknown") || !oneOf(x.Work, "idle", "preparing", "running", "stopping", "unknown") || !oneOf(x.Cleanup, "confirmed", "pending", "unknown") || (x.StandbyUntil != nil && (*x.StandbyUntil == 0 || *x.StandbyUntil > MaxInteger)) || (x.StandbyEndingSoon && x.StandbyUntil == nil) {
 			return ErrProtocol
 		}
 		if x.Transition != nil {

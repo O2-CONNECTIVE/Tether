@@ -51,15 +51,18 @@ impl Tracking {
         }
         if self.pending.is_some()
             || self.awaiting.is_some()
-            || !match request.intent {
-                Intent::On => current.can_request_on,
-                Intent::Off => current.can_request_off,
+            || match request.intent {
+                Intent::On => !current.can_request_on,
+                Intent::Off => !current.can_request_off,
+                Intent::Extend => false,
             }
         {
             return Err(Disposition::Rejected);
         }
-        self.pending = Some((request.request_id, request.intent, current.revision));
         self.awaiting = Some((request.request_id, request.intent));
+        if request.intent != Intent::Extend {
+            self.pending = Some((request.request_id, request.intent, current.revision));
+        }
         Ok(())
     }
     pub(super) fn event(&mut self, event: Event, now: u64) -> Result<Option<Receipt>, ()> {

@@ -5,7 +5,8 @@ import type { ResidentInvoke } from '../src/resident/model.ts';
 import { presentResident } from '../src/resident/presentation.ts';
 
 const sample = (change: Record<string, unknown> = {}) => ({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1,
-  validForMs: 3000, standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false, transition: null, ...change });
+  validForMs: 3000, standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false,
+  transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, ...change });
 function capture(invoke: ResidentInvoke | undefined, options: { now?: () => number; timeoutMs?: number } = {}) {
   const states: ResidentState[] = [];
   const controller = createResidentController({ invoke, onChange: state => states.push(state), pollMs: 10000, ...options });
