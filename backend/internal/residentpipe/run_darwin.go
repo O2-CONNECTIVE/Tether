@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostlifecycle"
@@ -39,7 +41,9 @@ func runInput(lifetime context.Context, protectedPolicy string, dialect inputDia
 // resident-pipe executable calls it; ordinary CLI and Tauri startup stay unbound.
 // Image trust and native ownership must be established by the future launcher.
 func RunEnrolled() error {
-	return runBootstrap(context.Background(), enrolledBootstrap, "", jsonInput)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	defer stop() // keep handling SIGTERM while the original owner is retained
+	return runBootstrap(ctx, enrolledBootstrap, "", jsonInput)
 }
 
 type bootstrapKind uint8
