@@ -33,6 +33,12 @@ impl BoundDuplex {
         };
         Ok(shared.submit(request, now))
     }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn standby_deadline(&self) -> Option<super::super::observation::StandbyDeadline> {
+        let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        let now = self.clock.now_millis()?;
+        shared.standby_deadline(now)
+    }
     // Native bootstrap must finish this off the UI thread BEFORE installing the
     // port/creating WebView. Timeout returns failure, never a fabricated status.
     // The separately retained supervisor continues owning this exact child.

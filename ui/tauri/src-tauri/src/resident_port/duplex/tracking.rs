@@ -12,6 +12,12 @@ pub(super) struct Tracking {
     last_source: Option<u64>,
     pub(super) failed: bool,
     cleanup_unknown: bool,
+    #[cfg(target_os = "macos")]
+    deadline_request_id: u64,
+    #[cfg(target_os = "macos")]
+    deadline_after_revision: u64,
+    #[cfg(target_os = "macos")]
+    deadline_uncertain: bool,
 }
 impl Tracking {
     pub(super) fn sample(&mut self, now: u64) -> bool {
@@ -38,6 +44,27 @@ impl Tracking {
     fn tick(&mut self, now: u64) {
         self.failed |= now < self.last_now;
         self.last_now = now;
+    }
+    #[cfg(target_os = "macos")]
+    pub(super) fn standby_deadline(&mut self, now: u64) -> Option<StandbyDeadline> {
+        let current = self.current(now)?;
+        if current.valid_for_ms == 0
+            || self.pending.is_some()
+            || self.awaiting.is_some()
+            || current.standby != Standby::On
+            || current.cleanup == Cleanup::Unknown
+            || current.standby_expired
+            || self.deadline_uncertain
+            || self.deadline_request_id == 0
+            || current.revision <= self.deadline_after_revision
+        {
+            return None;
+        }
+        Some(StandbyDeadline {
+            request_id: self.deadline_request_id,
+            unix_ms: current.standby_until?,
+            ending_soon: current.standby_ending_soon,
+        })
     }
     pub(super) fn begin(&mut self, request: &IntentRequest, now: u64) -> Result<(), Disposition> {
         let current = self.current(now).ok_or(Disposition::Unavailable)?;
@@ -84,6 +111,20 @@ impl Tracking {
                 if self.awaiting != Some((receipt.request_id, receipt.intent)) {
                     Err(())
                 } else {
+                    #[cfg(target_os = "macos")]
+                    {
+                        self.deadline_uncertain |= receipt.disposition == Disposition::Unknown;
+                    }
+                    #[cfg(target_os = "macos")]
+                    if receipt.intent == Intent::Extend
+                        && receipt.disposition == Disposition::Accepted
+                    {
+                        if let Some((status, _)) = &self.latest {
+                            self.deadline_request_id = receipt.request_id;
+                            // Go publishes the new deadline after its accepted receipt.
+                            self.deadline_after_revision = status.revision;
+                        }
+                    }
                     self.awaiting = None;
                     Ok(Some(receipt))
                 }
@@ -158,6 +199,16 @@ impl Tracking {
         self.cleanup_unknown |= observation.cleanup == Cleanup::Unknown;
         if let Some(transition) = &observation.transition {
             self.last_request = self.last_request.max(transition.request_id);
+            #[cfg(target_os = "macos")]
+            {
+                self.deadline_uncertain |= transition.outcome == TransitionOutcome::Unknown;
+                if observation.standby == Standby::On
+                    && transition.intent == Intent::On
+                    && transition.outcome == TransitionOutcome::Applied
+                {
+                    self.deadline_request_id = self.deadline_request_id.max(transition.request_id);
+                }
+            }
         }
         self.last_source = Some(timestamp);
         self.latest = Some((observation, deadline));
