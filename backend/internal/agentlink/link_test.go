@@ -551,7 +551,10 @@ func TestOwnedChannelLossRevokesThenCleansUp(t *testing.T) {
 // Scenario 4: a short hard deadline with no further requests ends the grant
 // with StopHardDeadline, revokes before stopping the shell and is joined.
 func TestShortHardDeadlineWithoutRequests(t *testing.T) {
-	p := newPath(t, 1500*time.Millisecond, nil)
+	p := newPath(t, 1500*time.Millisecond, func(peer *agentchannel.ClientConfig) {
+		// Keep the peer's timer out of the host deadline test.
+		peer.Deadline = peer.Deadline.Add(time.Minute)
+	})
 	st, _ := p.start("req-1", "sleep 60\n")
 	id := commandID(t, st)
 	proc := p.proc()

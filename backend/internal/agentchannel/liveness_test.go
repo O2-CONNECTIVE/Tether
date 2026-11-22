@@ -286,9 +286,11 @@ func TestStalledPeerReaderBoundsWrite(t *testing.T) {
 
 func TestHardDeadlineIsNotExtendedByPeerHeartbeats(t *testing.T) {
 	env := newEnv(t, 600*time.Millisecond)
-	peer := quickBudgets()
-	peer.HeartbeatInterval = 15 * time.Millisecond
-	p := connect(t, env, context.Background(), quickBudgets(), peer)
+	peer := env.clientConfig(quickBudgets())
+	peer.Budgets.HeartbeatInterval = 15 * time.Millisecond
+	// Keep the peer's timer out of the host deadline test.
+	peer.Deadline = peer.Deadline.Add(time.Minute)
+	p := connectWithClient(t, env, context.Background(), quickBudgets(), peer)
 	early := env.closedBeforeRevoke(p.sConn)
 	waitDone(t, p.server.Done(), 3*time.Second, "teardown at the hard deadline")
 	// The deadline owners end the grant when the wall clock reaches the deadline
