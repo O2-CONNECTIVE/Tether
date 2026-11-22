@@ -45,13 +45,23 @@ pub(crate) async fn request_resident_intent(
     let response = state.port().request(request)?;
     // Wait only on the existing owned receipt channel, never on the UI thread.
     // A disconnected sender does not apply an intent or retry its submission.
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         response
             .recv()
             .unwrap_or_else(|_| Receipt::new(fallback, model::Disposition::Unknown))
     })
     .await
-    .map_err(|_| "RESIDENT_SOURCE_UNAVAILABLE")
+    .map_err(|_| "RESIDENT_SOURCE_UNAVAILABLE");
+    // The CI fixture observes the actual receipt before WebView rendering or visibility can affect it.
+    #[cfg(all(target_os = "macos", resident_gui_fixture))]
+    if let Some(label) = result
+        .as_ref()
+        .ok()
+        .and_then(|receipt| state.port().take_menu_stop_receipt_label(receipt))
+    {
+        crate::resident_gui_fixture::event(label);
+    }
+    result
 }
 
 #[cfg(test)]

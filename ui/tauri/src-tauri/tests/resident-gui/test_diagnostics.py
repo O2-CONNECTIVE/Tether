@@ -7,6 +7,9 @@ ROOT = Path(__file__).resolve().parents[5]
 PHASES = ('init', 'on', 'auth', 'reopen', 'off', 'menu-stop', 'complete')
 REASONS = ('identity', 'receipt', 'transition', 'retry-budget', 'phase-timeout',
            'auth-timeout', 'bridge-timeout', 'window', 'unexpected')
+NATIVE_MENU_REASONS = ('on-precondition', 'dispatch', 'off-proof-timeout', 'visibility', 'reopen')
+MENU_EVENTS = ('dispatched', 'signal-received', 'receipt-accepted', 'receipt-stale',
+               'receipt-rejected', 'receipt-unavailable', 'receipt-unknown', 'applied-while-hidden')
 
 
 class DiagnosticContract(unittest.TestCase):
@@ -18,9 +21,18 @@ class DiagnosticContract(unittest.TestCase):
                 self.assertRegex(f'GUI_FIXTURE_FAILURE={phase}:{reason}', pattern)
         for value in ('event:sequence', 'event:lock'):
             self.assertRegex(f'GUI_FIXTURE_FAILURE={value}', pattern)
+        for reason in NATIVE_MENU_REASONS:
+            self.assertRegex(f'GUI_FIXTURE_FAILURE=menu-stop:{reason}', pattern)
+            self.assertIsNone(re.fullmatch(pattern, f'GUI_FIXTURE_FAILURE=on:{reason}'))
         for value in ('on:identity:extra', 'on:https://secret.invalid', 'private:identity',
                       'on:identity\nsecret', 'off:unexpected\r', 'event:payload'):
             self.assertIsNone(re.fullmatch(pattern, f'GUI_FIXTURE_FAILURE={value}'))
+
+        pattern = re.search(r"grep -E '([^']*GUI_FIXTURE_EVENT[^']*)'", workflow).group(1)
+        for event in MENU_EVENTS:
+            self.assertRegex(f'GUI_FIXTURE_EVENT=menu-stop-{event}', pattern)
+        for value in ('receipt-stale:42', 'receipt-private', 'signal-received\nprivate'):
+            self.assertIsNone(re.fullmatch(pattern, f'GUI_FIXTURE_EVENT=menu-stop-{value}'))
 
     def test_rust_failure_remains_terminal_and_lifecycle_unchanged(self):
         rust = (ROOT / 'ui/tauri/src-tauri/src/resident_gui_fixture.rs').read_text()

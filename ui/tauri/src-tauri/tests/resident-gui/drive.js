@@ -69,24 +69,31 @@
     };
     document.addEventListener('visibilitychange', observeVisibility);
     window.addEventListener('tether-fixture-window-reopened', () => { reopened = true; }, { once: true });
+    const observeStopSignal = async () => window.__TAURI__.event.emit('resident-gui-menu-stop', 'stop-received');
+    const onStop = () => { void observeStopSignal().catch(() => {}); };
+    if (menuStop) window.addEventListener('tether-resident-stop', onStop, { once: true });
     stage = menuStop ? 'menu-stop' : 'reopen';
-    await emit(menuStop ? 'menu-on-applied' : 'on-applied');
-    const reopenedUntil = performance.now() + 15000;
-    for (;;) {
-      const status = document.querySelector('#resident-panel')?.dataset;
-      const button = document.querySelector('#resident-switch');
-      const matched = menuStop
-        ? status?.residentStandby === 'off' && Number(status.residentRequestId) === onId + 1
-          && status.residentReceipt === 'accepted' && Number(status.residentTransitionId) === onId + 1
-          && status.residentTransitionIntent === 'off' && status.residentTransitionOutcome === 'applied'
-        : status?.residentStandby === 'on' && Number(status.residentRequestId) === onId;
-      if (hidden && reopened && document.visibilityState === 'visible' && matched
-        && Number(status.residentRevision) > 0 && button?.disabled === false
-        && button.getAttribute('aria-disabled') !== 'true') break;
-      if (performance.now() >= reopenedUntil) fail('phase-timeout');
-      await new Promise(resolve => setTimeout(resolve, 50));
+    try {
+      await emit(menuStop ? 'menu-on-applied' : 'on-applied');
+      const reopenedUntil = performance.now() + 15000;
+      for (;;) {
+        const status = document.querySelector('#resident-panel')?.dataset;
+        const button = document.querySelector('#resident-switch');
+        const matched = menuStop
+          ? status?.residentStandby === 'off' && Number(status.residentRequestId) === onId + 1
+            && status.residentReceipt === 'accepted' && Number(status.residentTransitionId) === onId + 1
+            && status.residentTransitionIntent === 'off' && status.residentTransitionOutcome === 'applied'
+          : status?.residentStandby === 'on' && Number(status.residentRequestId) === onId;
+        if (hidden && reopened && document.visibilityState === 'visible' && matched
+          && Number(status.residentRevision) > 0 && button?.disabled === false
+          && button.getAttribute('aria-disabled') !== 'true') break;
+        if (performance.now() >= reopenedUntil) fail('phase-timeout');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    } finally {
+      window.removeEventListener('tether-resident-stop', onStop);
+      document.removeEventListener('visibilitychange', observeVisibility);
     }
-    document.removeEventListener('visibilitychange', observeVisibility);
   };
   try {
     await emit('initializer-started');

@@ -4,6 +4,45 @@ use serde_json::{json, Value};
 fn intent() -> Value {
     json!({"protocolVersion":1,"requestId":1,"expectedRevision":0,"intent":"on"})
 }
+
+#[cfg(all(target_os = "macos", resident_gui_fixture))]
+#[test]
+fn resident_gui_menu_receipt_reports_only_the_expected_off_once() {
+    use model::{Disposition, Intent};
+
+    for (disposition, label) in [
+        (Disposition::Accepted, "menu-stop-receipt-accepted"),
+        (Disposition::Rejected, "menu-stop-receipt-rejected"),
+        (Disposition::Stale, "menu-stop-receipt-stale"),
+        (Disposition::Unavailable, "menu-stop-receipt-unavailable"),
+        (Disposition::Unknown, "menu-stop-receipt-unknown"),
+    ] {
+        let port = ResidentPort::default();
+        let receipt = |request_id, intent| Receipt {
+            protocol_version: 1,
+            request_id,
+            intent,
+            disposition,
+        };
+        assert_eq!(
+            port.take_menu_stop_receipt_label(&receipt(42, Intent::Off)),
+            None
+        );
+        port.expect_menu_stop_receipt(42);
+        assert_eq!(
+            port.take_menu_stop_receipt_label(&receipt(42, Intent::On)),
+            None
+        );
+        assert_eq!(
+            port.take_menu_stop_receipt_label(&receipt(41, Intent::Off)),
+            None
+        );
+        let off = receipt(42, Intent::Off);
+        assert_eq!(port.take_menu_stop_receipt_label(&off), Some(label));
+        assert_eq!(port.take_menu_stop_receipt_label(&off), None);
+    }
+}
+
 #[test]
 fn ordinary_port_is_unbound_and_returns_only_unavailable_receipts() {
     let port = ResidentPort::default();
