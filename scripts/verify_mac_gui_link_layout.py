@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 import struct
 import plistlib
+from xml.etree import ElementTree
+from xml.parsers.expat import ExpatError
 
 # -I execution deliberately excludes the caller's import path.
 import sys
@@ -31,6 +33,13 @@ GAPS = ['binary-source-correspondence', 'fixture-free-build', 'dynamic-loader-va
 
 class LayoutError(Exception):
     pass
+
+
+class UniquePlistKeys(dict):
+    def __setitem__(self, key, value):
+        if key in self:
+            raise plistlib.InvalidFileException()
+        super().__setitem__(key, value)
 
 
 def require(condition, code):
@@ -64,20 +73,27 @@ def swift_library(value):
     return re.fullmatch(r'@rpath/libswift[A-Za-z0-9_]+\.dylib', value) is not None
 
 
-def inspect(data, target, role):
+def macho_commands(data, target, role):
     require(role in ASSEMBLY_IMAGES and len(data) >= 32, 'LINK_MACHO_INVALID')
     magic, cpu, subtype, kind, count, size, flags, reserved = struct.unpack_from('<8I', data)
     require(magic == 0xfeedfacf and cpu == files.TARGETS[target] and reserved == 0 and
             kind == (6 if role == 'native' else 2) and 0 < count <= 4096 and
             8 * count <= size <= min(len(data) - 32, 1024 * 1024), 'LINK_MACHO_INVALID')
     offset, end = 32, 32 + size
-    minimum, identity, dependencies, rpaths, linker = None, [], [], [], []
     for _ in range(count):
         require(offset + 8 <= end, 'LINK_COMMAND_INVALID')
         code, length = struct.unpack_from('<2I', data, offset)
         require(length >= 8 and length % 8 == 0 and length <= end - offset,
                 'LINK_COMMAND_INVALID')
-        command = data[offset:offset + length]
+        yield code, data[offset:offset + length]
+        offset += length
+    require(offset == end, 'LINK_PLATFORM_INVALID')
+
+
+def inspect(data, target, role):
+    minimum, identity, dependencies, rpaths, linker = None, [], [], [], []
+    for code, command in macho_commands(data, target, role):
+        length = len(command)
         if code == 0x32:
             require(minimum is None and length >= 24, 'LINK_PLATFORM_INVALID')
             platform, minimum, sdk, tools = struct.unpack_from('<4I', command, 8)
@@ -99,8 +115,7 @@ def inspect(data, target, role):
             linker.append(command_text(command, 12))
         else:
             require(code in OPAQUE, 'LINK_COMMAND_UNSUPPORTED')
-        offset += length
-    require(offset == end and minimum is not None, 'LINK_PLATFORM_INVALID')
+    require(minimum is not None, 'LINK_PLATFORM_INVALID')
     require(identity == ([NATIVE] if role == 'native' else []), 'LINK_IDENTITY_INVALID')
     require(linker in ([], ['/usr/lib/dyld']) if role != 'native' else not linker,
             'LINK_DYNAMIC_LINKER_INVALID')
@@ -117,6 +132,74 @@ def inspect(data, target, role):
         if swift_library(value):
             require(SWIFT_ROOT in rpaths, 'LINK_SWIFT_RPATH_MISSING')
     return minimum
+
+
+def embedded_info_plist(data, target):
+    payload = None
+    error = 'EMBEDDED_INFO_PLIST_INVALID'
+    for code, command in macho_commands(data, target, 'gui'):
+        if code != 0x19:  # LC_SEGMENT_64
+            continue
+        require(len(command) >= 72, error)
+        if command[8:24].rstrip(b'\0') != b'__TEXT':
+            continue
+        vm_address, vm_size, file_offset, file_size = struct.unpack_from('<4Q', command, 24)
+        count = struct.unpack_from('<I', command, 64)[0]
+        require(len(command) == 72 + count * 80, error)
+        for index in range(count):
+            start = 72 + index * 80
+            name, segment, address, size, offset = struct.unpack_from('<16s16sQQI', command, start)
+            if name.rstrip(b'\0') != b'__info_plist':
+                continue
+            flags = struct.unpack_from('<I', command, start + 64)[0]
+            load_end = 32 + struct.unpack_from('<I', data, 20)[0]
+            relative = offset - file_offset
+            require(payload is None and segment.rstrip(b'\0') == b'__TEXT' and
+                    flags & 0xff == 0 and 0 < size <= 64 * 1024 and offset >= load_end and
+                    file_offset + file_size <= len(data) and 0 <= relative and
+                    relative + size <= min(file_size, vm_size) and address == vm_address + relative, error)
+            payload = data[offset:offset + size]
+    return payload
+
+
+def xml_plist_dictionary(payload):
+    # plistlib permits unknown XML elements and additional top-level values.
+    root = ElementTree.fromstring(payload)
+    if root.tag != 'plist' or len(root) != 1 or root[0].tag != 'dict':
+        return False
+    scalar_tags = {'data', 'date', 'false', 'integer', 'real', 'string', 'true'}
+    value_tags = scalar_tags | {'array', 'dict'}
+    for node in root[0].iter():
+        if node.tag == 'dict':
+            if len(node) % 2 or any(child.tag != 'key' for child in node[::2]):
+                return False
+            if any(child.tag not in value_tags for child in node[1::2]):
+                return False
+        elif node.tag == 'array':
+            if any(child.tag not in value_tags for child in node):
+                return False
+        elif len(node):
+            return False
+    return True
+
+
+def embedded_info_plist_identity(data, target, bundle_plist):
+    """Report only whether the GUI image declares the same app identity."""
+    try:
+        payload = embedded_info_plist(data, target)
+        if payload is None:
+            return 'absent'
+        plist = plistlib.loads(payload, dict_type=UniquePlistKeys)
+        if not payload.startswith(b'bplist00') and not xml_plist_dictionary(payload):
+            return 'invalid'
+    except (LayoutError, plistlib.InvalidFileException, ElementTree.ParseError, ExpatError,
+            AttributeError, LookupError, ValueError, TypeError, OverflowError, RecursionError):
+        return 'invalid'
+    identity_keys = ('CFBundleIdentifier', 'CFBundleExecutable', 'CFBundlePackageType')
+    if not isinstance(plist, dict) or any(not isinstance(plist.get(key), str) or not plist[key]
+                                          for key in identity_keys):
+        return 'invalid'
+    return 'match' if all(plist[key] == bundle_plist[key] for key in identity_keys) else 'mismatch'
 
 
 def framework_directory(app):

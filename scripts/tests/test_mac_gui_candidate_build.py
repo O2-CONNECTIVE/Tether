@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,19 @@ import build_mac_gui_candidate as tool
 import check_mac_gui_candidate_ci as check
 from scripts.tests.test_mac_gui_link_layout import image
 from scripts.tests.test_mac_sealed_producer_build import executable
+
+
+def gui_with_embedded_plist(payload, *, section_count=1, offset_delta=0):
+    command_size = 72 + 80 * section_count
+    start = len(image('gui')) + command_size
+    end = start + len(payload)
+    address = 1 << 32
+    segment = struct.pack('<II16sQQQQIIII', 0x19, command_size, b'__TEXT', address,
+                          end, 0, end, 5, 5, section_count, 0)
+    section = struct.pack('<16s16sQQIIIIIIII', b'__info_plist', b'__TEXT',
+                          address + start, len(payload), start + offset_delta,
+                          0, 0, 0, 0, 0, 0, 0)
+    return image('gui', extra=[segment + section * section_count]) + payload
 
 
 class GuiCandidateBuildTests(unittest.TestCase):
@@ -245,6 +259,49 @@ class GuiCandidateBuildTests(unittest.TestCase):
             bad['images']['producer'][field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
                 check.validate(bad, self.revision, self.tree)
+
+    def test_ci_reports_identity_from_the_assembled_gui_without_exposing_plist_values(self):
+        matching = {'CFBundleIdentifier': 'com.o2connective.rescue-host.shell',
+                    'CFBundleExecutable': 'rescue-host-shell', 'CFBundlePackageType': 'APPL',
+                    'PrivateField': 'PRIVATE'}
+        payload = plistlib.dumps(matching)
+        duplicate_identifier = payload.replace(b'</dict>',
+            b'<key>CFBundleIdentifier</key><string>com.o2connective.rescue-host.shell</string></dict>')
+        malformed = (
+            payload.replace(b'<string>PRIVATE</string>', b'<date>PRIVATE</date>'),
+            payload.replace(b'encoding="UTF-8"', b'encoding="PRIVATE"'),
+            payload.replace(b'<plist version="1.0">', b'<wrong>').replace(b'</plist>', b'</wrong>'),
+            payload.replace(b'<dict>', b'<dict/><dict>', 1),
+            payload.replace(b'<key>CFBundleIdentifier</key>', b'<wrong><key>CFBundleIdentifier</key>')
+                   .replace(b'<string>com.o2connective.rescue-host.shell</string>',
+                            b'<string>com.o2connective.rescue-host.shell</string></wrong>'),
+        )
+        cases = (
+            ('absent', image('gui')),
+            ('match', gui_with_embedded_plist(payload)),
+            ('match', gui_with_embedded_plist(plistlib.dumps(matching, fmt=plistlib.FMT_BINARY))),
+            ('mismatch', gui_with_embedded_plist(plistlib.dumps({**matching, 'CFBundleIdentifier': 'PRIVATE'}))),
+            ('mismatch', gui_with_embedded_plist(plistlib.dumps({**matching, 'CFBundleExecutable': 'PRIVATE'}))),
+            ('invalid', gui_with_embedded_plist(b'PRIVATE not a plist')),
+            ('invalid', gui_with_embedded_plist(plistlib.dumps({'CFBundleIdentifier': 'PRIVATE'}))),
+            ('invalid', gui_with_embedded_plist(duplicate_identifier)),
+            ('invalid', gui_with_embedded_plist(payload, section_count=2)),
+            ('invalid', gui_with_embedded_plist(payload, offset_delta=-4)),
+            *(('invalid', gui_with_embedded_plist(item)) for item in malformed),
+        )
+        for index, (expected, gui) in enumerate(cases):
+            with self.subTest(expected=expected, index=index):
+                self.images['gui'] = gui
+                output = self.root / f'ci-output-{index}'
+                stream = io.StringIO()
+                with patch.object(sys, 'argv', ['check_mac_gui_candidate_ci.py', str(output)]), \
+                     contextlib.redirect_stdout(stream):
+                    check.run()
+                self.assertNotIn('PRIVATE', stream.getvalue())
+                report = json.loads(stream.getvalue())
+                self.assertEqual(report['embeddedInfoPlistIdentity'], expected)
+                self.assertEqual(report['status'], 'blocked')
+                self.assertFalse(report['imageExecuted'])
 
     def test_fixed_nested_path_matches_production_launch_source(self):
         native = Path(__file__).resolve().parents[2] / tool.support.NATIVE_ROOT / 'ResidentLaunchPreparation.swift'
