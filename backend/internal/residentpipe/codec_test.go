@@ -117,7 +117,7 @@ func TestMappingReconnectAndNeedsActionStates(t *testing.T) {
 	if err != nil || s.Snapshot.Standby != "on" || s.Snapshot.Registration != "needs_action" || s.Snapshot.RegistrationReason != "identity_refused" || !s.Snapshot.CanRequestOff || s.Snapshot.CanRequestOn {
 		t.Fatal("needs-action state lost its reason or OFF affordance", s, err)
 	}
-	got := statusSnapshot(t, &needsMapper, s)
+	got := statusSnapshot(t, s)
 	if string(got["registrationReason"]) != `"identity_refused"` {
 		t.Fatal("JSONL omitted the needs-action reason", got)
 	}

@@ -14,7 +14,7 @@
 
 待機の状態に対応するbackendは `tether_standby_status` も公開します。操作する側の AI が、待機の期限の前に作業をまとめられるようにするためです（[#399](https://github.com/O2-CONNECTIVE/Tether/issues/399) の決定）。
 
-- 入力は無しです。argumentsが無いか `{}` だけを受け、それ以外はinvalid paramsとしてbackendを呼びません。延長の口はなく、延長はMacの前にいる人の操作（foregroundまたはhost GUI）だけです。
+- 入力は無しです。argumentsが無いか `{}` だけを受け、それ以外はinvalid paramsとしてbackendを呼びません。延長はMac上の操作に限ります。foregroundで延長でき、製品IPCも延長要求を受け付けます。ホストGUIの延長ボタンは [#451](https://github.com/O2-CONNECTIVE/Tether/issues/451) で扱います。
 - 出力はversion 1の `standby`（`on` / `stopping`）、`standby_until`（UTCのRFC 3339、ミリ秒。Macが終わりを出さない間はnull）、`remaining_ms` です。`remaining_ms` はgatewayの時計で `standby_until` までを数え、負なら0、`standby` が `on` でなければ0です。
 - エラーは `not_read`（要求の取消）、`not_reported`（controlは生きているが、まだ報告していない）、`control_ended`（`reinitialize_required: true`。sessionの世代のcontrolが無い）です。状態照会はcontrolの状態を1回だけ読み、その結果で応答を決めます。
 - 値の出どころは、Macがその常駐のcontrolの上で送る `resident_standby` です。wire fieldは `generation`、`revision`、`standby`、`until_unix_ms` の4値に `type` と `signature` を加えます。Macのホスト鍵で、binding（endpoint・host・principal・世代・両nonce・両鍵）に `host-standby` の役割とこの順の4値を加えて署名します。gatewayは今のcontrolの、前に採ったものよりrevisionの大きい値だけを採り、署名の合わない値・形の違う値・古い値は捨てます。捨てても、報告は権限を持たないのでcontrolは切りません。値はcontrolと一緒に消えます。

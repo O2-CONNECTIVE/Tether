@@ -12,7 +12,7 @@ import (
 // produced by the real mapper and Encode, not a handwritten consumer snapshot.
 // No transport, credentials, host, or command execution is involved.
 func TestDevelopmentPendingContractGolden(t *testing.T) {
-	m := mapper{foreground: true} // the development GUI reads the foreground dialect
+	var m mapper
 	var lines []byte
 	appendFrame := func(v any) {
 		b, err := Encode(v)
@@ -26,7 +26,7 @@ func TestDevelopmentPendingContractGolden(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		appendFrame(m.frame(s))
+		appendFrame(s)
 	}
 	o := fixtureOff()
 	observe(o)
@@ -60,7 +60,7 @@ func TestDevelopmentPendingContractGolden(t *testing.T) {
 // or it closes the host on the first network blip (#466). OFF ends
 // needs_action. Same real mapper and Encode as the pending golden.
 func TestDevelopmentReconnectContractGolden(t *testing.T) {
-	m := mapper{foreground: true}
+	var m mapper
 	var lines []byte
 	appendFrame := func(v any) {
 		b, err := Encode(v)
@@ -74,7 +74,7 @@ func TestDevelopmentReconnectContractGolden(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		appendFrame(m.frame(s))
+		appendFrame(s)
 	}
 	o := fixtureOff()
 	observe(o)

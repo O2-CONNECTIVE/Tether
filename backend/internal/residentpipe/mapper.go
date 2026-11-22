@@ -52,7 +52,6 @@ type mapper struct {
 	closedOn                     uint64 // an ON closed as rejected at its cycle's end; kept, since the GUI polls only the latest status
 	poisoned                     bool
 	cleanupUnknown               bool
-	foreground                   bool // ponytail: unread since both dialects share the status line (#451); drop it with the next run_darwin.go change, whose source SHA ci-producer pins
 }
 
 func oneOf(s string, values ...string) bool {
@@ -223,11 +222,6 @@ func (m *mapper) terminalUnknownStatus(now uint64, expired bool) (statusEnvelope
 	return statusEnvelope{1, "status", now, s}, nil
 }
 
-// frame is the status line. Both dialects share its shape since the product
-// line carries when standby ends too (#451).
-func (m *mapper) frame(s statusEnvelope) any {
-	return s
-}
 func (m *mapper) submit(owner *residentmac.Standby, r Intent, now uint64) Receipt {
 	out := Receipt{1, r.RequestID, r.Intent, "rejected"}
 	transition := r.Intent == "on" || r.Intent == "off"

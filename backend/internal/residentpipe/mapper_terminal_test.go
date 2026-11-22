@@ -34,7 +34,7 @@ func TestTerminalUnknownStatusProjectsLastObservation(t *testing.T) {
 	if s.Caller == nil || *s.Caller != caller || s.Transition == nil || s.Transition.Outcome != "unknown" {
 		t.Fatal("last validated caller or transition was not preserved safely", s)
 	}
-	b, err := Encode(m.frame(terminal))
+	b, err := Encode(terminal)
 	if err != nil {
 		t.Fatal(err)
 	}
