@@ -1,4 +1,5 @@
 //! Watches the original resident port independently of the WebView.
+use super::mac_quit::Quit;
 use crate::resident_port::{ResidentState, StandbyDeadline};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -27,7 +28,7 @@ pub(super) struct Watcher {
 }
 
 impl Watcher {
-    pub(super) fn start(owner: Arc<ResidentState>) -> Option<Self> {
+    pub(super) fn start(owner: Arc<ResidentState>, quit: Quit) -> Option<Self> {
         if !owner.port().has_source() {
             return None;
         }
@@ -37,7 +38,7 @@ impl Watcher {
         let active = running.clone();
         let thread = thread::Builder::new()
             .name("standby-deadline-notice".into())
-            .spawn(move || watch(&owner, &sender, receiver, &active))
+            .spawn(move || watch(&owner, &quit, &sender, receiver, &active))
             .ok()?;
         Some(Self {
             wake,
@@ -61,6 +62,7 @@ impl Drop for Watcher {
 
 fn watch(
     owner: &Arc<ResidentState>,
+    quit: &Quit,
     wake: &mpsc::Sender<Wake>,
     receiver: mpsc::Receiver<Wake>,
     running: &Arc<AtomicBool>,
@@ -68,17 +70,27 @@ fn watch(
     let mut permission = Permission::NotRequested;
     let mut warning = Warning::default();
     while running.load(Ordering::Acquire) {
-        if let (Some(deadline), Some(now)) = (owner.port().standby_deadline(), wall_ms()) {
+        if let (true, Some(deadline), Some(now)) = (
+            quit.allows_notices(),
+            owner.port().standby_deadline(),
+            wall_ms(),
+        ) {
             if permission == Permission::NotRequested && u128::from(deadline.unix_ms) > now {
                 permission = Permission::Checking;
                 let wake = wake.clone();
-                super::mac_notifications::request_permission(move |_| {
-                    let _ = wake.send(Wake::PermissionChecked);
-                });
+                let quit = quit.clone();
+                let running = running.clone();
+                super::mac_notifications::request_permission(
+                    move || running.load(Ordering::Acquire) && quit.allows_notices(),
+                    move |_| {
+                        let _ = wake.send(Wake::PermissionChecked);
+                    },
+                );
             }
             if permission == Permission::Checked && warning.reserve(deadline, now) {
                 let owner = Arc::downgrade(owner);
                 let running = running.clone();
+                let quit = quit.clone();
                 let wake = wake.clone();
                 let request_id = deadline.request_id;
                 let superseded = Arc::new(AtomicBool::new(false));
@@ -92,7 +104,8 @@ fn watch(
                                     owner.port().standby_deadline(),
                                     wall_ms(),
                                 )
-                            });
+                            })
+                            && quit.allows_notices();
                         checked.store(!current, Ordering::Release);
                         current
                     },

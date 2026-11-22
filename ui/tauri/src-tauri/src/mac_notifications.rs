@@ -1,5 +1,5 @@
 use block2::RcBlock;
-use objc2::rc::Retained;
+use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::Bool;
 use objc2_foundation::{ns_string, NSBundle, NSError};
 use objc2_user_notifications::{
@@ -10,10 +10,17 @@ use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
-pub(super) fn request_permission(completed: impl FnOnce(bool) + Send + 'static) {
+pub(super) fn request_permission(
+    can_prompt: impl FnOnce() -> bool + Send + 'static,
+    completed: impl FnOnce(bool) + Send + 'static,
+) {
     with_settings(completed, |settings, completed| {
         if settings.authorizationStatus() != UNAuthorizationStatus::NotDetermined {
             completed(alerts_authorized(settings));
+            return;
+        }
+        if !can_prompt() {
+            completed(false);
             return;
         }
 
@@ -68,20 +75,24 @@ fn with_settings(
     completed: impl FnOnce(bool) + Send + 'static,
     read: impl FnOnce(&UNNotificationSettings, Completion) + Send + 'static,
 ) {
-    let Some(center) = notification_center() else {
-        completed(false);
-        return;
-    };
-    let completed = once(completed);
-    let read = Mutex::new(Some(read));
-    let reply = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
-        let read = read.lock().unwrap().take();
-        if let Some(read) = read {
-            // UserNotifications supplies a live settings object for this callback.
-            read(unsafe { settings.as_ref() }, Arc::clone(&completed));
-        }
+    autoreleasepool(|_| {
+        let Some(center) = notification_center() else {
+            completed(false);
+            return;
+        };
+        let completed = once(completed);
+        let read = Mutex::new(Some(read));
+        let reply = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+            autoreleasepool(|_| {
+                let read = read.lock().unwrap().take();
+                if let Some(read) = read {
+                    // UserNotifications supplies a live settings object for this callback.
+                    read(unsafe { settings.as_ref() }, Arc::clone(&completed));
+                }
+            });
+        });
+        center.getNotificationSettingsWithCompletionHandler(&reply);
     });
-    center.getNotificationSettingsWithCompletionHandler(&reply);
 }
 
 type Completion = Arc<dyn Fn(bool) + Send + Sync>;
@@ -123,7 +134,10 @@ mod tests {
     #[test]
     fn unbundled_executable_skips_permission_and_notification_submission() {
         let (send, receive) = mpsc::channel();
-        request_permission(move |allowed| send.send(allowed).unwrap());
+        request_permission(
+            || panic!("unbundled binary reached the permission check"),
+            move |allowed| send.send(allowed).unwrap(),
+        );
         assert_eq!(receive.try_recv(), Ok(false));
 
         let (send, receive) = mpsc::channel();

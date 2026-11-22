@@ -261,7 +261,9 @@ pub fn run() {
     app.run(|_handle, _event| {}); // Preserve the existing non-Mac runtime path.
     #[cfg(target_os = "macos")]
     {
-        let notice = mac_deadline_notice::Watcher::start(lifetime.state());
+        use tauri::Manager;
+        let quit = app.state::<mac_quit::Quit>().inner().clone();
+        let notice = mac_deadline_notice::Watcher::start(lifetime.state(), quit);
         let exit_code = app.run_return(|handle, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 mac_quit::exit_requested(handle, &api);

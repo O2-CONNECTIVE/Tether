@@ -19,8 +19,8 @@ enum Phase {
     NeedsCleanup,
 }
 
-#[derive(Default)]
-pub(super) struct Quit(Mutex<Phase>);
+#[derive(Clone, Default)]
+pub(super) struct Quit(Arc<Mutex<Phase>>);
 
 impl Quit {
     fn update(&self, from: Phase, to: Phase) -> bool {
@@ -44,6 +44,14 @@ impl Quit {
             Phase::Idle
         };
         self.update(Phase::Confirming, next) && confirmed
+    }
+
+    #[cfg(any(not(resident_gui_fixture), test))]
+    pub(super) fn allows_notices(&self) -> bool {
+        matches!(
+            *self.0.lock().unwrap_or_else(|e| e.into_inner()),
+            Phase::Idle | Phase::Confirming
+        )
     }
 }
 
@@ -127,6 +135,19 @@ mod tests {
         assert!(quit.proceed(true));
         assert!(!quit.update(Phase::Idle, Phase::Confirming));
         assert!(!quit.ready());
+    }
+
+    #[test]
+    fn notification_view_closes_when_quit_is_confirmed_before_owner_close() {
+        let quit = Quit::default();
+        let watcher = quit.clone();
+        assert!(watcher.allows_notices());
+        assert!(quit.update(Phase::Idle, Phase::Confirming));
+        assert!(!quit.proceed(false));
+        assert!(watcher.allows_notices());
+        assert!(quit.update(Phase::Idle, Phase::Confirming));
+        assert!(quit.proceed(true));
+        assert!(!watcher.allows_notices());
     }
 
     #[test]
