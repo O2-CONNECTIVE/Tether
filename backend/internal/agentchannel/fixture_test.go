@@ -218,10 +218,15 @@ type pair struct {
 
 func connect(t *testing.T, env *grantEnv, ctx context.Context, sb, cb Budgets, allowReconnect ...bool) pair {
 	t.Helper()
+	return connectWithClient(t, env, ctx, sb, env.clientConfig(cb), allowReconnect...)
+}
+
+func connectWithClient(t *testing.T, env *grantEnv, ctx context.Context, sb Budgets, cfg ClientConfig, allowReconnect ...bool) pair {
+	t.Helper()
 	sConn, cConn := memPair()
 	srv := env.newServer(t, sb, allowReconnect...)
 	res := acceptAsync(ctx, srv, sConn)
-	client, err := Open(context.Background(), env.clientConfig(cb), cConn)
+	client, err := Open(context.Background(), cfg, cConn)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
