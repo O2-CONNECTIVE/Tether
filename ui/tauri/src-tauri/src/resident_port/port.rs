@@ -1,13 +1,19 @@
 //! Typed source/intent core; binding does not establish producer authority.
 #[cfg(target_os = "macos")]
 use super::duplex;
+#[cfg(all(target_os = "macos", resident_gui_fixture))]
+use super::model::{Disposition, Intent};
 use super::model::{IntentRequest, Receipt, Status};
+#[cfg(all(target_os = "macos", resident_gui_fixture))]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 
 #[derive(Default)]
 pub(crate) struct ResidentPort {
     #[cfg(target_os = "macos")]
     bound: Option<duplex::owner::BoundDuplex>,
+    #[cfg(all(target_os = "macos", resident_gui_fixture))]
+    menu_stop_receipt_id: AtomicU64,
 }
 impl ResidentPort {
     // Concrete and private: future sealed launcher must establish provenance
@@ -17,6 +23,31 @@ impl ResidentPort {
         source.first()?; // off UI thread, before publishing this same source
         Ok(Self {
             bound: Some(source),
+            #[cfg(resident_gui_fixture)]
+            menu_stop_receipt_id: AtomicU64::new(0),
+        })
+    }
+    #[cfg(all(target_os = "macos", resident_gui_fixture))]
+    pub(crate) fn expect_menu_stop_receipt(&self, id: u64) {
+        self.menu_stop_receipt_id.store(id, Ordering::SeqCst);
+    }
+    #[cfg(all(target_os = "macos", resident_gui_fixture))]
+    pub(super) fn take_menu_stop_receipt_label(&self, receipt: &Receipt) -> Option<&'static str> {
+        if receipt.intent != Intent::Off
+            || receipt.request_id == 0
+            || self
+                .menu_stop_receipt_id
+                .compare_exchange(receipt.request_id, 0, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        {
+            return None;
+        }
+        Some(match receipt.disposition {
+            Disposition::Accepted => "menu-stop-receipt-accepted",
+            Disposition::Rejected => "menu-stop-receipt-rejected",
+            Disposition::Stale => "menu-stop-receipt-stale",
+            Disposition::Unavailable => "menu-stop-receipt-unavailable",
+            Disposition::Unknown => "menu-stop-receipt-unknown",
         })
     }
     pub(crate) fn current(&self) -> Status {

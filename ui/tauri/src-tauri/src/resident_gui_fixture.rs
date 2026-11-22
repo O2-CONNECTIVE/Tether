@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tauri::{Listener, Manager};
 
 const TEST: &str = "TestCIResidentGUIWiring";
-fn event(stage: &'static str) {
+pub(crate) fn event(stage: &'static str) {
     eprintln!("GUI_FIXTURE_EVENT={stage}");
 }
 fn advance(state: &mut u8, payload: &str) -> &'static str {
@@ -77,6 +77,12 @@ fn failure_class(payload: &str) -> (&'static str, &'static str) {
 fn failure_event(phase: &'static str, reason: &'static str) {
     eprintln!("GUI_FIXTURE_FAILURE={phase}:{reason}");
 }
+fn menu_stop_diagnostic(payload: &str) -> Option<&'static str> {
+    match payload {
+        "\"stop-received\"" => Some("menu-stop-signal-received"),
+        _ => None,
+    }
+}
 fn hex(value: &str, count: usize) -> bool {
     value.len() == count
         && value
@@ -110,29 +116,36 @@ fn reopen_main(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> bool {
         .is_ok()
 }
 
-fn stop_hidden_standby(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> bool {
+fn stop_hidden_standby(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<(), &'static str> {
     let owner = app.state::<Arc<ResidentState>>();
     let read = || serde_json::to_value(owner.port().current()).unwrap_or_default();
     let on = read();
-    let (Some(on_id), Some(on_revision)) = (
-        on["transition"]["requestId"].as_u64(),
+    let (Some(off_id), Some(on_revision)) = (
+        on["transition"]["requestId"]
+            .as_u64()
+            .and_then(|id| id.checked_add(1)),
         on["revision"].as_u64(),
     ) else {
-        return false;
+        return Err("on-precondition");
     };
     if on["standby"] != "on"
         || on["registration"] != "authenticated"
         || on["transition"]["outcome"] != "applied"
-        || crate::mac_menu_bar::menu_event(
-            app,
-            tauri::menu::MenuEvent {
-                id: crate::mac_menu_bar::STOP_STANDBY.into(),
-            },
-        )
-        .is_err()
     {
-        return false;
+        return Err("on-precondition");
     }
+    owner.port().expect_menu_stop_receipt(off_id);
+    crate::mac_menu_bar::menu_event(
+        app,
+        tauri::menu::MenuEvent {
+            id: crate::mac_menu_bar::STOP_STANDBY.into(),
+        },
+    )
+    .map_err(|_| "dispatch")?;
+    event("menu-stop-dispatched");
     if !wait_until(|| {
         let off = read();
         off["revision"]
@@ -141,31 +154,41 @@ fn stop_hidden_standby(app: &tauri::AppHandle, window: &tauri::WebviewWindow) ->
             && off["standby"] == "off"
             && off["cleanup"] == "confirmed"
             && off["canRequestOn"] == true
-            && off["transition"]["requestId"].as_u64() == on_id.checked_add(1)
+            && off["transition"]["requestId"].as_u64() == Some(off_id)
             && off["transition"]["intent"] == "off"
             && off["transition"]["outcome"] == "applied"
-    }) || !matches!(window.is_visible(), Ok(false))
-    {
-        return false;
+    }) {
+        return Err("off-proof-timeout");
+    }
+    if !matches!(window.is_visible(), Ok(false)) {
+        return Err("visibility");
     }
     event("menu-stop-applied-while-hidden");
-    true
+    Ok(())
 }
 
-fn check_menu_bar(app: &tauri::AppHandle, webview_hidden: &AtomicBool, stop: bool) -> bool {
-    let Some(window) = app.get_webview_window("main") else {
-        return false;
-    };
+fn check_menu_bar(
+    app: &tauri::AppHandle,
+    webview_hidden: &AtomicBool,
+    stop: bool,
+) -> Result<(), &'static str> {
+    let window = app.get_webview_window("main").ok_or("window")?;
     webview_hidden.store(false, Ordering::SeqCst);
     if window.close().is_err()
         || !wait_until(|| {
             matches!(window.is_visible(), Ok(false)) && webview_hidden.load(Ordering::SeqCst)
         })
     {
-        return false;
+        return Err("window");
     }
     event("menu-bar-window-hidden");
-    (!stop || stop_hidden_standby(app, &window)) && reopen_main(app, &window)
+    if stop {
+        stop_hidden_standby(app, &window)?;
+    }
+    if !reopen_main(app, &window) {
+        return Err(if stop { "reopen" } else { "window" });
+    }
+    Ok(())
 }
 fn report(path: &PathBuf, invocation: &str, passed: bool) {
     let value = serde_json::json!({
@@ -282,6 +305,11 @@ pub(super) fn run() {
         .setup(move |app| {
             let sequence = std::sync::Mutex::new(0_u8);
             let result = observed.clone();
+            app.listen("resident-gui-menu-stop", |message| {
+                if let Some(label) = menu_stop_diagnostic(message.payload()) {
+                    event(label);
+                }
+            });
             // Only dedicated CI context local/main can emit. Events are not
             // authority: same pipe ON/OFF and original owner proof remain required.
             app.listen("resident-gui-fixture", move |message| {
@@ -384,10 +412,13 @@ pub(super) fn run() {
         let until = Instant::now() + Duration::from_secs(60);
         while observed.load(Ordering::SeqCst) == 0 && Instant::now() < until {
             let action = window_action.swap(0, Ordering::SeqCst);
-            if action != 0 && !check_menu_bar(&request, &webview_hidden, action == 2) {
-                failure_event(if action == 2 { "menu-stop" } else { "reopen" }, "window");
-                observed.store(2, Ordering::SeqCst);
-                break;
+            if action != 0 {
+                let stop = action == 2;
+                if let Err(reason) = check_menu_bar(&request, &webview_hidden, stop) {
+                    failure_event(if stop { "menu-stop" } else { "reopen" }, reason);
+                    observed.store(2, Ordering::SeqCst);
+                    break;
+                }
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -422,7 +453,25 @@ pub(super) fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{advance, failure_class};
+    use super::{advance, failure_class, menu_stop_diagnostic};
+
+    #[test]
+    fn menu_stop_diagnostics_project_only_fixed_labels() {
+        assert_eq!(
+            menu_stop_diagnostic("\"stop-received\""),
+            Some("menu-stop-signal-received")
+        );
+        for input in [
+            "\"passed\"",
+            "\"stop-received:42\"",
+            "\"receipt-accepted\"",
+            "\"receipt-stale\\n\"",
+            "receipt-stale",
+            "{}",
+        ] {
+            assert_eq!(menu_stop_diagnostic(input), None);
+        }
+    }
     #[test]
     fn fixed_failure_classes_never_accept_payload_values_or_restore_success() {
         for phase in [
