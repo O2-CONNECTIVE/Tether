@@ -8,6 +8,8 @@ use model::{IntentRequest, Receipt, Status};
 mod port;
 pub(crate) use port::ResidentPort;
 mod state;
+#[cfg(target_os = "macos")]
+pub(crate) use state::ExitProgress;
 #[cfg(not(resident_gui_fixture))]
 pub(crate) use state::ResidentLifetime;
 pub(crate) use state::ResidentState;

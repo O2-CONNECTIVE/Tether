@@ -32,6 +32,11 @@ EOF後event拒否は、従来PumpがEOFで止まる順序をこの内部部品�
 既存の`Supervisor::record`は、同じproducerからのauthoritative Close、実EOF、exact Child Wait、reader/writerを含むIOとsupervisor joinを区別して検査します。
 明示構成の`NativeOuterOwner/ExitGate`はouter monitorの実joinを待ち、unknownを保持します。
 Pump/Supervisorとstartup rejectionの別証跡は内部実装へ接続しています。明示的な`resident_native_source` cfgのmacOS構成ではouter monitor、guarded Quit、署名候補の登録済みproducer起動経路もソースにあります。実機での起動・回収は未検証です。
+
+Mac のメニューバーとアプリメニューの Command-Q は、同じ終了確認を使います。
+確認後は元の owner の Close と join を UI スレッド外で待ち、終了できる条件が揃った時点で同じアプリを閉じます。
+Go の回収未確認を観測した場合、または終了待ちの期限までに証跡が揃わない場合は、要清掃を表示してアプリと元の owner を保持します。
+終了待ちの期限は表示のためのもので、回収や終了を許可する証跡にはなりません。
 単純なprocess exitやreap gateを、resident全体の回収証明へ昇格させません。
 
 ## 確認範囲

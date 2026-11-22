@@ -11,14 +11,22 @@ pub(super) const STOP_STANDBY: &str = "host-menu-bar-stop-standby";
 pub(super) fn install(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, OPEN_WINDOW, "ウィンドウを開く", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, STOP_STANDBY, "待機を止める", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &stop])?;
+    let quit = MenuItem::with_id(
+        app,
+        crate::mac_quit_dialog::QUIT,
+        "終了…",
+        true,
+        None::<&str>,
+    )?;
+    let menu = Menu::with_items(app, &[&open, &stop, &quit])?;
     TrayIconBuilder::with_id(TRAY)
         .title("Tether")
         .menu(&menu)
-        .on_menu_event(|app, event| {
-            let _ = menu_event(app, event);
-        })
         .build(app)?;
+    // Application menu (Command-Q) and the status item arrive here once.
+    app.on_menu_event(|app, event| {
+        let _ = menu_event(app, event);
+    });
     Ok(())
 }
 
@@ -32,6 +40,10 @@ pub(super) fn menu_event(app: &AppHandle, event: MenuEvent) -> tauri::Result<()>
             // A payload-free UI signal for the existing local controller. It
             // carries no status, authorization or request identifier.
             window.eval("window.dispatchEvent(new Event('tether-resident-stop'))")
+        }
+        crate::mac_quit_dialog::QUIT => {
+            crate::mac_quit::request(app);
+            Ok(())
         }
         _ => Ok(()),
     }

@@ -6,6 +6,12 @@ use super::ResidentPort;
 pub(crate) struct ResidentState {
     source: Source,
 }
+#[cfg(target_os = "macos")]
+pub(crate) enum ExitProgress {
+    Waiting,
+    Confirmed,
+    Unconfirmed,
+}
 enum Source {
     Unbound(ResidentPort),
     #[cfg(all(target_os = "macos", resident_native_source))]
@@ -66,6 +72,26 @@ impl ResidentState {
             Source::Native(session) => session.owner().finish_requested(),
             #[cfg(any(test, resident_gui_fixture))]
             Source::Fixture(_) => false,
+        }
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn exit_progress(&self) -> ExitProgress {
+        match &self.source {
+            Source::Unbound(_) => ExitProgress::Confirmed,
+            #[cfg(resident_native_source)]
+            Source::Native(session) => {
+                let owner = session.owner();
+                let joined = owner.poll_join().is_some();
+                if owner.finish_requested() {
+                    ExitProgress::Confirmed
+                } else if joined || self.port().current().cleanup_unknown() {
+                    ExitProgress::Unconfirmed
+                } else {
+                    ExitProgress::Waiting
+                }
+            }
+            #[cfg(any(test, resident_gui_fixture))]
+            Source::Fixture(_) => ExitProgress::Unconfirmed,
         }
     }
     #[cfg(any(test, resident_gui_fixture))]

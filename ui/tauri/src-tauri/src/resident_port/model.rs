@@ -110,6 +110,15 @@ pub(crate) struct Status {
     source: Source,
 }
 impl Status {
+    #[cfg(all(target_os = "macos", resident_native_source))]
+    pub(super) fn cleanup_unknown(&self) -> bool {
+        matches!(
+            &self.source,
+            Source::ResidentOwner {
+                output: Output::SourceObservation { observation },
+            } if observation.cleanup == super::observation::Cleanup::Unknown
+        )
+    }
     pub(super) fn unbound() -> Self {
         Self {
             protocol_version: 1,
