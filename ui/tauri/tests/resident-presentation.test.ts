@@ -66,7 +66,15 @@ void test('standby on without an authenticated registration is not shown as conn
 void test('standby on while reconnecting is shown as retrying, not as connected or as needing action', () => {
   const view = presentResident(observed({ standby: 'on', registration: 'reconnecting', work: 'stopping', cleanup: 'pending' }), false);
   assert.deepEqual([view.tone, view.icon, view.heading], ['neutral', 'checking', '待機ON・再接続中']);
-  assert.equal(view.detail, '待機: ON / 接続: 再接続中 / 作業: 停止中 / 回収: 回収待ち');
+  assert.match(view.detail, /作業: 停止中 \/ 回収: 回収待ち/);
+  assert.match(view.detail, /待機と期限は続き、切断前の作業は停止・回収します。/);
+});
+
+void test('expiry reports a completed stop only after the owner confirms cleanup', () => {
+  const stopping = presentResident(observed({ standby: 'stopping', work: 'stopping', cleanup: 'pending', standbyExpired: true }), false);
+  assert.equal(stopping.heading, '待機期限に達しました。停止を確認中');
+  assert.equal(presentResident(observed({ standbyExpired: true }), false).heading, '待機は期限で停止しました');
+  assert.match(presentResident(observed({ cleanup: 'unknown', standbyExpired: true }), false).heading, /^要清掃/);
 });
 
 // 直らない失敗では Go が再試行をやめる。理由ごとに、何をすれば戻るかを利用者に示す。
@@ -80,7 +88,7 @@ void test('needs action names the reason and the way back for each refusal', () 
   for (const [registrationReason, detail] of Object.entries(reasons)) {
     const view = presentResident(observed({ standby: 'on', registration: 'needs_action',
       registrationReason: registrationReason as keyof typeof reasons, canRequestOn: false, canRequestOff: true }), false);
-    assert.deepEqual(view, { heading: '待機ON・要対応', detail, tone: 'unconfirmed', icon: 'warning' });
+    assert.deepEqual(view, { heading: '待機ON・要対応', detail: `自動での再接続を停止しました。${detail}`, tone: 'unconfirmed', icon: 'warning' });
   }
 });
 

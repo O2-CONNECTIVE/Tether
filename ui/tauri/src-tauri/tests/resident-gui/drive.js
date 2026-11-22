@@ -11,12 +11,15 @@
     }
     fail('bridge-timeout');
   };
-  const phase = async (intent, action, target) => {
+  const phase = async intent => {
     let attempts = 0, previousId = 0, sentRevision = 0;
+    const prior = intent === 'on' ? 'off' : 'on';
     const deadline = performance.now() + 20000;
     while (performance.now() < deadline) {
       const panel = document.querySelector('#resident-panel');
-      const button = document.querySelector(action);
+      const button = document.querySelector('#resident-switch');
+      const checked = button?.getAttribute('aria-checked');
+      const actionable = button?.disabled === false && button.getAttribute('aria-disabled') !== 'true';
       if (panel) {
         const d = panel.dataset;
         const id = Number(d.residentRequestId), revision = Number(d.residentRevision);
@@ -30,11 +33,11 @@
         if (received && receipt === 'accepted' && revision > sentRevision
           && Number(d.residentTransitionId) === id && d.residentTransitionIntent === intent
           && d.residentTransitionOutcome === 'applied' && d.residentStandby === intent
-          && document.querySelector(target)?.disabled === false) return;
+          && actionable && checked === String(intent === 'on')) return;
         if (received && !['accepted', 'stale'].includes(receipt)) fail('receipt');
         if (received && Number(d.residentTransitionId) === id
           && ['rejected', 'unknown'].includes(d.residentTransitionOutcome) && receipt !== 'stale') fail('transition');
-        if (button?.disabled === false && (attempts === 0
+        if (actionable && d.residentStandby === prior && checked === String(prior === 'on') && (attempts === 0
           || (received && receipt === 'stale' && revision > sentRevision))) {
           if (++attempts > 8) fail('retry-budget');
           previousId = id; sentRevision = revision;
@@ -49,7 +52,7 @@
   try {
     await emit('initializer-started');
     stage = 'on';
-    await phase('on', '#resident-on', '#resident-off');
+    await phase('on');
     stage = 'auth';
     const authenticatedUntil = performance.now() + 20000;
     while (document.querySelector('#resident-panel')?.dataset.residentRegistration !== 'authenticated') {
@@ -58,7 +61,7 @@
     }
     await emit('on-applied');
     stage = 'off';
-    await phase('off', '#resident-off', '#resident-on');
+    await phase('off');
     await emit('off-applied');
     stage = 'complete';
     await emit('passed');

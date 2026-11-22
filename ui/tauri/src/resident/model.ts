@@ -1,5 +1,7 @@
 export type Intent = 'on' | 'off';
 export type RequestIntent = Intent | 'extend';
+export const standbyHoursOptions = [2, 4, 8, 12, 24] as const;
+export type StandbyHours = (typeof standbyHoursOptions)[number];
 type Transition = { requestId: number; intent: Intent; outcome: 'pending' | 'applied' | 'rejected' | 'unknown' };
 type RegistrationReason = 'identity_refused' | 'connection_occupied' | 'gateway_refused';
 export type Observation = { revision: number; validForMs: number; standby: 'off' | 'on' | 'stopping' | 'unknown';
@@ -10,7 +12,7 @@ export type Observation = { revision: number; validForMs: number; standby: 'off'
   standbyUntil: number | null; standbyEndingSoon: boolean; standbyExpired: boolean };
 type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner'; observation: Observation | null };
 export type ResidentInvoke = (command: 'get_resident_status' | 'request_resident_intent', args: { request: {
-  protocolVersion: 1; requestId?: number; expectedRevision?: number; intent?: RequestIntent; standbyHours?: 2 | 4 | 8 | 12 | 24 } }) => Promise<unknown>;
+  protocolVersion: 1; requestId?: number; expectedRevision?: number; intent?: RequestIntent; standbyHours?: StandbyHours } }) => Promise<unknown>;
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const keys = (v: Record<string, unknown>, names: string) => Object.keys(v).sort().join(',') === names.split(',').sort().join(',');
 const integer = (v: unknown, min = 0): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= min;

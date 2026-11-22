@@ -15,9 +15,10 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
     standbyUntil: null, standbyEndingSoon: false, standbyExpired: false };
   const events: string[] = [], receipts: string[] = [], order: string[] = [];
   const dataset: Record<string, string> = {};
-  const buttons = {
-    '#resident-on': { disabled: true, click: () => { void controller.request('on'); } },
-    '#resident-off': { disabled: true, click: () => { void controller.request('off'); } },
+  const standbySwitch = {
+    disabled: true,
+    getAttribute: (name: string) => name === 'aria-checked' ? String(dataset.residentStandby === 'on') : null,
+    click: () => { void controller.request(dataset.residentStandby === 'on' ? 'off' : 'on'); },
   };
   const controller = createResidentController({ now: () => 0, pollMs: 1000000,
     onChange: state => {
@@ -26,7 +27,7 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
         residentRevision: String(o?.revision ?? 0), residentStandby: o?.standby ?? 'unknown',
         residentRegistration: o?.registration ?? 'unknown', residentTransitionId: String(o?.transition?.requestId ?? 0),
         residentTransitionIntent: o?.transition?.intent ?? 'none', residentTransitionOutcome: o?.transition?.outcome ?? 'none' });
-      buttons['#resident-on'].disabled = !state.canOn; buttons['#resident-off'].disabled = !state.canOff;
+      standbySwitch.disabled = !state.canOn && !state.canOff;
     }, invoke: (command, { request: r }) => {
       if (command === 'get_resident_status') return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', ...observation });
       const id = r.requestId!, intent = r.intent!;
@@ -61,7 +62,7 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
     await controller.refresh();
     await runInNewContext(driver, {
       performance: { now: () => now }, setTimeout: (f: () => void, ms: number) => { now += ms; queueMicrotask(f); },
-      document: { querySelector: (s: string) => s === '#resident-panel' ? { dataset } : buttons[s as keyof typeof buttons] },
+      document: { querySelector: (s: string) => s === '#resident-panel' ? { dataset } : s === '#resident-switch' ? standbySwitch : null },
       window: { __TAURI__: { event: { emit: (_: string, value: string) => { events.push(value); return Promise.resolve(); } } } },
     });
     return { events, receipts, order, ownerOffCalls };

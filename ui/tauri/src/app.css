@@ -9,6 +9,17 @@
 .shell-actions { display: flex; flex-wrap: wrap; gap: var(--sys-space-md); }
 .shell-actions .button { flex: 1 1 12rem; }
 .shell-code { font-family: var(--sys-font-code); color: var(--sys-text-secondary); }
+.resident-standby { display: grid; gap: var(--sys-space-md); padding-block-start: var(--sys-space-lg); border-block-start: 1px solid var(--sys-border-subtle); }
+.resident-standby__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sys-space-sm) var(--sys-space-md); }
+.resident-standby__notice { color: var(--sys-warning-fg); font-size: var(--sys-type-caption); }
+.resident-standby__notice:empty { position: absolute; }
+.resident-standby__settings > * + * { margin-block-start: var(--sys-space-sm); }
+.resident-standby__settings summary { cursor: pointer; font-weight: var(--sys-weight-heading); }
+.resident-standby__settings .input { width: auto; font: inherit; }
+.resident-switch { min-inline-size: 6em; }
+.resident-switch__track { display: flex; align-items: center; inline-size: 2em; block-size: 1.15em; padding: 0.13em; border: 1px solid currentColor; border-radius: 1em; }
+.resident-switch__track::before { content: ""; inline-size: 0.75em; block-size: 0.75em; border-radius: 50%; background: currentColor; }
+.resident-switch[aria-checked="true"] .resident-switch__track { justify-content: flex-end; }
 @media (max-width: 30rem) {
   .shell-panel { padding: var(--sys-space-lg); }
   .shell-permissions { gap: var(--sys-space-sm) var(--sys-space-lg); }

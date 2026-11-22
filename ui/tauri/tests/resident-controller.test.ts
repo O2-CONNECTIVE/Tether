@@ -181,3 +181,31 @@ void test('unknown outside exact mapper pending ON stays sealed, including misma
     } finally { r.controller.dispose(); }
   }
 });
+
+void test('standby sends the selected hours and updates the deadline only from a new observation', async () => {
+  const originalUntil = 1_900_000_000_000;
+  const renewedUntil = 1_900_007_200_000;
+  let observation = sample();
+  const requests: Parameters<ResidentInvoke>[1]['request'][] = [];
+  const r = capture((command, { request }) => {
+    if (command === 'get_resident_status') return Promise.resolve(observation);
+    requests.push(request);
+    return Promise.resolve({ protocolVersion: 1, requestId: request.requestId, intent: request.intent, disposition: 'accepted' });
+  });
+  try {
+    await r.controller.refresh();
+    await r.controller.request('on', 4);
+    assert.deepEqual(requests[0], { protocolVersion: 1, requestId: 1, expectedRevision: 1, intent: 'on', standbyHours: 4 });
+    observation = sample({ revision: 2, standby: 'on', registration: 'authenticated', canRequestOn: false, canRequestOff: true,
+      standbyUntil: originalUntil, standbyEndingSoon: true, transition: { requestId: 1, intent: 'on', outcome: 'applied' } });
+    await r.controller.refresh();
+    await r.controller.request('extend', 8);
+    assert.deepEqual(requests[1], { protocolVersion: 1, requestId: 2, expectedRevision: 2, intent: 'extend', standbyHours: 8 });
+    assert.equal(r.last()?.pending, false);
+    assert.equal(r.last()?.observation?.standbyUntil, originalUntil);
+    observation = sample({ ...observation, revision: 3, standbyUntil: renewedUntil, standbyEndingSoon: false });
+    await r.controller.refresh();
+    assert.equal(r.last()?.observation?.standbyUntil, renewedUntil);
+    assert.equal(r.last()?.canOff, true);
+  } finally { r.controller.dispose(); }
+});
