@@ -30,6 +30,8 @@ type Snapshot struct {
 	StandbyUntil       *uint64     `json:"standbyUntil"`      // wall-clock Unix ms; null unless standby admits work
 	StandbyEndingSoon  bool        `json:"standbyEndingSoon"` // from ten minutes before standbyUntil
 	StandbyExpired     bool        `json:"standbyExpired"`    // the last cycle ended because standby ran out
+
+	SleepPrevention residentmac.SleepPrevention `json:"sleepPrevention"`
 }
 
 type statusEnvelope struct {
@@ -177,6 +179,7 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 	// Unknown hides the end, a claim about admission. Why the cycle ended was
 	// settled before its cleanup went unknown, so it stays.
 	s.StandbyExpired = o.StandbyExpired
+	s.SleepPrevention = residentmac.SleepPreventionUnknown
 	if !m.poisoned {
 		if !o.StandbyUntil.IsZero() {
 			end := uint64(o.StandbyUntil.UnixMilli())
@@ -217,6 +220,7 @@ func (m *mapper) terminalUnknownStatus(now uint64, expired bool) (statusEnvelope
 	s.StandbyUntil = nil
 	s.StandbyEndingSoon = false
 	s.StandbyExpired = expired
+	s.SleepPrevention = residentmac.SleepPreventionUnknown
 	m.view = s
 	m.observedAt = now
 	return statusEnvelope{1, "status", now, s}, nil

@@ -196,7 +196,7 @@ func serveLoop(lifetime context.Context, owner *residentmac.Standby, p *ownedPip
 		if e != nil {
 			return e
 		}
-		return publishObservation(m, p, owner.Snapshot(), now)
+		return publishObservation(m, p, owner.Snapshot(), now, owner.SleepPrevention())
 	}
 	if e := publish(); e != nil {
 		return e
@@ -326,10 +326,13 @@ func safeServeInput(lifetime context.Context, owner *residentmac.Standby, p *own
 	}()
 	return serveInput(lifetime, owner, p, dialect, m)
 }
-func publishObservation(m *mapper, p *ownedPipes, o residentmac.StandbyObservation, now uint64) error {
+func publishObservation(m *mapper, p *ownedPipes, o residentmac.StandbyObservation, now uint64, sleep residentmac.SleepPrevention) error {
 	s, e := m.observe(o, now)
 	if e != nil {
 		return e
+	}
+	if !m.poisoned {
+		s.Snapshot.SleepPrevention = sleep
 	}
 	b, e := Encode(s)
 	if e != nil {

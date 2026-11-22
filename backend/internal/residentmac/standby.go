@@ -672,6 +672,21 @@ func (s *Standby) StandbyExpired() bool {
 	return s.expired.Load()
 }
 
+// SleepPrevention observes the native assertion independently of admission.
+// The worker does not hold this lock while calling IOKit.
+func (s *Standby) SleepPrevention() SleepPrevention {
+	s.sleepMu.Lock()
+	defer s.sleepMu.Unlock()
+	switch {
+	case s.sleepTaking || s.sleepReleasing || (s.sleepHeld && s.sleepErr != nil):
+		return SleepPreventionUnknown
+	case s.sleepHeld:
+		return SleepPreventionActive
+	default:
+		return SleepPreventionInactive
+	}
+}
+
 func (s *Standby) Changes() <-chan struct{} {
 	if s == nil {
 		return nil

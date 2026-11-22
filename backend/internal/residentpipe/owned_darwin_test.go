@@ -189,7 +189,7 @@ func TestUnknownObservationEndsServePolicy(t *testing.T) {
 	var m mapper
 	o := fixtureOff()
 	o.Cleanup = "unknown"
-	if e = publishObservation(&m, p, o, 10); !errors.Is(e, residentmac.ErrStandbyUnknown) {
+	if e = publishObservation(&m, p, o, 10, residentmac.SleepPreventionActive); !errors.Is(e, residentmac.ErrStandbyUnknown) {
 		t.Fatal(e)
 	}
 	b := make([]byte, MaxLine)
@@ -201,7 +201,8 @@ func TestUnknownObservationEndsServePolicy(t *testing.T) {
 	if e = json.Unmarshal(b[:n], &frame); e != nil {
 		t.Fatal(e)
 	}
-	if frame.Snapshot.Standby != "unknown" || frame.Snapshot.CanRequestOn || frame.Snapshot.Cleanup != "unknown" {
+	if frame.Snapshot.Standby != "unknown" || frame.Snapshot.CanRequestOn || frame.Snapshot.Cleanup != "unknown" ||
+		frame.Snapshot.SleepPrevention != residentmac.SleepPreventionUnknown {
 		t.Fatal(frame)
 	}
 }
@@ -210,7 +211,7 @@ func TestUnknownWriteFaultStillEndsServePolicy(t *testing.T) {
 	var m mapper
 	o := fixtureOff()
 	o.Cleanup = "unknown"
-	if e := publishObservation(&m, p, o, 10); e == nil || !m.poisoned {
+	if e := publishObservation(&m, p, o, 10, residentmac.SleepPreventionUnknown); e == nil || !m.poisoned {
 		t.Fatal(e)
 	}
 }

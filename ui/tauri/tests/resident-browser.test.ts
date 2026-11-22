@@ -13,7 +13,7 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
         const status = { protocolVersion: 1, source: 'resident-owner', state: 'source-observation',
           revision, validForMs: 3000, standby: on ? 'on' : 'off', registration, caller: null,
           work: 'idle', cleanup: 'confirmed', canRequestOn: !on, canRequestOff: on, transition,
-          standbyUntil: on ? deadline : null, standbyEndingSoon: on && endingSoon, standbyExpired: false };
+          standbyUntil: on ? deadline : null, standbyEndingSoon: on && endingSoon, standbyExpired: false, sleepPrevention: 'inactive' };
         if (document.documentElement.dataset.holdPoll !== 'true') return Promise.resolve(status);
         document.documentElement.dataset.pollHeld = 'true';
         return new Promise(resolve => { window.addEventListener('test-release-poll', () => resolve(status), { once: true }); });
@@ -42,7 +42,7 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
   await standby.waitFor({ timeout: 3000 });
   assert.equal(await standby.getAttribute('aria-checked'), 'false');
   assert.equal(await page.getByLabel('待機時間').isVisible(), false);
-  const notice = page.locator('.resident-standby [role="status"]');
+  const notice = page.locator('.resident-standby__notice[role="status"]');
   assert.equal(await notice.count(), 1);
   await page.getByText('詳細設定', { exact: true }).click();
   assert.equal(await page.getByLabel('待機時間').inputValue(), '2');
@@ -104,7 +104,8 @@ void test('cleanup unknown disables resident controls and is shown as needs clea
       ? { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }
       : { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1, validForMs: 3000,
         standby: 'unknown', registration: 'unknown', caller: 'private-fixture-name', work: 'unknown', cleanup: 'unknown',
-        canRequestOn: false, canRequestOff: false, transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: true }) } };
+        canRequestOn: false, canRequestOff: false, transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: true,
+        sleepPrevention: 'unknown' }) } };
   });
   await page.goto(url); await page.waitForSelector('#resident-panel');
   assert.equal(await page.locator('#resident-switch').isDisabled(), true);
@@ -113,5 +114,35 @@ void test('cleanup unknown disables resident controls and is shown as needs clea
   assert.equal(await page.locator('#resident-state').innerText(), '回収を確かめられないため、停止の成功を示しません。');
   assert.equal(await page.locator('#resident-diagnostic').innerText(), 'RESIDENT_CLEANUP_UNKNOWN');
   assert.doesNotMatch(await page.locator('body').innerText(), /private-fixture-name/);
+  await page.close();
+});
+
+void test('sleep prevention and the lid note use fresh owner status', async () => {
+  const page = await browser.newPage();
+  await page.addInitScript(() => {
+    let revision = 1, sleepPrevention = 'active', available = true;
+    window.addEventListener('test-sleep-prevention', event => {
+      sleepPrevention = (event as CustomEvent<string>).detail; revision++;
+    });
+    window.addEventListener('test-lose-resident-status', () => { available = false; });
+    window.__TAURI__ = { core: { invoke: command => Promise.resolve(command === 'get_status_presentation'
+      ? { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }
+      : !available ? { protocolVersion: 1, source: 'resident-owner', state: 'source-unavailable' }
+      : { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision, validForMs: 3000,
+        standby: 'on', registration: 'authenticated', caller: null, work: 'running', cleanup: 'confirmed',
+        canRequestOn: false, canRequestOff: true, transition: null, standbyUntil: 1_900_000_000_000,
+        standbyEndingSoon: false, standbyExpired: false, sleepPrevention }) } };
+  });
+  await page.goto(url);
+  const sleep = page.locator('#resident-sleep-status');
+  await sleep.getByText('作動中', { exact: true }).waitFor({ timeout: 3000 });
+  assert.equal(await page.getByText('Macの蓋を閉じるとスリープします。').isVisible(), true);
+  assert.equal(await page.getByRole('switch').count(), 1);
+  for (const [value, label] of [['inactive', '作動なし'], ['unknown', '未確認'], ['active', '作動中']]) {
+    await page.evaluate(status => window.dispatchEvent(new CustomEvent('test-sleep-prevention', { detail: status })), value);
+    await sleep.getByText(label, { exact: true }).waitFor();
+  }
+  await page.evaluate(() => window.dispatchEvent(new Event('test-lose-resident-status')));
+  await sleep.getByText('未確認', { exact: true }).waitFor();
   await page.close();
 });

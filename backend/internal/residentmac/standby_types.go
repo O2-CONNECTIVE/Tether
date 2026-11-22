@@ -17,6 +17,14 @@ const (
 	RegistrationReasonGatewayRefused     RegistrationReason = "gateway_refused"
 )
 
+type SleepPrevention string
+
+const (
+	SleepPreventionInactive SleepPrevention = "inactive"
+	SleepPreventionActive   SleepPrevention = "active"
+	SleepPreventionUnknown  SleepPrevention = "unknown"
+)
+
 // StandbyConfig controls resident behavior. Its zero value prevents system
 // idle sleep while owned work is being collected.
 type StandbyConfig struct {

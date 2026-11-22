@@ -13,7 +13,7 @@ import (
 // In-memory protocol checks only; no producer, pipes, sockets or native work.
 func TestCIProducerObservationValidation(t *testing.T) {
 	ciCheckProducerDiagnostics(t)
-	good := statusEnvelope{1, "status", 100, Snapshot{ProtocolVersion: 1, Source: "resident-owner", State: "source-observation", Revision: 1, ValidForMS: 3000, Standby: "off", Registration: "disconnected", Work: "idle", Cleanup: "confirmed", CanRequestOn: true}}
+	good := statusEnvelope{1, "status", 100, Snapshot{ProtocolVersion: 1, Source: "resident-owner", State: "source-observation", Revision: 1, ValidForMS: 3000, Standby: "off", Registration: "disconnected", Work: "idle", Cleanup: "confirmed", CanRequestOn: true, SleepPrevention: "inactive"}}
 	raw, err := Encode(good)
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +30,9 @@ func TestCIProducerObservationValidation(t *testing.T) {
 		bytes.Replace(raw, []byte(`"source":"resident-owner"`), []byte(`"source":"injected"`), 1),
 		bytes.Replace(raw, []byte(`"protocolVersion":1`), []byte(`"protocolVersion":1,"protocolVersion":1`), 1),
 		bytes.Replace(raw, []byte(`"validForMs":3000,`), nil, 1),
+		bytes.Replace(raw, []byte(`,"sleepPrevention":"inactive"`), nil, 1),
+		bytes.Replace(raw, []byte(`"sleepPrevention":"inactive"`), []byte(`"sleepPrevention":true`), 1),
+		bytes.Replace(raw, []byte(`"sleepPrevention":"inactive"`), []byte(`"sleepPrevention":"unrecognized"`), 1),
 	} {
 		if fresh().acceptFrame(bad) == nil {
 			t.Fatal("invalid or incomplete original frame accepted")

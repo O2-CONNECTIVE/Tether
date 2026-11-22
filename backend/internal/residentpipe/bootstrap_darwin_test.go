@@ -187,6 +187,15 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			if err != nil || json.Unmarshal(line, &status) != nil || status.Snapshot.Standby != "off" || status.Snapshot.Registration != "disconnected" {
 				t.Fatal("accepted policy did not remain idle", err)
 			}
+			var statusJSON struct {
+				Snapshot map[string]json.RawMessage `json:"snapshot"`
+			}
+			if err := json.Unmarshal(line, &statusJSON); err != nil {
+				t.Fatal(err)
+			}
+			if sleep := statusJSON.Snapshot["sleepPrevention"]; string(sleep) != `"inactive"` {
+				t.Fatalf("idle sleep prevention = %q, want inactive", sleep)
+			}
 			if tc.cancel {
 				cancel()
 			} else if tc.dialect == jsonInput {
@@ -386,6 +395,9 @@ func TestBootstrapSharedLifetimeReportsCoordinatorCleanup(t *testing.T) {
 				if _, ok := snapshotJSON[key]; !ok {
 					t.Fatal("terminal status missed standby field", key, string(terminal.line))
 				}
+			}
+			if terminal.status.Snapshot.SleepPrevention != residentmac.SleepPreventionUnknown {
+				t.Fatal("unknown cleanup retained a sleep prevention claim", string(terminal.line))
 			}
 			if closed.Type != "closed" || closed.Outcome != "unknown" {
 				t.Fatal("coordinator cleanup failure became confirmed", closed)

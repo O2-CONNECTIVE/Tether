@@ -42,6 +42,7 @@
 - 単発のレスキュー（[#22](https://github.com/O2-CONNECTIVE/Tether/issues/22)）と常駐を、1 つのホスト GUI で、全体のトグル「レスキュー / 常駐」で切り替えて使います。GUI は Mac も Windows も Tauri の同じアプリです（[Tauri UI のデザイントークン案](../tauri-design-tokens.md#ホスト-gui-の基盤)）。
 - トグルは排他です。受付、待機、作業がすべて止まっているときだけ切り替えられます。モードで、作業を実行する OS のアカウントが変わるためです。レスキューはセッションごとの一時的な非管理者のゲスト（[一時guestアカウント](../temporary-guest-account.md)、[ADR 0003](../adr/0003-owned-guest-workload.md)）、常駐は専用のアカウントを持ち続けます。
 - 2 つのモードの共通の部品は、受付と待機の ON/OFF、期限（上の「許可の期限」）、接続の状態（[#401](https://github.com/O2-CONNECTIVE/Tether/issues/401)）、作業の状況、停止と回収、スリープの防止（[#400](https://github.com/O2-CONNECTIVE/Tether/issues/400)）です。
+- 常駐画面のスリープ防止は Go が観測した「作動中」「作動なし」「未確認」を出し、Mac の蓋を閉じるとスリープすることを添えます。設定の切り替えは保存先の決定後に扱います（[#400 の裁定](https://github.com/O2-CONNECTIVE/Tether/issues/400#issuecomment-7070865683)）。
 - 常駐のペアがある Mac でも、レスキューを使えます。
   - 切り替えられるのは、常駐の待機が OFF で、所有作業が残っていないときだけです。
   - 常駐のペアとホスト鍵は消しません。レスキューでは使わず、レスキューはその回だけの鍵とゲストのアカウントで動きます。

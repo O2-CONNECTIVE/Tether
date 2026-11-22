@@ -29,7 +29,7 @@ def main():
                  revision=0, validForMs=3000, standby='off', registration='disconnected',
                  caller=None, work='idle', cleanup='confirmed', canRequestOn=True,
                  canRequestOff=False, transition=None, standbyUntil=None,
-                 standbyEndingSoon=False, standbyExpired=False)
+                 standbyEndingSoon=False, standbyExpired=False, sleepPrevention='inactive')
 
     def status():
         print(status_frame(state, now()), flush=True)
