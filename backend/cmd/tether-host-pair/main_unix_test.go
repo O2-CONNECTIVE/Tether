@@ -455,6 +455,40 @@ func TestExecuteDiscoveryIssuerMismatchDoesNotOpenBrowser(t *testing.T) {
 	}
 }
 
+func TestExecuteOccupiedCallbackDoesNotOpenBrowser(t *testing.T) {
+	callback, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer callback.Close()
+
+	f := newFlowFixture(t, "MATCH", http.StatusOK)
+	home := t.TempDir()
+	policy := filepath.Join(home, "resident-policy.json")
+	d := deps{
+		client: f.client,
+		location: func(context.Context) (string, string, error) {
+			return home, policy, nil
+		},
+		readProtected: func(_ context.Context, path string) ([]byte, error) {
+			return os.ReadFile(path)
+		},
+		callbackAddress: callback.Addr().String(),
+		openBrowser: func(string) error {
+			t.Error("authorization opened for an occupied callback")
+			return nil
+		},
+	}
+	var stderr strings.Builder
+	code := execute(context.Background(), []string{"--gateway", f.gateway.URL, "--issuer", f.issuer.URL, "--client-id", "client"}, io.Discard, &stderr, d)
+	if code != 1 || strings.TrimSpace(stderr.String()) != diagLoginCancelled || f.tokenForm != nil || f.seenHostKey != "" {
+		t.Fatalf("occupied callback: code=%d, diagnostic=%q", code, stderr.String())
+	}
+	if _, err = os.Lstat(policy); !os.IsNotExist(err) {
+		t.Fatalf("policy modified before callback: %v", err)
+	}
+}
+
 func TestExecuteMalformedGatewaySuccessIsUnknownAndPreservesOldFiles(t *testing.T) {
 	f := newFlowFixture(t, "MATCH", 200)
 	f.malformed = true

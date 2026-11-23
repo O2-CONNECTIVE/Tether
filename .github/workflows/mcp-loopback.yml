@@ -108,6 +108,7 @@ jobs:
           GOPROXY: 'off'
           GOSUMDB: 'off'
         run: |
+          go test -mod=readonly -count=1 -tags=tether_development ./cmd/tether-host-pair ./internal/residentmac
           child="$RUNNER_TEMP/pair-child.test"
           go test -mod=readonly -tags=pair_loopback -c -o "$child" ./cmd/tether-host-pair
           for lane in normal race; do

@@ -21,7 +21,6 @@ import (
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -30,6 +29,7 @@ type deps struct {
 	location                  func(context.Context) (home, policyPath string, err error)
 	readProtected             func(context.Context, string) ([]byte, error)
 	openBrowser               func(string) error
+	callbackAddress           string
 	callbackWait, pairTimeout time.Duration
 }
 type callbackResult struct {
@@ -171,7 +171,11 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 		fmt.Fprintln(stderr, diagLoginCancelled)
 		return 1
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	callbackAddress := d.callbackAddress
+	if callbackAddress == "" {
+		callbackAddress = "127.0.0.1:0"
+	}
+	listener, err := net.Listen("tcp4", callbackAddress)
 	if err != nil {
 		fmt.Fprintln(stderr, diagLoginCancelled)
 		return 1
@@ -324,5 +328,7 @@ func newCallback(state string) (http.Handler, <-chan callbackResult) {
 }
 func main() {
 	client := &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	os.Exit(execute(context.Background(), os.Args[1:], os.Stdout, os.Stderr, deps{client: client, location: residentmac.EnrolledLocation, openBrowser: openBrowser, callbackWait: 5 * time.Minute, pairTimeout: 60 * time.Second}))
+	d := deps{client: client, openBrowser: openBrowser, callbackWait: 5 * time.Minute, pairTimeout: 60 * time.Second}
+	configurePairing(&d)
+	os.Exit(execute(context.Background(), os.Args[1:], os.Stdout, os.Stderr, d))
 }
