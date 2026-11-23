@@ -69,7 +69,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu(); let item = NSMenuItem(); menu.addItem(item)
         item.submenu = NSMenu(); item.submenu?.addItem(withTitle: "停止して終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         NSApp.mainMenu = menu
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.update() }
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            // Menus pause the default mode. Keep draining the pipe without
+            // changing controls or terminating the app during menu tracking.
+            if RunLoop.current.currentMode == .eventTracking {
+                self?.resident.poll()
+            } else {
+                self?.update()
+            }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .default)
+        RunLoop.main.add(timer, forMode: .eventTracking)
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         update()
     }
