@@ -1,4 +1,4 @@
-//go:build tether_development && darwin && cgo
+//go:build tether_development && darwin && cgo && !osusergo
 
 package main
 

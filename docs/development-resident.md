@@ -32,7 +32,9 @@ go build -tags tether_development -o tether-dev-host-pair ./cmd/tether-host-pair
 認証基盤には `http://127.0.0.1:51847/callback` を正確に登録します。
 このポートが使用中なら、ログイン画面を開く前に失敗します。
 ChatGPT の MCP クライアントとは別の public client と audience を使用し、
-期限付きの開発用 gateway にその組み合わせを設定します。
+認証基盤でその audience を発行できるクライアントを開発用の1件に限定します。
+期限付きの開発用 gateway にその組み合わせを設定し、
+[開発環境の Worker のペア登録口](../deploy/cloudflare/native/README.md#常駐制御の明示的な中継候補)を有効にします。
 このビルドとローカル試験で OAuth クライアントの登録、gateway の配備、実接続は行いません。
 
 ## 常駐の操作
@@ -117,8 +119,8 @@ source 検証の入口（実 enrollment/接続は開始しない）:
 
 ```sh
 cd backend
-go test -tags tether_development ./cmd/tether-dev-resident ./internal/residentmac ./internal/residentpipe
-go vet -tags tether_development ./cmd/tether-dev-resident ./internal/residentmac ./internal/residentpipe
+go test -tags tether_development ./cmd/tether-host-pair ./cmd/tether-dev-resident ./internal/residentmac ./internal/residentpipe
+go vet -tags tether_development ./cmd/tether-host-pair ./cmd/tether-dev-resident ./internal/residentmac ./internal/residentpipe
 ```
 
 Darwin/cgo の実起動、ChatGPT の登録・同意、認証済み standby、5分を超える再接続、

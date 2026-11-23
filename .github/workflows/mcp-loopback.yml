@@ -111,12 +111,21 @@ jobs:
           go test -mod=readonly -count=1 -tags=tether_development ./cmd/tether-host-pair ./internal/residentmac
           child="$RUNNER_TEMP/pair-child.test"
           go test -mod=readonly -tags=pair_loopback -c -o "$child" ./cmd/tether-host-pair
-          for lane in normal race; do
+          dev_child="$RUNNER_TEMP/pair-child-development.test"
+          go test -mod=readonly -tags=pair_loopback,tether_development -c -o "$dev_child" ./cmd/tether-host-pair
+          for lane in normal race development; do
             flags=()
+            pair_child="$child"
+            expected_redirect=""
             if [ "$lane" = race ]; then flags=(-race); fi
+            if [ "$lane" = development ]; then
+              pair_child="$dev_child"
+              expected_redirect="http://127.0.0.1:51847/callback"
+            fi
             report="$RUNNER_TEMP/pair-loopback-$lane.jsonl"
             code=0
-            TETHER_PAIR_CHILD_BINARY="$child" go test -mod=readonly -count=1 -json -p=1 -parallel=1 -timeout=90s \
+            TETHER_PAIR_CHILD_BINARY="$pair_child" TETHER_PAIR_LOOPBACK_EXPECT_REDIRECT="$expected_redirect" \
+              go test -mod=readonly -count=1 -json -p=1 -parallel=1 -timeout=90s \
               -tags=pair_loopback -run '^TestPairLoopbackE2E$' "${flags[@]}" ./cmd/rescue-gateway > "$report" || code=$?
             python3 - "$report" "$code" "$lane" <<'PY'
           import json, pathlib, sys
