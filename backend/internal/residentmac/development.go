@@ -23,14 +23,24 @@ func developmentPolicy(enrolled string) (string, error) {
 	return home + "/" + developmentPolicyRelative, nil
 }
 
+// DevelopmentEnrolledLocation is the fixed per-account location shared by the
+// development pairing CLI and resident loader.
+func DevelopmentEnrolledLocation(ctx context.Context) (home, policyPath string, err error) {
+	home, enrolled, err := EnrolledLocation(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	selected, err := developmentPolicy(enrolled)
+	if err != nil {
+		return "", "", err
+	}
+	return home, selected, nil
+}
+
 // Build-tag-only composition. Loading preserves the real protected loader and
 // fixed operation/authentication checks; it neither enrolls nor starts ON.
 func LoadDevelopmentStandby(ctx context.Context, options ...StandbyConfig) (*Standby, error) {
-	enrolled, err := currentEnrolledPolicy(ctx)
-	if err != nil {
-		return nil, err
-	}
-	selected, err := developmentPolicy(enrolled)
+	_, selected, err := DevelopmentEnrolledLocation(ctx)
 	if err != nil {
 		return nil, err
 	}

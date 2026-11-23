@@ -58,6 +58,7 @@ func TestPairLoopbackE2E(t *testing.T) {
 	if _, err := os.Stat(child); err != nil {
 		t.Fatal("pair child binary unavailable", err)
 	}
+	expectedRedirect := os.Getenv("TETHER_PAIR_LOOPBACK_EXPECT_REDIRECT")
 	root, err := os.MkdirTemp(".", ".pair-loopback-")
 	if err != nil {
 		t.Fatal("create protected loopback directory", err)
@@ -98,6 +99,9 @@ func TestPairLoopbackE2E(t *testing.T) {
 		audience := "pair-api"
 		if r.Form.Get("code") == "mcp-loopback-code" {
 			audience = resource
+		} else if expectedRedirect != "" && r.Form.Get("redirect_uri") != expectedRedirect {
+			http.Error(w, "invalid redirect URI", http.StatusBadRequest)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"access_token": token(audience), "token_type": "Bearer"})
@@ -194,6 +198,9 @@ func TestPairLoopbackE2E(t *testing.T) {
 	}
 	policyPath := filepath.Join(home, "Library", "Application Support", "O2-CONNECTIVE", "Tether", "resident-policy.json")
 	childEnv := []string{"TETHER_PAIR_LOOPBACK_CHILD=1", "TETHER_PAIR_LOOPBACK_HOME=" + home, "TETHER_PAIR_LOOPBACK_POLICY=" + policyPath, "TETHER_PAIR_LOOPBACK_GATEWAY=" + baseURL, "TETHER_PAIR_LOOPBACK_ISSUER=" + issuerURL, "TETHER_PAIR_LOOPBACK_CLIENT_ID=pair-client", "TETHER_PAIR_LOOPBACK_CA=" + caPath}
+	if expectedRedirect != "" {
+		childEnv = append(childEnv, "TETHER_PAIR_LOOPBACK_EXPECT_REDIRECT="+expectedRedirect)
+	}
 	runPairChild(t, child, childEnv)
 	first := loadPairPolicy(t, policyPath)
 	loadStandbyPolicy(t, policyPath)

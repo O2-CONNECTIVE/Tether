@@ -1,7 +1,7 @@
 # 限定開発用の常駐 CLI 候補
 
-この source 候補は `tether_development` build tag を明示した専用
-`cmd/tether-dev-resident` だけです。通常の GUI、sealed producer、署名 gate、
+この source 候補は `tether_development` build tag を明示した専用の
+常駐 CLI とペア登録 CLI です。通常の GUI、sealed producer、署名 gate、
 通常 `tether-host` は変更しません。Developer ID の成功を偽装せず、利用者が
 個別に承認したローカル開発物を直接起動する別の信頼モデルです。
 製品と同等の配布・publisher・native launcher 保証はありません。
@@ -14,6 +14,30 @@ OS account home の下の固定
 この変更はそれらを実施しません。実試験は別の dev host/principal identity と
 credential を使用し、製品 enrollment/credential をコピー・共有しません。固定した
 別ファイル名だけでは認証 identity の隔離は強制されません。
+
+## 開発用ホストの OAuth ペア登録
+
+`backend` で次のコマンドを実行すると、開発用のペア登録 CLI をビルドできます。
+
+```sh
+go build -tags tether_development -o tether-dev-host-pair ./cmd/tether-host-pair
+```
+
+`tether-dev-host-pair` は [ホストのペア登録](host-pairing.md) と同じ
+`--gateway`、`--issuer`、`--client-id` を受け取ります。鍵と policy は
+上記の開発用ディレクトリへ保存します。ペア登録後は開発用常駐を起動し直してください。
+同じ登録枠にペア登録すると、前の鍵が置き換わります。開発専用の枠を使い、
+既存の登録がある場合は置き換えの対象を実行前に確認します。
+
+認証基盤には `http://127.0.0.1:51847/callback` を正確に登録します。
+このポートが使用中なら、ログイン画面を開く前に失敗します。
+ChatGPT の MCP クライアントとは別の public client と audience を使用し、
+認証基盤でその audience を発行できるクライアントを開発用の1件に限定します。
+期限付きの開発用 gateway にその組み合わせを設定し、
+[開発環境の Worker のペア登録口](../deploy/cloudflare/native/README.md#常駐制御の明示的な中継候補)を有効にします。
+このビルドとローカル試験で OAuth クライアントの登録、gateway の配備、実接続は行いません。
+
+## 常駐の操作
 
 `foreground` は既存の専用 stdin/stdout pipe 契約を使います。TTY や通常ファイル
 は対象外です。`status`、fresh revision に対する `on` / `extend` / `off`、`close`
@@ -95,8 +119,8 @@ source 検証の入口（実 enrollment/接続は開始しない）:
 
 ```sh
 cd backend
-go test -tags tether_development ./cmd/tether-dev-resident ./internal/residentmac ./internal/residentpipe
-go vet -tags tether_development ./cmd/tether-dev-resident ./internal/residentmac ./internal/residentpipe
+go test -tags tether_development ./cmd/tether-host-pair ./cmd/tether-dev-resident ./internal/residentmac ./internal/residentpipe
+go vet -tags tether_development ./cmd/tether-host-pair ./cmd/tether-dev-resident ./internal/residentmac ./internal/residentpipe
 ```
 
 Darwin/cgo の実起動、ChatGPT の登録・同意、認証済み standby、5分を超える再接続、

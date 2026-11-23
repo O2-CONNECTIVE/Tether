@@ -42,16 +42,22 @@ func TestPairLoopbackChild(t *testing.T) {
 	defer client.CloseIdleConnections()
 	d := deps{
 		client:       client,
-		location:     func(context.Context) (string, string, error) { return home, policyPath, nil },
 		callbackWait: 5 * time.Second,
 		pairTimeout:  5 * time.Second,
 	}
+	configurePairing(&d)
+	d.location = func(context.Context) (string, string, error) { return home, policyPath, nil }
 	d.openBrowser = func(raw string) error {
 		authorization, err := url.Parse(raw)
 		if err != nil {
 			return err
 		}
-		callback, err := url.Parse(authorization.Query().Get("redirect_uri"))
+		redirect := authorization.Query().Get("redirect_uri")
+		if want := os.Getenv("TETHER_PAIR_LOOPBACK_EXPECT_REDIRECT"); want != "" && redirect != want {
+			t.Errorf("authorization redirect=%q, want %q", redirect, want)
+			return fmt.Errorf("unexpected authorization redirect")
+		}
+		callback, err := url.Parse(redirect)
 		if err != nil {
 			return err
 		}
