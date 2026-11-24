@@ -110,6 +110,31 @@ func TestLocalConfigAcceptsExactMapping(t *testing.T) {
 	}
 }
 
+func TestPairingConsentConfigurationIsStrictHTTPS(t *testing.T) {
+	// The gateway must not redirect a browser or exchange a code at an unconfigured endpoint.
+	if _, err := parseLocalConfig(encode(t, pairingDoc(t)), configPath); err != nil {
+		t.Fatalf("valid consent configuration rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(map[string]any)
+	}{
+		{"unknown consent member", func(c map[string]any) { c["extra"] = true }},
+		{"missing required member", func(c map[string]any) { delete(c, "token_endpoint") }},
+		{"non-HTTPS endpoint", func(c map[string]any) { c["authorization_endpoint"] = "http://idp.example.invalid/authorize" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := pairingDoc(t)
+			pairing := doc["pairing"].(map[string]any)
+			config := pairing["consent"].(map[string]any)
+			tc.change(config)
+			if _, err := parseLocalConfig(encode(t, doc), configPath); err == nil {
+				t.Fatal("invalid consent configuration was accepted")
+			}
+		})
+	}
+}
+
 func TestLocalConfigKeyOrderFollowsPrincipals(t *testing.T) {
 	doc := localDoc(t)
 	keys := doc["principal_keys"].([]any)
@@ -265,6 +290,7 @@ func TestPairingConfigRejectsConflictingSettingsA13(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			doc := localDoc(t)
+			tc.pairing["consent"] = pairingConsentDoc()
 			doc["pairing"] = tc.pairing
 			if tc.edit != nil {
 				tc.edit(doc)
@@ -275,7 +301,7 @@ func TestPairingConfigRejectsConflictingSettingsA13(t *testing.T) {
 		})
 	}
 	accessDoc := accessLocalDoc(t)
-	accessDoc["pairing"] = map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}
+	accessDoc["pairing"] = map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}, "consent": pairingConsentDoc()}
 	if _, err := parseLocalConfig(encode(t, accessDoc), configPath); err == nil {
 		t.Fatal("A13 expected pairing with Access mode to be rejected")
 	}
@@ -293,7 +319,7 @@ func TestPairedHostRequiresPairingConfigA13(t *testing.T) {
 func TestPairedHostRequiresExactlyOnePrincipalA13(t *testing.T) {
 	// A paired host key belongs to exactly one resident principal.
 	doc := localDoc(t)
-	doc["pairing"] = map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}
+	doc["pairing"] = map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}, "consent": pairingConsentDoc()}
 	doc["hosts"] = []any{map[string]any{"label": "mac-1", "paired": true, "principals": []any{"member-1", "member-2"}}}
 	if _, err := parseLocalConfig(encode(t, doc), configPath); err == nil {
 		t.Fatal("A13 expected paired host with multiple principals to be rejected")

@@ -35,6 +35,7 @@ func TestPairingRegistryRejectsInvalidRecordsA14(t *testing.T) {
 		{"issuer mismatch", []storedPairRecord{{HostLabel: "mac-1", PublicKey: authorized(t, 0x31), Fingerprint: fingerprint(t, 0x31), Issuer: "https://other.example.invalid/", Subject: "synthetic-subject-1", RegisteredAt: "2026-11-18T00:00:00Z"}}},
 		{"subject mismatch", []storedPairRecord{{HostLabel: "mac-1", PublicKey: authorized(t, 0x31), Fingerprint: fingerprint(t, 0x31), Issuer: "https://issuer.example.invalid/", Subject: "synthetic-subject-2", RegisteredAt: "2026-11-18T00:00:00Z"}}},
 		{"malformed registration time", []storedPairRecord{{HostLabel: "mac-1", PublicKey: authorized(t, 0x31), Fingerprint: fingerprint(t, 0x31), Issuer: "https://issuer.example.invalid/", Subject: "synthetic-subject-1", RegisteredAt: "yesterday"}}},
+		{"invalid operation marker", []storedPairRecord{{HostLabel: "mac-1", PublicKey: authorized(t, 0x31), Fingerprint: fingerprint(t, 0x31), Issuer: "https://issuer.example.invalid/", Subject: "synthetic-subject-1", RegisteredAt: "2026-11-18T00:00:00Z", Operation: "bad"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, marshalErr := json.Marshal(storedPairRegistry{Hosts: tc.records})
@@ -86,5 +87,14 @@ func TestPairingRegistryRoundTripsWrittenRecordsA14(t *testing.T) {
 	}
 	if _, err := encodePairingRegistry([]agentgateway.PairRecord{{HostLabel: "mac-1", HostKey: []byte("not a key")}}); err == nil {
 		t.Fatal("an unparsable host key must not be written")
+	}
+	want.Operation = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	raw, err = encodePairingRegistry([]agentgateway.PairRecord{want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = validatePairingRegistry(raw, cfg)
+	if err != nil || len(got) != 1 || got[0].Operation != want.Operation {
+		t.Fatalf("operation marker did not round trip: got=%+v err=%v", got, err)
 	}
 }

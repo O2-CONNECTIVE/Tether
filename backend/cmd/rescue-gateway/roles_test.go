@@ -16,7 +16,7 @@ func roles(doc map[string]any, i int, r ...string) {
 
 func pairedDoc(t *testing.T) map[string]any {
 	d := residentDoc(t)
-	d["pairing"] = map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}}
+	d["pairing"] = map[string]any{"registry_path": "/tmp/pair.json", "audience": "pair-api", "client_id": "pair-client", "token_types": []any{"at+jwt"}, "consent": pairingConsentDoc()}
 	d["hosts"] = []any{
 		map[string]any{"label": "mac-1", "paired": true, "principals": []any{"member-1"}},
 		map[string]any{"label": "mac-2", "public_key": authorized(t, 0x22), "principals": []any{"member-2"}},

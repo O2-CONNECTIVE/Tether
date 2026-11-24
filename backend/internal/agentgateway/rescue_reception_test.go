@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +63,23 @@ func rescueReceptionGateway(t *testing.T, now *time.Time) *Gateway {
 		t.Fatal(err)
 	}
 	return g
+}
+
+type rescueReceptionTestClock struct {
+	mu  sync.RWMutex
+	now time.Time
+}
+
+func (c *rescueReceptionTestClock) Now() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.now
+}
+
+func (c *rescueReceptionTestClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
 }
 
 func rescueNonce(b byte) []byte { return bytes.Repeat([]byte{b}, RescueNonceSize) }
@@ -344,17 +362,24 @@ func TestRescueReceptionLimits(t *testing.T) {
 	})
 	t.Run("the 31st new reception in a minute is rate limited", func(t *testing.T) {
 		now := time.Unix(1_800_000_000, 0)
-		g := rescueReceptionGateway(t, &now)
+		clock := &rescueReceptionTestClock{now: now}
+		cfg := rescueReceptionConfig(t, &now)
+		cfg.Clock = clock.Now
+		g, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = g.Close(context.Background()) })
 		for i := range 30 { // the design value: rescueAdmitLimit
 			if err := g.AdmitRescue(); err != nil {
 				t.Fatalf("AdmitRescue #%d = %v", i+1, err)
 			}
-			now = now.Add(time.Second)
+			clock.Advance(time.Second)
 		}
 		if err := g.AdmitRescue(); !errors.Is(err, ErrRescueRate) {
 			t.Fatalf("AdmitRescue #31 within a minute = %v, want rate", err)
 		}
-		now = now.Add(time.Minute - 30*time.Second + time.Second)
+		clock.Advance(time.Minute - 30*time.Second + time.Second)
 		if err := g.AdmitRescue(); err != nil {
 			t.Fatalf("AdmitRescue once the first left the window = %v", err)
 		}
