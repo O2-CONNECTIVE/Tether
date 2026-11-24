@@ -105,6 +105,7 @@ func TestAccessTokenDoesNotFollowTokenRedirect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
+	browserReceiptErr := make(chan error, 1)
 	var tokenRequests int
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.String() {
@@ -141,18 +142,26 @@ func TestAccessTokenDoesNotFollowTokenRedirect(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			response, err := http.DefaultClient.Do(callback)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer response.Body.Close()
-			if response.StatusCode != http.StatusOK {
-				t.Fatalf("callback returned %d", response.StatusCode)
-			}
+			go func() {
+				response, err := http.DefaultClient.Do(callback)
+				if err != nil {
+					browserReceiptErr <- err
+					return
+				}
+				defer response.Body.Close()
+				body, err := io.ReadAll(response.Body)
+				if err == nil && (response.StatusCode != http.StatusOK || string(body) != browserReceipt) {
+					err = errors.New("browser did not receive the complete receipt")
+				}
+				browserReceiptErr <- err
+			}()
 			return nil
 		},
 	})
 	if err == nil || token != "" || tokenRequests != 1 {
 		t.Fatalf("expected a rejected redirect after one token POST, got %d POSTs and error %v", tokenRequests, err)
+	}
+	if err := <-browserReceiptErr; err != nil {
+		t.Fatalf("browser receipt after token exchange failed: %v", err)
 	}
 }
