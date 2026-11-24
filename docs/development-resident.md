@@ -29,6 +29,14 @@ go build -tags tether_development -o tether-dev-host-pair ./cmd/tether-host-pair
 同じ登録枠にペア登録すると、前の鍵が置き換わります。開発専用の枠を使い、
 既存の登録がある場合は置き換えの対象を実行前に確認します。
 
+常駐 policy は従来の `host_key_path` による PEM 参照と、
+`host_key_store: "keychain"` による Keychain 参照を相互排他で受け付けます。
+後者は `host_key_path` を持たず、`host_key_fingerprint` を Keychain account として使います。
+形式を混在させた policy や Keychain 読込み失敗時に PEM へ切り替える動作はありません。
+この PR では policy を Keychain 形式で書く producer を追加せず、現在の開発用 pair CLI は PEM 形式を出力します。
+署名済み製品の Keychain entitlement 手順と未照合範囲は
+[Mac署名release手順](mac-signed-release-build.md#keychain-access-group-の署名手順未照合)を参照してください。
+
 認証基盤には `http://127.0.0.1:51847/callback` を正確に登録します。
 このポートが使用中なら、ログイン画面を開く前に失敗します。
 ChatGPT の MCP クライアントとは別の public client と audience を使用し、

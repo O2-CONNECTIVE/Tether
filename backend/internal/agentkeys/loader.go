@@ -12,6 +12,7 @@ import (
 	"errors"
 	"runtime"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostkeychain"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -27,8 +28,11 @@ var (
 	// ErrCleanup: at least one held handle could not be confirmed closed. No
 	// signer is returned and the caller should treat the process state as
 	// uncertain rather than retrying in a loop.
-	ErrCleanup = errors.New("agentkeys: key handle cleanup unconfirmed")
+	ErrCleanup  = errors.New("agentkeys: key handle cleanup unconfirmed")
+	ErrKeychain = errors.New("agentkeys: Keychain host key unavailable")
 )
+
+const StoreKeychain = "keychain"
 
 // Config is chosen by the local trusted composition (the process owner's own
 // launcher). It must not be derived from remote commands, HTTP headers,
@@ -44,6 +48,8 @@ type Config struct {
 	// Fingerprint is the independently recorded "SHA256:..." public-key
 	// fingerprint (ssh.FingerprintSHA256), not a hash of the file.
 	Fingerprint string
+	// KeyStore is empty for the legacy protected PEM path or StoreKeychain.
+	KeyStore string
 }
 
 // LoadCurrentUser opens cfg.Path once for the current account, verifies the
@@ -56,7 +62,30 @@ type Config struct {
 // The returned signer holds private key material in Go memory for the
 // caller's lifetime; Go cannot guarantee that every copy is erased.
 func LoadCurrentUser(ctx context.Context, cfg Config) (ssh.Signer, error) {
-	return load(ctx, nativeStyle, nativeKernel, cfg)
+	switch cfg.KeyStore {
+	case "":
+		return load(ctx, nativeStyle, nativeKernel, cfg)
+	case StoreKeychain:
+		if ctx == nil || cfg.Path != "" || !validFingerprint(cfg.Fingerprint) {
+			return nil, ErrConfig
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			return nil, ErrConfig
+		}
+		if ctx.Err() != nil {
+			return nil, ErrDenied
+		}
+		signer, err := hostkeychain.Load(cfg.Fingerprint)
+		if err != nil {
+			return nil, errors.Join(ErrKeychain, err)
+		}
+		if ctx.Err() != nil {
+			return nil, ErrDenied
+		}
+		return signer, nil
+	default:
+		return nil, ErrConfig
+	}
 }
 
 type readOutcome struct {
