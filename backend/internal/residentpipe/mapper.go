@@ -31,7 +31,7 @@ type Snapshot struct {
 	StandbyEndingSoon  bool        `json:"standbyEndingSoon"` // from ten minutes before standbyUntil
 	StandbyExpired     bool        `json:"standbyExpired"`    // the last cycle ended because standby ran out
 
-	PreviousCleanup string                       `json:"previousCleanup"`
+	PreviousCleanup string                      `json:"previousCleanup"`
 	SleepPrevention residentmac.SleepPrevention `json:"sleepPrevention"`
 }
 
