@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ var errRegistry = errors.New("rescue-gateway: invalid pairing registry")
 type registryOps struct {
 	readTrust func(context.Context, string) ([]byte, error)
 	rename    func(string, string) error
+	syncFile  func(*os.File) error
 	syncDir   func(string) error
 	// diagnostic receives fixed operator text; it never carries paths or identities.
 	diagnostic io.Writer
@@ -34,6 +36,7 @@ type storedPairRecord struct {
 	Issuer       string `json:"issuer"`
 	Subject      string `json:"subject"`
 	RegisteredAt string `json:"registered_at"`
+	Operation    string `json:"operation,omitempty"`
 }
 
 type storedPairRegistry struct {
@@ -72,12 +75,15 @@ func validatePairingRegistry(raw []byte, cfg localConfig) ([]agentgateway.PairRe
 		principals[k.Fingerprint] = true
 	}
 	for _, item := range items {
-		f, err := agentwire.Fields(item, "label", "public_key", "fingerprint", "issuer", "subject", "registered_at")
-		if err != nil || len(f) != 6 {
+		f, err := agentwire.Fields(item, "label", "public_key", "fingerprint", "issuer", "subject", "registered_at", "operation")
+		if err != nil || (len(f) != 6 && len(f) != 7) {
 			return nil, errRegistry
 		}
 		var x storedPairRecord
 		valid := decodeString(f["label"], &x.HostLabel) && decodeString(f["public_key"], &x.PublicKey) && decodeString(f["fingerprint"], &x.Fingerprint) && decodeString(f["issuer"], &x.Issuer) && decodeString(f["subject"], &x.Subject) && decodeString(f["registered_at"], &x.RegisteredAt)
+		if rawOperation, present := f["operation"]; present {
+			valid = valid && decodeString(rawOperation, &x.Operation) && agentgateway.ValidPairOperationID(x.Operation)
+		}
 		wipeMembers(f)
 		if !valid || !labels[x.HostLabel] {
 			return nil, errRegistry
@@ -98,7 +104,7 @@ func validatePairingRegistry(raw []byte, cfg localConfig) ([]agentgateway.PairRe
 			return nil, errRegistry
 		}
 		keys[string(key.Marshal())] = true
-		records = append(records, agentgateway.PairRecord{HostLabel: x.HostLabel, HostKey: key.Marshal(), Issuer: x.Issuer, Subject: x.Subject, RegisteredAt: tm})
+		records = append(records, agentgateway.PairRecord{HostLabel: x.HostLabel, HostKey: key.Marshal(), Issuer: x.Issuer, Subject: x.Subject, RegisteredAt: tm, Operation: x.Operation})
 	}
 	return records, nil
 }
@@ -129,11 +135,14 @@ func encodePairingRegistry(records []agentgateway.PairRecord) ([]byte, error) {
 	records = slices.Clone(records)
 	slices.SortFunc(records, func(a, b agentgateway.PairRecord) int { return strings.Compare(a.HostLabel, b.HostLabel) })
 	for _, r := range records {
+		if r.Operation != "" && !agentgateway.ValidPairOperationID(r.Operation) {
+			return nil, errRegistry
+		}
 		k, err := ssh.ParsePublicKey(r.HostKey)
 		if err != nil {
 			return nil, errRegistry
 		}
-		d.Hosts = append(d.Hosts, storedPairRecord{r.HostLabel, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k))), ssh.FingerprintSHA256(k), r.Issuer, r.Subject, r.RegisteredAt.UTC().Format(time.RFC3339)})
+		d.Hosts = append(d.Hosts, storedPairRecord{HostLabel: r.HostLabel, PublicKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k))), Fingerprint: ssh.FingerprintSHA256(k), Issuer: r.Issuer, Subject: r.Subject, RegisteredAt: r.RegisteredAt.UTC().Format(time.RFC3339), Operation: r.Operation})
 	}
 	return json.Marshal(d)
 }

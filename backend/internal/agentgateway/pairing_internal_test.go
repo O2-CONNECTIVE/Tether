@@ -1,3 +1,5 @@
+//go:build tether_development
+
 package agentgateway
 
 import (
