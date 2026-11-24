@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -53,6 +54,9 @@ func TestAccessTokenDoesNotFollowDiscoveryRedirect(t *testing.T) {
 }
 
 func TestAccessTokenDoesNotFollowTokenRedirect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
 	var tokenRequests int
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.String() {
@@ -76,7 +80,7 @@ func TestAccessTokenDoesNotFollowTokenRedirect(t *testing.T) {
 			return nil, nil
 		}
 	})}
-	token, err := AccessToken(context.Background(), Config{
+	token, err := AccessToken(ctx, Config{
 		Client: client, Issuer: "https://id.example", ClientID: "test-client",
 		OpenBrowser: func(ctx context.Context, raw string) {
 			authURL, err := url.Parse(raw)
@@ -100,6 +104,6 @@ func TestAccessTokenDoesNotFollowTokenRedirect(t *testing.T) {
 		},
 	})
 	if err == nil || token != "" || tokenRequests != 1 {
-		t.Fatal("expected the token redirect to be rejected after a single token POST")
+		t.Fatalf("expected a rejected redirect after one token POST, got %d POSTs and error %v", tokenRequests, err)
 	}
 }
