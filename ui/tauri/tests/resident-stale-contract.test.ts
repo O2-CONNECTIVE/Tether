@@ -6,6 +6,43 @@ import { createResidentController } from '../src/resident/controller.ts';
 import type { Intent, Observation } from '../src/resident/model.ts';
 const driver = readFileSync(new URL('../src-tauri/tests/resident-gui/drive.js', import.meta.url), 'utf8');
 
+for (const read of ['poll', 'visibility', 'menu']) {
+  void test(`unresolved startup expires even if the next read comes from ${read}`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let now = 0, reads = 0, diagnostic = '';
+    let reply: (value: unknown) => void = () => {};
+    const source = { protocolVersion: 1, source: 'resident-owner' };
+    const controller = createResidentController({ now: () => now, onChange: state => { diagnostic = state.diagnostic; },
+      invoke: command => {
+        assert.equal(command, 'get_resident_status');
+        if (++reads === 2) return new Promise(resolve => { reply = resolve; });
+        return Promise.resolve({ ...source, state: 'source-startup-checking' });
+      }, pollMs: 2500 });
+    try {
+      await controller.refresh();
+      assert.equal(diagnostic, 'RESIDENT_STARTUP_CHECKING');
+      now = 2500;
+      if (read === 'visibility') {
+        await controller.setPageVisible(false);
+        void controller.setPageVisible(true);
+      } else if (read === 'menu') {
+        void controller.stopFromMenu();
+      } else {
+        t.mock.timers.tick(2500);
+      }
+      assert.equal(reads, 2);
+      now = 3000; t.mock.timers.tick(500);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(diagnostic, 'RESIDENT_SOURCE_UNAVAILABLE');
+      reply({ ...source, state: 'source-policy-rejected' });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(diagnostic, 'RESIDENT_SOURCE_UNAVAILABLE');
+      t.mock.timers.tick(3000);
+      assert.equal(reads, 2);
+    } finally { controller.dispose(); }
+  });
+}
+
 // Real controller + GUI driver, modeled ordered producer/Tracking boundary.
 // This is not Go/Rust IPC or evidence of the particular failed hosted run.
 async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' | 'unknown') {

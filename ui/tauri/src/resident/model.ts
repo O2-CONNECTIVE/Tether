@@ -11,7 +11,9 @@ export type Observation = { revision: number; validForMs: number; standby: 'off'
   canRequestOn: boolean; canRequestOff: boolean; transition: Transition | null;
   standbyUntil: number | null; standbyEndingSoon: boolean; standbyExpired: boolean;
   sleepPrevention: 'inactive' | 'active' | 'unknown' };
-type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner'; observation: Observation | null };
+export type ResidentStartup = 'checking' | 'policy-rejected';
+type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner' } & (
+  { observation: Observation; startup?: never } | { observation: null; startup?: ResidentStartup });
 export type ResidentInvoke = (command: 'get_resident_status' | 'request_resident_intent', args: { request: {
   protocolVersion: 1; requestId?: number; expectedRevision?: number; intent?: RequestIntent; standbyHours?: StandbyHours } }) => Promise<unknown>;
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -23,7 +25,13 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
   if (!record(value) || value.protocolVersion !== 1) return;
   if (value.source === 'unsupported' && keys(value, 'protocolVersion,source')) return { source: 'unsupported' };
   if (value.source !== 'resident-owner') return;
-  if (value.state === 'source-unavailable' && keys(value, 'protocolVersion,source,state')) return { source: 'resident-owner', observation: null };
+  if (keys(value, 'protocolVersion,source,state')) {
+    if (value.state === 'source-unavailable') return { source: 'resident-owner', observation: null };
+    if (value.state === 'source-startup-checking' || value.state === 'source-policy-rejected') {
+      const startup = value.state === 'source-startup-checking' ? 'checking' : 'policy-rejected';
+      return { source: 'resident-owner', observation: null, startup };
+    }
+  }
   const observationKeys = 'protocolVersion,source,state,revision,validForMs,standby,registration,caller,work,cleanup,canRequestOn,canRequestOff,transition,standbyUntil,standbyEndingSoon,standbyExpired,sleepPrevention';
   const hasRegistrationReason = Object.hasOwn(value, 'registrationReason');
   if (value.state !== 'source-observation' || !keys(value, hasRegistrationReason ? `${observationKeys},registrationReason` : observationKeys)) return;

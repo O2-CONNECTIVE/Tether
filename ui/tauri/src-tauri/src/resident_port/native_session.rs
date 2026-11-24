@@ -1,9 +1,10 @@
 //! Same closed native startup and its typed port; release identity is required.
 use super::{
     duplex::owner::{native::NativeIoSupervisor, BoundDuplex},
+    model::Status,
     ResidentPort,
 };
-use crate::standby_lifecycle::native::NativeOuterOwner;
+use crate::standby_lifecycle::{native::NativeOuterOwner, Outcome};
 use std::io;
 
 pub(crate) struct NativeSession {
@@ -33,6 +34,20 @@ impl NativeSession {
     }
     pub(crate) fn port(&self) -> &ResidentPort {
         &self.port
+    }
+    pub(crate) fn status(&self) -> Status {
+        if self.port.has_source() {
+            return self.port.current();
+        }
+        // Only the original, joined owner can prove a startup policy refusal.
+        let joined = self.owner.poll_join();
+        if self.owner.outcome() == Some(Outcome::StartupRejected) {
+            Status::policy_rejected()
+        } else if joined.is_none() {
+            Status::startup_checking()
+        } else {
+            self.port.current()
+        }
     }
     pub(crate) fn owner(&self) -> &NativeOuterOwner {
         &self.owner

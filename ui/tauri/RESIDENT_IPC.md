@@ -21,7 +21,11 @@ Tauriの当該版はconfigの親directoryから標準名を読むため、test c
 
 ## 受付と観測
 
-`get_resident_status`はstrict request versionを検査し、同じportの観測だけを返します。
+`get_resident_status`はstrict request versionを検査し、同じportの観測を返します。macOSの署名候補で元のportに観測源を接続できなかったときは、同じnative sessionの起動結果を返します。
+起動結果の応答は`protocolVersion: 1`、`source: "resident-owner"`、`state`の3キーです。
+元のownerの回収を確認中は`state: "source-startup-checking"`を返し、同じ画面での再取得と応答待ちは合計3秒を上限にします。画面の再表示やメニュー経由の照会も、確認中は同じ期限を使います。
+元のproducerと監視側を回収し、起動時の登録設定の拒否を確定できた場合は`state: "source-policy-rejected"`を返します。
+ほかの起動不可と確認期限切れは未確認と表示します。いずれも待機操作を許可しません。
 `request_resident_intent`は既存admissionへ一度だけsubmitし、既存Tauri async runtimeのblocking workerでReceipt receiverを待ちます。
 Tauriへは`request`をJSON文字列で渡します。Rustは文書を直接デシリアライズして、重複キーや未知のキーを拒みます。
 UI thread上で待たず、送信者切断はunknown、task失敗は固定unavailable errorにします。

@@ -31,7 +31,7 @@ pub(crate) fn get_resident_status(
     if request.protocol_version != 1 {
         return Err("UNSUPPORTED_RESIDENT_VERSION");
     }
-    Ok(state.port().current())
+    Ok(state.status())
 }
 #[tauri::command]
 pub(crate) async fn request_resident_intent(

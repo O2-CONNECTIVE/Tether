@@ -8,7 +8,7 @@ use crate::resident_port::duplex::owner::native::NativeOutcome;
 use crate::standby_lifecycle::{Outcome, native::NativeOuterJoined};
 use serde_json::{Value, json};
 fn status(session: &NativeSession) -> Value {
-    serde_json::to_value(session.port().current()).unwrap()
+    serde_json::to_value(session.status()).unwrap()
 }
 fn intent(id: u64) -> Value {
     json!({"protocolVersion":1,"requestId":id,"expectedRevision":1,"intent":"on"})
@@ -56,7 +56,10 @@ pub(crate) fn run(mode: &str) {
     };
     if mode == "session-normal" {
         let session = NativeSession::prepare().unwrap();
-        check(status(&session)["state"] == "source-unavailable");
+        check(matches!(
+            status(&session)["state"].as_str(),
+            Some("source-unavailable" | "source-startup-checking")
+        ));
         check(receipt(&session, 1)["disposition"] == "unavailable");
         let immediate = session.owner().request_exit();
         check(
@@ -74,7 +77,10 @@ pub(crate) fn run(mode: &str) {
         check(session.owner().finish_requested());
         check(status(&session)["state"] == "source-unavailable");
         let repeated = NativeSession::prepare().unwrap();
-        check(status(&repeated)["state"] == "source-unavailable");
+        check(matches!(
+            status(&repeated)["state"].as_str(),
+            Some("source-unavailable" | "source-startup-checking")
+        ));
         check(join(&repeated).native().outcome() == NativeOutcome::Refused);
         check(repeated.owner().outcome() == Some(Outcome::Unknown));
         check(!repeated.owner().request_exit() && !repeated.owner().finish_requested());
@@ -119,14 +125,12 @@ fn active(mode: &str) {
     };
     let session = NativeSession::fixture(fixture, mode == "session-unwind").unwrap();
     let before = status(&session);
-    check(
-        before["state"]
-            == if unavailable {
-                "source-unavailable"
-            } else {
-                "source-observation"
-            },
-    );
+    check(match before["state"].as_str() {
+        Some("source-observation") => !unavailable,
+        Some("source-unavailable" | "source-startup-checking") => unavailable,
+        Some("source-policy-rejected") => mode == "session-rejected",
+        _ => false,
+    });
     // Attachment failure already requests Close. ExitTwo may have completed
     // before this first check; accept only its complete original join proof.
     let initially_finished = session.owner().finish_requested();
@@ -202,10 +206,19 @@ fn active(mode: &str) {
             session.owner().poll_join() == Some(joined)
                 && joined.native().terminal_confirmed() == terminal,
         );
-        check(
-            status(&session)["state"] == "source-unavailable"
-                || status(&session)["validForMs"] == 0,
-        );
+        let after = status(&session);
+        if mode == "session-rejected" {
+            check(
+                after
+                    == json!({
+                        "protocolVersion":1,"source":"resident-owner","state":"source-policy-rejected"
+                    }),
+            );
+        } else if unavailable {
+            check(after["state"] == "source-unavailable");
+        } else {
+            check(after["state"] == "source-unavailable" || after["validForMs"] == 0);
+        }
         check(
             receipt(&session, id)["disposition"]
                 == if unavailable {

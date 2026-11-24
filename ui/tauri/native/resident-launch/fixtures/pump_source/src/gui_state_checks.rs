@@ -8,7 +8,7 @@ use std::time::Duration;
 #[cfg(resident_launch_fixture)]
 use std::time::Instant;
 fn status(state: &ResidentState) -> Value {
-    serde_json::to_value(state.port().current()).unwrap()
+    serde_json::to_value(state.status()).unwrap()
 }
 fn receipt(state: &ResidentState, id: u64) -> Value {
     serde_json::to_value(
@@ -50,7 +50,10 @@ pub(crate) fn run(mode: &str) {
         // lifetime guard and borrowed state across the actual close/joins.
         let lifetime = ResidentLifetime::new(ResidentState::startup().unwrap());
         let state = lifetime.state();
-        check(status(&state)["state"] == "source-unavailable");
+        check(matches!(
+            status(&state)["state"].as_str(),
+            Some("source-unavailable" | "source-startup-checking")
+        ));
         check(receipt(&state, 1)["disposition"] == "unavailable");
         let _ = state.request_exit();
         let until = std::time::Instant::now() + Duration::from_secs(3);
@@ -58,13 +61,16 @@ pub(crate) fn run(mode: &str) {
             assert!(std::time::Instant::now() < until, "startup outer join unavailable");
             std::thread::sleep(Duration::from_millis(1));
         }
-        check(state.finish_requested());
+        check(state.finish_requested() && status(&state)["state"] == "source-unavailable");
         check(state.request_exit());
         drop(lifetime);
         check(state.finish_requested());
         // No second unavailable receipt or replacement of the first state.
         let repeated = ResidentState::startup().unwrap();
-        check(status(&repeated)["state"] == "source-unavailable");
+        check(matches!(
+            status(&repeated)["state"].as_str(),
+            Some("source-unavailable" | "source-startup-checking")
+        ));
         check(!repeated.request_exit());
         std::thread::sleep(Duration::from_millis(20));
         check(!repeated.finish_requested());
