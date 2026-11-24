@@ -12,7 +12,8 @@ export type Observation = { revision: number; validForMs: number; standby: 'off'
   standbyUntil: number | null; standbyEndingSoon: boolean; standbyExpired: boolean;
   sleepPrevention: 'inactive' | 'active' | 'unknown' };
 export type ResidentStartup = 'checking' | 'policy-rejected';
-type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner'; observation: Observation | null; startup?: ResidentStartup };
+type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner' } & (
+  { observation: Observation; startup?: never } | { observation: null; startup?: ResidentStartup });
 export type ResidentInvoke = (command: 'get_resident_status' | 'request_resident_intent', args: { request: {
   protocolVersion: 1; requestId?: number; expectedRevision?: number; intent?: RequestIntent; standbyHours?: StandbyHours } }) => Promise<unknown>;
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);

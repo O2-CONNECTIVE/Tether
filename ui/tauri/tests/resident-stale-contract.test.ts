@@ -9,16 +9,23 @@ const driver = readFileSync(new URL('../src-tauri/tests/resident-gui/drive.js', 
 void test('unresolved startup returns to unconfirmed without continuing to poll', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 0, reads = 0, diagnostic = '';
+  let reply: (value: unknown) => void = () => {};
+  const source = { protocolVersion: 1, source: 'resident-owner' };
   const controller = createResidentController({ now: () => now, onChange: state => { diagnostic = state.diagnostic; },
     invoke: command => {
       assert.equal(command, 'get_resident_status');
-      reads++;
-      return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-startup-checking' });
-    } });
+      if (++reads === 2) return new Promise(resolve => { reply = resolve; });
+      return Promise.resolve({ ...source, state: 'source-startup-checking' });
+    }, pollMs: 2500 });
   try {
     await controller.refresh();
     assert.equal(diagnostic, 'RESIDENT_STARTUP_CHECKING');
+    now = 2500; t.mock.timers.tick(2500);
+    assert.equal(reads, 2);
     now = 3000; t.mock.timers.tick(500);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(diagnostic, 'RESIDENT_SOURCE_UNAVAILABLE');
+    reply({ ...source, state: 'source-policy-rejected' });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(diagnostic, 'RESIDENT_SOURCE_UNAVAILABLE');
     t.mock.timers.tick(3000);

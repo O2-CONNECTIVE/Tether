@@ -6,6 +6,7 @@ export const initialResidentState = (): ResidentState => ({ visible: false, obse
   canOn: false, canOff: false, canExtend: false, cleanupUnknown: false, diagnostic: 'RESIDENT_CHECKING', startup: null,
   lastReceipt: null, lastRequestIntent: null, lastRequestId: 0 });
 interface Options { invoke: ResidentInvoke | undefined; onChange: (state: ResidentState) => void; now?: () => number; timeoutMs?: number; pollMs?: number }
+const startupWaitMs = 3000;
 export function createResidentController({ invoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: Options) {
   let state = initialResidentState();
   let disposed = false, sealed = false, pageVisible = true;
@@ -33,13 +34,13 @@ export function createResidentController({ invoke, onChange, now = () => perform
   };
   const stopTimers = () => { clearTimeout(poll); clearTimeout(expiry); };
   const fail = (diagnostic: string, cleanupUnknown = false) => { sealed = true; epoch++; operation = null; stopTimers(); publish(diagnostic, cleanupUnknown); };
-  const call = async (command: Parameters<ResidentInvoke>[0], args: Parameters<ResidentInvoke>[1]) => {
+  const call = async (command: Parameters<ResidentInvoke>[0], args: Parameters<ResidentInvoke>[1], budget = timeoutMs) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try { return await Promise.race([invoke?.(command, args), new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
+      timer = setTimeout(() => reject(new Error('timeout')), budget);
     })]); } finally { clearTimeout(timer); }
   };
-  const schedule = () => { if (!disposed && !sealed && pageVisible && state.visible) poll = setTimeout(() => { void refresh(); }, pollMs); };
+  const schedule = (delay = pollMs) => { if (!disposed && !sealed && pageVisible && state.visible) poll = setTimeout(() => { void refresh(); }, delay); };
   async function refresh() {
     if (disposed || sealed || !pageVisible || operation || !invoke) return;
     await readStatus('status');
@@ -47,11 +48,19 @@ export function createResidentController({ invoke, onChange, now = () => perform
   async function readStatus(read: 'status' | 'menu-status') {
     clearTimeout(poll); operation = read;
     const generation = ++epoch, started = clock();
+    const deadline = startup === 'checking' ? startupUntil : undefined;
+    const budget = deadline === undefined ? timeoutMs : Math.min(timeoutMs, deadline - started);
+    const expireStartup = () => {
+      if (read === 'status') operation = null;
+      startup = null; publish('RESIDENT_SOURCE_UNAVAILABLE');
+    };
+    if (budget <= 0) return expireStartup();
     publish('RESIDENT_CHECKING');
     try {
-      const value = await call('get_resident_status', { request: { protocolVersion: 1 } });
+      const value = await call('get_resident_status', { request: { protocolVersion: 1 } }, budget);
       if (disposed || sealed || generation !== epoch) return;
       const received = clock(), decoded = decodeStatus(value);
+      if (deadline !== undefined && received >= deadline) return expireStartup();
       if (!decoded || !Number.isFinite(started) || !Number.isFinite(received) || received - started >= timeoutMs) return fail('RESIDENT_INVALID_RESPONSE');
       if (read === 'status') operation = null;
       if (decoded.source === 'unsupported') {
@@ -64,10 +73,10 @@ export function createResidentController({ invoke, onChange, now = () => perform
         if (revision !== 0) return fail('RESIDENT_SOURCE_LOST');
         observation = null; startup = decoded.startup ?? null;
         if (startup === 'checking') {
-          startupUntil ??= started + 3000;
+          startupUntil ??= started + startupWaitMs;
           if (received < startupUntil) {
             publish('RESIDENT_STARTUP_CHECKING');
-            if (read === 'status') schedule();
+            if (read === 'status') schedule(Math.min(pollMs, startupUntil - received));
             return;
           }
           startup = null;
@@ -100,7 +109,11 @@ export function createResidentController({ invoke, onChange, now = () => perform
       clearTimeout(expiry);
       expiry = setTimeout(() => fail('RESIDENT_OBSERVATION_EXPIRED'), Math.max(0, until - received));
       publish(pending ? 'RESIDENT_INTENT_PENDING' : 'RESIDENT_OBSERVED'); schedule();
-    } catch { if (!disposed && !sealed && generation === epoch) fail('RESIDENT_RESPONSE_UNCONFIRMED'); }
+    } catch {
+      if (disposed || sealed || generation !== epoch) return;
+      if (deadline !== undefined && clock() >= deadline) return expireStartup();
+      fail('RESIDENT_RESPONSE_UNCONFIRMED');
+    }
   }
   async function request(intent: RequestIntent, standbyHours?: StandbyHours) {
     if (disposed || sealed || !pageVisible || operation || pending || !observation || !invoke) return;
@@ -149,7 +162,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
     if (disposed || sealed || pageVisible === visible) return;
     pageVisible = visible;
     if (visible) return refresh();
-    until = 0; stopTimers();
+    until = 0; startup = null; stopTimers();
     // Drop the old read, but let the original mutation finish with its own receipt.
     if (operation === 'status') { epoch++; operation = null; }
     publish('RESIDENT_CHECKING');
