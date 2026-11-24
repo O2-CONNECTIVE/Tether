@@ -12,6 +12,27 @@
 - このsource・identity・実行Macを対象にした署名操作の承認。builderの引数は承認システムではありません。秘密鍵、p12、passwordを引数やチャットへ渡しません。
 - この初期recipeのentitlementsは全roleで空です。JIT、disable-library-validation、get-task-allow等を追加しません。必要になれば根拠と最小集合を別レビューします。
 
+## Keychain access group の署名手順（未照合）
+
+常駐ホスト鍵は `com.o2connective.tether.host-key` service の Keychain 項目に保存し、
+`host_key_fingerprint` を account に使います。signed producer は data-protection Keychain を指定し、
+コードに access group 名を持たせず、entitlement の既定 access group を使います。
+
+署名時は enrollment helper と常駐 producer が同じ Apple Team で署名されることを確認し、
+両方の entitlement に同じ Team-prefixed `keychain-access-groups` を設定します。
+複数 group を指定する場合、両方で共有 group を同じ位置（既定 group）に置きます。
+プロビジョニング profile がその group を許可していることを確認し、署名後に
+`codesign -d --entitlements :-` で実際の entitlement、`codesign -dv` で Team ID、
+profile inspection で group の許可を照合します。access group を hardcode した
+`kSecAttrAccessGroup` はコードへ追加しません。
+
+この repository の現在の署名 recipe は全 role の entitlement を空に固定し、
+pair helper も署名 inventory に含みません。そのため上記の設定は recipe に未反映で、
+署名・profile・実機の共有確認は**未照合**です。実署名と実機確認はこの変更の範囲外です。
+手順の根拠は Apple の [Keychain Sharing](https://developer.apple.com/documentation/xcode/configuring-keychain-sharing),
+[Keychain Entitlements](https://developer.apple.com/documentation/bundleresources/entitlements/keychain-access-groups),
+および [TN3125](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles) です。
+
 具体承認後のコマンド形は次のとおりです。`<...>` は公開識別子等に置き換えます。
 
 ```sh

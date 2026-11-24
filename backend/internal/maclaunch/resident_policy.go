@@ -123,9 +123,18 @@ func loadResidentMode(ctx context.Context, policyPath string, d residentDeps, st
 	p.runtime.RunLog = path.Join(path.Dir(policyPath), "run-history.jsonl")
 	signer, e := d.key(ctx, p.key)
 	if e != nil {
+		if p.key.KeyStore == agentkeys.StoreKeychain && errors.Is(e, agentkeys.ErrKeychain) && finiteResident(ctx) {
+			return nil, errors.Join(ErrResidentKeyUnavailable, e)
+		}
 		return nil, residentReadError(e)
 	}
-	if signer == nil || signer.PublicKey().Type() != ssh.KeyAlgoED25519 || ssh.FingerprintSHA256(signer.PublicKey()) != p.key.Fingerprint || !finiteResident(ctx) {
+	if !finiteResident(ctx) {
+		return nil, ErrResident
+	}
+	if signer == nil || signer.PublicKey().Type() != ssh.KeyAlgoED25519 || ssh.FingerprintSHA256(signer.PublicKey()) != p.key.Fingerprint {
+		if p.key.KeyStore == agentkeys.StoreKeychain {
+			return nil, ErrResidentKeyUnavailable
+		}
 		return nil, ErrResident
 	}
 	f := &ResidentFactory{stopped: make(chan struct{}), path: policyPath, digest: sha256.Sum256(raw), policy: p, signer: signer, deps: d}
@@ -134,12 +143,12 @@ func loadResidentMode(ctx context.Context, policyPath string, d residentDeps, st
 }
 func parseResidentPolicy(raw []byte) (residentPolicy, error) {
 	var p residentPolicy
-	names := []string{"protocol", "policy_digest", "registration_endpoint", "host_label", "principal_label", "principal_public_key", "host_key_path", "host_key_fingerprint", "work_dir", "home", "cleanup_seconds", "operations"}
+	names := []string{"protocol", "policy_digest", "registration_endpoint", "host_label", "principal_label", "principal_public_key", "host_key_store", "host_key_path", "host_key_fingerprint", "work_dir", "home", "cleanup_seconds", "operations"}
 	if len(raw) == 0 || len(raw) > agentkeys.MaxTrustConfigBytes || agentwire.CheckJSON(raw, false) != nil {
 		return p, ErrResident
 	}
 	fields, e := agentwire.Fields(raw, names...)
-	if e != nil || len(fields) != len(names) {
+	if e != nil || len(fields) != len(names)-1 {
 		return p, ErrResident
 	}
 	str := func(n string) string {
@@ -169,9 +178,20 @@ func parseResidentPolicy(raw []byte) (residentPolicy, error) {
 	if e != nil || p.peer.Type() != ssh.KeyAlgoED25519 {
 		return p, ErrResident
 	}
-	p.key = agentkeys.Config{Path: str("host_key_path"), Fingerprint: str("host_key_fingerprint")}
+	store, keyPath := str("host_key_store"), str("host_key_path")
+	if store == agentkeys.StoreKeychain && keyPath == "" {
+		p.key = agentkeys.Config{KeyStore: agentkeys.StoreKeychain, Fingerprint: str("host_key_fingerprint")}
+	} else if store == "" && keyPath != "" {
+		p.key = agentkeys.Config{Path: keyPath, Fingerprint: str("host_key_fingerprint")}
+	} else {
+		return p, ErrResident
+	}
 	p.runtime = macagent.Config{WorkDir: str("work_dir"), Home: str("home")}
-	for _, v := range []string{p.key.Path, p.runtime.WorkDir, p.runtime.Home} {
+	paths := []string{p.runtime.WorkDir, p.runtime.Home}
+	if p.key.KeyStore == "" {
+		paths = append(paths, p.key.Path)
+	}
+	for _, v := range paths {
 		if !path.IsAbs(v) || path.Clean(v) != v || v == "/" || bytes.ContainsAny([]byte(v), "\x00\r\n") {
 			return p, ErrResident
 		}

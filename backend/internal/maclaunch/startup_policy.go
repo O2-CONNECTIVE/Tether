@@ -2,11 +2,14 @@ package maclaunch
 
 import (
 	"context"
+	"errors"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentchannel"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentexec"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent"
 )
+
+var ErrResidentKeyUnavailable = errors.New("maclaunch: resident host key unavailable")
 
 // This private type is minted only after a successful protected policy read,
 // before key/factory acquisition. It is not Close, OFF, authorization, or proof

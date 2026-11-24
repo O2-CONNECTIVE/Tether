@@ -360,4 +360,4 @@ Linux/Windowsは非対応の拒否・root handle消費と共通permission契約�
 
 `internal/hostlifecycle` に、ホストが取った資源の台帳と停止の判定を持つ coordinator `coordinator.go` を共通の1fileとして追加します（[#456](https://github.com/O2-CONNECTIVE/Tether/issues/456)）。Mac の resident sidecar が、Standby の読み込みと停止をこれに載せます。
 
-現inventoryは55 packageです。cgo有効時のfile数はLinux407 / Darwin412 / Windows438、Darwinのcgo無効時は409です。
+現inventoryは56 packageです。cgo有効時のfile数はLinux409 / Darwin414 / Windows440、Darwinのcgo無効時は411です。`internal/hostkeychain` は共通 `keychain.go` と Darwin/cgo の Security.framework 実装または非対応 stub を選択します。
