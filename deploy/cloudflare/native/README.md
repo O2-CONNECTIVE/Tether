@@ -29,13 +29,18 @@ wrangler設定・compatibility date・hostnameは用意していません（未�
 | 経路 | method | Workerの早期拒否 | 転送するheader | Go側の責任 |
 | --- | --- | --- | --- | --- |
 | `/mcp` | POST / DELETE | assertion欠落・重複（`,` 含む）・8 KiB超は403。値の長さ超過は400。本文は宣言/実測とも512 KiB超で413、10秒で408 | `Cf-Access-Jwt-Assertion`、POSTのみ `Content-Type`・`Accept`、両方で `Mcp-Session-Id`・`Mcp-Protocol-Version` | assertionの暗号検証とsubject対応、media type・version・sessionの検査 |
+| `/tether-agent/v1/pair/operations` | POST | pairing opt-inが無い場合404。Bearer欠落・重複・過大は403。JSON以外は400。本文4 KiB超は413 | `Authorization` と `Content-Type: application/json` だけ | gatewayがpairing tokenと新鍵のproofを検証し、登録前の確認結果とconsent URLを返す |
+| `/tether-agent/v1/pair/confirm` | POST | pairing opt-inが無い場合404。JSON以外は400。本文4 KiB超は413 | `Content-Type: application/json` だけ。Authorization等のambient credentialは落とす | gatewayが本人同意・operation・新鍵proofを照合して確定する。Workerはstatusと本文を保つ（`registration_unknown` の500を含む） |
+| `/tether-agent/v1/pair/consent` | GET | `operation` だけを1つ許可。その他のqueryは400 | request headerなし | gatewayがIdP authorize URLへ302し、`Set-Cookie` を発行する。Workerはredirectを追わず、その応答を保つ |
+| `/tether-agent/v1/pair/consent/callback` | GET | 非空の `state` と非空の `code` / `error` の一方が各1つ必須。error時の `error_description` は任意で1つ。重複キー・`code` と `error` の併存は400 | `Cookie` だけ。queryは `code`+`state`、または `error`+任意の `error_description`+`state` に限定 | gatewayがstate/cookieを照合してIdP応答を処理し、確認HTMLを返す |
+| `/tether-agent/v1/pair/consent` | POST | same-origin `Origin` 必須。form以外は400。本文4 KiB超は413 | `Cookie` と `Content-Type: application/x-www-form-urlencoded` だけ | gatewayが一回限りのform tokenとdecisionを検査する |
 | `/tether-agent/v1/register` | GET upgrade | `Cookie`・`Authorization`・`Proxy-Authorization`・`Cf-Access-Jwt-Assertion` 付きは403。`Sec-WebSocket-Protocol` が `rescue-agent-register.v1` の1件以外は400 | `Upgrade: websocket` と固定subprotocolだけ | challenge（text ≤2 KiB）、host proof、dispatch検査、`Connect` 後のbinary stream（≤32 KiB）とagent channelの相互認証 |
 | `/tether-agent/v1/rescue` | GET upgrade（`TETHER_NATIVE_RESCUE` opt-in時のみ） | 登録と同じ禁止headerは403。`rescue-agent-reception.v1` の1件以外は400 | `Upgrade: websocket` と固定subprotocolだけ | gatewayの受付処理と認証・回数制限 |
 
-共通：完全一致のpathのみ（末尾slash・大文字・percent-encoded・probe path・`/.well-known/*` は404）、query（空の `?` を含む）は400、その他のmethod・`Upgrade` 付きMCP・GET stream・CORS preflightは405、`Origin` 付きは403（Go側にもallowlistを設定しない前提。CORS応答は出さない）。
-`Authorization`（Access edgeのopaque token）・cookie・email等のidentity header・forwarding headerは転送しません。assertionの有無は早期拒否にだけ使い、認証とはみなしません。
+共通：完全一致のpathのみ（末尾slash・大文字・percent-encoded・probe path・`/.well-known/*` は404）。consent GETは `operation` を1つ必須とし、callback GETは非空の `state` と非空の `code` / `error` の一方を各1つ必須にします。error時の `error_description` は任意で1つです。callbackのその他のIdP queryは破棄してから転送し、重複キー・`code` と `error` の併存・不正な必須値は400にします。consent GET/callbackの不正なquery（空の `?` を含む）は400です。その他のmethod・`Upgrade` 付きHTTP経路・GET stream・CORS preflightは405です。既存経路とconsent GET/callbackの`Origin`付き要求は403、consent POSTだけはrequestの公開originと完全一致する`Origin`を必須にします。CORS応答は出しません。
+二段階pairingではoperationsだけBearerを認証用に転送し、confirmはBearerを落とします。既存の一段階 `/pair` は従来どおりBearerを転送します。consent callback/POSTだけ `Cookie` を転送し、`Proxy-Authorization` と `Cf-Access-Jwt-Assertion` はpairing各経路へ渡しません。register/rescueは従来どおりCookie・Authorization等を拒否します。assertionの有無はMCPの早期拒否にだけ使い、Workerは認証しません。
 
-MCP応答は、Goが返すstatus（200/202/204/400/403/404/405/406/413/415/429/500/503）だけを中継します。3xx・401・その他は502にし、`Location`・`Set-Cookie`・`WWW-Authenticate` は出しません。中継するheaderは `Content-Type`（`application/json` または `text/plain; charset=utf-8`）、`Mcp-Session-Id`（32桁hex）、`Mcp-Protocol-Version`、`Retry-After`、`Allow: POST, DELETE` だけで、形が違えば502です。OAuth discoveryはAccess edgeの担当で、Workerはmetadataを作りません。
+MCPと既存の一段階 `/pair` は従来のstatus/header allowlistを維持します。operations/confirmはgatewayのstatusと本文をそのまま返します。consent系は `Cache-Control`、`X-Frame-Options`、CSP、`Set-Cookie`、`Location`、`Content-Type` をgatewayの値のまま返し、Workerから共通の安全headerを重ねません。MCPはGoが返すstatus（200/202/204/400/403/404/405/406/413/415/429/500/503）だけを中継します。3xx・401・その他は502にし、`Location`・`Set-Cookie`・`WWW-Authenticate` は出しません。中継するheaderは `Content-Type`（`application/json` または `text/plain; charset=utf-8`）、`Mcp-Session-Id`（32桁hex）、`Mcp-Protocol-Version`、`Retry-After`、`Allow: POST, DELETE` だけで、形が違えば502です。OAuth discoveryはAccess edgeの担当で、Workerはmetadataを作りません。
 
 ## 上限（`LIMITS`）
 
@@ -109,7 +114,7 @@ The wrapper pins only the time window, not VPC binding identity. Deployment must
 
 `TETHER_RESIDENT_GATE=open-resident-tether-control` を明示した場合だけ、同じ登録pathで `rescue-agent-resident.v1` も受け付けます。既存のnative gateと固定VPC bindingは引き続き必須です。未設定・未知値では従来の `rescue-agent-register.v1` だけを受け付けます。複数protocol、ambient credential、Originは拒否し、応答protocolは要求と完全一致しなければ中継しません。
 
-`TETHER_NATIVE_PAIRING=open-native-tether-pairing` を明示した場合だけ、`POST /tether-agent/v1/pair` を `Authorization` 付きで転送します。既存のnative gateとVPC bindingは引き続き必須です。Workerは認証せず、gatewayがIdP tokenとhost鍵の証明を検証します。未設定・未知値では登録口は404になります。
+`TETHER_NATIVE_PAIRING=open-native-tether-pairing` を明示した場合だけ、既存の `POST /tether-agent/v1/pair` と二段階pairingの5操作を転送します。5操作は `/pair/operations` POST、`/pair/confirm` POST、`/pair/consent` GET/POST、`/pair/consent/callback` GETです。既存のnative gateとVPC bindingも必須です。一段階 `/pair` の中継は変えていません。Workerは認証せず、gatewayがtoken・proof・本人同意を検証します。gateway側の二段階実装は別PRです。未設定・未知値では全pairing経路が404になります。
 
 `TETHER_NATIVE_RESCUE=open-native-tether-rescue` を明示した場合だけ、`GET /tether-agent/v1/rescue` のWebSocket upgradeを `rescue-agent-reception.v1` だけで固定pathへ転送します。既存のnative gateとVPC bindingも必須です。登録口と同じくCookie・Authorization・Proxy-Authorization・Access assertionを拒否し、認証やrate limitはWorkerで行いません。未設定・未知値では404です。送信元IPごとの1分5件制限はCloudflare edgeのrate limiting ruleで配置してください（手順は[container配置のroute節](../linux-container.md#待受するroute-cmdrescue-gatewayのroutes)）。この中継だけ寿命とframeの予算が異なるのは、受付とchannelが同じWSSに載るためです（[中継の寿命](../../../docs/rescue-connection-start.md#中継の寿命)）。
 
