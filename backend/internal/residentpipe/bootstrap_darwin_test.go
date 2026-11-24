@@ -28,6 +28,11 @@ type capturedStatus struct {
 	line   []byte
 }
 
+func bootstrapTestPlace(t *testing.T) recordPlace {
+	t.Helper()
+	return recordPlace{dir: t.TempDir(), bootSession: func() (string, error) { return "test-boot", nil }}
+}
+
 func isTerminalUnknownCleanupStatus(status statusEnvelope) bool {
 	return status.Type == "status" && status.Snapshot.Cleanup == "unknown" && status.Snapshot.Registration == "unknown" && !status.Snapshot.CanRequestOn && !status.Snapshot.CanRequestOff
 }
@@ -134,7 +139,7 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 	}{{"json-eof", jsonInput, false}, {"json-cancel", jsonInput, true}, {"foreground-close", foregroundInput, false}, {"foreground-cancel", foregroundInput, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			policyPath := idleProtectedPolicy(t)
-			coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
+			coord, owner, record, err := startStandby(context.Background(), bootstrapTestPlace(t), func(ctx context.Context) (*residentmac.Standby, error) {
 				return loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
 			})
 			if err != nil {
@@ -169,7 +174,7 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
-			go func() { done <- runOwnedInput(ctx, coord, owner, pipes, tc.dialect) }()
+			go func() { done <- runOwnedInput(ctx, coord, owner, record, pipes, tc.dialect) }()
 			joined := false
 			t.Cleanup(func() {
 				cancel()
@@ -195,6 +200,9 @@ func TestBootstrapSharedLifetimeClosesOriginalIdleOwner(t *testing.T) {
 			}
 			if sleep := statusJSON.Snapshot["sleepPrevention"]; string(sleep) != `"inactive"` {
 				t.Fatalf("idle sleep prevention = %q, want inactive", sleep)
+			}
+			if previous := statusJSON.Snapshot["previousCleanup"]; string(previous) != `"confirmed"` {
+				t.Fatalf("idle previous cleanup = %q, want confirmed", previous)
 			}
 			if tc.cancel {
 				cancel()
@@ -314,7 +322,7 @@ func TestBootstrapSharedLifetimeReportsCoordinatorCleanup(t *testing.T) {
 	}{{"json", jsonInput}, {"foreground", foregroundInput}} {
 		t.Run(tc.name, func(t *testing.T) {
 			policyPath := idleProtectedPolicy(t)
-			coord, owner, err := startStandby(context.Background(), func(ctx context.Context) (*residentmac.Standby, error) {
+			coord, owner, record, err := startStandby(context.Background(), bootstrapTestPlace(t), func(ctx context.Context) (*residentmac.Standby, error) {
 				return loadBootstrap(ctx, explicitPolicyBootstrap, policyPath)
 			})
 			if err != nil {
@@ -354,7 +362,7 @@ func TestBootstrapSharedLifetimeReportsCoordinatorCleanup(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
-			go func() { done <- runOwnedInput(ctx, coord, owner, pipes, tc.dialect) }()
+			go func() { done <- runOwnedInput(ctx, coord, owner, record, pipes, tc.dialect) }()
 			reader := bufio.NewReader(outR)
 			line, err := reader.ReadBytes('\n')
 			var status statusEnvelope
@@ -451,7 +459,7 @@ func TestOwnedResultExitsCleanlyOnlyAfterConfirmedClose(t *testing.T) {
 func TestStartStandbyRetainsAnUnconfirmedLoad(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := startStandby(context.Background(), func(context.Context) (*residentmac.Standby, error) { panic("load panicked") })
+		_, _, _, err := startStandby(context.Background(), recordPlace{}, func(context.Context) (*residentmac.Standby, error) { panic("load panicked") })
 		done <- err
 	}()
 	select {
@@ -465,7 +473,7 @@ func TestStartStandbyRetainsAnUnconfirmedLoad(t *testing.T) {
 // error, so the startup-rejection receipt still sees its concrete type.
 func TestStartStandbyReturnsACleanLoadFailure(t *testing.T) {
 	refused := errors.New("load refused")
-	_, owner, err := startStandby(context.Background(), func(context.Context) (*residentmac.Standby, error) { return nil, refused })
+	_, owner, _, err := startStandby(context.Background(), recordPlace{}, func(context.Context) (*residentmac.Standby, error) { return nil, refused })
 	if err != refused || owner != nil {
 		t.Fatal(err, owner)
 	}

@@ -63,6 +63,7 @@ protocol error です。`extend <request_id> <expected_revision> <hours>` は、
 持ちます。foreground と製品 JSON の `status.snapshot` はこれらの期限の鍵に加え、
 Go が観測したスリープ防止の状態 `sleepPrevention`（`inactive` / `active` / `unknown`）を含みます。
 取得・解除中や解除の結果が未確認の場合は `unknown` です。
+`previousCleanup` は前回の常駐 owner の回収が確認できたかを示し、`unknown` は Mac の再起動まで残ります。アプリの再起動や今回の正常終了では解消しません。
 
 所有作業の受付中または Owner が作業を保持している間、macOS のシステム idle sleep を防ぎます。
 回収確認後に assertion を解放します。待機 ON だけでは取得せず、`AllowSleepDuringWork: true`

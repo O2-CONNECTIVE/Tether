@@ -83,6 +83,33 @@ fn status_requires_and_carries_sleep_prevention() {
 }
 
 #[test]
+fn status_requires_previous_cleanup_and_keeps_unknown_independent_of_this_run() {
+    for state in ["confirmed", "unknown"] {
+        let mut frame = test_frames::status(100);
+        frame["snapshot"]["previousCleanup"] = json!(state);
+        let Event::Status { snapshot, .. } = test_frames::event(&frame) else {
+            panic!("expected status");
+        };
+        let observation = snapshot.observation().unwrap();
+        let value = serde_json::to_value(&observation).unwrap();
+        assert_eq!(value["previousCleanup"], json!(state));
+        assert!(observation.can_request_on);
+    }
+
+    let mut missing = test_frames::status(100);
+    missing["snapshot"]
+        .as_object_mut()
+        .unwrap()
+        .remove("previousCleanup");
+    assert!(!accepted(missing));
+    for value in [json!(null), json!(true), json!("pending")] {
+        let mut invalid = test_frames::status(100);
+        invalid["snapshot"]["previousCleanup"] = value;
+        assert!(!accepted(invalid));
+    }
+}
+
+#[test]
 fn expired_reason_survives_unknown_cleanup_status() {
     let mut poisoned = test_frames::status(100);
     poisoned["snapshot"]["validForMs"] = json!(0);

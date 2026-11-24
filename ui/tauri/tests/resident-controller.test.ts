@@ -4,7 +4,7 @@ import { createResidentController, type ResidentState } from '../src/resident/co
 import { decodeStatus, decodeReceipt, type ResidentInvoke } from '../src/resident/model.ts';
 const sample = (change: Record<string, unknown> = {}) => ({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1,
   validForMs: 3000, standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false,
-  transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive', ...change });
+  transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, previousCleanup: 'confirmed', sleepPrevention: 'inactive', ...change });
 const settle = () => new Promise(resolve => setTimeout(resolve, 5));
 function capture(invoke: ResidentInvoke | undefined, options: { now?: () => number; timeoutMs?: number; pollMs?: number } = {}) {
   const states: ResidentState[] = [];

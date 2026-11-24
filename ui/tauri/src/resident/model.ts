@@ -10,6 +10,7 @@ export type Observation = { revision: number; validForMs: number; standby: 'off'
   work: 'idle' | 'preparing' | 'running' | 'stopping' | 'completed' | 'failed' | 'unknown'; cleanup: 'confirmed' | 'pending' | 'unknown';
   canRequestOn: boolean; canRequestOff: boolean; transition: Transition | null;
   standbyUntil: number | null; standbyEndingSoon: boolean; standbyExpired: boolean;
+  previousCleanup: 'confirmed' | 'unknown';
   sleepPrevention: 'inactive' | 'active' | 'unknown' };
 export type ResidentStartup = 'checking' | 'policy-rejected';
 type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner' } & (
@@ -32,11 +33,11 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
       return { source: 'resident-owner', observation: null, startup };
     }
   }
-  const observationKeys = 'protocolVersion,source,state,revision,validForMs,standby,registration,caller,work,cleanup,canRequestOn,canRequestOff,transition,standbyUntil,standbyEndingSoon,standbyExpired,sleepPrevention';
+  const observationKeys = 'protocolVersion,source,state,revision,validForMs,standby,registration,caller,work,cleanup,canRequestOn,canRequestOff,transition,standbyUntil,standbyEndingSoon,standbyExpired,previousCleanup,sleepPrevention';
   const hasRegistrationReason = Object.hasOwn(value, 'registrationReason');
   if (value.state !== 'source-observation' || !keys(value, hasRegistrationReason ? `${observationKeys},registrationReason` : observationKeys)) return;
   const { revision, validForMs, standby, registration, caller, work, cleanup, canRequestOn, canRequestOff,
-    standbyUntil, standbyEndingSoon, standbyExpired, sleepPrevention } = value;
+    standbyUntil, standbyEndingSoon, standbyExpired, previousCleanup, sleepPrevention } = value;
   if (!integer(revision, 1) || !integer(validForMs) || validForMs > 3000 || !oneOf(standby, ['off', 'on', 'stopping', 'unknown'])
     || !oneOf(registration, ['disconnected', 'connecting', 'reconnecting', 'authenticated', 'needs_action', 'unknown'])
     || !(caller === null || (typeof caller === 'string' && [...caller].length > 0 && [...caller].length <= 80 && !/\p{Cc}/u.test(caller)))
@@ -44,6 +45,7 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
     || !oneOf(cleanup, ['confirmed', 'pending', 'unknown']) || typeof canRequestOn !== 'boolean' || typeof canRequestOff !== 'boolean'
     || !(standbyUntil === null || integer(standbyUntil, 1)) || typeof standbyEndingSoon !== 'boolean'
     || (standbyEndingSoon && standbyUntil === null) || typeof standbyExpired !== 'boolean'
+    || !oneOf(previousCleanup, ['confirmed', 'unknown'])
     || !oneOf(sleepPrevention, ['inactive', 'active', 'unknown'])) return;
   let registrationReason: RegistrationReason | undefined;
   if (hasRegistrationReason) {
@@ -67,7 +69,7 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
       : !(standby === 'off' && work === 'idle' && cleanup === 'confirmed'))))) return;
   return { source: 'resident-owner', observation: { revision, validForMs, standby, registration,
     ...(registrationReason ? { registrationReason } : {}), caller, work, cleanup, canRequestOn, canRequestOff, transition,
-    standbyUntil, standbyEndingSoon, standbyExpired, sleepPrevention } };
+    standbyUntil, standbyEndingSoon, standbyExpired, previousCleanup, sleepPrevention } };
 }
 export function decodeReceipt(value: unknown, id: number, intent: RequestIntent) {
   if (!record(value) || !keys(value, 'protocolVersion,requestId,intent,disposition') || value.protocolVersion !== 1

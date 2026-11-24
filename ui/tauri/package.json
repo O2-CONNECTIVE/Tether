@@ -13,7 +13,7 @@
     "lint": "eslint . --max-warnings 0",
     "knip": "knip",
     "knip:production": "knip --production",
-    "test:browser": "node --test tests/browser.test.ts tests/mac-app-browser.test.ts tests/resident-browser.test.ts",
+    "test:browser": "node --test tests/browser.test.ts tests/mac-app-browser.test.ts tests/resident-browser.test.ts tests/resident-previous-cleanup-browser.test.ts",
     "build": "vite build && node scripts/notices.mjs",
     "test:native": "node native-smoke/run.ts",
     "build:host-status-fixture": "vite build --config host-status-fixture/vite.config.ts"
