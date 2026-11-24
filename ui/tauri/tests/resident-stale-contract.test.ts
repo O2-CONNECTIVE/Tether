@@ -6,6 +6,26 @@ import { createResidentController } from '../src/resident/controller.ts';
 import type { Intent, Observation } from '../src/resident/model.ts';
 const driver = readFileSync(new URL('../src-tauri/tests/resident-gui/drive.js', import.meta.url), 'utf8');
 
+void test('unresolved startup returns to unconfirmed without continuing to poll', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0, reads = 0, diagnostic = '';
+  const controller = createResidentController({ now: () => now, onChange: state => { diagnostic = state.diagnostic; },
+    invoke: command => {
+      assert.equal(command, 'get_resident_status');
+      reads++;
+      return Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-startup-checking' });
+    } });
+  try {
+    await controller.refresh();
+    assert.equal(diagnostic, 'RESIDENT_STARTUP_CHECKING');
+    now = 3000; t.mock.timers.tick(500);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(diagnostic, 'RESIDENT_SOURCE_UNAVAILABLE');
+    t.mock.timers.tick(3000);
+    assert.equal(reads, 2);
+  } finally { controller.dispose(); }
+});
+
 // Real controller + GUI driver, modeled ordered producer/Tracking boundary.
 // This is not Go/Rust IPC or evidence of the particular failed hosted run.
 async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' | 'unknown') {

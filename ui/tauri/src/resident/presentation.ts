@@ -1,4 +1,4 @@
-import type { Observation } from './model.ts';
+import type { Observation, ResidentStartup } from './model.ts';
 
 export interface ResidentPresentation {
   heading: string;
@@ -18,9 +18,13 @@ const work: Record<Observation['work'], string> = { idle: '作業なし', prepar
 const cleanup: Record<Observation['cleanup'], string> = { confirmed: '回収確認済み', pending: '回収待ち', unknown: '要清掃' };
 // Pure display mapping. It grants nothing: missing evidence stays unconfirmed,
 // and a pending change is never shown as a settled state.
-export function presentResident(o: Observation | null, pending: boolean, cleanupUnknown = false): ResidentPresentation {
+export function presentResident(o: Observation | null, pending: boolean, cleanupUnknown = false, startup: ResidentStartup | null = null): ResidentPresentation {
   if (cleanupUnknown || o?.cleanup === 'unknown') return { heading: '要清掃: 常駐ホストの回収を確認できません',
     detail: '回収を確かめられないため、停止の成功を示しません。', tone: 'unconfirmed', icon: 'warning' };
+  if (!o && startup === 'checking') return { heading: '常駐ホストの起動結果を確認中',
+    detail: '起動結果が届くまで待機を開始できません。', tone: 'neutral', icon: 'checking' };
+  if (!o && startup === 'policy-rejected') return { heading: '登録設定を確認してください',
+    detail: 'この Mac の登録設定に問題があります。設定を確認してからアプリを開き直してください。', tone: 'unconfirmed', icon: 'warning' };
   if (!o) return { heading: '常駐ホストの状態を確認できません', detail: '未確認。接続・停止・回収の成功を示しません。', tone: 'unconfirmed', icon: 'warning' };
   const detail = `待機: ${standby[o.standby]} / 接続: ${registration[o.registration]} / 作業: ${work[o.work]} / 回収: ${cleanup[o.cleanup]}`;
   if (pending) return { heading: '待機の変更を確認中', detail, tone: 'neutral', icon: 'checking' };

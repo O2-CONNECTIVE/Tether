@@ -1,9 +1,9 @@
-import { decodeReceipt, decodeStatus, type Intent, type Observation, type RequestIntent, type ResidentInvoke, type StandbyHours } from './model.ts';
+import { decodeReceipt, decodeStatus, type Intent, type Observation, type RequestIntent, type ResidentInvoke, type ResidentStartup, type StandbyHours } from './model.ts';
 export type ResidentState = { visible: boolean; observation: Observation | null; busy: boolean; pending: boolean;
-  canOn: boolean; canOff: boolean; canExtend: boolean; cleanupUnknown: boolean; diagnostic: string;
+  canOn: boolean; canOff: boolean; canExtend: boolean; cleanupUnknown: boolean; diagnostic: string; startup: ResidentStartup | null;
   lastReceipt: 'accepted' | 'rejected' | 'stale' | 'unavailable' | null; lastRequestIntent: RequestIntent | null; lastRequestId: number };
 export const initialResidentState = (): ResidentState => ({ visible: false, observation: null, busy: false, pending: false,
-  canOn: false, canOff: false, canExtend: false, cleanupUnknown: false, diagnostic: 'RESIDENT_CHECKING',
+  canOn: false, canOff: false, canExtend: false, cleanupUnknown: false, diagnostic: 'RESIDENT_CHECKING', startup: null,
   lastReceipt: null, lastRequestIntent: null, lastRequestId: 0 });
 interface Options { invoke: ResidentInvoke | undefined; onChange: (state: ResidentState) => void; now?: () => number; timeoutMs?: number; pollMs?: number }
 export function createResidentController({ invoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: Options) {
@@ -11,6 +11,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
   let disposed = false, sealed = false, pageVisible = true;
   let operation: 'status' | 'menu-status' | 'intent' | null = null;
   let cleanupLatched = false;
+  let startup: ResidentStartup | null = null, startupUntil: number | undefined;
   let epoch = 0, requestId = 0, revision = 0, until = 0, lastClock = 0;
   let pending: { id: number; intent: Intent } | undefined;
   let observation: Observation | null = null;
@@ -26,7 +27,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
       canOn: fresh && !busy && !pending && observation?.canRequestOn === true,
       canOff, canExtend: canOff && observation?.standby === 'on' && observation.standbyUntil !== null
         && !observation.standbyExpired && observation.registration !== 'needs_action',
-      cleanupUnknown: cleanupLatched, diagnostic,
+      cleanupUnknown: cleanupLatched, diagnostic, startup: !sealed && pageVisible ? startup : null,
       lastReceipt: state.lastReceipt, lastRequestIntent: state.lastRequestIntent, lastRequestId: state.lastRequestId };
     onChange(state);
   };
@@ -61,8 +62,20 @@ export function createResidentController({ invoke, onChange, now = () => perform
       const next = decoded.observation;
       if (!next) {
         if (revision !== 0) return fail('RESIDENT_SOURCE_LOST');
-        observation = null; publish('RESIDENT_SOURCE_UNAVAILABLE'); return;
+        observation = null; startup = decoded.startup ?? null;
+        if (startup === 'checking') {
+          startupUntil ??= started + 3000;
+          if (received < startupUntil) {
+            publish('RESIDENT_STARTUP_CHECKING');
+            if (read === 'status') schedule();
+            return;
+          }
+          startup = null;
+        }
+        publish(startup === 'policy-rejected' ? 'RESIDENT_ENROLLMENT_POLICY_REJECTED' : 'RESIDENT_SOURCE_UNAVAILABLE');
+        return;
       }
+      startup = null;
       if (next.revision < revision || (next.revision === revision && observation
         && JSON.stringify({ ...next, validForMs: 0 }) !== JSON.stringify({ ...observation, validForMs: 0 }))) return fail('RESIDENT_REVISION_INVALID');
       if (next.cleanup === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN', true);

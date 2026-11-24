@@ -32,7 +32,7 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
   }, [invoke]);
   if (!state.visible) return null;
   const o = state.observation;
-  const view = presentResident(o, state.pending, state.cleanupUnknown);
+  const view = presentResident(o, state.pending, state.cleanupUnknown, state.startup);
   const isOn = o?.standby === 'on';
   const isOff = o?.standby === 'off';
   const canSwitch = isOn ? state.canOff : isOff && state.canOn;

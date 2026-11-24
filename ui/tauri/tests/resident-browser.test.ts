@@ -1,6 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { browser, url } from './app-browser.ts';
+void test('native registration refusal is visible with standby unavailable', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.addInitScript(() => {
+      window.__TAURI__ = { core: { invoke: command => Promise.resolve(command === 'get_resident_status'
+        ? { protocolVersion: 1, source: 'resident-owner', state: document.documentElement.dataset.rejected
+          ? 'source-policy-rejected' : 'source-startup-checking' }
+        : { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }) } };
+    });
+    await page.goto(url);
+    await page.getByRole('heading', { name: '常駐ホストの起動結果を確認中' }).waitFor();
+    const standby = page.locator('#resident-switch');
+    assert.equal(await standby.isDisabled(), true);
+    await page.evaluate(() => { document.documentElement.dataset.rejected = 'true'; });
+    await page.getByRole('heading', { name: '登録設定を確認してください' }).waitFor();
+    assert.equal(await standby.isDisabled(), true);
+    assert.equal(await standby.getAttribute('aria-checked'), null);
+  } finally { await page.close(); }
+});
+
 void test('resident switch and deadline use shared IPC and wait for owner observations', async () => {
   const page = await browser.newPage({ viewport: { width: 900, height: 1000 }, timezoneId: 'Asia/Tokyo' });
   await page.addInitScript(() => {

@@ -92,12 +92,20 @@ enum Source {
     },
 }
 #[derive(Clone, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[serde(tag = "state")]
 enum Output {
-    SourceUnavailable,
+    #[serde(rename = "source-unavailable")]
+    Unavailable,
+    #[cfg(all(target_os = "macos", resident_native_source))]
+    #[serde(rename = "source-startup-checking")]
+    StartupChecking,
+    #[cfg(all(target_os = "macos", resident_native_source))]
+    #[serde(rename = "source-policy-rejected")]
+    PolicyRejected,
     // Fixture shape tests do not supply authentication or a native factory.
     #[cfg(any(test, target_os = "macos"))]
-    SourceObservation {
+    #[serde(rename = "source-observation")]
+    Observation {
         #[serde(flatten)]
         observation: super::observation::Observation,
     },
@@ -111,35 +119,42 @@ pub(crate) struct Status {
 }
 impl Status {
     #[cfg(all(target_os = "macos", resident_native_source))]
+    pub(super) fn startup_checking() -> Self {
+        Self::owner(Output::StartupChecking)
+    }
+    #[cfg(all(target_os = "macos", resident_native_source))]
+    pub(super) fn policy_rejected() -> Self {
+        Self::owner(Output::PolicyRejected)
+    }
+    fn owner(output: Output) -> Self {
+        Self {
+            protocol_version: 1,
+            source: Source::ResidentOwner { output },
+        }
+    }
+    #[cfg(all(target_os = "macos", resident_native_source))]
     pub(super) fn cleanup_unknown(&self) -> bool {
         matches!(
             &self.source,
             Source::ResidentOwner {
-                output: Output::SourceObservation { observation },
+                output: Output::Observation { observation },
             } if observation.cleanup == super::observation::Cleanup::Unknown
         )
     }
     pub(super) fn unbound() -> Self {
-        Self {
-            protocol_version: 1,
-            source: if cfg!(target_os = "macos") {
-                Source::ResidentOwner {
-                    output: Output::SourceUnavailable,
-                }
-            } else {
-                Source::Unsupported
-            },
+        if cfg!(target_os = "macos") {
+            Self::owner(Output::Unavailable)
+        } else {
+            Self {
+                protocol_version: 1,
+                source: Source::Unsupported,
+            }
         }
     }
     #[cfg(target_os = "macos")]
     pub(super) fn bound(source: &super::duplex::owner::BoundDuplex) -> Self {
         match source.current() {
-            Some(observation) => Self {
-                protocol_version: 1,
-                source: Source::ResidentOwner {
-                    output: Output::SourceObservation { observation },
-                },
-            },
+            Some(observation) => Self::owner(Output::Observation { observation }),
             None => Self::unbound(),
         }
     }

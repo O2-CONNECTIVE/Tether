@@ -6,7 +6,7 @@ const sample = (change: Record<string, unknown> = {}) => ({ protocolVersion: 1, 
   validForMs: 3000, standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false,
   transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive', ...change });
 const settle = () => new Promise(resolve => setTimeout(resolve, 5));
-function capture(invoke: ResidentInvoke | undefined, options: { now?: () => number; timeoutMs?: number } = {}) {
+function capture(invoke: ResidentInvoke | undefined, options: { now?: () => number; timeoutMs?: number; pollMs?: number } = {}) {
   const states: ResidentState[] = [];
   const controller = createResidentController({ invoke, onChange: state => states.push(state), pollMs: 10000, ...options });
   return { controller, states, last: () => states.at(-1) };
@@ -20,6 +20,27 @@ void test('fixed status and unbound/unsupported responses do not create authorit
     await r.controller.refresh(); assert.equal(r.last()?.visible, source !== 'unsupported'); assert.equal(r.last()?.canOn, false);
     r.controller.dispose();
   }
+});
+void test('a joined registration policy refusal replaces startup checking without enabling standby', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const source = { protocolVersion: 1, source: 'resident-owner' };
+  let reads = 0;
+  const r = capture(command => {
+    assert.equal(command, 'get_resident_status');
+    const state = reads++ === 0 ? 'source-startup-checking' : 'source-policy-rejected';
+    return Promise.resolve({ ...source, state });
+  }, { pollMs: 50 });
+  try {
+    await r.controller.refresh();
+    assert.equal(r.last()?.diagnostic, 'RESIDENT_STARTUP_CHECKING');
+    assert.equal(r.last()?.canOn, false);
+    t.mock.timers.tick(50);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(r.last()?.diagnostic, 'RESIDENT_ENROLLMENT_POLICY_REJECTED');
+    await r.controller.request('on');
+    assert.equal(r.last()?.canOn, false);
+    assert.equal(reads, 2);
+  } finally { r.controller.dispose(); }
 });
 void test('strict source contract rejects unknown fields, enums and inconsistent states', () => {
   assert.ok(decodeStatus(sample()));

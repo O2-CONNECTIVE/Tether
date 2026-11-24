@@ -18,6 +18,16 @@ void test('an absent observation is shown as unconfirmed, never as a neutral or 
   assert.equal(presentResident(null, true).tone, 'unconfirmed');
 });
 
+void test('startup evidence has a closed shape and keeps cleanup uncertainty visible', () => {
+  const startup = { protocolVersion: 1, source: 'resident-owner', state: 'source-policy-rejected' };
+  assert.deepEqual(decodeStatus(startup), { source: 'resident-owner', observation: null, startup: 'policy-rejected' });
+  assert.equal(decodeStatus({ ...startup, account: 'synthetic' }), undefined);
+  assert.equal(decodeStatus({ ...startup, canRequestOn: true }), undefined);
+  assert.equal(presentResident(null, false, false, 'checking').heading, '常駐ホストの起動結果を確認中');
+  assert.equal(presentResident(null, false, false, 'policy-rejected').heading, '登録設定を確認してください');
+  assert.deepEqual(presentResident(null, false, true, 'policy-rejected'), presentResident(null, false, true));
+});
+
 // 色だけで状態を区別しない: 待機ONとOFFは色・記号・文言の3つすべてが違う。
 void test('standby on and off differ in tone, icon and heading', () => {
   const on = presentResident(observed({ standby: 'on', registration: 'authenticated' }), false);
