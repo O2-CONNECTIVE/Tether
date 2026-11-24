@@ -128,8 +128,14 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 		return loadBootstrap(ctx, kind, protectedPolicy)
 	})
 	if e != nil {
+		if errors.Is(e, maclaunch.ErrResidentKeyUnavailable) {
+			if writeErr := writeStartupRejected(pipes, "host-key-unavailable"); writeErr != nil {
+				return writeErr
+			}
+			return errStartupHostKeyUnavailable
+		}
 		if maclaunch.IsStartupPolicyRejected(e) {
-			if writeErr := writeStartupRejected(pipes); writeErr != nil {
+			if writeErr := writeStartupRejected(pipes, "policy-rejected"); writeErr != nil {
 				return writeErr
 			}
 			return errStartupRejected
@@ -355,12 +361,12 @@ func assemblyExpired(start *uint64, now uint64) bool {
 	return start != nil && (now < *start || now-*start >= 1000)
 }
 
-func writeStartupRejected(p *ownedPipes) error {
+func writeStartupRejected(p *ownedPipes, code string) error {
 	now, err := continuousMS()
 	if err != nil {
 		return err
 	}
-	b, err := Encode(startupRejectedEnvelope{1, "startupRejected", now, "policy-rejected"})
+	b, err := Encode(startupRejectedEnvelope{1, "startupRejected", now, code})
 	if err != nil {
 		return err
 	}

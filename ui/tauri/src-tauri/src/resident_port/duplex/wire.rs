@@ -30,10 +30,20 @@ pub(super) enum Event {
         receipt: Receipt,
     },
 }
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub(super) enum RejectionCode {
     #[serde(rename = "policy-rejected")]
     PolicyRejected,
+    #[serde(rename = "host-key-unavailable")]
+    HostKeyUnavailable,
+}
+impl RejectionCode {
+    pub(super) fn exit_code(self) -> i32 {
+        match self {
+            Self::PolicyRejected => 2,
+            Self::HostKeyUnavailable => 3,
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -123,7 +133,7 @@ impl Event {
             | Self::StartupRejected {
                 protocol_version,
                 source_continuous_ms,
-                code: RejectionCode::PolicyRejected,
+                code: RejectionCode::PolicyRejected | RejectionCode::HostKeyUnavailable,
             }
             | Self::Closed {
                 protocol_version,

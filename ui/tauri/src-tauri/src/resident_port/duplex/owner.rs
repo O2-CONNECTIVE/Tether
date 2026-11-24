@@ -107,6 +107,7 @@ pub(crate) struct Supervisor {
     known: bool,
     cleanup_confirmed: bool,
     startup_rejected: bool,
+    host_key_unavailable: bool,
     not_spawned: bool,
     require_cleanup: bool,
 }
@@ -124,6 +125,9 @@ impl Supervisor {
     // Reaped/known alone must never authorize confirmed application teardown.
     pub(crate) fn startup_rejected(&self) -> bool {
         self.known && self.startup_rejected
+    }
+    pub(crate) fn host_key_unavailable(&self) -> bool {
+        self.known && self.host_key_unavailable
     }
     pub(crate) fn cleanup_confirmed(&self) -> bool {
         self.known && self.cleanup_confirmed

@@ -28,6 +28,16 @@ void test('startup evidence has a closed shape and keeps cleanup uncertainty vis
   assert.deepEqual(presentResident(null, false, true, 'policy-rejected'), presentResident(null, false, true));
 });
 
+// なぜ要るか: Keychain鍵の読取不能だけを厳密に受け入れ、policy拒否や未確認と別の表示にする。
+void test('host key unavailability decodes strictly and is shown as an unconfirmed warning', () => {
+  const startup = { protocolVersion: 1, source: 'resident-owner', state: 'source-host-key-unavailable' };
+  assert.deepEqual(decodeStatus(startup), { source: 'resident-owner', observation: null, startup: 'host-key-unavailable' });
+  assert.equal(decodeStatus({ ...startup, account: 'synthetic' }), undefined);
+  assert.deepEqual(presentResident(null, false, false, 'host-key-unavailable'), {
+    heading: 'この Mac の鍵を読めません', detail: '登録し直してください', tone: 'unconfirmed', icon: 'warning',
+  });
+});
+
 // 色だけで状態を区別しない: 待機ONとOFFは色・記号・文言の3つすべてが違う。
 void test('standby on and off differ in tone, icon and heading', () => {
   const on = presentResident(observed({ standby: 'on', registration: 'authenticated' }), false);

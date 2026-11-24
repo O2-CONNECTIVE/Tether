@@ -1,4 +1,5 @@
 //! Concrete native IO worker only; no full cleanup or application Quit permit.
+use super::super::wire::RejectionCode;
 use super::*;
 use crate::native_preparation::{
     ExitObservation, NativePreparation, NativeTerminal, Preparation, StartupPreparation, State,
@@ -20,21 +21,21 @@ pub(crate) enum NativeOutcome {
 pub(crate) struct NativeJoined {
     outcome: NativeOutcome,
     terminal: bool,
-    startup_rejected: bool,
+    startup_rejection: Option<RejectionCode>,
 }
 // Only the worker can produce the affine native component; only actual join
 // below can turn it into durable read-only completion evidence.
 struct NativeWorkerEnd {
     outcome: NativeOutcome,
     terminal: Option<NativeTerminal>,
-    startup_rejected: bool,
+    startup_rejection: Option<RejectionCode>,
 }
 impl NativeWorkerEnd {
     fn incomplete(outcome: NativeOutcome) -> Self {
         Self {
             outcome,
             terminal: None,
-            startup_rejected: false,
+            startup_rejection: None,
         }
     }
 }
@@ -43,10 +44,29 @@ impl NativeJoined {
         self.terminal
     }
     pub(crate) fn startup_rejected(self) -> bool {
-        self.startup_rejected
+        self.startup_rejection == Some(RejectionCode::PolicyRejected)
+    }
+    pub(crate) fn host_key_unavailable(self) -> bool {
+        self.startup_rejection == Some(RejectionCode::HostKeyUnavailable)
     }
     pub(crate) fn outcome(self) -> NativeOutcome {
         self.outcome
+    }
+    #[cfg(resident_launch_fixture)]
+    pub(crate) fn fixture_startup_rejection(exit_code: i32, host_key_unavailable: bool) -> Self {
+        Self {
+            outcome: NativeOutcome::Active {
+                exit: ExitObservation::Exit(exit_code),
+                io: State::ActiveIoRetired,
+                unwound: false,
+            },
+            terminal: true,
+            startup_rejection: Some(if host_key_unavailable {
+                RejectionCode::HostKeyUnavailable
+            } else {
+                RejectionCode::PolicyRejected
+            }),
+        }
     }
 }
 
@@ -155,7 +175,7 @@ impl NativeIoSupervisor {
         let joined = NativeJoined {
             outcome: outcome.outcome,
             terminal: outcome.terminal.is_some(),
-            startup_rejected: outcome.startup_rejected,
+            startup_rejection: outcome.startup_rejection,
         }; // Only after the actual join, including TLS destructor completion.
         self.joined = Some(joined);
         joined
@@ -284,12 +304,17 @@ fn run(
     // The same worker reads the original Shared proof before consuming its owner.
     let (wire, startup) = {
         let state = shared.lock().unwrap_or_else(|e| e.into_inner());
-        (state.closure.confirmed(), state.startup.confirmed())
+        (
+            state.closure.confirmed(),
+            state.startup.confirmed_for_exit(match exit {
+                ExitObservation::Exit(code) => Some(code),
+                _ => None,
+            }),
+        )
     };
     let eligible = clean_eof
         && matches!(execution, Ok(Ok(())))
-        && ((exit == ExitObservation::Exit(0) && wire)
-            || (exit == ExitObservation::Exit(2) && startup));
+        && ((exit == ExitObservation::Exit(0) && wire) || startup.is_some());
     let terminal = if eligible {
         original.finish_active()
     } else {
@@ -301,7 +326,7 @@ fn run(
             io,
             unwound: execution.is_err(),
         },
-        startup_rejected: terminal.is_some() && exit == ExitObservation::Exit(2) && startup,
+        startup_rejection: terminal.is_some().then_some(startup).flatten(),
         terminal,
     }
 }

@@ -25,6 +25,8 @@ export function presentResident(o: Observation | null, pending: boolean, cleanup
     detail: '起動結果が届くまで待機を開始できません。', tone: 'neutral', icon: 'checking' };
   if (!o && startup === 'policy-rejected') return { heading: '登録設定を確認してください',
     detail: 'この Mac の登録設定に問題があります。設定を確認してからアプリを開き直してください。', tone: 'unconfirmed', icon: 'warning' };
+  if (!o && startup === 'host-key-unavailable') return { heading: 'この Mac の鍵を読めません',
+    detail: '登録し直してください', tone: 'unconfirmed', icon: 'warning' };
   if (!o) return { heading: '常駐ホストの状態を確認できません', detail: '未確認。接続・停止・回収の成功を示しません。', tone: 'unconfirmed', icon: 'warning' };
   const detail = `待機: ${standby[o.standby]} / 接続: ${registration[o.registration]} / 作業: ${work[o.work]} / 回収: ${cleanup[o.cleanup]}`;
   if (pending) return { heading: '待機の変更を確認中', detail, tone: 'neutral', icon: 'checking' };

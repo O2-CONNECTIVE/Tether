@@ -1,8 +1,12 @@
 //! Real native IO → original outer monitor; terminal proof requires both joins.
+#[cfg(resident_launch_fixture)]
+use super::owner::native::NativeJoined;
 use super::owner::native::{NativeIoSupervisor, NativeOutcome};
+#[cfg(resident_launch_fixture)]
+use crate::standby_lifecycle::native::classify_startup_fixture;
 use crate::standby_lifecycle::{
-    Outcome,
     native::{NativeOuterJoined, NativeOuterOwner},
+    Outcome,
 };
 #[cfg(resident_launch_fixture)]
 use crate::{
@@ -46,8 +50,7 @@ pub(crate) fn run(mode: &str) {
         let immediate = owner.request_exit();
         check(
             !immediate
-                || (owner.outcome() == Some(Outcome::NotSpawned)
-                    && owner.poll_join().is_some()),
+                || (owner.outcome() == Some(Outcome::NotSpawned) && owner.poll_join().is_some()),
         );
         let joined = join(&owner);
         check(
@@ -178,6 +181,14 @@ fn active(mode: &str) {
         assert!(v, "outer condition {}", passed + 1);
         passed += 1;
     };
+    // Why: the outer owner must classify only the matching joined exit/code pair.
+    let startup_pairing_matches = mode != "outer-rejected"
+        || (classify_startup_fixture(NativeJoined::fixture_startup_rejection(3, true))
+            == Outcome::HostKeyUnavailable
+            && classify_startup_fixture(NativeJoined::fixture_startup_rejection(3, false))
+                == Outcome::Unknown
+            && classify_startup_fixture(NativeJoined::fixture_startup_rejection(2, true))
+                == Outcome::Unknown);
     if mode == "outer-panic" {
         // Finish/Wait/close before monitor panic; forget the retained unknown
         // parent BEFORE assertions so a negative never abandons a live child.
@@ -208,7 +219,7 @@ fn active(mode: &str) {
         check(!exit_after);
         check(!finish_after);
     } else {
-        check(!owner.finish_requested());
+        check(!owner.finish_requested() && startup_pairing_matches);
         if let Some(id) = id {
             check(first.is_some());
             check(owner.poll_join().is_none());

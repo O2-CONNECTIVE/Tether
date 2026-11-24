@@ -102,6 +102,9 @@ enum Output {
     #[cfg(all(target_os = "macos", resident_native_source))]
     #[serde(rename = "source-policy-rejected")]
     PolicyRejected,
+    #[cfg(all(target_os = "macos", resident_native_source))]
+    #[serde(rename = "source-host-key-unavailable")]
+    HostKeyUnavailable,
     // Fixture shape tests do not supply authentication or a native factory.
     #[cfg(any(test, target_os = "macos"))]
     #[serde(rename = "source-observation")]
@@ -125,6 +128,10 @@ impl Status {
     #[cfg(all(target_os = "macos", resident_native_source))]
     pub(super) fn policy_rejected() -> Self {
         Self::owner(Output::PolicyRejected)
+    }
+    #[cfg(all(target_os = "macos", resident_native_source))]
+    pub(super) fn host_key_unavailable() -> Self {
+        Self::owner(Output::HostKeyUnavailable)
     }
     fn owner(output: Output) -> Self {
         Self {

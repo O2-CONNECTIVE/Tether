@@ -8,12 +8,18 @@ pub(crate) enum Outcome {
     Confirmed,
     NotSpawned,
     StartupRejected,
+    HostKeyUnavailable,
     Unknown,
 }
 fn safe(outcome: Option<Outcome>) -> bool {
     matches!(
         outcome,
-        Some(Outcome::Confirmed | Outcome::NotSpawned | Outcome::StartupRejected)
+        Some(
+            Outcome::Confirmed
+                | Outcome::NotSpawned
+                | Outcome::StartupRejected
+                | Outcome::HostKeyUnavailable
+        )
     )
 }
 #[derive(Default)]
@@ -130,6 +136,9 @@ impl StandbyOwner {
                         Ok(End::NotSpawned) => Outcome::NotSpawned,
                         Ok(End::Reaped(_)) if producer.startup_rejected() => {
                             Outcome::StartupRejected
+                        }
+                        Ok(End::Reaped(_)) if producer.host_key_unavailable() => {
+                            Outcome::HostKeyUnavailable
                         }
                         Ok(End::Reaped(_)) if producer.cleanup_confirmed() => Outcome::Confirmed,
                         _ => Outcome::Unknown,

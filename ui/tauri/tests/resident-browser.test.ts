@@ -21,6 +21,24 @@ void test('native registration refusal is visible with standby unavailable', asy
   } finally { await page.close(); }
 });
 
+// なぜ要るか: 新しい起動理由でも画面の待機スイッチを有効化しないことをブラウザー境界で確かめる。
+void test('native host key unavailability is visible with standby unavailable', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.addInitScript(() => {
+      window.__TAURI__ = { core: { invoke: command => Promise.resolve(command === 'get_resident_status'
+        ? { protocolVersion: 1, source: 'resident-owner', state: 'source-host-key-unavailable' }
+        : { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }) } };
+    });
+    await page.goto(url);
+    await page.getByRole('heading', { name: 'この Mac の鍵を読めません' }).waitFor();
+    const standby = page.locator('#resident-switch');
+    assert.equal(await standby.isDisabled(), true);
+    assert.equal(await standby.getAttribute('aria-disabled'), 'true');
+    assert.equal(await standby.getAttribute('aria-checked'), null);
+  } finally { await page.close(); }
+});
+
 void test('resident switch and deadline use shared IPC and wait for owner observations', async () => {
   const page = await browser.newPage({ viewport: { width: 900, height: 1000 }, timezoneId: 'Asia/Tokyo' });
   await page.addInitScript(() => {
