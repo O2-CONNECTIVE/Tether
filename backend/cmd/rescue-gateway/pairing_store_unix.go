@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -177,10 +178,27 @@ func (r *nativeRegistry) Save(ctx context.Context, raw []byte) error {
 	wipe(r.raw)
 	r.raw = append(r.raw[:0], raw...)
 	if err := r.ops.syncDir(dir); err != nil {
-		report(r.ops.diagnostic, "登録簿の親ディレクトリを同期できませんでした。登録は確定済みです")
+		message := "登録簿の親ディレクトリを同期できませんでした。登録は確定済みです"
+		if registryHasPairOperation(raw) {
+			message = "登録簿の親ディレクトリを同期できませんでした。永続化を確認できません"
+		}
+		report(r.ops.diagnostic, message)
 		return agentgateway.ErrRegistryDurabilityUnknown
 	}
 	return nil
+}
+
+func registryHasPairOperation(raw []byte) bool {
+	var stored storedPairRegistry
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return true
+	}
+	for _, record := range stored.Hosts {
+		if record.Operation != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *nativeRegistry) Close() error {

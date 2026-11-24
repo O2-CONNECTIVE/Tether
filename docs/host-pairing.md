@@ -70,6 +70,8 @@ Bearerなしで `{ "operation": "...", "proof": "..." }` を送ります。proof
 | 503 `save_failed` | rename前の保存失敗。旧登録内容を保ち、同じ結果を返します |
 | 500 `registration_unknown` | rename後の親directory fsyncが失敗し、永続化を確認できません。同じoperationの再送も500です |
 
+期限後・置き換え後のoperation IDに対する404は、「今は登録されていない」ことが確定した結果です。helperは通常の拒否と同じ扱いにします。
+
 同じoperationへの並行confirmや再送は、確定を最大1回にします。MCP用Bearer tokenはpairing用APIで使えません。pairing verifierはissuer/subjectでアカウントを特定し、pairing audienceのtokenをMCP入口に通しません。
 
 ### 一段階APIとの互換
@@ -97,6 +99,8 @@ Bearerなしで `{ "operation": "...", "proof": "..." }` を送ります。proof
 ```
 
 `consent`は3 member全て必須で、未知memberを拒否します。authorization endpointとtoken endpointはHTTPSでなければなりません。callback redirect URIとconsent URLはMCP resourceの公開originから作られます。
+
+ブラウザでのログイン後、gatewayはIdPのtoken endpointへHTTPS接続してauthorization codeを交換します。この接続には信頼済みCAが必要です。`deploy/cloudflare/Dockerfile.gateway`のscratch imageにはCA bundleが含まれないため、確認画面を有効にする配置ではCA bundleの用意が前提です。配置手順の変更はこのPRでは行いません。
 
 paired枠のprincipalは `resident_owner` の役割を持つ必要があります（[principalの役割](agent-gateway.md#principalの役割)）。`hosts`項目は `public_key` か `"paired": true` のどちらか一方です。paired枠はprincipalちょうど1人を持ち、そのprincipalの `resident.host_label` は同じhost labelを指します。
 

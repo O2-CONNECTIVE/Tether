@@ -146,7 +146,7 @@ func (g *Gateway) ServePairOperations(w http.ResponseWriter, r *http.Request) {
 
 	// A newer preview for this slot revokes every unfinished earlier decision.
 	for id, old := range g.pairOperations {
-		if old.hostLabel == label && (old.state == "pending" || old.state == "consented") {
+		if old.hostLabel == label && old.state != "consumed" {
 			g.removePairOperationLocked(id)
 		}
 	}
@@ -192,7 +192,7 @@ func (g *Gateway) ServePairConsent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Allow", "GET, POST")
-	http.Error(w, "", http.StatusMethodNotAllowed)
+	writePairConsentResult(w, http.StatusMethodNotAllowed, pairConsentRejectedHTML)
 }
 
 func (g *Gateway) startPairConsent(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +218,7 @@ func (g *Gateway) startPairConsent(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	g.removePairStatesLocked(id)
 	if len(g.pairConsentStates) >= maxPairConsentStates {
 		g.pairMu.Unlock()
 		writePairError(w, http.StatusServiceUnavailable, "consent_unavailable")
@@ -339,13 +340,14 @@ func (g *Gateway) ServePairConsentCallback(w http.ResponseWriter, r *http.Reques
 		writePairError(w, http.StatusForbidden, "account_mismatch")
 		return
 	}
-	if len(g.pairConsentForms) >= maxPairConsentForms {
+	formToken, err := randomPairValue()
+	if err != nil {
 		g.pairMu.Unlock()
 		writePairError(w, http.StatusServiceUnavailable, "consent_unavailable")
 		return
 	}
-	formToken, err := randomPairValue()
-	if err != nil {
+	g.removePairFormsLocked(operationID)
+	if len(g.pairConsentForms) >= maxPairConsentForms {
 		g.pairMu.Unlock()
 		writePairError(w, http.StatusServiceUnavailable, "consent_unavailable")
 		return
@@ -385,31 +387,36 @@ func (g *Gateway) decidePairConsent(w http.ResponseWriter, r *http.Request) {
 	cfg := g.pairing
 	g.mu.Unlock()
 	if cfg == nil || cfg.Consent == nil {
-		http.NotFound(w, r)
+		writePairConsentResult(w, http.StatusNotFound, pairConsentRejectedHTML)
 		return
 	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/x-www-form-urlencoded" {
-		http.Error(w, "", http.StatusBadRequest)
+		writePairConsentResult(w, http.StatusBadRequest, pairConsentRejectedHTML)
 		return
 	}
-	body, ok := readPairBody(w, r)
-	if !ok {
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxPairBody+1))
+	if err != nil {
+		writePairConsentResult(w, http.StatusBadRequest, pairConsentRejectedHTML)
+		return
+	}
+	if len(body) > MaxPairBody {
+		writePairConsentResult(w, http.StatusRequestEntityTooLarge, pairConsentRejectedHTML)
 		return
 	}
 	form, err := url.ParseQuery(string(body))
 	if err != nil || len(form) != 3 || len(form["operation"]) != 1 || len(form["form_token"]) != 1 || len(form["decision"]) != 1 {
-		http.Error(w, "", http.StatusBadRequest)
+		writePairConsentResult(w, http.StatusBadRequest, pairConsentRejectedHTML)
 		return
 	}
 	id, token, decision := form.Get("operation"), form.Get("form_token"), form.Get("decision")
 	if !validPairOperationID(id) || !validPairOperationID(token) || (decision != "confirm" && decision != "cancel") {
-		http.Error(w, "", http.StatusBadRequest)
+		writePairConsentResult(w, http.StatusBadRequest, pairConsentRejectedHTML)
 		return
 	}
 	cookieHash, ok := consentCookieHash(r)
 	if !ok {
-		writePairError(w, http.StatusForbidden, "consent_invalid")
+		writePairConsentResult(w, http.StatusForbidden, pairConsentRejectedHTML)
 		return
 	}
 	g.pairMu.Lock()
@@ -419,14 +426,14 @@ func (g *Gateway) decidePairConsent(w http.ResponseWriter, r *http.Request) {
 	operation := g.pairOperations[id]
 	formRecord := g.pairConsentForms[token]
 	if operation == nil || formRecord == nil || formRecord.operation != id || !now.Before(formRecord.expires) || subtle.ConstantTimeCompare(cookieHash[:], formRecord.cookieHash[:]) != 1 {
-		writePairError(w, http.StatusForbidden, "consent_invalid")
+		writePairConsentResult(w, http.StatusForbidden, pairConsentRejectedHTML)
 		return
 	}
 	if operation.state != "pending" || !now.Before(operation.expires) {
 		if operation.terminalStatus != 0 {
-			writePairError(w, operation.terminalStatus, operation.terminalError)
+			writePairConsentResult(w, operation.terminalStatus, pairConsentRejectedHTML)
 		} else {
-			writePairError(w, http.StatusConflict, "consent_decided")
+			writePairConsentResult(w, http.StatusConflict, pairConsentRejectedHTML)
 		}
 		return
 	}
@@ -434,8 +441,9 @@ func (g *Gateway) decidePairConsent(w http.ResponseWriter, r *http.Request) {
 		operation.state = "cancelled"
 		operation.terminalStatus = http.StatusForbidden
 		operation.terminalError = "consent_cancelled"
+		g.removePairStatesLocked(id)
 		g.removePairFormsLocked(id)
-		writePairJSON(w, http.StatusOK, map[string]string{"state": "cancelled"})
+		writePairConsentResult(w, http.StatusOK, pairConsentCancelledHTML)
 		return
 	}
 	g.mu.Lock()
@@ -446,13 +454,15 @@ func (g *Gateway) decidePairConsent(w http.ResponseWriter, r *http.Request) {
 		operation.state = "terminal"
 		operation.terminalStatus = http.StatusConflict
 		operation.terminalError = "revision_changed"
+		g.removePairStatesLocked(id)
 		g.removePairFormsLocked(id)
-		writePairError(w, http.StatusConflict, "revision_changed")
+		writePairConsentResult(w, http.StatusConflict, pairConsentRejectedHTML)
 		return
 	}
 	operation.state = "consented"
+	g.removePairStatesLocked(id)
 	g.removePairFormsLocked(id)
-	writePairJSON(w, http.StatusOK, map[string]string{"state": "consented"})
+	writePairConsentResult(w, http.StatusOK, pairConsentConfirmedHTML)
 }
 
 func (g *Gateway) ServePairConfirm(w http.ResponseWriter, r *http.Request) {
@@ -511,7 +521,7 @@ func (g *Gateway) ServePairConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	g.prunePairOperationsLocked(now)
 	operation := g.pairOperations[id]
-	if operation == nil || !now.Before(operation.expires) {
+	if operation == nil || (!now.Before(operation.expires) && operation.terminalStatus == 0) {
 		http.NotFound(w, r)
 		return
 	}
@@ -711,7 +721,7 @@ func parsePairRequest(body []byte) (ssh.PublicKey, string, error) {
 		return nil, "", errors.New("pair request values invalid")
 	}
 	key, comment, options, rest, err := ssh.ParseAuthorizedKey([]byte(keyText))
-	if err != nil || comment != "" || len(options) != 0 || len(rest) != 0 || key.Type() != ssh.KeyAlgoED25519 || strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(key)), "\n") != keyText {
+	if err != nil || comment != "" || len(options) != 0 || len(rest) != 0 || key.Type() != ssh.KeyAlgoED25519 || smallOrderPairKey(key) || strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(key)), "\n") != keyText {
 		return nil, "", errors.New("pair host key invalid")
 	}
 	return key, proofText, nil
@@ -723,7 +733,7 @@ func verifyPairProof(key ssh.PublicKey, encoded string, transcript []byte) bool 
 
 func verifyPairProofBytes(rawKey []byte, encoded string, transcript []byte) bool {
 	key, err := ssh.ParsePublicKey(rawKey)
-	if err != nil || key.Type() != ssh.KeyAlgoED25519 {
+	if err != nil || key.Type() != ssh.KeyAlgoED25519 || smallOrderPairKey(key) {
 		return false
 	}
 	sigWire, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
@@ -739,6 +749,49 @@ func verifyPairProofBytes(rawKey []byte, encoded string, transcript []byte) bool
 		return false
 	}
 	return key.Verify(transcript, &ssh.Signature{Format: signature.Format, Blob: signature.Blob}) == nil
+}
+
+func smallOrderPairKey(key ssh.PublicKey) bool {
+	if key == nil || key.Type() != ssh.KeyAlgoED25519 {
+		return true
+	}
+	raw := key.Marshal()
+	if len(raw) < 32 {
+		return true
+	}
+	return smallOrderEd25519Encoding(raw[len(raw)-32:])
+}
+
+func smallOrderEd25519Encoding(encoded []byte) bool {
+	if len(encoded) != 32 {
+		return false
+	}
+	for _, point := range pairSmallOrderEd25519Encodings {
+		var diff byte
+		for i := 0; i < len(encoded)-1; i++ {
+			diff |= encoded[i] ^ point[i]
+		}
+		diff |= (encoded[31] & 0x7f) ^ (point[31] & 0x7f)
+		if diff == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+var pairSmallOrderEd25519Encodings = [12][32]byte{
+	{0x00},
+	{0x01},
+	{0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0, 0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05},
+	{0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a},
+	{0x13, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0, 0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x85},
+	{0xb4, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0xfa},
+	{0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xd9, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	{0xda, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	{0xdb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
 }
 
 func readPairBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
@@ -811,7 +864,7 @@ func consentCookieHash(r *http.Request) ([32]byte, bool) {
 
 func (g *Gateway) prunePairOperationsLocked(now time.Time) {
 	for id, operation := range g.pairOperations {
-		if !now.Before(operation.expires) {
+		if !now.Before(operation.expires) && operation.terminalStatus == 0 {
 			g.removePairOperationLocked(id)
 		}
 	}
@@ -829,12 +882,16 @@ func (g *Gateway) prunePairOperationsLocked(now time.Time) {
 
 func (g *Gateway) removePairOperationLocked(id string) {
 	delete(g.pairOperations, id)
+	g.removePairStatesLocked(id)
+	g.removePairFormsLocked(id)
+}
+
+func (g *Gateway) removePairStatesLocked(id string) {
 	for state, transaction := range g.pairConsentStates {
 		if transaction.operation == id {
 			delete(g.pairConsentStates, state)
 		}
 	}
-	g.removePairFormsLocked(id)
 }
 
 func (g *Gateway) removePairFormsLocked(id string) {
@@ -926,6 +983,19 @@ type pairConsentPageView struct {
 }
 
 var pairConsentTemplate = template.Must(template.New("pair-consent").Parse(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>ホスト登録の確認</title></head><body><main><h1>ホスト登録の確認</h1><dl><dt>アカウント</dt><dd>{{.PrincipalLabel}}（{{.Subject}}）</dd><dt>登録枠</dt><dd>{{.HostLabel}}</dd><dt>置換される既存登録</dt><dd>{{if .Replacing}}{{.ReplacingFingerprint}}（{{.RegisteredAt}}）{{else}}{{.ReplacingLabel}}{{end}}</dd><dt>新しいホスト鍵</dt><dd>{{.NewFingerprint}}</dd></dl><form method="post" action="/tether-agent/v1/pair/consent"><input type="hidden" name="operation" value="{{.Operation}}"><input type="hidden" name="form_token" value="{{.FormToken}}"><button type="submit" name="decision" value="confirm">登録を確定</button><button type="submit" name="decision" value="cancel">取り消す</button></form></main></body></html>`))
+
+const (
+	pairConsentConfirmedHTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>登録結果</title></head><body><main><p>登録を確定しました。アプリに戻ってください</p></main></body></html>`
+	pairConsentCancelledHTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>登録結果</title></head><body><main><p>登録を取り消しました。アプリに戻ってください</p></main></body></html>`
+	pairConsentRejectedHTML  = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>登録結果</title></head><body><main><p>登録を完了できませんでした。アプリに戻ってください</p></main></body></html>`
+)
+
+func writePairConsentResult(w http.ResponseWriter, status int, page string) {
+	setConsentPageHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, page)
+}
 
 func writePairJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")

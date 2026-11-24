@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -171,7 +173,7 @@ func newPairConsentFixture(t *testing.T, subject string) *pairConsentFixture {
 	return f
 }
 
-func (f *pairConsentFixture) initialize(t *testing.T, records []PairRecord, saveResult error) {
+func (f *pairConsentFixture) initialize(t *testing.T, records []PairRecord, saveResult error, otherSubjects ...string) {
 	t.Helper()
 	// The test servers use self-signed certificates. Trust only these two
 	// loopback certificates, preserving normal TLS verification.
@@ -186,10 +188,10 @@ func (f *pairConsentFixture) initialize(t *testing.T, records []PairRecord, save
 	f.client = &http.Client{Transport: f.transport, Jar: jar, Timeout: 5 * time.Second}
 	f.saveResult = saveResult
 	f.persisted = clonePairRecords(records)
-	f.newGateway(t, records)
+	f.newGateway(t, records, otherSubjects...)
 }
 
-func (f *pairConsentFixture) newGateway(t *testing.T, records []PairRecord) {
+func (f *pairConsentFixture) newGateway(t *testing.T, records []PairRecord, otherSubjects ...string) {
 	t.Helper()
 	mcpVerifier, err := NewVerifier(VerifierConfig{Issuer: testIssuer, Audience: testResource, Scope: testScope, Types: []string{"at+jwt"}, JWKS: jwks(t)})
 	if err != nil {
@@ -204,11 +206,17 @@ func (f *pairConsentFixture) newGateway(t *testing.T, records []PairRecord) {
 	if f.subject == subjects[0] {
 		principal.Subject = subjects[0]
 	}
-	g, err := New(Config{Verifier: mcpVerifier, Resource: testResource, Principals: []Principal{principal}, Clock: func() time.Time { return f.clockNow }})
+	principals := []Principal{principal}
+	hosts := []HostEntry{{Label: "host-1", Principals: []string{"member-1"}, Paired: true}}
+	if len(otherSubjects) > 0 {
+		principals = append(principals, Principal{Label: "member-2", Subject: otherSubjects[0], Roles: bothRoles, Signer: fixtureSigner(t, 0x63)})
+		hosts = append(hosts, HostEntry{Label: "host-2", Principals: []string{"member-2"}, Paired: true})
+	}
+	g, err := New(Config{Verifier: mcpVerifier, Resource: testResource, Principals: principals, Clock: func() time.Time { return f.clockNow }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.ConfigureHosts([]HostEntry{{Label: "host-1", Principals: []string{"member-1"}, Paired: true}}); err != nil {
+	if err := g.ConfigureHosts(hosts); err != nil {
 		t.Fatal(err)
 	}
 	client := &http.Client{Transport: f.transport, Timeout: 5 * time.Second}
@@ -347,6 +355,21 @@ func (f *pairConsentFixture) decide(t *testing.T, id, token, decision string) *h
 	return resp
 }
 
+func (f *pairConsentFixture) decideWithCookie(t *testing.T, id, token, decision, cookie string) *http.Response {
+	t.Helper()
+	form := url.Values{"operation": {id}, "form_token": {token}, "decision": {decision}}
+	req, _ := http.NewRequest(http.MethodPost, f.base+PairConsentPath, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if cookie != "" {
+		req.Header.Set("Cookie", pairConsentCookie+"="+cookie)
+	}
+	resp, err := (&http.Client{Transport: f.transport, Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 func (f *pairConsentFixture) confirm(t *testing.T, id string, signer, proofSigner ssh.Signer) *http.Response {
 	t.Helper()
 	if proofSigner == nil {
@@ -457,6 +480,66 @@ func TestPairOperationsRejectsBadProofAndInvalidOrMCPToken(t *testing.T) {
 	}
 }
 
+func TestPairRequestRejectsSmallOrderKeyAndForgedProof(t *testing.T) {
+	// Small-order keys make Ed25519 proofs forgeable, so every pairing entry point must reject them.
+	identity := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	identity[0] = 1
+	key, err := ssh.NewPublicKey(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := make([]byte, ed25519.SignatureSize)
+	signature[0] = 1 // R is the identity and S is zero.
+	proof := base64.RawURLEncoding.EncodeToString(ssh.Marshal(&ssh.Signature{Format: ssh.KeyAlgoED25519, Blob: signature}))
+	transcript := []byte("small-order-proof")
+	preflightAccepts := verifyPairProof(key, proof, transcript)
+	confirmAccepts := verifyPairProofBytes(key.Marshal(), proof, transcript)
+	keyText := strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(key)), "\n")
+	body, _ := json.Marshal(map[string]string{"host_public_key": keyText, "proof": proof})
+	_, _, parseErr := parsePairRequest(body)
+	if preflightAccepts || confirmAccepts || parseErr == nil {
+		t.Fatalf("small-order key was accepted: preflight=%v confirm=%v parseErr=%v", preflightAccepts, confirmAccepts, parseErr)
+	}
+}
+
+func TestPairRequestRejectsLibsodiumSmallOrderEncodings(t *testing.T) {
+	// Noncanonical encodings and the ignored sign bit must not create alternate small-order keys.
+	encodings := []string{
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		"0100000000000000000000000000000000000000000000000000000000000000",
+		"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+		"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+		"13e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+		"b4176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+		"ec" + strings.Repeat("ff", 30) + "7f",
+		"ed" + strings.Repeat("ff", 30) + "7f",
+		"ee" + strings.Repeat("ff", 30) + "7f",
+		"d9" + strings.Repeat("ff", 31),
+		"da" + strings.Repeat("ff", 31),
+		"db" + strings.Repeat("ff", 31),
+	}
+	for _, encoded := range encodings {
+		for _, flipSign := range []bool{false, true} {
+			raw, err := hex.DecodeString(encoded)
+			if err != nil || len(raw) != ed25519.PublicKeySize {
+				t.Fatalf("invalid test encoding %q: %v", encoded, err)
+			}
+			if flipSign {
+				raw[31] ^= 0x80
+			}
+			key, err := ssh.NewPublicKey(ed25519.PublicKey(raw))
+			if err != nil {
+				t.Fatalf("construct SSH key for %q: %v", encoded, err)
+			}
+			keyText := strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(key)), "\n")
+			body, _ := json.Marshal(map[string]string{"host_public_key": keyText, "proof": "proof"})
+			if _, _, err := parsePairRequest(body); err == nil {
+				t.Errorf("accepted small-order encoding %q with sign bit flipped=%v", encoded, flipSign)
+			}
+		}
+	}
+}
+
 func TestPairConsentGETSetsCookieAndStartsPKCES256AtPublicOrigin(t *testing.T) {
 	// OAuth state, PKCE, and the redirect URI must all be bound to the configured public gateway origin.
 	f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
@@ -552,6 +635,95 @@ func TestPairConsentCallbackRejectsAccountAndCookieMismatch(t *testing.T) {
 	})
 }
 
+func TestPairConsentPOSTRequiresTheOriginatingCookie(t *testing.T) {
+	// A form token alone must not authorize a decision outside the browser that completed OAuth.
+	for _, test := range []struct {
+		name      string
+		different bool
+	}{{"missing cookie", false}, {"different cookie", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+			id, _ := f.newOperation(t)
+			token := f.formToken(t, id)
+			cookie := ""
+			if test.different {
+				var err error
+				cookie, err = randomPairValue()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			resp := f.decideWithCookie(t, id, token, "confirm", cookie)
+			resp.Body.Close()
+			f.g.pairMu.Lock()
+			state := f.g.pairOperations[id].state
+			f.g.pairMu.Unlock()
+			if resp.StatusCode != http.StatusForbidden || state != "pending" {
+				t.Fatalf("decision with %s status=%d state=%s, want 403 and pending", test.name, resp.StatusCode, state)
+			}
+		})
+	}
+}
+
+func TestPairConsentPOSTReturnsProtectedJapaneseHTML(t *testing.T) {
+	// Consent POST responses are shown in the browser and must remain fixed, protected HTML.
+	for _, test := range []struct {
+		name, decision, want string
+		status               int
+	}{
+		{"confirmed", "confirm", "登録を確定しました。アプリに戻ってください", http.StatusOK},
+		{"cancelled", "cancel", "登録を取り消しました。アプリに戻ってください", http.StatusOK},
+		{"rejected", "confirm", "登録を完了できませんでした。アプリに戻ってください", http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+			id, _ := f.newOperation(t)
+			token := f.formToken(t, id)
+			var resp *http.Response
+			if test.name == "rejected" {
+				resp = f.decideWithCookie(t, id, token, test.decision, "")
+			} else {
+				resp = f.decide(t, id, token, test.decision)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != test.status || resp.Header.Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(string(body), test.want) || resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("X-Frame-Options") != "DENY" || resp.Header.Get("Content-Security-Policy") != "default-src 'none'; form-action 'self'; frame-ancestors 'none'" {
+				t.Errorf("response status=%d content-type=%q body=%q headers=%v", resp.StatusCode, resp.Header.Get("Content-Type"), body, resp.Header)
+			}
+			if test.name == "rejected" {
+				f.g.pairMu.Lock()
+				state := f.g.pairOperations[id].state
+				f.g.pairMu.Unlock()
+				if state != "pending" {
+					t.Errorf("rejected consent changed operation state to %q", state)
+				}
+			}
+		})
+	}
+}
+
+func TestHostPairingDocumentationCoversExpiryAndCACertificate(t *testing.T) {
+	// Operators and helpers need the final 404 meaning and the gateway's external TLS trust requirement documented.
+	document, err := os.ReadFile("../../../docs/host-pairing.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"期限後・置き換え後",
+		"今は登録されていない",
+		"helperは通常の拒否と同じ扱い",
+		"IdPのtoken endpointへHTTPS接続",
+		"信頼済みCA",
+		"deploy/cloudflare/Dockerfile.gateway",
+		"CA bundle",
+		"配置手順の変更はこのPRでは行いません",
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Errorf("host-pairing documentation is missing %q", required)
+		}
+	}
+}
+
 func TestPairConsentPageEscapesValuesAndSetsBrowserSecurityHeaders(t *testing.T) {
 	// All IdP and slot values are escaped, and the page cannot be framed or cached by another site.
 	malicious := "<img src=x onerror=alert(1)>"
@@ -596,31 +768,139 @@ func TestPairConsentPageShowsThePreflightReplacementSnapshot(t *testing.T) {
 	}
 }
 
-func TestPairConsentStateRequestsHaveABoundedMap(t *testing.T) {
-	// Repeated consent links must not grow server-side state without a fixed limit.
-	f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+func TestPairConsentGETRequestsDoNotExhaustOtherAccounts(t *testing.T) {
+	// Reopening one consent link must not consume the shared admission capacity for another account.
+	f := newPairConsentFixture(t, subjects[0])
+	f.initialize(t, nil, nil, subjects[1])
 	id, _ := f.newOperation(t)
 	noFollow := &http.Client{
 		Transport: f.transport, Jar: f.client.Jar, Timeout: 5 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	for i := 0; i < 64; i++ {
+	failedStarts := 0
+	for i := 0; i < 100; i++ {
 		resp, err := noFollow.Get(f.base + PairConsentPath + "?operation=" + url.QueryEscape(id))
 		if err != nil {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusFound {
-			t.Fatalf("state request %d status = %d, want 302", i+1, resp.StatusCode)
+			failedStarts++
 		}
 	}
-	resp, err := noFollow.Get(f.base + PairConsentPath + "?operation=" + url.QueryEscape(id))
+	otherSigner := f.newHost(t)
+	other, otherBody := f.postOperation(t, otherSigner, consentToken(t, subjects[1]), otherSigner)
+	if other.StatusCode != http.StatusOK {
+		t.Fatalf("other account preview status = %d", other.StatusCode)
+	}
+	otherID, _ := otherBody["operation"].(string)
+	resp, err := noFollow.Get(f.base + PairConsentPath + "?operation=" + url.QueryEscape(otherID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("state cap status = %d, want 503", resp.StatusCode)
+	if failedStarts != 0 || otherID == "" || resp.StatusCode != http.StatusFound {
+		t.Fatalf("repeated consent starts failed=%d; other account operation=%q status=%d, want no failures and 302", failedStarts, otherID, resp.StatusCode)
+	}
+}
+
+func TestPairConsentGETReplacesOAuthStateForOperation(t *testing.T) {
+	// A consent link must retain only its latest OAuth state so stale callbacks cannot create another approval form.
+	f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+	id, _ := f.newOperation(t)
+	noFollow := &http.Client{Transport: f.transport, Jar: f.client.Jar, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	locations := make([]url.Values, 0, 2)
+	for range 2 {
+		resp, err := noFollow.Get(f.base + PairConsentPath + "?operation=" + url.QueryEscape(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		location, _ := url.Parse(resp.Header.Get("Location"))
+		locations = append(locations, location.Query())
+		resp.Body.Close()
+	}
+	f.g.pairMu.Lock()
+	stateCount := 0
+	for _, state := range f.g.pairConsentStates {
+		if state.operation == id {
+			stateCount++
+		}
+	}
+	f.g.pairMu.Unlock()
+	callback, _ := url.Parse(locations[0].Get("redirect_uri"))
+	query := callback.Query()
+	query.Set("code", "same")
+	query.Set("state", locations[0].Get("state"))
+	callback.RawQuery = query.Encode()
+	stale, err := f.client.Get(callback.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.Body.Close()
+	if stateCount != 1 || stale.StatusCode != http.StatusForbidden {
+		t.Fatalf("active states=%d, stale callback status=%d; want one state and 403", stateCount, stale.StatusCode)
+	}
+}
+
+func TestPairConsentCallbackReplacesFormTokenForOperation(t *testing.T) {
+	// Only the latest callback's form may decide, preventing abandoned tabs from using an older approval token.
+	f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+	id, _ := f.newOperation(t)
+	oldToken := f.formToken(t, id)
+	newToken := f.formToken(t, id)
+	oldForm := f.decide(t, id, oldToken, "confirm")
+	oldForm.Body.Close()
+	f.g.pairMu.Lock()
+	state := f.g.pairOperations[id].state
+	f.g.pairMu.Unlock()
+	newForm := f.decide(t, id, newToken, "confirm")
+	newForm.Body.Close()
+	if oldForm.StatusCode != http.StatusForbidden || state != "pending" || newForm.StatusCode != http.StatusOK {
+		t.Fatalf("old form status=%d state=%s; new form status=%d, want 403/pending then 200", oldForm.StatusCode, state, newForm.StatusCode)
+	}
+}
+
+func TestPairConfirmConflictSurvivesExpiry(t *testing.T) {
+	// A terminal 409 is the operation's stable result until a newer preflight replaces it.
+	f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+	id, signer := f.newOperation(t)
+	token := f.formToken(t, id)
+	f.g.mu.Lock()
+	changed := recordForConsentTest(t, f.newHost(t))
+	f.g.hosts["host-1"].record = &changed
+	f.g.mu.Unlock()
+	decision := f.decide(t, id, token, "confirm")
+	decision.Body.Close()
+	if decision.StatusCode != http.StatusConflict {
+		t.Fatalf("revision conflict status=%d, want 409", decision.StatusCode)
+	}
+	f.clockNow = f.clockNow.Add(11 * time.Minute)
+	retry := f.confirm(t, id, signer, nil)
+	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusConflict || responseError(t, retry) != "revision_changed" {
+		t.Fatalf("expired terminal retry status=%d, want retained 409 revision_changed", retry.StatusCode)
+	}
+}
+
+func TestPairNewPreflightRemovesTerminalOperation(t *testing.T) {
+	// A newer preflight for the slot must make an older terminal operation definitively unknown.
+	f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+	oldID, oldSigner := f.newOperation(t)
+	token := f.formToken(t, oldID)
+	f.g.mu.Lock()
+	changed := recordForConsentTest(t, f.newHost(t))
+	f.g.hosts["host-1"].record = &changed
+	f.g.mu.Unlock()
+	decision := f.decide(t, oldID, token, "confirm")
+	decision.Body.Close()
+	if decision.StatusCode != http.StatusConflict {
+		t.Fatalf("revision conflict status=%d, want 409", decision.StatusCode)
+	}
+	_, _ = f.newOperation(t)
+	oldRetry := f.confirm(t, oldID, oldSigner, nil)
+	defer oldRetry.Body.Close()
+	if oldRetry.StatusCode != http.StatusNotFound {
+		t.Fatalf("old terminal operation status=%d, want 404", oldRetry.StatusCode)
 	}
 }
 
@@ -638,36 +918,36 @@ func TestPairConsentCancelThenConfirmIsForbiddenWithoutSaving(t *testing.T) {
 	}
 }
 
-func TestPairConsentFirstDecisionWinsAcrossTabs(t *testing.T) {
-	// A decision from either open tab invalidates every form token for that operation.
-	t.Run("cancel first", func(t *testing.T) {
+func TestPairConsentLatestFormTokenWinsAcrossTabs(t *testing.T) {
+	// A new callback replaces the old form token, leaving only the latest tab able to make the first decision.
+	t.Run("latest confirm", func(t *testing.T) {
 		f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
 		id, signer := f.newOperation(t)
-		cancelToken := f.formToken(t, id)
-		confirmToken := f.formToken(t, id)
-		first := f.decide(t, id, cancelToken, "cancel")
-		first.Body.Close()
-		second := f.decide(t, id, confirmToken, "confirm")
-		second.Body.Close()
+		oldToken := f.formToken(t, id)
+		latestToken := f.formToken(t, id)
+		old := f.decide(t, id, oldToken, "cancel")
+		old.Body.Close()
+		latest := f.decide(t, id, latestToken, "confirm")
+		latest.Body.Close()
 		result := f.confirm(t, id, signer, nil)
 		defer result.Body.Close()
-		if result.StatusCode != http.StatusForbidden || responseError(t, result) != "consent_cancelled" || f.saveCount.Load() != 0 {
-			t.Fatalf("second tab changed cancel: status=%d saves=%d", result.StatusCode, f.saveCount.Load())
+		if old.StatusCode != http.StatusForbidden || latest.StatusCode != http.StatusOK || result.StatusCode != http.StatusOK || f.saveCount.Load() != 1 {
+			t.Fatalf("stale form status=%d latest form status=%d confirm status=%d saves=%d", old.StatusCode, latest.StatusCode, result.StatusCode, f.saveCount.Load())
 		}
 	})
-	t.Run("confirm first", func(t *testing.T) {
+	t.Run("latest cancel", func(t *testing.T) {
 		f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
 		id, signer := f.newOperation(t)
-		confirmToken := f.formToken(t, id)
-		cancelToken := f.formToken(t, id)
-		first := f.decide(t, id, confirmToken, "confirm")
-		first.Body.Close()
-		second := f.decide(t, id, cancelToken, "cancel")
-		second.Body.Close()
+		oldToken := f.formToken(t, id)
+		latestToken := f.formToken(t, id)
+		old := f.decide(t, id, oldToken, "confirm")
+		old.Body.Close()
+		latest := f.decide(t, id, latestToken, "cancel")
+		latest.Body.Close()
 		result := f.confirm(t, id, signer, nil)
 		defer result.Body.Close()
-		if result.StatusCode != http.StatusOK || f.saveCount.Load() != 1 {
-			t.Fatalf("second tab changed confirm: status=%d saves=%d", result.StatusCode, f.saveCount.Load())
+		if old.StatusCode != http.StatusForbidden || latest.StatusCode != http.StatusOK || result.StatusCode != http.StatusForbidden || responseError(t, result) != "consent_cancelled" || f.saveCount.Load() != 0 {
+			t.Fatalf("stale form status=%d latest form status=%d confirm status=%d saves=%d", old.StatusCode, latest.StatusCode, result.StatusCode, f.saveCount.Load())
 		}
 	})
 }

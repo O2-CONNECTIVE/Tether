@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -82,6 +83,44 @@ func TestNativePairingRegistryRenameAndDirectorySyncA11(t *testing.T) {
 			t.Fatalf("protected read failure was not observed: called=%v err=%v", called, err)
 		}
 	})
+}
+
+func TestNativePairingRegistryDirectorySyncDiagnosticReflectsCertainty(t *testing.T) {
+	// Operators must not be told a two-stage registration is durable when its parent directory sync failed.
+	tests := []struct {
+		name, raw, want string
+	}{
+		{"one-stage pair keeps existing wording", `{"hosts":[{"label":"host"}]}`, "登録は確定済みです"},
+		{"two-stage pair reports unknown durability", `{"hosts":[{"label":"host","operation":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}`, "永続化を確認できません"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pairs.json")
+			diagnostic := &bytes.Buffer{}
+			syncCalls := 0
+			store, err := openRegistryWith(context.Background(), path, registryOps{
+				readTrust: func(context.Context, string) ([]byte, error) { return []byte("synthetic protected file"), nil },
+				syncDir: func(string) error {
+					syncCalls++
+					if syncCalls > 1 {
+						return errors.New("synthetic directory sync failure")
+					}
+					return nil
+				},
+				diagnostic: diagnostic,
+			})
+			if err != nil {
+				t.Fatalf("open registry: %v", err)
+			}
+			defer store.Close()
+			if err := store.Save(context.Background(), []byte(test.raw)); !errors.Is(err, agentgateway.ErrRegistryDurabilityUnknown) {
+				t.Fatalf("save error = %v, want durability unknown", err)
+			}
+			if !bytes.Contains(diagnostic.Bytes(), []byte(test.want)) {
+				t.Fatalf("diagnostic = %q, want %q", diagnostic.String(), test.want)
+			}
+		})
+	}
 }
 
 func TestNativePairingRegistryExclusiveLockA14(t *testing.T) {
