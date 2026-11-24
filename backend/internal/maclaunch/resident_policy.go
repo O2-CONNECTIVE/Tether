@@ -148,8 +148,16 @@ func parseResidentPolicy(raw []byte) (residentPolicy, error) {
 		return p, ErrResident
 	}
 	fields, e := agentwire.Fields(raw, names...)
-	if e != nil || len(fields) != len(names)-1 {
+	if e != nil {
 		return p, ErrResident
+	}
+	for _, name := range []string{
+		"protocol", "policy_digest", "registration_endpoint", "host_label", "principal_label",
+		"principal_public_key", "host_key_fingerprint", "work_dir", "home", "cleanup_seconds", "operations",
+	} {
+		if _, ok := fields[name]; !ok {
+			return p, ErrResident
+		}
 	}
 	str := func(n string) string {
 		var s string
@@ -157,6 +165,17 @@ func parseResidentPolicy(raw []byte) (residentPolicy, error) {
 			return ""
 		}
 		return s
+	}
+	stringValue := func(raw json.RawMessage) (string, bool) {
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 || raw[0] != '"' {
+			return "", false
+		}
+		var value string
+		if json.Unmarshal(raw, &value) != nil {
+			return "", false
+		}
+		return value, true
 	}
 	if str("protocol") != "rescue-mac-resident-policy/1" || str("policy_digest") != agentexec.MacCurrentUserPolicyDigest() {
 		return p, ErrResident
@@ -178,13 +197,27 @@ func parseResidentPolicy(raw []byte) (residentPolicy, error) {
 	if e != nil || p.peer.Type() != ssh.KeyAlgoED25519 {
 		return p, ErrResident
 	}
-	store, keyPath := str("host_key_store"), str("host_key_path")
-	if store == agentkeys.StoreKeychain && keyPath == "" {
-		p.key = agentkeys.Config{KeyStore: agentkeys.StoreKeychain, Fingerprint: str("host_key_fingerprint")}
-	} else if store == "" && keyPath != "" {
-		p.key = agentkeys.Config{Path: keyPath, Fingerprint: str("host_key_fingerprint")}
-	} else {
+	fingerprint, ok := stringValue(fields["host_key_fingerprint"])
+	if !ok {
 		return p, ErrResident
+	}
+	storeRaw, hasStore := fields["host_key_store"]
+	pathRaw, hasPath := fields["host_key_path"]
+	if hasStore == hasPath {
+		return p, ErrResident
+	}
+	if hasStore {
+		store, ok := stringValue(storeRaw)
+		if !ok || store != agentkeys.StoreKeychain {
+			return p, ErrResident
+		}
+		p.key = agentkeys.Config{KeyStore: agentkeys.StoreKeychain, Fingerprint: fingerprint}
+	} else {
+		keyPath, ok := stringValue(pathRaw)
+		if !ok {
+			return p, ErrResident
+		}
+		p.key = agentkeys.Config{Path: keyPath, Fingerprint: fingerprint}
 	}
 	p.runtime = macagent.Config{WorkDir: str("work_dir"), Home: str("home")}
 	paths := []string{p.runtime.WorkDir, p.runtime.Home}
