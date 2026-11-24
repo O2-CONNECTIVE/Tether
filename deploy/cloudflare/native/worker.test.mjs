@@ -969,14 +969,14 @@ test("two-step pairing stays behind both gates and accepts only each exact path 
   assert.equal(rt.timers.size, 0);
 });
 
-test("two-step consent accepts only the operation and callback query allowlists — why: extra or duplicate values could change which consent the browser binds", async () => {
+test("two-step consent validates required query values and rejects duplicates — why: repeated flow identifiers could bind the wrong consent", async () => {
   const rt = fakeRuntime();
   const worker = createNativeWorker(rt);
   const binding = fakeBinding(() => new Response("ok", { headers: { "Content-Type": "text/html" } }));
   for (const query of ["", "?", "?token=x", "?operation=", "?operation=a&operation=b", "?operation=a&extra=b"]) {
     assert.equal((await worker.fetch(request(PAIR_CONSENT_PATH + query, { method: "GET" }), pairEnv(binding))).status, 400, query);
   }
-  for (const query of ["", "?", "?state=s", "?code=c", "?code=c&state=s&extra=x", "?code=c&state=s&state=t", "?error=e&state=s", "?code=c&error=e&error_description=d&state=s"]) {
+  for (const query of ["", "?", "?state=s", "?code=c", "?code=c&state=s&state=t", "?code=c&state=s&iss=a&iss=b", "?error=e&state=s&error_description=a&error_description=b", "?code=c&error=e&error_description=d&state=s"]) {
     assert.equal((await worker.fetch(request(PAIR_CONSENT_CALLBACK_PATH + query, { method: "GET" }), pairEnv(binding))).status, 400, query);
   }
   for (const query of ["?operation=op-1", "?operation=op-1&operation=op-2"]) {
@@ -986,6 +986,23 @@ test("two-step consent accepts only the operation and callback query allowlists 
   const postWithQuery = await worker.fetch(request(`${PAIR_CONSENT_PATH}?operation=op-1`, { headers: { ...pairConsentHeaders, Origin: ORIGIN }, body: PAIR_FORM_BODY }), pairEnv(binding));
   assert.equal(postWithQuery.status, 400);
   assert.equal(binding.calls.length, 0);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("consent callback strips optional IdP query parameters before forwarding — why: provider metadata must not change gateway callback parsing", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const successBinding = fakeBinding(() => new Response("page", { headers: { "Content-Type": "text/html" } }));
+  const successQuery = "?code=synthetic-code&state=synthetic-state&scope=openid&authuser=0&prompt=consent&session_state=session&iss=https%3A%2F%2Fidp.example.invalid";
+  const success = await worker.fetch(request(PAIR_CONSENT_CALLBACK_PATH + successQuery, { method: "GET" }), pairEnv(successBinding));
+  assert.equal(success.status, 200);
+  assert.equal(successBinding.calls[0].url, `${UPSTREAM_ORIGIN}${PAIR_CONSENT_CALLBACK_PATH}?code=synthetic-code&state=synthetic-state`);
+
+  const errorBinding = fakeBinding(() => new Response("denied", { status: 400, headers: { "Content-Type": "text/html" } }));
+  const errorQuery = "?error=access_denied&state=synthetic-state&iss=https%3A%2F%2Fidp.example.invalid&error_uri=https%3A%2F%2Fidp.example.invalid%2Ferror";
+  const denied = await worker.fetch(request(PAIR_CONSENT_CALLBACK_PATH + errorQuery, { method: "GET" }), pairEnv(errorBinding));
+  assert.equal(denied.status, 400);
+  assert.equal(errorBinding.calls[0].url, `${UPSTREAM_ORIGIN}${PAIR_CONSENT_CALLBACK_PATH}?error=access_denied&state=synthetic-state`);
   assert.equal(rt.timers.size, 0);
 });
 

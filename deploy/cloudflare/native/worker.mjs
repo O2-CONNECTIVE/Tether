@@ -181,7 +181,7 @@ async function route(request, env, rt) {
   if (pairConfirm) return forwardPairStage(request, PAIR_CONFIRM_PATH, binding, rt, false);
   if (pairConsent && request.method === "GET") return forwardPairConsent(request, PAIR_CONSENT_PATH, url.search, {}, undefined, binding, rt);
   if (pairConsent && request.method === "POST") return forwardPairConsentPost(request, binding, rt);
-  if (pairConsentCallback) return forwardPairConsentCallback(request, url.search, binding, rt);
+  if (pairConsentCallback) return forwardPairConsentCallback(request, consentCallbackQuery(url), binding, rt);
   if (rescue) return forwardRescue(request, binding, rt);
   return forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
 }
@@ -193,11 +193,24 @@ function exactlyOneQueryValue(url, name) {
 
 function validConsentCallbackQuery(url) {
   const keys = [...url.searchParams.keys()];
-  const success = keys.length === 2 && ["code", "state"].every((name) => keys.filter((key) => key === name).length === 1)
-    && url.searchParams.get("code") !== "" && url.searchParams.get("state") !== "";
-  const denied = keys.length === 3 && ["error", "error_description", "state"].every((name) => keys.filter((key) => key === name).length === 1)
-    && url.searchParams.get("error") !== "" && url.searchParams.get("state") !== "";
+  if (keys.length !== new Set(keys).size || url.searchParams.getAll("state").length !== 1 || url.searchParams.get("state") === "") return false;
+  const hasCode = url.searchParams.has("code");
+  const hasError = url.searchParams.has("error");
+  const success = hasCode && !hasError && !url.searchParams.has("error_description") && url.searchParams.get("code") !== "";
+  const denied = !hasCode && hasError && url.searchParams.get("error") !== "";
   return success || denied;
+}
+
+function consentCallbackQuery(url) {
+  const query = new URLSearchParams();
+  if (url.searchParams.has("code")) {
+    query.set("code", url.searchParams.get("code"));
+  } else {
+    query.set("error", url.searchParams.get("error"));
+    if (url.searchParams.has("error_description")) query.set("error_description", url.searchParams.get("error_description"));
+  }
+  query.set("state", url.searchParams.get("state"));
+  return `?${query}`;
 }
 
 async function forwardPair(request, binding, rt) {
