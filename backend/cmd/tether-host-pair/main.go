@@ -10,17 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostpairoauth"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -31,10 +30,6 @@ type deps struct {
 	openBrowser               func(string) error
 	callbackAddress           string
 	callbackWait, pairTimeout time.Duration
-}
-type callbackResult struct {
-	code string
-	err  error
 }
 
 const (
@@ -166,69 +161,16 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 		return 1
 	}
 	wire := "ssh-ed25519 " + base64.StdEncoding.EncodeToString(signer.PublicKey().Marshal())
-	discovery, err := discover(ctx, d.client, issuer)
-	if err != nil {
-		fmt.Fprintln(stderr, diagLoginCancelled)
-		return 1
-	}
-	callbackAddress := d.callbackAddress
-	if callbackAddress == "" {
-		callbackAddress = "127.0.0.1:0"
-	}
-	listener, err := net.Listen("tcp4", callbackAddress)
-	if err != nil {
-		fmt.Fprintln(stderr, diagLoginCancelled)
-		return 1
-	}
-	defer listener.Close()
-	redirect := fmt.Sprintf("http://127.0.0.1:%d/callback", listener.Addr().(*net.TCPAddr).Port)
-	state, err := randomURL(32)
-	if err != nil {
-		fmt.Fprintln(stderr, diagLoginCancelled)
-		return 1
-	}
-	verifier, err := randomURL(32)
-	if err != nil {
-		fmt.Fprintln(stderr, diagLoginCancelled)
-		return 1
-	}
-	ch := sha256.Sum256([]byte(verifier))
-	handler, result := newCallback(state)
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
-	go srv.Serve(listener)
-	defer srv.Close()
-	auth, _ := url.Parse(discovery.AuthorizationEndpoint)
-	q := auth.Query()
-	q.Del("scope")
-	for k, v := range map[string]string{"response_type": "code", "client_id": clientID, "redirect_uri": redirect, "code_challenge": base64.RawURLEncoding.EncodeToString(ch[:]), "code_challenge_method": "S256", "state": state} {
-		q.Set(k, v)
-	}
-	auth.RawQuery = q.Encode()
-	fmt.Fprintln(stderr, auth.String())
-	if d.openBrowser != nil {
-		_ = d.openBrowser(auth.String())
-	}
-	wait := d.callbackWait
-	if wait <= 0 {
-		wait = 5 * time.Minute
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	var cb callbackResult
-	select {
-	case cb = <-result:
-	case <-ctx.Done():
-		fmt.Fprintln(stderr, diagLoginCancelled)
-		return 1
-	case <-timer.C:
-		fmt.Fprintln(stderr, diagLoginCancelled)
-		return 1
-	}
-	if cb.err != nil {
-		fmt.Fprintln(stderr, diagLoginCancelled)
-		return 1
-	}
-	token, err := exchange(ctx, d.client, discovery.TokenEndpoint, cb.code, redirect, clientID, verifier)
+	token, err := hostpairoauth.AccessToken(ctx, hostpairoauth.Config{
+		Client: d.client, Issuer: issuer, ClientID: clientID,
+		CallbackAddress: d.callbackAddress, CallbackWait: d.callbackWait,
+		OpenBrowser: func(authURL string) {
+			fmt.Fprintln(stderr, authURL)
+			if d.openBrowser != nil {
+				_ = d.openBrowser(authURL)
+			}
+		},
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, diagLoginCancelled)
 		return 1
@@ -286,45 +228,6 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 	}
 	fmt.Fprintln(stdout, diagPairComplete)
 	return 0
-}
-func newCallback(state string) (http.Handler, <-chan callbackResult) {
-	ch := make(chan callbackResult, 1)
-	var mu sync.Mutex
-	done := false
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip, _, e := net.SplitHostPort(r.RemoteAddr)
-		if e != nil || ip != "127.0.0.1" {
-			http.Error(w, "", http.StatusForbidden)
-			return
-		}
-		if r.Method != "GET" || r.URL.Path != "/callback" {
-			http.NotFound(w, r)
-			return
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if done {
-			http.Error(w, "", http.StatusConflict)
-			return
-		}
-		done = true
-		q, queryErr := url.ParseQuery(r.URL.RawQuery)
-		if queryErr != nil || q.Get("state") != state || q.Has("error") {
-			http.Error(w, "", http.StatusBadRequest)
-			ch <- callbackResult{err: errors.New("cancelled")}
-			return
-		}
-		code := q.Get("code")
-		if code == "" {
-			http.Error(w, "", http.StatusBadRequest)
-			ch <- callbackResult{err: errors.New("cancelled")}
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, "ログインが完了しました。このページを閉じてください")
-		ch <- callbackResult{code: code}
-	}), ch
 }
 func main() {
 	client := &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
