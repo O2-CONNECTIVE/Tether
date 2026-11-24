@@ -152,11 +152,13 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 	token, err := hostpairoauth.AccessToken(ctx, hostpairoauth.Config{
 		Client: d.client, Issuer: issuer, ClientID: clientID,
 		CallbackAddress: d.callbackAddress, CallbackWait: d.callbackWait,
-		OpenBrowser: func(_ context.Context, authURL string) {
+		OpenBrowser: func(_ context.Context, authURL string) error {
 			fmt.Fprintln(stderr, authURL)
 			if d.openBrowser != nil {
 				_ = d.openBrowser(authURL)
 			}
+			// The CLI can continue with the printed URL if automatic opening fails.
+			return nil
 		},
 	})
 	if err != nil {

@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+// ErrBrowserOpen reports that the caller could not start the browser handoff.
+var ErrBrowserOpen = errors.New("host pairing OAuth browser could not be opened")
+
 // Config describes the trusted native caller's OAuth client and browser entry.
 // The default callback is an ephemeral IPv4 loopback port.
 type Config struct {
@@ -25,8 +28,8 @@ type Config struct {
 	CallbackAddress string
 	CallbackWait    time.Duration
 	// OpenBrowser starts the external browser and returns without waiting for consent.
-	// The caller observes ctx cancellation while starting it.
-	OpenBrowser func(ctx context.Context, authorizationURL string)
+	// It observes ctx cancellation while starting it. An error stops the flow.
+	OpenBrowser func(ctx context.Context, authorizationURL string) error
 }
 
 // ValidClient checks the issuer and public client ID before local or network work.
@@ -84,7 +87,16 @@ func AccessToken(ctx context.Context, cfg Config) (string, error) {
 	query.Set("code_challenge_method", "S256")
 	query.Set("state", state)
 	authorize.RawQuery = query.Encode()
-	cfg.OpenBrowser(ctx, authorize.String())
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	openErr := cfg.OpenBrowser(ctx, authorize.String())
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if openErr != nil {
+		return "", ErrBrowserOpen
+	}
 
 	wait := cfg.CallbackWait
 	if wait <= 0 {

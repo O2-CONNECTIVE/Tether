@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -437,6 +438,9 @@ func invokeFlowAt(t *testing.T, f *flowFixture, callbackMode, home string) (int,
 				_, _ = f.client.Get(redirect.String())
 			}
 		}()
+		if callbackMode == "manual-browser" {
+			return errors.New("synthetic browser startup failure")
+		}
 		return nil
 	}}
 	if d.readProtected == nil {
@@ -445,6 +449,17 @@ func invokeFlowAt(t *testing.T, f *flowFixture, callbackMode, home string) (int,
 	var stdout, stderr strings.Builder
 	code := execute(context.Background(), []string{"--gateway", f.gateway.URL, "--issuer", f.issuer.URL, "--client-id", "client"}, &stdout, &stderr, d)
 	return code, stdout.String(), stderr.String(), authURL
+}
+
+func TestExecuteAllowsManualBrowserAfterAutomaticOpenFails(t *testing.T) {
+	f := newFlowFixture(t, "MATCH", http.StatusOK)
+	code, stdout, stderr, authURL := invokeFlow(t, f, "manual-browser")
+	if code != 0 || !strings.Contains(stdout, diagPairComplete) || f.gatewayCalls != 1 {
+		t.Fatalf("manual browser did not complete registration: status=%d calls=%d", code, f.gatewayCalls)
+	}
+	if authURL == "" || !strings.Contains(stderr, authURL+"\n") {
+		t.Fatal("manual browser URL was not printed")
+	}
 }
 
 func TestExecuteDiscoveryIssuerMismatchDoesNotOpenBrowser(t *testing.T) {

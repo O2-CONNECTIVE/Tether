@@ -49,7 +49,7 @@ func newCallback(state string) (http.Handler, <-chan callbackResult) {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, "ログインが完了しました。このページを閉じてください")
+		io.WriteString(w, "ログインの応答を受け取りました。このページを閉じ、Tether で登録結果を確認してください。")
 		ch <- callbackResult{code: code}
 	}), ch
 }

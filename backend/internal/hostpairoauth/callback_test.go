@@ -38,7 +38,7 @@ func TestNewCallbackAcceptsOnlyOneMatchingLoopbackLogin(t *testing.T) {
 	r.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusOK || w.Body.String() != "ログインが完了しました。このページを閉じてください" {
+	if w.Code != http.StatusOK || w.Body.String() != "ログインの応答を受け取りました。このページを閉じ、Tether で登録結果を確認してください。" {
 		t.Fatalf("accepted callback: %d %q", w.Code, w.Body.String())
 	}
 	second := httptest.NewRecorder()
