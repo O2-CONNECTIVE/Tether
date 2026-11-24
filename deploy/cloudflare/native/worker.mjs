@@ -3,18 +3,19 @@
 //
 // DENY ALL unless env.TETHER_NATIVE_GATE equals GATE_VALUE exactly. Even then
 // only POST/DELETE MCP_PATH, OAuth protected-resource metadata GETs, a GET
-// WebSocket upgrade at REGISTER_PATH, when TETHER_NATIVE_PAIRING opts in POST
-// PAIR_PATH, and when TETHER_NATIVE_RESCUE opts in a GET WebSocket upgrade at
-// RESCUE_PATH are forwarded, to fixed upstream paths, through the ONE VPC
+// WebSocket upgrade at REGISTER_PATH, when TETHER_NATIVE_PAIRING opts in the
+// pairing paths, and when TETHER_NATIVE_RESCUE opts in a GET WebSocket upgrade
+// at RESCUE_PATH are forwarded, to fixed upstream paths, through the ONE VPC
 // Service binding env.TETHER_NATIVE_VPC. There is no global fetch, no
 // request-selected target and no redirect. This Worker authenticates
 // nobody and issues no grant: for
 // MCP the Go agentgateway verifies the configured Access assertion or OAuth
 // bearer token and maps its subject;
 // for registration the Go agenttransport verifies the enrolled host-key proof
-// and the agent channel checks the same grant before any command. Nothing is
-// logged. For pairing the Go agentgateway verifies the bearer token and the
-// new host key's proof.
+// and the agent channel checks the same grant before any command. For pairing,
+// the Go agentgateway verifies the existing route's bearer and key proof,
+// operations bearer and key proof, or confirm consent binding and key proof.
+// Nothing is logged.
 
 // The WebSocket relay is the reviewed probe relay (explicit ArrayBuffer
 // binaryType, one close, one lifetime timer); only the limits differ.
@@ -23,6 +24,10 @@ import { relay } from "../probe/worker.mjs";
 export const MCP_PATH = "/mcp";
 export const REGISTER_PATH = "/tether-agent/v1/register";
 export const PAIR_PATH = "/tether-agent/v1/pair";
+export const PAIR_OPERATIONS_PATH = `${PAIR_PATH}/operations`;
+export const PAIR_CONFIRM_PATH = `${PAIR_PATH}/confirm`;
+export const PAIR_CONSENT_PATH = `${PAIR_PATH}/consent`;
+export const PAIR_CONSENT_CALLBACK_PATH = `${PAIR_CONSENT_PATH}/callback`;
 export const RESCUE_PATH = "/tether-agent/v1/rescue";
 export const SUBPROTOCOL = "rescue-agent-register.v1";
 export const RESCUE_SUBPROTOCOL = "rescue-agent-reception.v1";
@@ -120,11 +125,29 @@ async function route(request, env, rt) {
   const authMode = env.TETHER_NATIVE_AUTH_MODE;
   const metadataPath = authMode === OAUTH_BEARER_MODE ? OAUTH_METADATA_PATHS.find((path) => path === url.pathname) : undefined;
   const pair = env.TETHER_NATIVE_PAIRING === PAIRING_GATE_VALUE && url.pathname === PAIR_PATH;
+  const pairOperations = env.TETHER_NATIVE_PAIRING === PAIRING_GATE_VALUE && url.pathname === PAIR_OPERATIONS_PATH;
+  const pairConfirm = env.TETHER_NATIVE_PAIRING === PAIRING_GATE_VALUE && url.pathname === PAIR_CONFIRM_PATH;
+  const pairConsent = env.TETHER_NATIVE_PAIRING === PAIRING_GATE_VALUE && url.pathname === PAIR_CONSENT_PATH;
+  const pairConsentCallback = env.TETHER_NATIVE_PAIRING === PAIRING_GATE_VALUE && url.pathname === PAIR_CONSENT_CALLBACK_PATH;
   const rescue = env.TETHER_NATIVE_RESCUE === RESCUE_GATE_VALUE && url.pathname === RESCUE_PATH;
-  if (url.pathname !== MCP_PATH && url.pathname !== REGISTER_PATH && !pair && !rescue && metadataPath === undefined) return deny(rt, 404, "not found");
-  if (url.search !== "" || request.url.includes("?")) return deny(rt, 400, "query parameters are not accepted");
+  const pairConsentFlow = pairOperations || pairConfirm || pairConsent || pairConsentCallback;
+  if (url.pathname !== MCP_PATH && url.pathname !== REGISTER_PATH && !pair && !pairConsentFlow && !rescue && metadataPath === undefined) return deny(rt, 404, "not found");
+  const hasQuery = url.search !== "" || request.url.includes("?");
+  if (pairConsentFlow) {
+    const queryAllowed = pairConsent && request.method === "GET"
+      ? exactlyOneQueryValue(url, "operation")
+      : pairConsentCallback && request.method === "GET"
+        ? validConsentCallbackQuery(url)
+        : !hasQuery;
+    if (!queryAllowed) return deny(rt, 400, "pair consent query is not accepted");
+  } else if (hasQuery) {
+    return deny(rt, 400, "query parameters are not accepted");
+  }
   // Reject observable raw-path aliases before normalized URL routing.
-  if (request.url.slice(url.origin.length) !== url.pathname) return deny(rt, 404, "not found");
+  const rawTarget = request.url.slice(url.origin.length);
+  const queryAt = rawTarget.indexOf("?");
+  const rawPath = queryAt < 0 ? rawTarget : rawTarget.slice(0, queryAt);
+  if (rawPath !== url.pathname) return deny(rt, 404, "not found");
   const mcp = url.pathname === MCP_PATH;
   if (metadataPath !== undefined) {
     if (request.method !== "GET") return deny(rt, 405, "method not allowed", { Allow: "GET" });
@@ -135,17 +158,46 @@ async function route(request, env, rt) {
     }
   } else if (pair) {
     if (request.method !== "POST" || request.headers.has("Upgrade")) return deny(rt, 405, "method not allowed", { Allow: "POST" });
+  } else if (pairOperations || pairConfirm || (pairConsent && request.method === "POST")) {
+    if (request.method !== "POST" || request.headers.has("Upgrade")) return deny(rt, 405, "method not allowed", { Allow: "POST" });
+  } else if (pairConsent) {
+    if (request.method !== "GET" || request.headers.has("Upgrade")) return deny(rt, 405, "method not allowed", { Allow: "GET, POST" });
+  } else if (pairConsentCallback) {
+    if (request.method !== "GET" || request.headers.has("Upgrade")) return deny(rt, 405, "method not allowed", { Allow: "GET" });
   } else if (request.method !== "GET" || (request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket") {
     return deny(rt, 405, "method not allowed", { Allow: "GET" });
   }
-  // No Origin is configured for either Go handler, so it is refused here
-  // rather than dropped.
-  if (request.headers.has("Origin")) return deny(rt, 403, "origin not allowed");
+  // Only the browser's consent form may carry Origin, and it must be same-origin.
+  // Existing native routes continue to refuse Origin rather than forwarding it.
+  if (pairConsent && request.method === "POST") {
+    if (request.headers.get("Origin") !== url.origin) return deny(rt, 403, "origin not allowed");
+  } else if (request.headers.has("Origin")) {
+    return deny(rt, 403, "origin not allowed");
+  }
   if (metadataPath !== undefined) return forwardProtectedResourceMetadata(metadataPath, binding, rt);
   if (mcp) return forwardMcp(request, binding, rt, authMode);
   if (pair) return forwardPair(request, binding, rt);
+  if (pairOperations) return forwardPairStage(request, PAIR_OPERATIONS_PATH, binding, rt, true);
+  if (pairConfirm) return forwardPairStage(request, PAIR_CONFIRM_PATH, binding, rt, false);
+  if (pairConsent && request.method === "GET") return forwardPairConsent(request, PAIR_CONSENT_PATH, url.search, {}, undefined, binding, rt);
+  if (pairConsent && request.method === "POST") return forwardPairConsentPost(request, binding, rt);
+  if (pairConsentCallback) return forwardPairConsentCallback(request, url.search, binding, rt);
   if (rescue) return forwardRescue(request, binding, rt);
   return forwardRegister(request, binding, rt, env.TETHER_RESIDENT_GATE === RESIDENT_GATE_VALUE);
+}
+
+function exactlyOneQueryValue(url, name) {
+  const keys = [...url.searchParams.keys()];
+  return keys.length === 1 && keys[0] === name && url.searchParams.get(name) !== "";
+}
+
+function validConsentCallbackQuery(url) {
+  const keys = [...url.searchParams.keys()];
+  const success = keys.length === 2 && ["code", "state"].every((name) => keys.filter((key) => key === name).length === 1)
+    && url.searchParams.get("code") !== "" && url.searchParams.get("state") !== "";
+  const denied = keys.length === 3 && ["error", "error_description", "state"].every((name) => keys.filter((key) => key === name).length === 1)
+    && url.searchParams.get("error") !== "" && url.searchParams.get("state") !== "";
+  return success || denied;
 }
 
 async function forwardPair(request, binding, rt) {
@@ -184,6 +236,101 @@ async function forwardPair(request, binding, rt) {
   if (result === TIMED_OUT) return deny(rt, 504, "pair upstream timed out");
   if (result === null) return deny(rt, 502, "pair upstream reply refused");
   return new rt.Response(result.reply.byteLength === 0 ? null : result.reply, { status: result.status, headers: result.headers });
+}
+
+async function readPairBody(request, rt) {
+  const declared = request.headers.get("Content-Length");
+  if (declared !== null && !(/^\d{1,4}$/.test(declared) && Number(declared) <= LIMITS.pairBody)) {
+    return { response: deny(rt, 413, "pair body exceeds the size limit") };
+  }
+  const body = await withDeadline(rt, LIMITS.bodyMs, (signal) => readBounded(request.body, LIMITS.pairBody, signal));
+  if (body === TIMED_OUT) return { response: deny(rt, 408, "pair body read timed out") };
+  if (body === null) return { response: deny(rt, 413, "pair body exceeds the size limit") };
+  return { body };
+}
+
+async function forwardPairStage(request, path, binding, rt, requireBearer) {
+  const headers = {};
+  if (requireBearer) {
+    const authorization = request.headers.get("Authorization");
+    if (!authorization || authorization.length > LIMITS.authorization || authorization.includes(",")) {
+      return deny(rt, 403, "exactly one bounded bearer credential is required");
+    }
+    headers.Authorization = authorization;
+  }
+  if (request.headers.get("Content-Type") !== "application/json") return deny(rt, 400, "Content-Type must be application/json");
+  headers["Content-Type"] = "application/json";
+  const input = await readPairBody(request, rt);
+  if (input.response) return input.response;
+
+  const result = await withDeadline(rt, LIMITS.upstreamMs, async (signal) => {
+    const response = await binding.fetch(UPSTREAM_ORIGIN + path, {
+      method: "POST", headers, body: input.body, redirect: "manual", signal,
+    });
+    if (signal.aborted) {
+      await cancelBody(response);
+      return null;
+    }
+    const reply = await readBounded(response.body, LIMITS.reply, signal);
+    if (reply === null) return null;
+    const responseHeaders = new Headers();
+    const contentType = response.headers.get("Content-Type");
+    if (contentType !== null) responseHeaders.set("Content-Type", contentType);
+    return { status: response.status, headers: responseHeaders, reply };
+  });
+  if (result === TIMED_OUT) return deny(rt, 504, "pair upstream timed out");
+  if (result === null) return deny(rt, 502, "pair upstream reply refused");
+  return new rt.Response(result.reply.byteLength === 0 ? null : result.reply, { status: result.status, headers: result.headers });
+}
+
+async function forwardPairConsentPost(request, binding, rt) {
+  if (request.headers.get("Content-Type") !== "application/x-www-form-urlencoded") {
+    return deny(rt, 400, "Content-Type must be application/x-www-form-urlencoded");
+  }
+  const input = await readPairBody(request, rt);
+  if (input.response) return input.response;
+  const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  const cookie = request.headers.get("Cookie");
+  if (cookie !== null) headers.Cookie = cookie;
+  return forwardPairConsent(request, PAIR_CONSENT_PATH, "", headers, input.body, binding, rt);
+}
+
+async function forwardPairConsentCallback(request, search, binding, rt) {
+  const headers = {};
+  const cookie = request.headers.get("Cookie");
+  if (cookie !== null) headers.Cookie = cookie;
+  return forwardPairConsent(request, PAIR_CONSENT_CALLBACK_PATH, search, headers, undefined, binding, rt);
+}
+
+async function forwardPairConsent(request, path, search, headers, body, binding, rt) {
+  const result = await withDeadline(rt, LIMITS.upstreamMs, async (signal) => {
+    const init = { method: request.method, headers, redirect: "manual", signal };
+    if (body !== undefined) init.body = body;
+    const response = await binding.fetch(UPSTREAM_ORIGIN + path + search, init);
+    if (signal.aborted) {
+      await cancelBody(response);
+      return null;
+    }
+    const reply = await readBounded(response.body, LIMITS.reply, signal);
+    if (reply === null) return null;
+    return { status: response.status, headers: consentReplyHeaders(response.headers), reply };
+  });
+  if (result === TIMED_OUT) return deny(rt, 504, "pair consent upstream timed out");
+  if (result === null) return deny(rt, 502, "pair consent upstream reply refused");
+  return new rt.Response(result.reply.byteLength === 0 ? null : result.reply, { status: result.status, headers: result.headers });
+}
+
+function consentReplyHeaders(upstream) {
+  const out = new Headers();
+  for (const name of ["Cache-Control", "X-Frame-Options", "Content-Security-Policy", "Set-Cookie", "Location", "Content-Type"]) {
+    if (name === "Set-Cookie" && typeof upstream.getSetCookie === "function") {
+      for (const cookie of upstream.getSetCookie()) out.append(name, cookie);
+      continue;
+    }
+    const value = upstream.get(name);
+    if (value !== null) out.set(name, value);
+  }
+  return out;
 }
 
 async function forwardMcp(request, binding, rt, authMode) {

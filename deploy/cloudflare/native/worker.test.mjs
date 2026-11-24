@@ -639,11 +639,11 @@ test("throwing bindings and failing streams leave no timer, socket or open reade
   assert.equal(rt.pairs.length, 0);
 });
 
-test("the source imports only the probe relay and has no global fetch, logging, cookie or CORS handling", () => {
+test("the source imports only the probe relay and has no global fetch, logging or CORS handling", () => {
   const source = readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
   assert.deepEqual(source.match(/^import .*$/gm), ['import { relay } from "../probe/worker.mjs";']);
-  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding.", "binding.", "binding."]);
-  assert.doesNotMatch(source, /console\.|globalThis\.fetch|Access-Control|"Set-Cookie"|caches\.|\.connect\(/);
+  assert.deepEqual([...source.matchAll(/([\w.]*)fetch\(/g)].map((m) => m[1]), ["", "binding.", "binding.", "binding.", "binding.", "binding.", "binding.", "binding."]);
+  assert.doesNotMatch(source, /console\.|globalThis\.fetch|Access-Control|caches\.|\.connect\(/);
   assert.ok(!source.includes("tether-echo-probe.internal"));
 });
 
@@ -910,6 +910,212 @@ test("B1: every pairing answer carries the gateway's media type, and Allow or a 
   assert.equal(unauthorized.headers.get("Allow"), null);
   const method = await send(() => pairRefusal(405, { Allow: "POST", "WWW-Authenticate": "Bearer" }));
   assert.equal(method.headers.get("WWW-Authenticate"), null);
+  assert.equal(rt.timers.size, 0);
+});
+
+// Two-step host pairing (#453). These paths remain behind the existing native
+// and pairing gates; the gateway owns consent state and registration results.
+const PAIR_OPERATIONS_PATH = `${PAIR_PATH}/operations`;
+const PAIR_CONFIRM_PATH = `${PAIR_PATH}/confirm`;
+const PAIR_CONSENT_PATH = `${PAIR_PATH}/consent`;
+const PAIR_CONSENT_CALLBACK_PATH = `${PAIR_CONSENT_PATH}/callback`;
+const PAIR_STAGE_PATHS = [PAIR_OPERATIONS_PATH, PAIR_CONFIRM_PATH, PAIR_CONSENT_PATH, PAIR_CONSENT_CALLBACK_PATH];
+const PAIR_CONFIRM_BODY = '{"operation":"synthetic-operation","proof":"c3ludGhldGlj"}';
+const PAIR_CONSENT_COOKIE = "__Host-tether-pair-consent=synthetic-cookie";
+const PAIR_FORM_BODY = "operation=synthetic-operation&form_token=synthetic-token&decision=confirm";
+const pairConsentHeaders = { Cookie: PAIR_CONSENT_COOKIE, "Content-Type": "application/x-www-form-urlencoded" };
+
+function pairStageRequest(path, method) {
+  if (method === "GET") {
+    if (path === PAIR_CONSENT_PATH) return request(`${path}?operation=synthetic-operation`, { method });
+    if (path === PAIR_CONSENT_CALLBACK_PATH) return request(`${path}?code=synthetic-code&state=synthetic-state`, { method });
+  }
+  const headers = path === PAIR_CONSENT_PATH && method === "POST"
+    ? pairConsentHeaders
+    : { Authorization: PAIR_TOKEN, "Content-Type": "application/json" };
+  const body = path === PAIR_CONSENT_PATH && method === "POST" ? PAIR_FORM_BODY : PAIR_CONFIRM_BODY;
+  return request(path, { method, headers, body });
+}
+
+test("two-step pairing stays behind both gates and accepts only each exact path and method — why: aliases or an accidental route must never reach the gateway", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => new Response("ok", { headers: { "Content-Type": "text/plain" } }));
+  const cases = [
+    [PAIR_OPERATIONS_PATH, ["POST"]], [PAIR_CONFIRM_PATH, ["POST"]],
+    [PAIR_CONSENT_PATH, ["GET", "POST"]], [PAIR_CONSENT_CALLBACK_PATH, ["GET"]],
+  ];
+  for (const [path, methods] of cases) {
+    for (const method of methods) {
+      const req = pairStageRequest(path, method);
+      for (const env of [openEnv(binding), { ...pairEnv(binding), TETHER_NATIVE_PAIRING: "true" }, { ...pairEnv(binding), TETHER_NATIVE_GATE: undefined }]) {
+        assert.equal((await worker.fetch(req, env)).status, 404, `${method} ${path}`);
+      }
+    }
+    const suffix = path === PAIR_CONSENT_PATH ? "?operation=synthetic-operation" : path === PAIR_CONSENT_CALLBACK_PATH ? "?code=synthetic-code&state=synthetic-state" : "";
+    const aliases = [path + "/" + suffix, path.toUpperCase() + suffix, path.replace("/pair", "/%70air") + suffix, `/x/..${path}${suffix}`];
+    for (const alias of aliases) assert.equal((await worker.fetch(request(alias, { method: methods[0] }), pairEnv(binding))).status, 404, alias);
+    for (const method of ["PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) {
+      if (methods.includes(method)) continue;
+      assert.equal((await worker.fetch(pairStageRequest(path, method), pairEnv(binding))).status, 405, `${method} ${path}`);
+    }
+    for (const method of methods) {
+      const upgraded = pairStageRequest(path, method);
+      upgraded.headers.set("Upgrade", "websocket");
+      assert.equal((await worker.fetch(upgraded, pairEnv(binding))).status, 405, `Upgrade ${method} ${path}`);
+    }
+  }
+  assert.equal(binding.calls.length, 0);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("two-step consent accepts only the operation and callback query allowlists — why: extra or duplicate values could change which consent the browser binds", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => new Response("ok", { headers: { "Content-Type": "text/html" } }));
+  for (const query of ["", "?", "?token=x", "?operation=", "?operation=a&operation=b", "?operation=a&extra=b"]) {
+    assert.equal((await worker.fetch(request(PAIR_CONSENT_PATH + query, { method: "GET" }), pairEnv(binding))).status, 400, query);
+  }
+  for (const query of ["", "?", "?state=s", "?code=c", "?code=c&state=s&extra=x", "?code=c&state=s&state=t", "?error=e&state=s", "?code=c&error=e&error_description=d&state=s"]) {
+    assert.equal((await worker.fetch(request(PAIR_CONSENT_CALLBACK_PATH + query, { method: "GET" }), pairEnv(binding))).status, 400, query);
+  }
+  for (const query of ["?operation=op-1", "?operation=op-1&operation=op-2"]) {
+    const response = await worker.fetch(request(PAIR_OPERATIONS_PATH + query, { headers: pairHeaders, body: PAIR_BODY }), pairEnv(binding));
+    assert.equal(response.status, 400, query);
+  }
+  const postWithQuery = await worker.fetch(request(`${PAIR_CONSENT_PATH}?operation=op-1`, { headers: { ...pairConsentHeaders, Origin: ORIGIN }, body: PAIR_FORM_BODY }), pairEnv(binding));
+  assert.equal(postWithQuery.status, 400);
+  assert.equal(binding.calls.length, 0);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("consent callback accepts the IdP's complete error response tuple — why: denial must reach the gateway so it can clear the one-time flow", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const query = "?error=access_denied&error_description=No+consent&state=synthetic-state";
+  const binding = fakeBinding(() => new Response("denied", { status: 400, headers: { "Content-Type": "text/html" } }));
+  const response = await worker.fetch(request(PAIR_CONSENT_CALLBACK_PATH + query, { method: "GET" }), pairEnv(binding));
+  assert.equal(response.status, 400);
+  assert.equal(binding.calls[0].url, `${UPSTREAM_ORIGIN}${PAIR_CONSENT_CALLBACK_PATH}${query}`);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("operations forwards one bearer while confirm strips credentials and both retain gateway status and body — why: only the precheck authenticates and confirm outcomes must stay distinguishable", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const spoof = { Cookie: PAIR_CONSENT_COOKIE, "Proxy-Authorization": "Basic synthetic", [ASSERTION_HEADER]: TOKEN, "X-Forwarded-For": "192.0.2.1" };
+  const operationReply = '{"operation":"op-1","consent_url":"https://tether-native.example.invalid/consent"}';
+  const operationBinding = fakeBinding(() => new Response(operationReply, { status: 200, headers: { "Content-Type": "application/json" } }));
+  const operation = await worker.fetch(request(PAIR_OPERATIONS_PATH, { headers: { ...pairHeaders, ...spoof }, body: PAIR_BODY }), pairEnv(operationBinding));
+  assert.equal(operation.status, 200);
+  assert.equal(text(operation), operationReply);
+  assert.equal(operationBinding.calls[0].url, UPSTREAM_ORIGIN + PAIR_OPERATIONS_PATH);
+  assert.deepEqual(operationBinding.calls[0].init.headers, pairHeaders);
+  assert.equal(operationBinding.calls[0].init.redirect, "manual");
+  for (const authorization of [null, "", `${PAIR_TOKEN}, ${PAIR_TOKEN}`]) {
+    const headers = { ...pairHeaders, ...spoof };
+    if (authorization === null) delete headers.Authorization;
+    else headers.Authorization = authorization;
+    const refused = await worker.fetch(request(PAIR_OPERATIONS_PATH, { headers, body: PAIR_BODY }), pairEnv(operationBinding));
+    assert.equal(refused.status, 403, String(authorization));
+  }
+  const unknownBody = '{"error":"registration_unknown"}';
+  const unknownBinding = fakeBinding(() => new Response(unknownBody, { status: 500, headers: { "Content-Type": "application/json" } }));
+  const unknown = await worker.fetch(request(PAIR_OPERATIONS_PATH, { headers: pairHeaders, body: PAIR_BODY }), pairEnv(unknownBinding));
+  assert.equal(unknown.status, 500);
+  assert.equal(text(unknown), unknownBody);
+
+  for (const status of [500, 202, 403, 404, 409, 503]) {
+    const body = `{"status":${status},"error":"registration_unknown"}`;
+    const binding = fakeBinding(() => new Response(body, { status, headers: { "Content-Type": "application/json" } }));
+    const response = await worker.fetch(request(PAIR_CONFIRM_PATH, { headers: { ...pairHeaders, ...spoof }, body: PAIR_CONFIRM_BODY }), pairEnv(binding));
+    assert.equal(response.status, status, String(status));
+    assert.equal(text(response), body, String(status));
+    assert.deepEqual(binding.calls[0].init.headers, { "Content-Type": "application/json" });
+  }
+  assert.equal(rt.timers.size, 0);
+});
+
+test("two-step JSON and form requests enforce their media type and 4 KiB body bound — why: the gateway parsers receive only the intended small wire formats", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => new Response("ok", { headers: { "Content-Type": "text/plain" } }));
+  const posts = [
+    [PAIR_OPERATIONS_PATH, { ...pairHeaders }, PAIR_BODY],
+    [PAIR_CONFIRM_PATH, { "Content-Type": "application/json" }, PAIR_CONFIRM_BODY],
+    [PAIR_CONSENT_PATH, { ...pairConsentHeaders, Origin: ORIGIN }, PAIR_FORM_BODY],
+  ];
+  for (const [path, headers, body] of posts) {
+    const over = "x".repeat(PAIR_BODY_LIMIT + 1);
+    assert.equal((await worker.fetch(request(path, { headers, body: over }), pairEnv(binding))).status, 413, path);
+    assert.equal((await worker.fetch(request(path, { headers: { ...headers, "Content-Length": String(PAIR_BODY_LIMIT + 1) }, body: "x" }), pairEnv(binding))).status, 413, path);
+    assert.equal((await worker.fetch(request(path, { headers: { ...headers, "Content-Type": "text/plain" }, body }), pairEnv(binding))).status, 400, path);
+    assert.equal((await worker.fetch(request(path, { headers, body: "x".repeat(PAIR_BODY_LIMIT) }), pairEnv(binding))).status, 200, path);
+  }
+  assert.equal(binding.calls.length, 3);
+  for (const call of binding.calls) assert.equal(call.init.body.byteLength, PAIR_BODY_LIMIT);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("consent redirects and confirmation pages preserve the gateway's redirect, cookie, cache and frame protections — why: the browser must enforce the gateway's one-time consent boundary", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const location = "https://idp.example.invalid/authorize?client_id=synthetic&state=state-1";
+  const cookie = "__Host-tether-pair-consent=synthetic; Secure; HttpOnly; SameSite=Lax; Path=/";
+  const security = {
+    "Cache-Control": "no-store", "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'; default-src 'none'; form-action 'self'",
+    "Content-Type": "text/html; charset=utf-8",
+  };
+  const redirectBinding = fakeBinding(() => new Response(null, { status: 302, headers: { ...security, Location: location, "Set-Cookie": cookie } }));
+  const redirect = await worker.fetch(request(`${PAIR_CONSENT_PATH}?operation=synthetic-operation`, {
+    method: "GET", headers: { Authorization: PAIR_TOKEN, "Proxy-Authorization": "Basic synthetic", [ASSERTION_HEADER]: TOKEN, Cookie: PAIR_CONSENT_COOKIE },
+  }), pairEnv(redirectBinding));
+  assert.equal(redirect.status, 302);
+  for (const [name, value] of Object.entries({ ...security, Location: location, "Set-Cookie": cookie })) assert.equal(redirect.headers.get(name), value, name);
+  assert.equal(redirectBinding.calls[0].init.redirect, "manual");
+  assert.equal(redirectBinding.calls[0].url, `${UPSTREAM_ORIGIN}${PAIR_CONSENT_PATH}?operation=synthetic-operation`);
+  assert.deepEqual(redirectBinding.calls[0].init.headers, {});
+
+  const pageBody = "<!doctype html><form>Confirm this Mac</form>";
+  const pageBinding = fakeBinding(() => new Response(pageBody, { status: 200, headers: { ...security, "Set-Cookie": cookie } }));
+  const page = await worker.fetch(request(`${PAIR_CONSENT_CALLBACK_PATH}?code=synthetic-code&state=synthetic-state`, { method: "GET" }), pairEnv(pageBinding));
+  assert.equal(page.status, 200);
+  assert.equal(text(page), pageBody);
+  for (const [name, value] of Object.entries({ ...security, "Set-Cookie": cookie })) assert.equal(page.headers.get(name), value, name);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("browser consent forwards only its cookie and form while dropping all ambient credentials — why: IdP consent must not inherit Worker or Access identity", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const spoof = { Authorization: PAIR_TOKEN, "Proxy-Authorization": "Basic synthetic", [ASSERTION_HEADER]: TOKEN, "X-Forwarded-For": "192.0.2.1" };
+  const callbackBinding = fakeBinding(() => new Response("page", { headers: { "Content-Type": "text/html" } }));
+  const callback = await worker.fetch(request(`${PAIR_CONSENT_CALLBACK_PATH}?code=c&state=s`, { method: "GET", headers: { ...spoof, Cookie: PAIR_CONSENT_COOKIE } }), pairEnv(callbackBinding));
+  assert.equal(callback.status, 200);
+  assert.deepEqual(callbackBinding.calls[0].init.headers, { Cookie: PAIR_CONSENT_COOKIE });
+  assert.equal(callbackBinding.calls[0].url, `${UPSTREAM_ORIGIN}${PAIR_CONSENT_CALLBACK_PATH}?code=c&state=s`);
+
+  const consentBinding = fakeBinding(() => new Response("done", { headers: { "Content-Type": "text/html" } }));
+  const consent = await worker.fetch(request(PAIR_CONSENT_PATH, {
+    headers: { ...pairConsentHeaders, ...spoof, Origin: ORIGIN, "X-Request-Id": "synthetic" }, body: PAIR_FORM_BODY,
+  }), pairEnv(consentBinding));
+  assert.equal(consent.status, 200);
+  assert.deepEqual(consentBinding.calls[0].init.headers, pairConsentHeaders);
+  assert.equal(consentBinding.calls[0].init.method, "POST");
+  assert.equal(new TextDecoder().decode(consentBinding.calls[0].init.body), PAIR_FORM_BODY);
+  assert.equal(rt.timers.size, 0);
+});
+
+test("consent POST requires the request's public origin — why: a cross-origin form must not consume the browser-bound form token", async () => {
+  const rt = fakeRuntime();
+  const worker = createNativeWorker(rt);
+  const binding = fakeBinding(() => new Response("done"));
+  for (const origin of [undefined, "https://attacker.example.invalid", `${ORIGIN}/path`, `${ORIGIN}:443`]) {
+    const headers = { ...pairConsentHeaders, ...(origin === undefined ? {} : { Origin: origin }) };
+    assert.equal((await worker.fetch(request(PAIR_CONSENT_PATH, { headers, body: PAIR_FORM_BODY }), pairEnv(binding))).status, 403, String(origin));
+  }
+  assert.equal(binding.calls.length, 0);
   assert.equal(rt.timers.size, 0);
 });
 
