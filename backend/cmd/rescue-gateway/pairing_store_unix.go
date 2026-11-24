@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"golang.org/x/sys/unix"
 )
@@ -28,6 +30,9 @@ func openRegistryWith(ctx context.Context, path string, ops registryOps) (regist
 	}
 	if ops.rename == nil {
 		ops.rename = os.Rename
+	}
+	if ops.syncFile == nil {
+		ops.syncFile = func(file *os.File) error { return file.Sync() }
 	}
 	if ops.syncDir == nil {
 		ops.syncDir = syncRegistryDir
@@ -77,7 +82,20 @@ func openRegistryWith(ctx context.Context, path string, ops registryOps) (regist
 		if err != nil {
 			return nil, err
 		}
+		fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+		if err != nil {
+			return nil, err
+		}
+		file := os.NewFile(uintptr(fd), path)
+		syncErr := ops.syncFile(file)
+		closeErr := file.Close()
+		if err := errors.Join(syncErr, closeErr); err != nil {
+			return nil, err
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err := ops.syncDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	store := &nativeRegistry{path: path, lockPath: lockPath, lockFile: lockFile, ops: ops, raw: raw}
@@ -160,9 +178,27 @@ func (r *nativeRegistry) Save(ctx context.Context, raw []byte) error {
 	wipe(r.raw)
 	r.raw = append(r.raw[:0], raw...)
 	if err := r.ops.syncDir(dir); err != nil {
-		report(r.ops.diagnostic, "登録簿の親ディレクトリを同期できませんでした。登録は確定済みです")
+		message := "登録簿の親ディレクトリを同期できませんでした。登録は確定済みです"
+		if registryHasPairOperation(raw) {
+			message = "登録簿の親ディレクトリを同期できませんでした。永続化を確認できません"
+		}
+		report(r.ops.diagnostic, message)
+		return agentgateway.ErrRegistryDurabilityUnknown
 	}
 	return nil
+}
+
+func registryHasPairOperation(raw []byte) bool {
+	var stored storedPairRegistry
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return true
+	}
+	for _, record := range stored.Hosts {
+		if record.Operation != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *nativeRegistry) Close() error {

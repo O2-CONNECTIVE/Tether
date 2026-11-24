@@ -213,9 +213,17 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 			return closeUnserved(nil, gw.Close, diagnostic, 2)
 		}
 		resource, _ := url.Parse(cfg.gateway.Resource)
+		var consent *agentgateway.PairConsentConfig
+		if cfg.pairing.Consent != nil {
+			consent = &agentgateway.PairConsentConfig{
+				ClientID:              cfg.pairing.Consent.ClientID,
+				AuthorizationEndpoint: cfg.pairing.Consent.AuthorizationEndpoint,
+				TokenEndpoint:         cfg.pairing.Consent.TokenEndpoint,
+			}
+		}
 		if err := gw.ConfigurePairing(agentgateway.PairingConfig{
 			Verifier: verifier, Endpoint: resource.Scheme + "://" + resource.Host + agentgateway.PairPath,
-			RegistrationEndpoint: cfg.endpoint, Records: records,
+			RegistrationEndpoint: cfg.endpoint, Records: records, Consent: consent,
 			Save: func(next []agentgateway.PairRecord) error {
 				raw, err := encodePairingRegistry(next)
 				if err != nil {
@@ -304,7 +312,7 @@ func execute(ctx context.Context, args []string, diagnostic io.Writer, d deps) (
 	metadata := cfg.gateway.Mode == agentgateway.ModeOAuthBearer
 	var pair http.Handler
 	if cfg.pairing != nil {
-		pair = http.HandlerFunc(gw.ServePair)
+		pair = pairingRoutes(gw, cfg.pairing)
 	}
 	closeHandlers := func(ctx context.Context) error {
 		var errs []error
@@ -366,7 +374,7 @@ func routes(mcpPath, registrationPath string, metadata bool, pair, gw, registrat
 		switch p := r.URL.Path; {
 		case rescue != nil && p == agentgateway.RescuePath:
 			rescue.ServeHTTP(w, r)
-		case pair != nil && p == agentgateway.PairPath:
+		case pair != nil && isPairEndpointPath(p):
 			pair.ServeHTTP(w, r)
 		case p == registrationPath:
 			registration.ServeHTTP(w, r)

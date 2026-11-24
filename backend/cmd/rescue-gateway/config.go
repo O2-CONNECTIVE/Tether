@@ -16,6 +16,7 @@ import (
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agenttransport"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentwire"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostpairoauth"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -48,6 +49,11 @@ type pairingConfig struct {
 	Audience     string
 	ClientID     string
 	TokenTypes   []string
+	Consent      *pairingConsentConfig
+}
+
+type pairingConsentConfig struct {
+	ClientID, AuthorizationEndpoint, TokenEndpoint string
 }
 
 // parseLocalConfig validates the whole document before any key is opened.
@@ -116,8 +122,8 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 		c.residentOnly = true
 	}
 	if raw, present := m["pairing"]; present {
-		f, fieldErr := agentwire.Fields(raw, "registry_path", "audience", "client_id", "token_types")
-		if fieldErr != nil || len(f) != 4 {
+		f, fieldErr := agentwire.Fields(raw, "registry_path", "audience", "client_id", "token_types", "consent")
+		if fieldErr != nil || (len(f) != 4 && len(f) != 5) {
 			return localConfig{}, errConfig
 		}
 		var p pairingConfig
@@ -145,9 +151,29 @@ func parseLocalConfig(raw []byte, configPath string) (localConfig, error) {
 			}
 			p.TokenTypes = append(p.TokenTypes, s)
 		}
+		if rawConsent, present := f["consent"]; present {
+			consentFields, consentErr := agentwire.Fields(rawConsent, "client_id", "authorization_endpoint", "token_endpoint")
+			var consent pairingConsentConfig
+			consent.ClientID, valid = text(consentFields["client_id"], 256)
+			if consentErr != nil || len(consentFields) != 3 || !valid || !printable(consent.ClientID) {
+				return localConfig{}, errConfig
+			}
+			consent.AuthorizationEndpoint, valid = text(consentFields["authorization_endpoint"], maxEndpointBytes)
+			if !valid {
+				return localConfig{}, errConfig
+			}
+			consent.TokenEndpoint, valid = text(consentFields["token_endpoint"], maxEndpointBytes)
+			if !valid || !hostpairoauth.ValidConsentEndpoints(consent.AuthorizationEndpoint, consent.TokenEndpoint) {
+				return localConfig{}, errConfig
+			}
+			p.Consent = &consent
+		}
+		if !legacyPairBuildEnabled() && p.Consent == nil {
+			return localConfig{}, errConfig
+		}
 		if c.gateway.Mode != agentgateway.ModeOAuthBearer || p.Audience == c.gateway.Verifier.Audience ||
 			(p.Audience == p.ClientID && containsNormalType(p.TokenTypes, "jwt")) ||
-			fixedPathConflict(c.gateway.Resource, c.endpoint, agentgateway.PairPath) || samePath(p.RegistryPath, configPath) {
+			pairingPathConflict(c.gateway.Resource, c.endpoint, p.Consent != nil) || samePath(p.RegistryPath, configPath) {
 			return localConfig{}, errConfig
 		}
 		for _, k := range c.keys {
@@ -224,6 +250,19 @@ func fixedPathConflict(resource, endpoint, fixed string) bool {
 	r, err := url.Parse(resource)
 	e, ok := wssEndpoint(endpoint)
 	return err != nil || !ok || r.Path == fixed || e.Path == fixed
+}
+
+func pairingPathConflict(resource, endpoint string, withConsent bool) bool {
+	paths := []string{agentgateway.PairPath}
+	if withConsent {
+		paths = append(paths, agentgateway.PairOperationsPath, agentgateway.PairConsentPath, agentgateway.PairConsentCallbackPath, agentgateway.PairConfirmPath)
+	}
+	for _, path := range paths {
+		if fixedPathConflict(resource, endpoint, path) {
+			return true
+		}
+	}
+	return false
 }
 
 // residentEnrollments selects an existing, unambiguous principal/host pair.

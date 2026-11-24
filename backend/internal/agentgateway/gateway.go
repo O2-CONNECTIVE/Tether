@@ -145,29 +145,33 @@ type session struct {
 
 // Gateway holds every mapping in memory only.
 type Gateway struct {
-	hosts         map[string]*hostSlot
-	pairing       *PairingConfig
-	pairMu        sync.Mutex
-	residentOnly  bool // immutable, trusted composition only
-	discoveryOnly bool // immutable capability restriction, never request-selected
-	organization  string
-	ctx           context.Context
-	cancel        context.CancelFunc
-	verifier      *Verifier       // nil in Access mode
-	access        *AccessVerifier // nil in OAuth bearer mode
-	path          string
-	metadataURL   string // OAuth bearer mode only
-	metadata      []byte // OAuth bearer mode only
-	origins       map[string]bool
-	bySubject     map[string]*principal
-	byLabel       map[string]*principal
-	budgets       agentchannel.Budgets
-	callTimeout   time.Duration
-	clock         func() time.Time
-	inflight      chan struct{}
-	rescueCodes   *rescueCodes // rescue connection codes; guarded by its own lock
-	rescueSigner  ssh.Signer
-	rescue        *rescueReceptionState
+	hosts               map[string]*hostSlot
+	pairing             *PairingConfig
+	pairMu              sync.Mutex
+	pairOperations      map[string]*pairOperation
+	pairConsentStates   map[string]*pairConsentState
+	pairConsentForms    map[string]*pairConsentForm
+	uncertainOperations map[string]bool
+	residentOnly        bool // immutable, trusted composition only
+	discoveryOnly       bool // immutable capability restriction, never request-selected
+	organization        string
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	verifier            *Verifier       // nil in Access mode
+	access              *AccessVerifier // nil in OAuth bearer mode
+	path                string
+	metadataURL         string // OAuth bearer mode only
+	metadata            []byte // OAuth bearer mode only
+	origins             map[string]bool
+	bySubject           map[string]*principal
+	byLabel             map[string]*principal
+	budgets             agentchannel.Budgets
+	callTimeout         time.Duration
+	clock               func() time.Time
+	inflight            chan struct{}
+	rescueCodes         *rescueCodes // rescue connection codes; guarded by its own lock
+	rescueSigner        ssh.Signer
+	rescue              *rescueReceptionState
 	// These internal barriers let race tests stop on either side of rescue route publication.
 	rescueBeforePublishHook func(*route)
 	rescueAfterPublishHook  func()

@@ -26,6 +26,7 @@ O2 CONNECTIVE IdP のOAuth tokenを検証するJWKS取得の `internal/agentgate
 保護した登録簿の store（unix は `pairing_store_unix.go`、Windows は常に拒否する `pairing_store_other.go`）を限定登録し、
 52 package、Linux386 / Darwin-cgo391 / Darwin-nocgo388 / Windows417 production fileです。
 principal の役割の判定 `internal/agentgateway/roles.go` を1fileだけ追加登録します（#408）。file数は末尾の現inventoryを参照してください。
+二段階pairingでは `internal/agentgateway/pair_consent.go`、`cmd/rescue-gateway/pairing_routes.go` と製品build用 `pair_build_product.go` を製品inventoryに加えます。開発build用 `pair_build_development.go` は製品inventoryに含めません。
 レスキューの接続コード `internal/agentgateway/rescue_code.go` と受付状態 `rescue_reception.go`、担当者要求 `rescue_request.go`、MCP入口 `internal/mcpadapter/rescue_http.go`、WSS transport `internal/agenttransport/rescue_gateway.go`・`rescue_host.go` を登録します（#421〜#423）。
 任意 argv は exit 1、対応 build のゼロ引数だけが固定 enrollment を選びます。
 この entry の追加は署名・配置・native verified launch・配布を証明せず、通常 CLI / Tauri は未接続です。

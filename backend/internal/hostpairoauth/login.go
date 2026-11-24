@@ -37,6 +37,21 @@ func ValidClient(issuer, clientID string) bool {
 	return validEndpoint(issuer, false) && len(clientID) > 0 && len(clientID) <= 256 && asciiVisible(clientID)
 }
 
+// ValidConsentEndpoints checks the HTTPS endpoints trusted by a gateway's browser consent flow.
+func ValidConsentEndpoints(authorizationEndpoint, tokenEndpoint string) bool {
+	return validEndpoint(authorizationEndpoint, true) && validEndpoint(tokenEndpoint, false)
+}
+
+// ExchangeAuthorizationCode exchanges a server-owned PKCE transaction at a configured token endpoint.
+func ExchangeAuthorizationCode(ctx context.Context, client *http.Client, tokenEndpoint, code, redirectURI, clientID, verifier string) (string, error) {
+	if client == nil || !validEndpoint(tokenEndpoint, false) || !validEndpoint(redirectURI, false) ||
+		len(code) == 0 || len(code) > 4096 || !asciiVisible(code) || len(clientID) == 0 || len(clientID) > 256 || !asciiVisible(clientID) ||
+		len(verifier) < 43 || len(verifier) > 128 || !asciiVisible(verifier) {
+		return "", fmt.Errorf("token exchange configuration invalid")
+	}
+	return exchange(ctx, client, tokenEndpoint, code, redirectURI, clientID, verifier)
+}
+
 // AccessToken completes browser authorization and returns a transient bearer
 // token to the trusted caller, which owns subsequent registration decisions.
 func AccessToken(ctx context.Context, cfg Config) (string, error) {
