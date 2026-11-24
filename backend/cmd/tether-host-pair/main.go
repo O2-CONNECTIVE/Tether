@@ -58,26 +58,14 @@ func parseArgs(args []string) (string, string, string, bool) {
 		i++
 	}
 	g, i, c := values["--gateway"], values["--issuer"], values["--client-id"]
-	if len(values) != 3 || !validURL(g, true) || !validGatewayForm(g) || !validURL(i, false) || len(c) < 1 || len(c) > 256 {
+	if len(values) != 3 || !validGatewayForm(g) || !hostpairoauth.ValidClient(i, c) {
 		return "", "", "", false
-	}
-	for _, r := range c {
-		if r < 0x21 || r > 0x7e {
-			return "", "", "", false
-		}
 	}
 	return g, i, c, true
 }
 func validGatewayForm(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && u.Host == strings.ToLower(u.Host) && (u.Path == "" || u.Path == "/") && raw == "https://"+u.Host+u.Path
-}
-func validURL(raw string, gateway bool) bool {
-	u, e := url.Parse(raw)
-	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") {
-		return false
-	}
-	return !gateway || u.Path == "" || u.Path == "/"
+	return err == nil && u.Host != "" && u.Host == strings.ToLower(u.Host) && (u.Path == "" || u.Path == "/") && raw == "https://"+u.Host+u.Path
 }
 func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) int {
 	gateway, issuer, clientID, ok := parseArgs(args)
@@ -164,7 +152,7 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 	token, err := hostpairoauth.AccessToken(ctx, hostpairoauth.Config{
 		Client: d.client, Issuer: issuer, ClientID: clientID,
 		CallbackAddress: d.callbackAddress, CallbackWait: d.callbackWait,
-		OpenBrowser: func(authURL string) {
+		OpenBrowser: func(_ context.Context, authURL string) {
 			fmt.Fprintln(stderr, authURL)
 			if d.openBrowser != nil {
 				_ = d.openBrowser(authURL)

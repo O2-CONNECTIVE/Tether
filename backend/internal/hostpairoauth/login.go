@@ -24,13 +24,20 @@ type Config struct {
 	ClientID        string
 	CallbackAddress string
 	CallbackWait    time.Duration
-	OpenBrowser     func(authorizationURL string)
+	// OpenBrowser starts the external browser and returns without waiting for consent.
+	// The caller observes ctx cancellation while starting it.
+	OpenBrowser func(ctx context.Context, authorizationURL string)
+}
+
+// ValidClient checks the issuer and public client ID before local or network work.
+func ValidClient(issuer, clientID string) bool {
+	return validEndpoint(issuer, false) && len(clientID) > 0 && len(clientID) <= 256 && asciiVisible(clientID)
 }
 
 // AccessToken completes browser authorization and returns a transient bearer
 // token to the trusted caller, which owns subsequent registration decisions.
 func AccessToken(ctx context.Context, cfg Config) (string, error) {
-	if cfg.Client == nil || cfg.OpenBrowser == nil || !validEndpoint(cfg.Issuer, false) || len(cfg.ClientID) > 256 || cfg.ClientID == "" || !asciiVisible(cfg.ClientID) {
+	if cfg.Client == nil || cfg.OpenBrowser == nil || !ValidClient(cfg.Issuer, cfg.ClientID) {
 		return "", errors.New("invalid host pairing OAuth configuration")
 	}
 	address := cfg.CallbackAddress
@@ -77,7 +84,7 @@ func AccessToken(ctx context.Context, cfg Config) (string, error) {
 	query.Set("code_challenge_method", "S256")
 	query.Set("state", state)
 	authorize.RawQuery = query.Encode()
-	cfg.OpenBrowser(authorize.String())
+	cfg.OpenBrowser(ctx, authorize.String())
 
 	wait := cfg.CallbackWait
 	if wait <= 0 {
