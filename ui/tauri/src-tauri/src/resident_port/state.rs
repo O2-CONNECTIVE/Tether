@@ -1,7 +1,7 @@
 //! GUI state owns the entire native session; IPC only borrows its original port.
 #[cfg(all(target_os = "macos", resident_native_source))]
 use super::native_session::NativeSession;
-use super::{ResidentPort, model::Status};
+use super::{model::Status, ResidentPort};
 
 pub(crate) struct ResidentState {
     source: Source,

@@ -58,10 +58,7 @@ pub(crate) fn run(mode: &str) {
         let _ = state.request_exit();
         let until = std::time::Instant::now() + Duration::from_secs(3);
         while !state.finish_requested() {
-            assert!(
-                std::time::Instant::now() < until,
-                "startup outer join unavailable"
-            );
+            assert!(std::time::Instant::now() < until, "startup outer join unavailable");
             std::thread::sleep(Duration::from_millis(1));
         }
         check(state.finish_requested() && status(&state)["state"] == "source-unavailable");

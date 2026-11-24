@@ -48,7 +48,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
   async function readStatus(read: 'status' | 'menu-status') {
     clearTimeout(poll); operation = read;
     const generation = ++epoch, started = clock();
-    const deadline = startup === 'checking' ? startupUntil : undefined;
+    const deadline = startupUntil;
     const budget = deadline === undefined ? timeoutMs : Math.min(timeoutMs, deadline - started);
     const expireStartup = () => {
       if (read === 'status') operation = null;
@@ -67,6 +67,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
         if (state.visible) return fail('RESIDENT_SOURCE_CHANGED');
         publish('RESIDENT_UNSUPPORTED'); return;
       }
+      if (decoded.startup !== 'checking') startupUntil = undefined;
       state.visible = true;
       const next = decoded.observation;
       if (!next) {
@@ -79,7 +80,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
             if (read === 'status') schedule(Math.min(pollMs, startupUntil - received));
             return;
           }
-          startup = null;
+          return expireStartup();
         }
         publish(startup === 'policy-rejected' ? 'RESIDENT_ENROLLMENT_POLICY_REJECTED' : 'RESIDENT_SOURCE_UNAVAILABLE');
         return;

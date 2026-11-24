@@ -1,10 +1,10 @@
 //! Same closed native startup and its typed port; release identity is required.
 use super::{
-    ResidentPort,
-    duplex::owner::{BoundDuplex, native::NativeIoSupervisor},
+    duplex::owner::{native::NativeIoSupervisor, BoundDuplex},
     model::Status,
+    ResidentPort,
 };
-use crate::standby_lifecycle::{Outcome, native::NativeOuterOwner};
+use crate::standby_lifecycle::{native::NativeOuterOwner, Outcome};
 use std::io;
 
 pub(crate) struct NativeSession {
