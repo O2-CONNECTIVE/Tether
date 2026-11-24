@@ -349,7 +349,8 @@ Linux/Windowsは非対応の拒否・root handle消費と共通permission契約�
 
 ## tether-host-pair
 
-ホストのpair CLIは `cmd/tether-host-pair` の通常ビルド共通4 fileと、lock / browser起動のOS別2 fileを製品fileとして照合します。linux / darwinは `platform_unix.go`、windowsは拒否stubを選びます。browser起動はdarwinだけ `/usr/bin/open` を使います。開発タグ付きの組立は [開発用常駐](development-resident.md) の検査で扱います。
+ホストのpair CLIは `cmd/tether-host-pair` の通常ビルド共通3 fileと、lock / browser起動のOS別2 fileを製品fileとして照合します。linux / darwinは `platform_unix.go`、windowsは拒否stubを選びます。browser起動はdarwinだけ `/usr/bin/open` を使います。開発タグ付きの組立は [開発用常駐](development-resident.md) の検査で扱います。
+ブラウザと PKCE の共通処理は `internal/hostpairoauth` の2 fileを全 OS の製品 inventory で照合します。
 
 ## レスキューの許可の状態機械
 
@@ -359,4 +360,4 @@ Linux/Windowsは非対応の拒否・root handle消費と共通permission契約�
 
 `internal/hostlifecycle` に、ホストが取った資源の台帳と停止の判定を持つ coordinator `coordinator.go` を共通の1fileとして追加します（[#456](https://github.com/O2-CONNECTIVE/Tether/issues/456)）。Mac の resident sidecar が、Standby の読み込みと停止をこれに載せます。
 
-現inventoryは54 packageです。cgo有効時のfile数はLinux406 / Darwin411 / Windows437、Darwinのcgo無効時は408です。
+現inventoryは55 packageです。cgo有効時のfile数はLinux407 / Darwin412 / Windows438、Darwinのcgo無効時は409です。
