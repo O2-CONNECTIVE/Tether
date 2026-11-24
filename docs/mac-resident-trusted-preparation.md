@@ -84,3 +84,7 @@ fake の成功を実 launch requirement の enforcement としません。署名
 source 設計では、単一 enrollment、固定位置、env / UI override なし、現在ユーザー・非昇格、署名で保護した一つの release と OS enforcement を推奨として進めます。
 実際の Developer ID の Team / signing identity と release 承認者だけは、この source から決められません。署名 credentials の作成・照会は行わず、実接続前に正規所有者が指定します。
 既存 policy の固定位置への移行も、実ファイルに触る別工程です。今回の架空値や私有評価 pin で代用しません。
+
+resident policy は `host_key_path` の PEM 形式、または `host_key_store: "keychain"` と
+`host_key_fingerprint` の Keychain 形式を相互排他で選びます。helper と常駐 producer の
+署名主体が同じ Team の共有 access group を使えることは、署名済み実物で未照合です。
