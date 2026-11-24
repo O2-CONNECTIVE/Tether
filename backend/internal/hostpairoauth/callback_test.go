@@ -3,8 +3,24 @@ package hostpairoauth
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
+
+type receiptBeforeResult struct {
+	*httptest.ResponseRecorder
+	result <-chan callbackResult
+	t      *testing.T
+}
+
+func (w receiptBeforeResult) Flush() {
+	select {
+	case <-w.result:
+		w.t.Error("token exchange was signaled before flushing the receipt")
+	default:
+	}
+	w.ResponseRecorder.Flush()
+}
 
 func TestNewCallbackAcceptsOnlyOneMatchingLoopbackLogin(t *testing.T) {
 	h, result := newCallback("expected-state")
@@ -37,9 +53,12 @@ func TestNewCallbackAcceptsOnlyOneMatchingLoopbackLogin(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/callback?state=state&code=code", nil)
 	r.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != http.StatusOK || w.Body.String() != "ログインが完了しました。このページを閉じてください" {
+	h.ServeHTTP(receiptBeforeResult{ResponseRecorder: w, result: result, t: t}, r)
+	if w.Code != http.StatusOK || w.Body.String() != "ログインの応答を受け取りました。このページを閉じ、Tether で登録結果を確認してください。" {
 		t.Fatalf("accepted callback: %d %q", w.Code, w.Body.String())
+	}
+	if !w.Flushed || w.Header().Get("Content-Length") != strconv.Itoa(w.Body.Len()) {
+		t.Fatal("browser receipt was not flushed with a complete body before token exchange")
 	}
 	second := httptest.NewRecorder()
 	h.ServeHTTP(second, r)

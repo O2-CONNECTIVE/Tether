@@ -2,13 +2,17 @@ package hostpairoauth
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 )
+
+const syntheticDiscovery = `{"issuer":"https://id.example","authorization_endpoint":"https://id.example/authorize","token_endpoint":"https://id.example/token","code_challenge_methods_supported":["S256"]}`
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -24,7 +28,10 @@ func TestAccessTokenRejectsNonLoopbackCallbackBeforeDiscovery(t *testing.T) {
 	token, err := AccessToken(context.Background(), Config{
 		Client: client, Issuer: "https://id.example", ClientID: "test-client",
 		CallbackAddress: "0.0.0.0:1234",
-		OpenBrowser:     func(context.Context, string) { t.Fatal("browser opened with a non-loopback callback") },
+		OpenBrowser: func(context.Context, string) error {
+			t.Fatal("browser opened with a non-loopback callback")
+			return nil
+		},
 	})
 	if err == nil || token != "" {
 		t.Fatal("non-loopback callback was accepted")
@@ -46,10 +53,51 @@ func TestAccessTokenDoesNotFollowDiscoveryRedirect(t *testing.T) {
 	})}
 	token, err := AccessToken(context.Background(), Config{
 		Client: client, Issuer: "https://id.example", ClientID: "test-client",
-		OpenBrowser: func(context.Context, string) { t.Fatal("browser opened after discovery redirect") },
+		OpenBrowser: func(context.Context, string) error {
+			t.Fatal("browser opened after discovery redirect")
+			return nil
+		},
 	})
 	if err == nil || token != "" || calls != 1 || client.CheckRedirect != nil {
 		t.Fatal("discovery redirect was accepted or the caller's client was changed")
+	}
+}
+
+func TestAccessTokenReportsBrowserStartFailureAndClosesCallback(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://id.example/.well-known/openid-configuration" {
+			t.Fatal("unexpected request after browser startup failed")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(syntheticDiscovery))}, nil
+	})}
+	var callbackHost string
+	token, err := AccessToken(ctx, Config{
+		Client: client, Issuer: "https://id.example", ClientID: "test-client", CallbackWait: 40 * time.Millisecond,
+		OpenBrowser: func(_ context.Context, raw string) error {
+			authURL, err := url.Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			callbackURL, err := url.Parse(authURL.Query().Get("redirect_uri"))
+			if err != nil || callbackURL.Host == "" {
+				t.Fatal("browser received no callback address")
+			}
+			callbackHost = callbackURL.Host
+			return errors.New("synthetic platform error with private details")
+		},
+	})
+	if token != "" || err != ErrBrowserOpen {
+		t.Errorf("expected only browser startup failure, got %v", err)
+	}
+	if callbackHost == "" {
+		t.Fatal("browser handoff was not attempted")
+	}
+	conn, dialErr := net.DialTimeout("tcp4", callbackHost, time.Second)
+	if dialErr == nil {
+		conn.Close()
+		t.Fatal("callback remained reachable after browser startup failed")
 	}
 }
 
@@ -57,13 +105,14 @@ func TestAccessTokenDoesNotFollowTokenRedirect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
+	browserReceiptErr := make(chan error, 1)
 	var tokenRequests int
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.String() {
 		case "https://id.example/.well-known/openid-configuration":
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"issuer":"https://id.example","authorization_endpoint":"https://id.example/authorize","token_endpoint":"https://id.example/token","code_challenge_methods_supported":["S256"]}`)),
+				Body:       io.NopCloser(strings.NewReader(syntheticDiscovery)),
 			}, nil
 		case "https://id.example/token":
 			tokenRequests++
@@ -82,7 +131,7 @@ func TestAccessTokenDoesNotFollowTokenRedirect(t *testing.T) {
 	})}
 	token, err := AccessToken(ctx, Config{
 		Client: client, Issuer: "https://id.example", ClientID: "test-client",
-		OpenBrowser: func(ctx context.Context, raw string) {
+		OpenBrowser: func(ctx context.Context, raw string) error {
 			authURL, err := url.Parse(raw)
 			if err != nil {
 				t.Fatal(err)
@@ -93,17 +142,26 @@ func TestAccessTokenDoesNotFollowTokenRedirect(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			response, err := http.DefaultClient.Do(callback)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer response.Body.Close()
-			if response.StatusCode != http.StatusOK {
-				t.Fatalf("callback returned %d", response.StatusCode)
-			}
+			go func() {
+				response, err := http.DefaultClient.Do(callback)
+				if err != nil {
+					browserReceiptErr <- err
+					return
+				}
+				defer response.Body.Close()
+				body, err := io.ReadAll(response.Body)
+				if err == nil && (response.StatusCode != http.StatusOK || string(body) != browserReceipt) {
+					err = errors.New("browser did not receive the complete receipt")
+				}
+				browserReceiptErr <- err
+			}()
+			return nil
 		},
 	})
 	if err == nil || token != "" || tokenRequests != 1 {
 		t.Fatalf("expected a rejected redirect after one token POST, got %d POSTs and error %v", tokenRequests, err)
+	}
+	if err := <-browserReceiptErr; err != nil {
+		t.Fatalf("browser receipt after token exchange failed: %v", err)
 	}
 }

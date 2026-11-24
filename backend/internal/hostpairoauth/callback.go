@@ -6,8 +6,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 )
+
+const browserReceipt = "ログインの応答を受け取りました。このページを閉じ、Tether で登録結果を確認してください。"
 
 type callbackResult struct {
 	code string
@@ -48,8 +51,11 @@ func newCallback(state string) (http.Handler, <-chan callbackResult) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.Itoa(len(browserReceipt)))
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, "ログインが完了しました。このページを閉じてください")
+		_, _ = io.WriteString(w, browserReceipt)
+		// The exchange can finish and close the callback server as soon as ch is sent.
+		_ = http.NewResponseController(w).Flush()
 		ch <- callbackResult{code: code}
 	}), ch
 }
