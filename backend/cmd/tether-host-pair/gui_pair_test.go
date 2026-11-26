@@ -425,6 +425,10 @@ func (f *guiPairFixture) signedToken(audience string) string {
 }
 
 func (f *guiPairFixture) run(t *testing.T) (int, string, string) {
+	return f.runWithContext(t, context.Background())
+}
+
+func (f *guiPairFixture) runWithContext(t *testing.T, ctx context.Context) (int, string, string) {
 	t.Helper()
 	oldGateway, oldIssuer, oldClient := guiGateway, guiIssuer, guiClientID
 	guiGateway, guiIssuer, guiClientID = f.gateway.URL, f.issuer.URL, "gui-public-client"
@@ -447,7 +451,7 @@ func (f *guiPairFixture) run(t *testing.T) (int, string, string) {
 		f.depsOverride(&d)
 	}
 	var stdout, stderr strings.Builder
-	code := execute(context.Background(), nil, &stdout, &stderr, d)
+	code := execute(ctx, nil, &stdout, &stderr, d)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -736,8 +740,8 @@ func TestGUIUnknownConfirmReconcilesSameOperationAfterGatewayRestart(t *testing.
 		t.Fatalf("pending mode is not 0600: info=%v err=%v", info, err)
 	}
 	pendingBytes, err := os.ReadFile(pendingPath)
-	fields, fieldErr := agentwire.Fields(pendingBytes, "gateway", "operation", "host_key_fingerprint")
-	if err != nil || fieldErr != nil || len(fields) != 3 || strings.Contains(string(pendingBytes), f.accessToken) {
+	fields, fieldErr := agentwire.Fields(pendingBytes, "gateway", "operation", "host_key_fingerprint", "consent_url", "expires_at")
+	if err != nil || fieldErr != nil || len(fields) != 5 || strings.Contains(string(pendingBytes), f.accessToken) {
 		t.Fatalf("pending record is not strict or contains a token: err=%v fields=%v", err, fields)
 	}
 	firstOperation, firstPreflights := f.operation, f.operationsCalls.Load()

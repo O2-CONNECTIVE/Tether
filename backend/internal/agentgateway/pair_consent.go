@@ -479,7 +479,7 @@ func (g *Gateway) ServePairConfirm(w http.ResponseWriter, r *http.Request) {
 	cfg := g.pairing
 	g.mu.Unlock()
 	if cfg == nil || cfg.Consent == nil {
-		http.NotFound(w, r)
+		writePairError(w, http.StatusNotFound, "operation_not_found")
 		return
 	}
 	if agentwire.CheckJSON(body, false) != nil {
@@ -522,7 +522,7 @@ func (g *Gateway) ServePairConfirm(w http.ResponseWriter, r *http.Request) {
 	g.prunePairOperationsLocked(now)
 	operation := g.pairOperations[id]
 	if operation == nil || (!now.Before(operation.expires) && operation.terminalStatus == 0) {
-		http.NotFound(w, r)
+		writePairError(w, http.StatusNotFound, "operation_not_found")
 		return
 	}
 	if !verifyPairProofBytes(operation.newKey, proofText, PairConfirmTranscript(publicPairURL(cfg, PairConfirmPath), id, operation.newKey)) {
@@ -543,7 +543,7 @@ func (g *Gateway) ServePairConfirm(w http.ResponseWriter, r *http.Request) {
 	case "consented":
 		// Continue into the shared reservation, save, reflection, and disconnect path below.
 	default:
-		http.NotFound(w, r)
+		writePairError(w, http.StatusNotFound, "operation_not_found")
 		return
 	}
 	newRecord := PairRecord{HostLabel: operation.hostLabel, HostKey: append([]byte(nil), operation.newKey...), Issuer: operation.issuer, Subject: operation.subject, RegisteredAt: now.Truncate(time.Second), Operation: operation.id}

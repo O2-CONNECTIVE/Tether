@@ -402,6 +402,13 @@ func responseError(t *testing.T, resp *http.Response) string {
 	return body["error"]
 }
 
+func assertPairOperationNotFound(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if resp.StatusCode != http.StatusNotFound || resp.Header.Get("Content-Type") != "application/json" || responseError(t, resp) != "operation_not_found" {
+		t.Fatalf("missing operation response status=%d content-type=%q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+}
+
 func recordForConsentTest(t *testing.T, signer ssh.Signer) PairRecord {
 	t.Helper()
 	return PairRecord{HostLabel: "host-1", HostKey: signer.PublicKey().Marshal(), Issuer: testIssuer, Subject: subjects[0], RegisteredAt: time.Now().UTC().Truncate(time.Second)}
@@ -711,7 +718,9 @@ func TestHostPairingDocumentationCoversExpiryAndCACertificate(t *testing.T) {
 	for _, required := range []string{
 		"期限後・置き換え後",
 		"今は登録されていない",
-		"helperは通常の拒否と同じ扱い",
+		"operation_not_found",
+		"Workerのpairing gate",
+		"新鍵と保留記録を保ちます",
 		"IdPのtoken endpointへHTTPS接続",
 		"信頼済みCA",
 		"deploy/cloudflare/Dockerfile.gateway",
@@ -1101,18 +1110,41 @@ func TestPairConfirmRejectsSupersededAndExpiredOperations(t *testing.T) {
 		t.Fatal("operation IDs repeated")
 	}
 	superseded := f.confirm(t, oldID, oldKey, nil)
-	if superseded.StatusCode != http.StatusNotFound {
-		superseded.Body.Close()
-		t.Fatalf("superseded operation status=%d, want 404", superseded.StatusCode)
-	}
-	superseded.Body.Close()
+	assertPairOperationNotFound(t, superseded)
 	// Keep the gateway's clock injectable in the fixture so expiry is deterministic.
 	f.clockNow = f.clockNow.Add(11 * time.Minute)
 	expired := f.confirm(t, newID, newKey, nil)
-	defer expired.Body.Close()
-	if expired.StatusCode != http.StatusNotFound {
-		t.Fatalf("expired operation status=%d, want 404", expired.StatusCode)
-	}
+	assertPairOperationNotFound(t, expired)
+}
+
+func TestPairConfirmUnavailableOrUnknownOperationUsesStructuredNotFound(t *testing.T) {
+	// Why: the helper may treat only a gateway-authored operation_not_found code as terminal; plain Worker 404s must remain distinguishable.
+	t.Run("pairing unavailable", func(t *testing.T) {
+		f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+		id, signer := f.newOperation(t)
+		f.g.mu.Lock()
+		f.g.pairing = nil
+		f.g.mu.Unlock()
+		assertPairOperationNotFound(t, f.confirm(t, id, signer, nil))
+	})
+
+	t.Run("unknown operation", func(t *testing.T) {
+		f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+		id, signer := f.newOperation(t)
+		f.g.pairMu.Lock()
+		delete(f.g.pairOperations, id)
+		f.g.pairMu.Unlock()
+		assertPairOperationNotFound(t, f.confirm(t, id, signer, nil))
+	})
+
+	t.Run("unknown state", func(t *testing.T) {
+		f := newPairConsentFixtureReady(t, subjects[0], nil, nil)
+		id, signer := f.newOperation(t)
+		f.g.pairMu.Lock()
+		f.g.pairOperations[id].state = "unknown-state"
+		f.g.pairMu.Unlock()
+		assertPairOperationNotFound(t, f.confirm(t, id, signer, nil))
+	})
 }
 
 func TestPairConfirmBusyResultIsTerminal(t *testing.T) {

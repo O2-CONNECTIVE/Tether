@@ -19,6 +19,9 @@ import (
 // ErrBrowserOpen reports that the caller could not start the browser handoff.
 var ErrBrowserOpen = errors.New("host pairing OAuth browser could not be opened")
 
+// ErrCallbackTimeout reports that the local OAuth callback did not arrive before its wait limit.
+var ErrCallbackTimeout = errors.New("host pairing OAuth callback timed out")
+
 // Config describes the trusted native caller's OAuth client and browser entry.
 // The default callback is an ephemeral IPv4 loopback port.
 type Config struct {
@@ -128,7 +131,7 @@ func AccessToken(ctx context.Context, cfg Config) (string, error) {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	case <-timer.C:
-		return "", errors.New("host pairing OAuth callback timed out")
+		return "", ErrCallbackTimeout
 	}
 }
 

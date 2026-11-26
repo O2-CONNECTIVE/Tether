@@ -38,7 +38,6 @@ const (
 	guiResultBusy                 = "busy"
 	guiResultUnavailable          = "unavailable"
 	guiConfirmInterval            = 2 * time.Second
-	guiOperationLifetime          = 10 * time.Minute
 	guiPairingPendingName         = "pairing-pending.json"
 	guiNativeContinue             = "continue"
 	guiNativeCancel               = "cancel"
@@ -59,9 +58,17 @@ end run`
 )
 
 type guiPairPending struct {
-	Gateway            string `json:"gateway"`
-	Operation          string `json:"operation"`
-	HostKeyFingerprint string `json:"host_key_fingerprint"`
+	Gateway            string    `json:"gateway"`
+	Operation          string    `json:"operation"`
+	HostKeyFingerprint string    `json:"host_key_fingerprint"`
+	ConsentURL         string    `json:"consent_url"`
+	ExpiresAt          time.Time `json:"expires_at"`
+}
+
+type guiPolicyIdentity struct {
+	Fingerprint    string `json:"host_key_fingerprint"`
+	PrincipalLabel string `json:"principal_label"`
+	HostLabel      string `json:"host_label"`
 }
 
 var errInvalidGUIPendingRecord = errors.New("invalid pending pair record")
@@ -178,14 +185,14 @@ func executeGUIResult(ctx context.Context, d deps) string {
 	pendingPath := filepath.Join(dir, guiPairingPendingName)
 	pending, hasPending, err := readGUIWaiting(ctx, pendingPath, gateway, d.readProtected)
 	if err != nil {
-		if !errors.Is(err, errInvalidGUIPendingRecord) || discardGUIPending(dir, pendingPath, pending, d.deleteHostKey) != nil {
+		if !errors.Is(err, errInvalidGUIPendingRecord) || discardGUIPending(dir, pendingPath, pending, oldPolicy, d.deleteHostKey) != nil {
 			return guiResultUnavailable
 		}
 	}
 	if hasPending {
 		signer, err := d.loadHostKey(pending.HostKeyFingerprint)
-		if errors.Is(err, hostkeychain.ErrNotFound) || err == nil && (signer == nil || ssh.FingerprintSHA256(signer.PublicKey()) != pending.HostKeyFingerprint) {
-			if discardGUIPending(dir, pendingPath, pending, d.deleteHostKey) != nil {
+		if errors.Is(err, hostkeychain.ErrNotFound) || errors.Is(err, hostkeychain.ErrFingerprint) || err == nil && (signer == nil || ssh.FingerprintSHA256(signer.PublicKey()) != pending.HostKeyFingerprint) {
+			if discardGUIPending(dir, pendingPath, pending, oldPolicy, d.deleteHostKey) != nil {
 				return guiResultUnavailable
 			}
 			hasPending = false
@@ -193,8 +200,7 @@ func executeGUIResult(ctx context.Context, d deps) string {
 			return guiResultUnavailable
 		}
 		if hasPending {
-			deadline := time.Now().Add(guiOperationLifetime)
-			result, registration := confirmGUIPair(ctx, client, d, gateway, pending.Operation, pending.HostKeyFingerprint, signer, deadline)
+			result, registration := confirmGUIPair(ctx, client, d, gateway, pending.Operation, pending.HostKeyFingerprint, signer, pending.ExpiresAt, pending.ConsentURL, true)
 			return completeGUIResult(result, registration, pending, pendingPath, dir, home, policyPath, oldPolicy, signer, d)
 		}
 	}
@@ -241,7 +247,7 @@ func executeGUIResult(ctx context.Context, d deps) string {
 		if d.deleteHostKey(fingerprint) != nil {
 			return guiResultUnavailable
 		}
-		if errors.Is(err, context.Canceled) || err.Error() == "cancelled" {
+		if errors.Is(err, hostpairoauth.ErrCallbackTimeout) || errors.Is(err, context.Canceled) || err.Error() == "cancelled" {
 			return guiResultCancelled
 		}
 		return guiResultUnavailable
@@ -264,16 +270,29 @@ func executeGUIResult(ctx context.Context, d deps) string {
 	}
 
 	replacing := "新規"
+	replacingFingerprint := ""
 	if operation.Replacing != nil {
 		replacing = operation.Replacing.Fingerprint + " / " + operation.Replacing.RegisteredAt
+		replacingFingerprint = operation.Replacing.Fingerprint
+	}
+	currentPolicy, hasCurrentPolicy := readGUIPolicyIdentity(oldPolicy)
+	if hasCurrentPolicy && currentPolicy.Fingerprint != replacingFingerprint {
+		replacing += " / この Mac の今の登録（" + currentPolicy.PrincipalLabel + " / " + currentPolicy.HostLabel + "）は使えなくなります"
 	}
 	nativeCtx, cancelNative := context.WithDeadline(ctx, operation.ExpiresAt)
 	nativeResult, nativeErr := d.runAppleScript(nativeCtx, guiNativePromptScript,
 		operation.Account.Subject, operation.HostLabel, replacing, operation.NewKeyFingerprint)
+	nativeContextErr := nativeCtx.Err()
 	cancelNative()
 	if nativeErr != nil {
 		if d.deleteHostKey(fingerprint) != nil {
 			return guiResultUnavailable
+		}
+		if !time.Now().Before(operation.ExpiresAt) {
+			return guiResultRejected
+		}
+		if errors.Is(nativeContextErr, context.Canceled) {
+			return guiResultCancelled
 		}
 		return guiResultUnavailable
 	}
@@ -291,18 +310,16 @@ func executeGUIResult(ctx context.Context, d deps) string {
 		return guiResultUnavailable
 	}
 
-	pending = guiPairPending{Gateway: gateway, Operation: operation.ID, HostKeyFingerprint: fingerprint}
+	pending = guiPairPending{Gateway: gateway, Operation: operation.ID, HostKeyFingerprint: fingerprint, ConsentURL: operation.ConsentURL, ExpiresAt: operation.ExpiresAt}
 	committed, err := writeGUIWaiting(dir, pendingPath, pending)
-	if err != nil {
-		if !committed {
-			_ = d.deleteHostKey(fingerprint)
-		}
+	if err != nil && !committed {
+		_ = d.deleteHostKey(fingerprint)
 		return guiResultUnavailable
 	}
 	if err := d.openBrowser(operation.ConsentURL); err != nil {
 		return cleanupGUIResult(guiResultBrowserFailed, pending, pendingPath, dir, d)
 	}
-	result, registration := confirmGUIPair(ctx, client, d, gateway, pending.Operation, fingerprint, signer, operation.ExpiresAt)
+	result, registration := confirmGUIPair(ctx, client, d, gateway, pending.Operation, fingerprint, signer, operation.ExpiresAt, "", false)
 	return completeGUIResult(result, registration, pending, pendingPath, dir, home, policyPath, oldPolicy, signer, d)
 }
 
@@ -320,11 +337,28 @@ func readGUIWaiting(ctx context.Context, path, gateway string, readProtected fun
 		return pending, false, err
 	}
 	unmarshalErr := json.Unmarshal(raw, &pending)
-	fields, fieldsErr := agentwire.Fields(raw, "gateway", "operation", "host_key_fingerprint")
-	if unmarshalErr != nil || fieldsErr != nil || len(fields) != 3 || pending.Gateway != gateway || !validGatewayForm(pending.Gateway) || !agentgateway.ValidPairOperationID(pending.Operation) || !validGUIPendingFingerprint(pending.HostKeyFingerprint) {
+	fields, fieldsErr := agentwire.Fields(raw, "gateway", "operation", "host_key_fingerprint", "consent_url", "expires_at")
+	if unmarshalErr != nil || fieldsErr != nil || len(fields) != 5 || !sameGUIGateway(pending.Gateway, gateway) || !agentgateway.ValidPairOperationID(pending.Operation) || !validGUIPendingFingerprint(pending.HostKeyFingerprint) || !validGUIConsentURL(pending.Gateway, pending.Operation, pending.ConsentURL) || pending.ExpiresAt.IsZero() {
 		return pending, false, errInvalidGUIPendingRecord
 	}
 	return pending, true, nil
+}
+
+func sameGUIGateway(left, right string) bool {
+	if !validGatewayForm(left) || !validGatewayForm(right) {
+		return false
+	}
+	a, _ := url.Parse(left)
+	b, _ := url.Parse(right)
+	return a.Scheme == b.Scheme && a.Host == b.Host
+}
+
+func readGUIPolicyIdentity(raw []byte) (guiPolicyIdentity, bool) {
+	var identity guiPolicyIdentity
+	if agentwire.CheckJSON(raw, false) != nil || json.Unmarshal(raw, &identity) != nil {
+		return guiPolicyIdentity{}, false
+	}
+	return identity, true
 }
 
 func validGUIPendingFingerprint(fingerprint string) bool {
@@ -337,8 +371,9 @@ func validGUIPendingFingerprint(fingerprint string) bool {
 	return err == nil && len(decoded) == ed25519.PublicKeySize && base64.RawStdEncoding.EncodeToString(decoded) == encoded
 }
 
-func discardGUIPending(dir, path string, pending guiPairPending, deleteHostKey func(string) error) error {
-	if validGUIPendingFingerprint(pending.HostKeyFingerprint) {
+func discardGUIPending(dir, path string, pending guiPairPending, oldPolicy []byte, deleteHostKey func(string) error) error {
+	policy, _ := readGUIPolicyIdentity(oldPolicy)
+	if validGUIPendingFingerprint(pending.HostKeyFingerprint) && pending.HostKeyFingerprint != policy.Fingerprint {
 		if err := deleteHostKey(pending.HostKeyFingerprint); err != nil && !errors.Is(err, hostkeychain.ErrNotFound) {
 			return err
 		}
@@ -467,7 +502,7 @@ func pairRequestTimeout(d deps) time.Duration {
 	return 60 * time.Second
 }
 
-func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, operation, fingerprint string, signer ssh.Signer, deadline time.Time) (string, pairResult) {
+func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, operation, fingerprint string, signer ssh.Signer, deadline time.Time, consentURL string, reopenConsent bool) (string, pairResult) {
 	var empty pairResult
 	u, err := url.Parse(gateway)
 	if err != nil {
@@ -486,11 +521,20 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 	if interval <= 0 {
 		interval = guiConfirmInterval
 	}
+	pendingSeen := false
+	transientFailure := false
 	for {
 		if !time.Now().Before(deadline) {
+			if pendingSeen && transientFailure {
+				return guiResultUnknown, empty
+			}
 			return guiResultRejected, empty
 		}
-		requestCtx, cancel := context.WithTimeout(ctx, pairRequestTimeout(d))
+		requestTimeout := pairRequestTimeout(d)
+		if remaining := time.Until(deadline); remaining < requestTimeout {
+			requestTimeout = remaining
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 		req, reqErr := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 		if reqErr != nil {
 			cancel()
@@ -498,13 +542,29 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 		}
 		req.Header.Set("Content-Type", "application/json")
 		response, requestErr := client.Do(req)
-		cancel()
 		if requestErr != nil {
+			cancel()
+			if pendingSeen {
+				transientFailure = true
+				if waitGUIConfirmRetry(ctx, interval, deadline) {
+					continue
+				}
+			}
 			return guiResultUnknown, empty
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(response.Body, 16*1024+1))
 		response.Body.Close()
-		if readErr != nil || len(raw) > 16*1024 {
+		cancel()
+		if readErr != nil {
+			if pendingSeen {
+				transientFailure = true
+				if waitGUIConfirmRetry(ctx, interval, deadline) {
+					continue
+				}
+			}
+			return guiResultUnknown, empty
+		}
+		if len(raw) > 16*1024 {
 			return guiResultUnknown, empty
 		}
 		switch response.StatusCode {
@@ -520,24 +580,36 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 			if parseErr != nil || len(fields) != 1 || json.Unmarshal(fields["state"], &state) != nil || state != "consent_pending" {
 				return guiResultUnknown, empty
 			}
-			if !time.Now().Before(deadline) {
+			pendingSeen = true
+			transientFailure = false
+			if reopenConsent {
+				if d.openBrowser == nil || d.openBrowser(consentURL) != nil {
+					return guiResultBrowserFailed, empty
+				}
+				reopenConsent = false
+			}
+			if !waitGUIConfirmRetry(ctx, interval, deadline) {
+				if ctx.Err() != nil {
+					return guiResultUnknown, empty
+				}
 				return guiResultRejected, empty
 			}
-			wait := interval
-			if remaining := time.Until(deadline); remaining < wait {
-				wait = remaining
-			}
-			timer := time.NewTimer(wait)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return guiResultUnknown, empty
-			}
+			continue
 		case http.StatusForbidden:
-			return guiResultCancelled, empty
-		case http.StatusNotFound, http.StatusServiceUnavailable:
-			return guiResultRejected, empty
+			if pairHTTPError(raw) == "consent_cancelled" {
+				return guiResultCancelled, empty
+			}
+			return guiResultUnknown, empty
+		case http.StatusNotFound:
+			if pairHTTPError(raw) == "operation_not_found" {
+				return guiResultRejected, empty
+			}
+			return guiResultUnknown, empty
+		case http.StatusServiceUnavailable:
+			if pairHTTPError(raw) == "save_failed" {
+				return guiResultRejected, empty
+			}
+			return guiResultUnknown, empty
 		case http.StatusConflict:
 			errorCode := pairHTTPError(raw)
 			switch errorCode {
@@ -548,14 +620,38 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 			default:
 				return guiResultRejected, empty
 			}
-		case http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
+		case http.StatusInternalServerError:
+			return guiResultUnknown, empty
+		case http.StatusBadGateway, http.StatusGatewayTimeout:
+			if pendingSeen {
+				transientFailure = true
+				if waitGUIConfirmRetry(ctx, interval, deadline) {
+					continue
+				}
+			}
 			return guiResultUnknown, empty
 		default:
-			if response.StatusCode >= 500 {
-				return guiResultUnknown, empty
-			}
-			return guiResultRejected, empty
+			return guiResultUnknown, empty
 		}
+	}
+}
+
+func waitGUIConfirmRetry(ctx context.Context, interval time.Duration, deadline time.Time) bool {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return false
+	}
+	wait := interval
+	if remaining < wait {
+		wait = remaining
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return time.Now().Before(deadline)
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -576,9 +672,7 @@ func completeGUIResult(result string, registration pairResult, pending guiPairPe
 		if writeGUIKeychainPolicy(dir, policyPath, home, signer, registration, oldPolicy, d.deleteHostKey) != nil {
 			return guiResultLocalApplyFailed
 		}
-		if removeGUIWaiting(dir, pendingPath) != nil {
-			return guiResultLocalApplyFailed
-		}
+		_ = removeGUIWaiting(dir, pendingPath)
 		return guiResultSucceeded
 	}
 	if result == guiResultUnknown || result == guiResultLocalApplyFailed {

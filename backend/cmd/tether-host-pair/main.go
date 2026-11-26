@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
@@ -243,7 +245,19 @@ func productionDeps() deps {
 	return d
 }
 
+func guiSignalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+func runMain(args []string, stdout, stderr io.Writer, d deps) int {
+	if len(args) != 0 {
+		return execute(context.Background(), args, stdout, stderr, d)
+	}
+	ctx, stop := guiSignalContext()
+	defer stop()
+	return execute(ctx, args, stdout, stderr, d)
+}
+
 func main() {
-	d := productionDeps()
-	os.Exit(execute(context.Background(), os.Args[1:], os.Stdout, os.Stderr, d))
+	os.Exit(runMain(os.Args[1:], os.Stdout, os.Stderr, productionDeps()))
 }

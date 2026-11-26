@@ -231,11 +231,7 @@ func TestGUIPendingMissingKeyRestartsFreshPair(t *testing.T) {
 	f := newGUIPairFixture(t, nil)
 	missingKey := mustSignerFromSeed(t, 0x72)
 	fingerprint := ssh.FingerprintSHA256(missingKey.PublicKey())
-	raw, err := json.Marshal(guiPairPending{Gateway: f.gateway.URL, Operation: validGUIPendingOperation(), HostKeyFingerprint: fingerprint})
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeGUIPendingRecord(t, f, raw)
+	writeGUIPendingJSON(t, f, f.gateway.URL, validGUIPendingOperation(), fingerprint)
 	deleteCalls := 0
 	f.depsOverride = func(d *deps) {
 		deleteHostKey := d.deleteHostKey
@@ -258,11 +254,7 @@ func TestGUIPendingFingerprintMismatchStartsFreshPair(t *testing.T) {
 	// Why: a Keychain signer that does not match its pending account cannot safely resume that gateway operation.
 	f := newGUIPairFixture(t, nil)
 	fingerprint := seedGUIPendingKey(t, f, 0x73)
-	raw, err := json.Marshal(guiPairPending{Gateway: f.gateway.URL, Operation: validGUIPendingOperation(), HostKeyFingerprint: fingerprint})
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeGUIPendingRecord(t, f, raw)
+	writeGUIPendingJSON(t, f, f.gateway.URL, validGUIPendingOperation(), fingerprint)
 	mismatchedSigner := mustSignerFromSeed(t, 0x74)
 	f.depsOverride = func(d *deps) {
 		loadHostKey := d.loadHostKey
@@ -281,11 +273,7 @@ func TestGUIPendingKeychainFailureKeepsRecord(t *testing.T) {
 	// Why: a temporary Keychain error must remain unavailable without discarding recoverable pending state.
 	f := newGUIPairFixture(t, nil)
 	fingerprint := seedGUIPendingKey(t, f, 0x75)
-	raw, err := json.Marshal(guiPairPending{Gateway: f.gateway.URL, Operation: validGUIPendingOperation(), HostKeyFingerprint: fingerprint})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pendingPath := writeGUIPendingRecord(t, f, raw)
+	pendingPath := writeGUIPendingJSON(t, f, f.gateway.URL, validGUIPendingOperation(), fingerprint)
 	deleteCalls := 0
 	f.depsOverride = func(d *deps) {
 		d.loadHostKey = func(string) (ssh.Signer, error) { return nil, hostkeychain.ErrUnavailable }
@@ -310,11 +298,7 @@ func TestGUIPendingProtectedReadFailureKeepsRecord(t *testing.T) {
 	// Why: a protected-file read failure can be an ownership or permission problem and must never trigger recovery deletion.
 	f := newGUIPairFixture(t, nil)
 	fingerprint := seedGUIPendingKey(t, f, 0x76)
-	raw, err := json.Marshal(guiPairPending{Gateway: f.gateway.URL, Operation: validGUIPendingOperation(), HostKeyFingerprint: fingerprint})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pendingPath := writeGUIPendingRecord(t, f, raw)
+	pendingPath := writeGUIPendingJSON(t, f, f.gateway.URL, validGUIPendingOperation(), fingerprint)
 	deleteCalls := 0
 	f.depsOverride = func(d *deps) {
 		readProtected := d.readProtected
