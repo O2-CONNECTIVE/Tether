@@ -164,7 +164,7 @@ def verify(producer_root, host_pair_root, notices_root, module_root, source,
     try:
         host_pair.verify_binary(host_pair_root / 'tether-host-pair', pair_record)
     except (host_pair.PairBuildError, builder.source.BuildError):
-        raise NoticeError('GO_NOTICE_HOST_PAIR_BUILD_INFO_MISMATCH') from None
+        raise NoticeError('GO_NOTICE_HOST_PAIR_CONFIG_MISMATCH') from None
     selected |= pair_selected
     inventory_bytes = mac.read_regular(notices_root / 'DEPENDENCIES.json', 64 * 1024)
     inventory = parse(inventory_bytes)

@@ -1,8 +1,13 @@
-"""Synthetic helper-build metadata only; no compiler, signing or helper execution."""
+"""Helper build records and a small real trimmed Go embed binary."""
+import contextlib
+import io
 import json
+import os
+import platform
 from pathlib import Path
 from pathlib import PurePosixPath
 import sys
+import subprocess
 import struct
 import tempfile
 import unittest
@@ -59,25 +64,49 @@ class HostPairBuildTests(unittest.TestCase):
         value = dict(self.config(), issuer='https://issuer.example:999999')
         self.assertEqual(tool.validate_configuration(value, required=True), value)
 
-    def test_ldflags_and_go_version_record_must_match_exactly(self):
-        # The app record cannot claim values that the executable's Go build info does not contain.
+    def test_pair_config_json_has_fixed_keys_order_and_newline(self):
+        # Why: one canonical encoding keeps the staged input, record hash, and verifier expectation identical.
         values = self.config()
-        flags = tool.linker_flags(values)
-        record = {'pairConfig': values, 'ldflags': flags,
-                  'goBuildInfo': {'path': tool.ROLE, 'ldflags': flags}}
-        output = f'executable: go1.27.3\n\tpath\t{tool.ROLE}\n\tbuild\t-ldflags={json.dumps(flags)}\n'
-        tool.verify_build_info(output, record)
-        with self.assertRaisesRegex(tool.PairBuildError, 'PAIR_BUILD_INFO_MISMATCH'):
-            tool.verify_build_info(output.replace('gateway.example', 'other.example'), record)
-        changed_record = dict(record, ldflags=flags + ' altered')
-        with self.assertRaisesRegex(tool.PairBuildError, 'PAIR_BUILD_INFO_MISMATCH'):
-            tool.verify_build_info(output, changed_record)
+        self.assertEqual(tool.pair_config_bytes(values),
+                         b'{"gateway":"https://gateway.example","issuer":"https://issuer.example","clientID":"public-client"}\n')
 
-    def test_client_configuration_values_are_quote_safe_in_go_ldflags(self):
-        # Valid visible OAuth client IDs may contain quotes and backslashes; Go must receive them literally.
-        values = dict(self.config(), clientID='public"\\client')
-        encoded = tool.linker_flags(values)
-        self.assertIn('public\\"\\\\client', encoded)
+    def test_repository_pair_config_is_the_canonical_empty_json(self):
+        # Why: committed helper source must remain unavailable until the approved build supplies all values.
+        empty = {'gateway': '', 'issuer': '', 'clientID': ''}
+        path = tool.source.ROOT / tool.PAIR_CONFIG_PATH
+        self.assertEqual(path.read_bytes(), tool.pair_config_bytes(empty))
+
+    @unittest.skipUnless(platform.system() == 'Darwin' and platform.machine() == 'arm64',
+                         'The real trimmed binary regression requires macOS ARM64.')
+    def test_real_trimpath_binary_embeds_and_verifies_pair_configuration(self):
+        # Why: an actual trimmed Go binary proves exact embedded bytes and quote-safe recorded values.
+        values = dict(self.config(), clientID='public"\'\\client')
+        config_bytes = tool.pair_config_bytes(values)
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
+            root = Path(temporary)
+            (root / 'go.mod').write_text('module ' + tool.ROLE + '\n\ngo 1.23\n')
+            (root / 'pair_config.json').write_bytes(config_bytes)
+            (root / 'main.go').write_text(
+                'package main\nimport ("os"; _ "embed")\n'
+                '//go:embed pair_config.json\nvar pairConfig []byte\n'
+                'func main() { _, _ = os.Stdout.Write(pairConfig) }\n')
+            binary = root / 'pair-regression'
+            subprocess.run(['go', 'build', *tool.FLAGS, '-o', str(binary), '.'],
+                           cwd=root, check=True, capture_output=True, text=True,
+                           env={**os.environ, 'GOWORK': 'off', 'GOFLAGS': '',
+                                'GOTOOLCHAIN': 'local', 'GOPROXY': 'off', 'GOSUMDB': 'off',
+                                'GOOS': 'darwin', 'GOARCH': 'arm64', 'CGO_ENABLED': '0'})
+            run = subprocess.run([str(binary)], check=True, capture_output=True)
+            self.assertEqual(run.stdout, config_bytes)
+            record = {'pairConfig': values, 'pairConfigSha256': tool.source.digest(config_bytes),
+                      'image': tool.inspect_image(binary)}
+            tool.verify_binary(binary, record)
+            other = dict(values, clientID=values['clientID'] + 'x')
+            changed = {'pairConfig': other,
+                       'pairConfigSha256': tool.source.digest(tool.pair_config_bytes(other)),
+                       'image': record['image']}
+            with self.assertRaisesRegex(tool.PairBuildError, 'PAIR_CONFIG_BINARY_MISMATCH'):
+                tool.verify_binary(binary, changed)
 
 
 class HostPairBuildCommandTests(unittest.TestCase):
@@ -91,13 +120,15 @@ class HostPairBuildCommandTests(unittest.TestCase):
         self.revision, self.tree = 'a' * 40, 'b' * 40
         self.config = {'gateway': 'https://gateway.example', 'issuer': 'https://issuer.example',
                        'clientID': 'public-client'}
-        self.ldflags = tool.linker_flags(self.config)
+        self.config_bytes = tool.pair_config_bytes(self.config)
+        self.mutate_config_after_build = False
         self.image = (struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 1, 24, 0, 0)
                       + struct.pack('<6I', 0x32, 24, 1, 27 << 16, 27 << 16, 0))
         self.calls = []
         self.patch(tool.source, 'ROOT', self.repo)
         self.patch(tool.source, 'head', lambda: (self.revision, self.tree))
         self.patch(tool.source, 'snapshot', self.snapshot)
+        self.patch(tool.source, 'source_blob', self.source_blob)
         self.patch(tool.source, 'build_metadata', lambda *args: {
             'GOVERSION': 'go1.27.3', 'GOOS': 'darwin', 'GOARCH': 'arm64', 'CGO_ENABLED': '1'})
         self.patch(tool.source, 'source_inventory', lambda *args: None)
@@ -131,27 +162,72 @@ class HostPairBuildCommandTests(unittest.TestCase):
             locks['backend/' + name] = tool.source.digest(path.read_bytes())
         return files, locks, {name: 'c' * 64 for name in recipe_paths}
 
+    def source_blob(self, revision, relative):
+        self.assertEqual(revision, self.revision)
+        self.assertEqual(relative, tool.PAIR_CONFIG_PATH)
+        return tool.pair_config_bytes({'gateway': '', 'issuer': '', 'clientID': ''})
+
     def command(self, args, cwd, env):
         self.calls.append(args)
         if args[:2] == ['go', 'build']:
             self.assertNotIn('-tags', args)
-            self.assertEqual(args[args.index('-ldflags') + 1], self.ldflags)
+            self.assertNotIn('-ldflags', args)
+            self.assertEqual(args[2:2 + len(tool.FLAGS)], list(tool.FLAGS))
+            staged_config = cwd / 'cmd/tether-host-pair/pair_config.json'
+            self.assertEqual(staged_config.read_bytes(), self.config_bytes)
             path = Path(args[args.index('-o') + 1])
-            path.write_bytes(self.image)
+            path.write_bytes(self.image + self.config_bytes)
+            if self.mutate_config_after_build:
+                staged_config.write_bytes(self.config_bytes + b'changed')
             return b''
-        self.assertEqual(args[:3], ['go', 'version', '-m'])
-        return (f"{args[-1]}: go1.27.3\n\tpath\t{tool.ROLE}\n"
-                f'\tbuild\t-ldflags={json.dumps(self.ldflags)}\n').encode()
+        self.fail(f'unexpected Go command: {args}')
 
-    def test_build_records_production_image_and_verified_linker_values(self):
-        # The bundled binary must be the production Go role with exact environment-derived linker values.
+    def test_build_records_pair_config_hash_and_embedded_image_bytes(self):
+        # Why: the builder must write only the staged config, omit linker flags, and verify embedded bytes.
         record = tool.build(self.output, self.config)
         tool.validate_record(record, self.revision, self.tree)
         self.assertEqual(record['pairConfig'], self.config)
-        self.assertEqual(record['ldflags'], self.ldflags)
-        self.assertEqual(record['goBuildInfo'], {'path': tool.ROLE, 'ldflags': self.ldflags})
-        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(record['pairConfigSha256'], tool.source.digest(self.config_bytes))
+        self.assertNotIn('ldflags', record)
+        self.assertNotIn('goBuildInfo', record)
+        self.assertEqual(len(self.calls), 1)
         self.assertEqual(set(path.name for path in self.output.iterdir()), {'tether-host-pair', 'BUILD_RECORD.json'})
+
+    def test_record_rejects_a_pair_config_hash_that_does_not_match_its_values(self):
+        # Why: a self-declared pairConfig must not authenticate a different canonical JSON hash.
+        record = tool.build(self.output, self.config)
+        changed = dict(record, pairConfigSha256='0' * 64)
+        with self.assertRaisesRegex(tool.PairBuildError, 'PAIR_CONFIG_HASH_MISMATCH'):
+            tool.validate_record(changed, self.revision, self.tree)
+
+    def test_build_rechecks_the_rewritten_pair_config_file(self):
+        # Why: pair_config.json is the sole intentional snapshot exception and still needs a post-build hash check.
+        self.mutate_config_after_build = True
+        with self.assertRaisesRegex(tool.source.BuildError, 'PAIR_CONFIG_CHANGED'):
+            tool.build(self.output, self.config)
+        self.assertFalse(self.output.exists())
+
+    def test_main_reports_blocked_build_with_exit_two_and_summary_json(self):
+        # Why: CLI callers must distinguish an inert recorded build from failure by its exit code and JSON.
+        record = {'sourceCommit': self.revision, 'image': {'sha256': 'c' * 64}}
+        stream = io.StringIO()
+        with patch.object(tool, 'build', return_value=record), contextlib.redirect_stdout(stream):
+            self.assertEqual(tool.main(['--output', str(self.output)]), 2)
+        self.assertEqual(json.loads(stream.getvalue()), {
+            'status': 'blocked', 'code': 'HOST_PAIR_BUILD_RECORDED',
+            'record': 'BUILD_RECORD.json', 'sourceCommit': self.revision,
+            'imageSha256': 'c' * 64, 'blockers': list(tool.BLOCKERS),
+        })
+
+    def test_main_reports_build_failure_with_exit_one_and_error_code(self):
+        # Why: rejected inputs must stay machine-readable and must never look like a recorded candidate.
+        stream = io.StringIO()
+        with patch.object(tool, 'build', side_effect=tool.PairBuildError('PAIR_CONFIG_PARTIAL')), \
+                contextlib.redirect_stdout(stream):
+            self.assertEqual(tool.main(['--output', str(self.output)]), 1)
+        self.assertEqual(json.loads(stream.getvalue()), {
+            'status': 'blocked', 'code': 'PAIR_CONFIG_PARTIAL',
+        })
 
 
 if __name__ == '__main__':

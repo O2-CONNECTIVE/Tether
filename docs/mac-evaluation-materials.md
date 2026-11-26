@@ -62,7 +62,7 @@ schema は `tether-mac-evaluation-materials/2`、repository は `O2-CONNECTIVE/T
 構造の完全な有限例は [`CandidateFixture`](../scripts/tests/test_mac_evaluation_candidate.py) に置きます。fixture の Mach-O と依存資料は合成であり、生成されたものを配布候補として使いません。
 
 - `sourceCommit`、`buildUTC`、`target`、`label`、`appDirectory` を固定型・形式で確認します。UTC は実在する秒精度の `YYYY-MM-DDTHH:MM:SSZ`、target は `darwin-arm64` または `darwin-amd64` に限定します。
-- `images` は `gui`、`producer`、`hostPair` に固定し、固定相対pathと外部期待hashを照合します。追加roleや任意executable pathは拒否します。Goの `-ldflags` は[Go notice verifier](go-notice-closure.md)がbinaryの `go version -m` とbuild recordから照合します。
+- `images` は `gui`、`producer`、`hostPair` に固定し、固定相対pathと外部期待hashを照合します。追加roleや任意executable pathは拒否します。pair helperの設定JSONは[Go notice verifier](go-notice-closure.md)がbuild recordのSHA-256とbinary内bytesから照合します。
 - `files` は manifest 以外の全 file の相対 path と SHA-256、`notices` は同梱を宣言する本文の path 一覧です。固定材料と notice の和以外の file、欠落、重複、case alias、空 directory、symlink/reparse point、特殊 file を拒否します。
 - Go 固定7本文は collector の既知 hash と実 bytes を照合します。GUI の frontend と Rust toolchain 2本文、少なくとも1個の crate notice を要求しますが、実 crate graph との一致や内容の法的十分性は確認しません。
 - 任意追加の本文は所定の Rust crate / Go stdlib-vendor prefix、その下の少なくとも1段の対象 directory と license 等の basename に限ります。prefix 直下の本文だけで crate / 対象の宣言を代用しません。本文が非空 UTF-8 で hash に一致することと、対象の全依存を網羅することは別です。

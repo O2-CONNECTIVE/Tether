@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -25,6 +27,58 @@ import (
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"golang.org/x/crypto/ssh"
 )
+
+//go:embed pair_config.json
+var embeddedGUIPairConfig []byte
+
+type guiPairConfiguration struct {
+	gateway  string
+	issuer   string
+	clientID string
+}
+
+var errInvalidGUIPairConfiguration = errors.New("invalid GUI pair configuration")
+
+func parseGUIPairConfiguration(raw []byte) (guiPairConfiguration, error) {
+	var configuration guiPairConfiguration
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
+		return configuration, errInvalidGUIPairConfiguration
+	}
+	seen := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		if err != nil || !ok || seen[key] {
+			return guiPairConfiguration{}, errInvalidGUIPairConfiguration
+		}
+		seen[key] = true
+		valueToken, err := decoder.Token()
+		value, ok := valueToken.(string)
+		if err != nil || !ok {
+			return guiPairConfiguration{}, errInvalidGUIPairConfiguration
+		}
+		switch key {
+		case "gateway":
+			configuration.gateway = value
+		case "issuer":
+			configuration.issuer = value
+		case "clientID":
+			configuration.clientID = value
+		default:
+			return guiPairConfiguration{}, errInvalidGUIPairConfiguration
+		}
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') || len(seen) != 3 {
+		return guiPairConfiguration{}, errInvalidGUIPairConfiguration
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return guiPairConfiguration{}, errInvalidGUIPairConfiguration
+	}
+	return configuration, nil
+}
 
 const (
 	guiResultSucceeded            = "succeeded"
@@ -103,7 +157,11 @@ func guiHTTPClient() *http.Client {
 func noPairRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 func executeGUI(ctx context.Context, stdout io.Writer, d deps) int {
-	result := executeGUIResult(ctx, d)
+	configuration, err := parseGUIPairConfiguration(d.guiConfigJSON)
+	result := guiResultUnavailable
+	if err == nil {
+		result = executeGUIResult(ctx, d, configuration)
+	}
 	raw, err := json.Marshal(struct {
 		ProtocolVersion int    `json:"protocolVersion"`
 		Result          string `json:"result"`
@@ -119,8 +177,8 @@ func executeGUI(ctx context.Context, stdout io.Writer, d deps) int {
 	return 0
 }
 
-func executeGUIResult(ctx context.Context, d deps) string {
-	gateway, issuer, clientID := guiGateway, guiIssuer, guiClientID
+func executeGUIResult(ctx context.Context, d deps, configuration guiPairConfiguration) string {
+	gateway, issuer, clientID := configuration.gateway, configuration.issuer, configuration.clientID
 	if !validGatewayForm(gateway) || !hostpairoauth.ValidClient(issuer, clientID) {
 		return guiResultUnavailable
 	}
@@ -253,7 +311,8 @@ func executeGUIResult(ctx context.Context, d deps) string {
 		return guiResultUnavailable
 	}
 
-	operation, preflightResult, err := createGUIPairOperation(ctx, client, d, gateway, token, signer, fingerprint)
+	operation, preflightResult, err := createGUIPairOperation(ctx, client, d, gateway, issuer,
+		token, signer, fingerprint)
 	if err != nil {
 		_ = d.deleteHostKey(fingerprint)
 		return guiResultUnavailable
@@ -411,7 +470,7 @@ func removeGUIWaiting(dir, path string) error {
 	return nil
 }
 
-func createGUIPairOperation(ctx context.Context, client *http.Client, d deps, gateway, token string, signer ssh.Signer, fingerprint string) (guiPairOperation, string, error) {
+func createGUIPairOperation(ctx context.Context, client *http.Client, d deps, gateway, issuer, token string, signer ssh.Signer, fingerprint string) (guiPairOperation, string, error) {
 	var operation guiPairOperation
 	u, err := url.Parse(gateway)
 	if err != nil {
@@ -467,7 +526,7 @@ func createGUIPairOperation(ctx context.Context, client *http.Client, d deps, ga
 		return operation, "", errors.New("pair operation response invalid")
 	}
 	accountFields, err := agentwire.Fields(fields["account"], "issuer", "subject", "principal_label")
-	if err != nil || len(accountFields) != 3 || operation.ID == "" || !agentgateway.ValidPairOperationID(operation.ID) || operation.Account.Issuer != guiIssuer || operation.Account.Subject == "" || operation.Account.PrincipalLabel == "" || operation.HostLabel == "" || operation.NewKeyFingerprint != fingerprint {
+	if err != nil || len(accountFields) != 3 || operation.ID == "" || !agentgateway.ValidPairOperationID(operation.ID) || operation.Account.Issuer != issuer || operation.Account.Subject == "" || operation.Account.PrincipalLabel == "" || operation.HostLabel == "" || operation.NewKeyFingerprint != fingerprint {
 		return operation, "", errors.New("pair operation response invalid")
 	}
 	if strings.TrimSpace(string(fields["replacing"])) != "null" {

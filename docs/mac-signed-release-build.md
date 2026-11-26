@@ -55,7 +55,7 @@ python scripts/build_mac_signed_release.py \
 ## 組立の順序と同一性
 
 1. clean HEADの通常GUI source/locks/assetsとrecipeを固定します。署名検査helperも同じGit blobからcompileします。
-2. 既存sealed producer recipeで `cmd/resident-pipe` をbuildし、pair helper recipeで `cmd/tether-host-pair` を製品buildします。`tether_development` tagは付けません。両方のGo source・lock・module閉包と元image hashを保存し、pair helperでは設定値と `go version -m` の `-ldflags` を照合します。
+2. 既存sealed producer recipeで `cmd/resident-pipe` をbuildし、pair helper recipeで `cmd/tether-host-pair` を製品buildします。`tether_development` tagは付けません。両方のGo source・lock・module閉包と元image hashを保存し、pair helperでは固定形式の `pair_config.json` とそのSHA-256を記録して、同じJSON bytesがbinary内にあることを照合します。
 3. producerを固定identifier `com.o2connective.rescue-host.resident-pipe`、pair helperを `com.o2connective.rescue-host.tether-host-pair` で、それぞれHardened Runtimeとsecure timestampを付けて署名します。
 4. Appleの `SecStaticCodeCheckValidityWithOnDiskRequirement` を使い、signatureIsValidとrequirementMatchedの両方を要求します。期待Team・固定identifier・Developer ID区分を確認してから、署名情報の20-byte CDHashを取得し、そのhashを加えた完全なtyped requirementでも再検証します。選択証明書fingerprint、timestamp、runtime flag、空entitlementsも照合します。単なるmetadata抽出やfile SHA-256短縮ではありません。
 5. 同じ実行の検証結果だけから `generated/SignedResidentReleaseIdentity.swift` を生成します。`TETHER_SIGNED_RELEASE` の固定compile compositionだけがこの一つの入力を使い、Swiftと通常Rust GUIをbuildします。生成物はGit blobと区別してhash記録します。生成入力の欠落・重複はcompile失敗です。アプリにruntime getter/setter、環境変数やJSON manifestの信頼overrideを追加しません。

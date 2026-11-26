@@ -22,7 +22,7 @@ RECIPE = ('scripts/build_mac_host_pair.py', 'scripts/build_mac_resident_source.p
           'scripts/go_ci.py', 'scripts/package_mac_agent.py', 'scripts/collect_go_licenses.py')
 CONFIG_KEYS = {'gateway': 'TETHER_PAIR_GATEWAY', 'issuer': 'TETHER_PAIR_ISSUER',
                'clientID': 'TETHER_PAIR_CLIENT_ID'}
-BUILD_VARS = {'gateway': 'guiGateway', 'issuer': 'guiIssuer', 'clientID': 'guiClientID'}
+PAIR_CONFIG_PATH = 'backend/cmd/tether-host-pair/pair_config.json'
 LIMIT = 256 * 1024 * 1024
 BLOCKERS = ('GUI_BUILD_UNBOUND', 'RELEASE_IDENTITY_UNCONFIGURED', 'SIGNING_UNVERIFIED',
             'ENROLLMENT_UNCONFIGURED', 'PLACEMENT_UNVERIFIED', 'VERIFY_TO_EXEC_UNVERIFIED',
@@ -126,53 +126,10 @@ def configuration_from_env(env=None, *, required=False):
                                  required=required)
 
 
-def quote_ldflags_arg(value):
-    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
-
-
-def linker_flags(configuration):
+def pair_config_bytes(configuration):
     configuration = validate_configuration(configuration)
-    return ' '.join('-X ' + quote_ldflags_arg('main.' + BUILD_VARS[name] + '=' + configuration[name])
-                    for name in CONFIG_KEYS)
-
-
-def parse_build_info(output):
-    if isinstance(output, bytes):
-        try:
-            output = output.decode('utf-8')
-        except UnicodeError:
-            raise PairBuildError('PAIR_BUILD_INFO_INVALID') from None
-    if not isinstance(output, str) or len(output) > 64 * 1024:
-        raise PairBuildError('PAIR_BUILD_INFO_INVALID')
-    paths, flags = [], []
-    for line in output.splitlines():
-        entry = line.strip()
-        if entry.startswith('path\t'):
-            paths.append(entry[5:])
-        elif entry.startswith('build\t-ldflags='):
-            encoded = entry[len('build\t-ldflags='):]
-            try:
-                decoded = json.loads(encoded) if encoded.startswith('"') else encoded
-            except (json.JSONDecodeError, TypeError):
-                raise PairBuildError('PAIR_BUILD_INFO_INVALID') from None
-            if not isinstance(decoded, str):
-                raise PairBuildError('PAIR_BUILD_INFO_INVALID')
-            flags.append(decoded)
-    require(len(paths) == 1 and len(flags) == 1, 'PAIR_BUILD_INFO_INVALID')
-    return {'path': paths[0], 'ldflags': flags[0]}
-
-
-def verify_build_info(output, record):
-    try:
-        configuration = validate_configuration(record['pairConfig'])
-        expected_flags = linker_flags(configuration)
-        expected = {'path': ROLE, 'ldflags': expected_flags}
-        require(record['ldflags'] == expected_flags and record['goBuildInfo'] == expected,
-                'PAIR_BUILD_INFO_MISMATCH')
-        actual = parse_build_info(output)
-        require(actual == expected, 'PAIR_BUILD_INFO_MISMATCH')
-    except (KeyError, TypeError):
-        raise PairBuildError('PAIR_BUILD_INFO_MISMATCH') from None
+    value = {name: configuration[name] for name in ('gateway', 'issuer', 'clientID')}
+    return (json.dumps(value, ensure_ascii=True, separators=(',', ':')) + '\n').encode('ascii')
 
 
 def validate_record(record, revision, tree):
@@ -184,7 +141,7 @@ def validate_record(record, revision, tree):
                           'GOARCH': 'arm64', 'CGO_ENABLED': '1'},
              'flags': list(FLAGS), 'helperExecutable': True, 'helperExecuted': False,
              'signingPerformed': False, 'blockers': list(BLOCKERS)}
-    variable = {'sourceTree', 'buildUTC', 'pairConfig', 'ldflags', 'goBuildInfo',
+    variable = {'sourceTree', 'buildUTC', 'pairConfig', 'pairConfigSha256',
                 'snapshotGoFiles', 'locks', 'recipe', 'compiledRepositoryPackages', 'modules', 'image'}
     require(isinstance(record, dict) and set(record) == set(fixed) | variable and
             all(type(record.get(key)) is type(value) and record[key] == value
@@ -200,10 +157,10 @@ def validate_record(record, revision, tree):
     except ValueError:
         raise PairBuildError('PAIR_BUILD_RECORD_INVALID') from None
     config = validate_configuration(record['pairConfig'])
-    expected_ldflags = linker_flags(config)
-    require(record['ldflags'] == expected_ldflags and
-            record['goBuildInfo'] == {'path': ROLE, 'ldflags': expected_ldflags},
-            'PAIR_BUILD_INFO_MISMATCH')
+    config_bytes = pair_config_bytes(config)
+    require(isinstance(record['pairConfigSha256'], str) and
+            re.fullmatch('[0-9a-f]{64}', record['pairConfigSha256']) is not None and
+            record['pairConfigSha256'] == source.digest(config_bytes), 'PAIR_CONFIG_HASH_MISMATCH')
     inventory = product_files_for('darwin', True)
     snapshot = {str(PurePosixPath('backend') /
                     package[len(source.PROJECT):].lstrip('/') / name)
@@ -239,11 +196,16 @@ def validate_record(record, revision, tree):
             'PAIR_BUILD_RECORD_INVALID')
 
 
-def verify_binary(path, record, *, cwd=None, env=None):
+def verify_binary(path, record):
     require(inspect_image(path) == record['image'], 'PAIR_IMAGE_RECORD_MISMATCH')
-    output = source.command(['go', 'version', '-m', str(path)],
-                            cwd or source.ROOT / 'backend', env)
-    verify_build_info(output, record)
+    try:
+        config_bytes = pair_config_bytes(record['pairConfig'])
+        require(record['pairConfigSha256'] == source.digest(config_bytes),
+                'PAIR_CONFIG_HASH_MISMATCH')
+    except (KeyError, TypeError):
+        raise PairBuildError('PAIR_CONFIG_HASH_MISMATCH') from None
+    binary = image.read_regular(path, LIMIT)
+    require(config_bytes in binary, 'PAIR_CONFIG_BINARY_MISMATCH')
 
 
 def inspect_image(path):
@@ -270,19 +232,23 @@ def build(output, configuration=None, *, required_config=False):
             stage = Path(temporary)
             files, locks, recipe = source.snapshot(revision, stage, RECIPE)
             module = stage / 'backend'
+            empty_config = {'gateway': '', 'issuer': '', 'clientID': ''}
+            source_config = source.source_blob(revision, PAIR_CONFIG_PATH)
+            source.require(source_config == pair_config_bytes(empty_config), 'PAIR_CONFIG_SOURCE_INVALID')
+            config_path = stage / PAIR_CONFIG_PATH
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_bytes(source_config)
+            config_bytes = pair_config_bytes(pair_config)
+            config_path.write_bytes(config_bytes)
             env = source.environment(stage / 'cache', 'arm64')
             settings = source.build_metadata(module, env, 'arm64')
             source.source_inventory(env)
             packages, paths = source.closure(module, env, ROLE)
             modules = source.module_metadata(module, env, paths)
-            expected_ldflags = linker_flags(pair_config)
             result = stage / 'tether-host-pair'
-            source.command(['go', 'build', *FLAGS, '-ldflags', expected_ldflags,
-                            '-o', str(result), ROLE], module, env)
-            raw_build_info = source.command(['go', 'version', '-m', str(result)], module, env)
-            actual_build_info = parse_build_info(raw_build_info)
-            require(actual_build_info == {'path': ROLE, 'ldflags': expected_ldflags},
-                    'PAIR_BUILD_INFO_MISMATCH')
+            source.command(['go', 'build', *FLAGS, '-o', str(result), ROLE], module, env)
+            source.require(source.digest(config_path.read_bytes()) == source.digest(config_bytes),
+                           'PAIR_CONFIG_CHANGED')
             for relative, expected in (files | locks).items():
                 source.require(source.digest((stage / relative).read_bytes()) == expected,
                                'BUILD_INPUT_CHANGED')
@@ -293,13 +259,14 @@ def build(output, configuration=None, *, required_config=False):
                       'repository': 'O2-CONNECTIVE/Tether', 'sourceCommit': revision,
                       'sourceTree': tree, 'buildUTC': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                       'role': ROLE, 'target': 'darwin-arm64', 'settings': settings,
-                      'flags': list(FLAGS), 'pairConfig': pair_config, 'ldflags': expected_ldflags,
-                      'goBuildInfo': actual_build_info,
+                      'flags': list(FLAGS), 'pairConfig': pair_config,
+                      'pairConfigSha256': source.digest(config_bytes),
                       'snapshotGoFiles': files, 'locks': locks, 'recipe': recipe,
                       'compiledRepositoryPackages': packages, 'modules': modules, 'image': artifact,
                       'helperExecutable': True, 'helperExecuted': False, 'signingPerformed': False,
                       'blockers': list(BLOCKERS)}
             validate_record(record, revision, tree)
+            verify_binary(result, record)
             result.chmod(0o600)
             result.rename(output / 'tether-host-pair')
             (output / 'BUILD_RECORD.json').write_text(json.dumps(record, indent=2) + '\n')

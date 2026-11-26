@@ -36,8 +36,7 @@ class GoNoticeClosureTests(unittest.TestCase):
         self.host_pair = self.root / 'host-pair'
         self.notices = self.root / 'notices'
         self.module = self.root / 'module'
-        self.fake_go = self.root / 'bin' / 'go'
-        for path in (self.producer, self.host_pair, self.notices, self.module, self.fake_go.parent):
+        for path in (self.producer, self.host_pair, self.notices, self.module):
             path.mkdir()
         self.locks = {name: (ROOT / 'backend' / name).read_bytes() for name in ('go.mod', 'go.sum')}
         for name, data in self.locks.items():
@@ -51,7 +50,6 @@ class GoNoticeClosureTests(unittest.TestCase):
         self.image = (struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 1, 24, 0, 0)
                       + struct.pack('<6I', 0x32, 24, 1, 27 << 16, 27 << 16, 0))
         (self.producer / 'resident-pipe').write_bytes(self.image)
-        (self.host_pair / 'tether-host-pair').write_bytes(self.image)
         files = {package.replace(builder.source.PROJECT, 'backend', 1) + '/' + name: 'c'*64
                  for package, names in product_files_for('darwin', True).items() for name in names}
         self.record = {
@@ -72,7 +70,9 @@ class GoNoticeClosureTests(unittest.TestCase):
                       'bytes': len(self.image), 'header': mac.macho(self.image, 'darwin-arm64')},
         }
         pair_config = {'gateway': '', 'issuer': '', 'clientID': ''}
-        pair_flags = host_pair.linker_flags(pair_config)
+        pair_config_bytes = host_pair.pair_config_bytes(pair_config)
+        self.host_pair_image = self.image + pair_config_bytes
+        (self.host_pair / 'tether-host-pair').write_bytes(self.host_pair_image)
         self.host_pair_record = {
             'schema': 'tether-mac-host-pair-build/1', 'status': 'blocked',
             'activation': 'blocked', 'distribution': 'blocked',
@@ -81,8 +81,8 @@ class GoNoticeClosureTests(unittest.TestCase):
             'role': host_pair.ROLE, 'target': 'darwin-arm64',
             'settings': {'GOVERSION': 'go1.27.3', 'GOOS': 'darwin',
                          'GOARCH': 'arm64', 'CGO_ENABLED': '1'},
-            'flags': list(host_pair.FLAGS), 'pairConfig': pair_config, 'ldflags': pair_flags,
-            'goBuildInfo': {'path': host_pair.ROLE, 'ldflags': pair_flags},
+            'flags': list(host_pair.FLAGS), 'pairConfig': pair_config,
+            'pairConfigSha256': sha(pair_config_bytes),
             'snapshotGoFiles': files,
             'locks': {'backend/' + name: sha(data) for name, data in self.locks.items()},
             'recipe': {path: 'e'*64 for path in host_pair.RECIPE},
@@ -90,19 +90,11 @@ class GoNoticeClosureTests(unittest.TestCase):
             'modules': [dict(zip(('Path', 'Version', 'Sum', 'GoModSum'), (name, *values)))
                         for name, values in licenses.MODULES.items()],
             'image': {'path': 'tether-host-pair', 'kind': 'mach-o-executable',
-                      'sha256': sha(self.image), 'bytes': len(self.image),
-                      'header': mac.macho(self.image, 'darwin-arm64')},
+                      'sha256': sha(self.host_pair_image), 'bytes': len(self.host_pair_image),
+                      'header': mac.macho(self.host_pair_image, 'darwin-arm64')},
             'helperExecutable': True, 'helperExecuted': False, 'signingPerformed': False,
             'blockers': list(host_pair.BLOCKERS)}
-        self.write_fake_go(pair_flags)
         self.save()
-
-    def write_fake_go(self, ldflags):
-        output = (f'fixture: go1.27.3\n\tpath\t{host_pair.ROLE}\n'
-                  f'\tbuild\t-ldflags={json.dumps(ldflags)}\n')
-        self.fake_go.write_text('#!/bin/sh\n/bin/cat <<\'TETHER_BUILD_INFO\'\n' + output +
-                                'TETHER_BUILD_INFO\n', encoding='utf-8')
-        self.fake_go.chmod(0o700)
 
     def save(self):
         self.record_bytes = (json.dumps(self.record, sort_keys=True) + '\n').encode()
@@ -117,8 +109,8 @@ class GoNoticeClosureTests(unittest.TestCase):
             '--notices-root', str(self.notices), '--module-root', str(self.module), '--source', SOURCE,
             '--build-record-sha256', sha(self.record_bytes), '--producer-sha256', sha(self.image),
             '--host-pair-build-record-sha256', sha(self.host_pair_record_bytes),
-            '--host-pair-sha256', sha(self.image), *extra], capture_output=True, text=True, timeout=15,
-            env={**os.environ, 'PATH': str(self.fake_go.parent), 'PYTHONOPTIMIZE': '2'})
+            '--host-pair-sha256', sha(self.host_pair_image), *extra], capture_output=True, text=True, timeout=15,
+            env={**os.environ, 'PYTHONOPTIMIZE': '2'})
 
     def rejected(self, code=None, *extra):
         result = self.run_cli(*extra)
@@ -296,14 +288,22 @@ class GoNoticeClosureTests(unittest.TestCase):
         (self.producer / 'resident-pipe').write_bytes(self.image + b'PRIVATE')
         self.rejected('GO_NOTICE_IMAGE_HASH_MISMATCH')
 
-    def test_pair_go_build_info_must_match_the_recorded_linker_values(self):
-        # A build record alone cannot prove which OAuth values were linked into the helper image.
-        self.write_fake_go(self.host_pair_record['ldflags'] + ' altered')
-        self.rejected('GO_NOTICE_HOST_PAIR_BUILD_INFO_MISMATCH')
-        self.write_fake_go(self.host_pair_record['ldflags'])
-        self.host_pair_record['ldflags'] += ' altered'
+    def test_pair_embedded_config_must_match_the_recorded_values(self):
+        # Why: notice closure must verify the bytes in the helper, not only its self-declared record.
+        expected = host_pair.pair_config_bytes(self.host_pair_record['pairConfig'])
+        changed = host_pair.pair_config_bytes({
+            'gateway': 'https://other.example', 'issuer': 'https://issuer.example',
+            'clientID': 'other-client',
+        })
+        self.host_pair_image = self.host_pair_image.replace(expected, changed)
+        (self.host_pair / 'tether-host-pair').write_bytes(self.host_pair_image)
+        self.host_pair_record['image'] = {
+            'path': 'tether-host-pair', 'kind': 'mach-o-executable',
+            'sha256': sha(self.host_pair_image), 'bytes': len(self.host_pair_image),
+            'header': mac.macho(self.host_pair_image, 'darwin-arm64'),
+        }
         self.save()
-        self.rejected('GO_NOTICE_HOST_PAIR_RECORD_INVALID')
+        self.rejected('GO_NOTICE_HOST_PAIR_CONFIG_MISMATCH')
 
     def test_image_record_hash_size_header_and_kind_are_checked(self):
         original = copy.deepcopy(self.record['image'])

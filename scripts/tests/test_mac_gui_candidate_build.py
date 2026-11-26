@@ -49,7 +49,8 @@ class GuiCandidateBuildTests(unittest.TestCase):
         self.input = 'ui/tauri/source.txt'
         self.images = {role: image(role) for role in ('gui', 'native')}
         self.images['producer'] = executable()
-        self.images['hostPair'] = executable()
+        empty_pair_config = {'gateway': '', 'issuer': '', 'clientID': ''}
+        self.images['hostPair'] = executable() + tool.support.host_pair.pair_config_bytes(empty_pair_config)
         self.producer_revision, self.producer_tree = self.revision, self.tree
         self.patch(tool.support.producer, 'build', self.producer_build)
         self.patch(tool.support, 'build_host_pair', self.host_pair_build)
@@ -120,7 +121,6 @@ class GuiCandidateBuildTests(unittest.TestCase):
                            package[len(pair.source.PROJECT):].lstrip('/') / name): 'c' * 64
                         for package, names in inventory.items() for name in names}
         empty = {'gateway': '', 'issuer': '', 'clientID': ''}
-        flags = pair.linker_flags(empty)
         record = {'schema': 'tether-mac-host-pair-build/1', 'status': 'blocked',
                   'activation': 'blocked', 'distribution': 'blocked',
                   'repository': 'O2-CONNECTIVE/Tether', 'sourceCommit': revision,
@@ -128,8 +128,8 @@ class GuiCandidateBuildTests(unittest.TestCase):
                   'role': pair.ROLE, 'target': 'darwin-arm64',
                   'settings': {'GOVERSION': 'go1.27.3', 'GOOS': 'darwin',
                                'GOARCH': 'arm64', 'CGO_ENABLED': '1'},
-                  'flags': list(pair.FLAGS), 'pairConfig': empty, 'ldflags': flags,
-                  'goBuildInfo': {'path': pair.ROLE, 'ldflags': flags},
+                  'flags': list(pair.FLAGS), 'pairConfig': empty,
+                  'pairConfigSha256': pair.source.digest(pair.pair_config_bytes(empty)),
                   'snapshotGoFiles': source_files,
                   'locks': {'backend/go.mod': 'c' * 64, 'backend/go.sum': 'c' * 64},
                   'recipe': {name: 'd' * 64 for name in pair.RECIPE},
@@ -204,13 +204,13 @@ class GuiCandidateBuildTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_ci_checker_sanitizes_pair_build_errors(self):
-        # A mismatched linker record must use the checker failure boundary, not expose a traceback.
-        error = tool.support.host_pair.PairBuildError('PAIR_BUILD_INFO_MISMATCH')
+        # Why: a mismatched embedded pair config must use the checker failure boundary, not expose a traceback.
+        error = tool.support.host_pair.PairBuildError('PAIR_CONFIG_BINARY_MISMATCH')
         stream = io.StringIO()
         with patch.object(check, 'run', side_effect=error), \
                 patch.object(sys, 'stderr', stream):
             self.assertEqual(check.main(), 1)
-        self.assertEqual(stream.getvalue(), 'MAC_GUI_CANDIDATE_BUILD_FAILED PAIR_BUILD_INFO_MISMATCH\n')
+        self.assertEqual(stream.getvalue(), 'MAC_GUI_CANDIDATE_BUILD_FAILED PAIR_CONFIG_BINARY_MISMATCH\n')
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX permission bits required')
     def test_images_are_nonexecutable_and_output_is_private(self):
@@ -310,12 +310,12 @@ class GuiCandidateBuildTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 check.validate(bad, self.revision, self.tree)
 
-    def test_ci_rejects_pair_ldflags_or_assembled_bytes_that_do_not_match(self):
-        # A valid producer cannot hide a pairing binary built with different client configuration.
+    def test_ci_rejects_pair_config_tampering_or_assembled_bytes_that_do_not_match(self):
+        # Why: the candidate record and assembled helper must retain the same exact embedded configuration.
         record = tool.build(self.output)
         bad = copy.deepcopy(record)
-        bad['hostPairBuild']['ldflags'] += ' altered'
-        with self.assertRaises(tool.support.host_pair.PairBuildError):
+        bad['hostPairBuild']['pairConfigSha256'] = '0' * 64
+        with self.assertRaisesRegex(tool.support.host_pair.PairBuildError, 'PAIR_CONFIG_HASH_MISMATCH'):
             check.validate(bad, self.revision, self.tree)
         bad = copy.deepcopy(record)
         bad['images']['hostPair']['sha256'] = '0' * 64

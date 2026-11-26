@@ -71,6 +71,10 @@ class SignedReleaseTests(unittest.TestCase):
         return path, {'sourceCommit': revision, 'sourceTree': tree, 'image': {'sha256': tool.source.digest(path.read_bytes())}}
 
     def host_pair(self, stage, revision, tree, *, configuration=None, required_config=False):
+        self.assertEqual(configuration, {'gateway': 'https://gateway.example',
+                                         'issuer': 'https://issuer.example',
+                                         'clientID': 'public-client'})
+        self.assertIs(required_config, True)
         self.events.append('build-host-pair')
         path = stage / 'tether-host-pair'
         path.write_bytes(executable())
@@ -117,6 +121,7 @@ class SignedReleaseTests(unittest.TestCase):
         return tool.build(self.output, self.team, self.cert, self.revision, **kwargs)
 
     def test_producer_is_signed_and_verified_before_compilation(self):
+        # Why: the signed build must receive the validated configuration and require all three values.
         result = self.build()
         self.assertEqual(self.events[:8], ['build-host-pair', 'build-producer', 'sign-producer',
                                           'observe-producer', 'sign-hostPair', 'observe-hostPair',

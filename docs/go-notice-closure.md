@@ -2,7 +2,7 @@
 
 [#24](https://github.com/O2-CONNECTIVE/Tether/issues/24) の限定検査です。
 [`verify_go_notice_closure.py`](../scripts/verify_go_notice_closure.py) は、[固定producer build](mac-sealed-producer-build.md) とGUI pairing helper buildの記録・image、および[固定Go本文収集](go-license-inventory.md) の8 filesを読み取ります。
-二つのbuildが記録した選択moduleのnoticeを照合しても、**終了値2 / blocked**を維持します。再build、依存graphの再取得、cache参照、image起動、署名、登録、package生成、uploadは行いません。helper imageについてはGo toolの `go version -m` だけを実行し、実 `-ldflags` と記録値を照合します。
+二つのbuildが記録した選択moduleのnoticeを照合しても、**終了値2 / blocked**を維持します。再build、依存graphの再取得、cache参照、image起動、署名、登録、package生成、uploadは行いません。helper imageは通常fileとして読み取り、記録した固定形式のpair設定JSONのhashと、同じJSON bytesがimage内にあることを照合します。
 
 ## 見つかった閉包の不足
 
@@ -13,7 +13,7 @@
 - 外部moduleを持たないStandard packageはbuild helperのrecordに保存されません。Go stdlib内のvendor packageや各本文を、Go rootのLICENSE/PATENTSだけで覆ったと判定できません。native library、platform runtime、compiler/SDK、build toolもこの記録では網羅されません。
 - recordのmoduleを削除しても、imageからmoduleを復元する検査ではないため完全性を証明できません。空集合も「記録されたmoduleが0件」として扱い、実binaryに外部依存がないという意味にはしません。record hashは独立した信頼できるbuild結果から取得する必要があります。
 
-この照合では、helper recordの3つの公開設定値から期待 `-ldflags` を再構成し、実 `go version -m` の `-ldflags` とrole pathを照合します。resident-pipeのbuild info照合は別契約のままです。実Go dependency graphの再取得、stdlib/vendorの版・本文inventory、実Macでの最終notice収集は未実施・後続です。法律上の十分性やlicense互換性を認定しません。
+この照合では、helper recordの3つの公開設定値から固定形式のJSONを再構成し、そのSHA-256とimage内のbytesを照合します。resident-pipeのbuild info照合は別契約のままです。実Go dependency graphの再取得、stdlib/vendorの版・本文inventory、実Macでの最終notice収集は未実施・後続です。法律上の十分性やlicense互換性を認定しません。
 
 ## 入口と入力
 
@@ -34,7 +34,7 @@ python scripts/verify_go_notice_closure.py \
 
 - snapshotのpathはbuilderと同じPOSIX形式で照合します。root packageは `backend/activity.go` のように区切りを1個にし、record内の二重slash・dot・親参照を正規化して受け入れません。
 - producer-rootは `BUILD_RECORD.json` と `resident-pipe` の2 filesだけです。現在のsealed producer schema、固定role/target/settings/flags、全blocked/false境界、snapshot/recipeのpath集合・hash形式、repository package宣言を検査します。
-- host-pair-rootは `BUILD_RECORD.json` と `tether-host-pair` の2 filesだけです。専用schema、source/tree、Go設定、snapshot/recipe、package/module、固定pair設定、recorded `-ldflags` と実 `go version -m` の一致を検査します。
+- host-pair-rootは `BUILD_RECORD.json` と `tether-host-pair` の2 filesだけです。専用schema、source/tree、Go設定、snapshot/recipe、package/module、固定pair設定JSONのhashとbinary内bytes、image SHA-256、Mach-O headerを検査します。
 - imageの実bytesを外部期待hashとrecordのhash/sizeへ照合し、既存Mach-O parserでexecutable/CPU/modern macOS header宣言を確認します。loader検証・署名検証・source対応証明ではありません。
 - module-rootの `go.mod` / `go.sum` を既存collectorの固定lock規則に照合し、その実bytesのhashをrecordとinventoryへ対応づけます。他のsource fileは読みません。
 - 選択moduleは両imageのPath/Version/Sum/GoModSumの和です。未知module、版/checksum不一致、重複、replace/main/local情報を拒否します。未知依存を見つけても本文を自動取得・許可しません。
