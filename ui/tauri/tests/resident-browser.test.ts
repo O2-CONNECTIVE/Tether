@@ -1,43 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { browser, url } from './app-browser.ts';
-void test('native registration refusal is visible with standby unavailable', async () => {
-  const page = await browser.newPage();
-  try {
-    await page.addInitScript(() => {
-      window.__TAURI__ = { core: { invoke: command => Promise.resolve(command === 'get_resident_status'
-        ? { protocolVersion: 1, source: 'resident-owner', state: document.documentElement.dataset.rejected
-          ? 'source-policy-rejected' : 'source-startup-checking' }
-        : { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }) } };
-    });
-    await page.goto(url);
-    await page.getByRole('heading', { name: '常駐ホストの起動結果を確認中' }).waitFor();
-    const standby = page.locator('#resident-switch');
-    assert.equal(await standby.isDisabled(), true);
-    await page.evaluate(() => { document.documentElement.dataset.rejected = 'true'; });
-    await page.getByRole('heading', { name: '登録設定を確認してください' }).waitFor();
-    assert.equal(await standby.isDisabled(), true);
-    assert.equal(await standby.getAttribute('aria-checked'), null);
-  } finally { await page.close(); }
-});
-
-// なぜ要るか: 新しい起動理由でも画面の待機スイッチを有効化しないことをブラウザー境界で確かめる。
-void test('native host key unavailability is visible with standby unavailable', async () => {
-  const page = await browser.newPage();
-  try {
-    await page.addInitScript(() => {
-      window.__TAURI__ = { core: { invoke: command => Promise.resolve(command === 'get_resident_status'
-        ? { protocolVersion: 1, source: 'resident-owner', state: 'source-host-key-unavailable' }
-        : { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }) } };
-    });
-    await page.goto(url);
-    await page.getByRole('heading', { name: 'この Mac の鍵を読めません' }).waitFor();
-    const standby = page.locator('#resident-switch');
-    assert.equal(await standby.isDisabled(), true);
-    assert.equal(await standby.getAttribute('aria-disabled'), 'true');
-    assert.equal(await standby.getAttribute('aria-checked'), null);
-  } finally { await page.close(); }
-});
+// なぜ要るか: どの起動拒否の理由でも、確認中から結果へ移ったあと待機スイッチを有効化しない。
+for (const [state, heading] of [['source-policy-rejected', '登録設定を確認してください'], ['source-host-key-unavailable', 'この Mac の鍵を読めません']]) {
+  void test(`native startup refusal ${state} is visible with standby unavailable`, async () => {
+    const page = await browser.newPage();
+    try {
+      await page.addInitScript(() => {
+        window.__TAURI__ = { core: { invoke: command => Promise.resolve(command === 'get_resident_status'
+          ? { protocolVersion: 1, source: 'resident-owner', state: document.documentElement.dataset.rejected ?? 'source-startup-checking' }
+          : { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }) } };
+      });
+      await page.goto(url);
+      await page.getByRole('heading', { name: '常駐ホストの起動結果を確認中' }).waitFor();
+      const standby = page.locator('#resident-switch');
+      assert.equal(await standby.isDisabled(), true);
+      await page.evaluate(value => { document.documentElement.dataset.rejected = value; }, state);
+      await page.getByRole('heading', { name: heading }).waitFor();
+      assert.equal(await standby.isDisabled(), true);
+      assert.equal(await standby.getAttribute('aria-checked'), null);
+    } finally { await page.close(); }
+  });
+}
 
 void test('resident switch and deadline use shared IPC and wait for owner observations', async () => {
   const page = await browser.newPage({ viewport: { width: 900, height: 1000 }, timezoneId: 'Asia/Tokyo' });
