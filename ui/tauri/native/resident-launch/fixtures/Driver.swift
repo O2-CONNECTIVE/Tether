@@ -14,6 +14,10 @@ private enum Check {
 @MainActor
 struct Driver {
     static func main() {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "pairing-child" {
+            runPairingChild(CommandLine.arguments[2])
+            return
+        }
         for (major, minor, patch, expected) in [
             (10, 13, 0, false), (13, 6, 0, false), (14, 0, 0, false),
             (14, 3, 99, false), (14, 4, 0, true), (14, 4, 1, true),
@@ -69,6 +73,27 @@ struct Driver {
         encoder.outputFormatting = [.sortedKeys]
         Check.that(try encoder.encode(reference) == first.expected, "publisher-and-release-allOf")
 
+        let pairingRequirement = try ResidentLaunchPreparation.pairingRequirementFixture(team: "TESTTEAM01")
+        let pairingReference = try LaunchCodeRequirement.allOf {
+            TeamIdentifier("TESTTEAM01")
+            SigningIdentifier("com.o2connective.rescue-host.tether-host-pair")
+            ValidationCategory(.developerID)
+        }
+        Check.that(pairingRequirement == (try encoder.encode(pairingReference)), "pairing-helper-same-team-requirement")
+        Check.that(pairingRequirement != (try ResidentLaunchPreparation.pairingRequirementFixture(team: "TESTTEAM02")),
+                   "pairing-helper-different-team-refused")
+
+        let success = ResidentLaunchPreparation.runPairingProcessFixture("success", timeout: 2)
+        Check.that(success == .exited(status: 0, stdout: Data("{\"protocolVersion\":1,\"result\":\"succeeded\"}\n".utf8)),
+                   "pairing-helper-captures-result-line")
+        let limit = ResidentLaunchPreparation.runPairingProcessFixture("limit", timeout: 2)
+        Check.that(limit == .exited(status: 0, stdout: Data(repeating: 120, count: 4096)),
+                   "pairing-helper-accepts-four-kibibytes")
+        Check.that(ResidentLaunchPreparation.runPairingProcessFixture("overflow", timeout: 2) == .outputTooLarge,
+                   "pairing-helper-rejects-output-over-four-kibibytes")
+        Check.that(ResidentLaunchPreparation.runPairingProcessFixture("hold", timeout: 0.1) == .timedOut,
+                   "pairing-helper-timeout-kills-child")
+
         let otherTeam = try ResidentLaunchPreparation.fixture(team: "TESTTEAM02", hashes: hashes, version: version)
         let otherRelease = try ResidentLaunchPreparation.fixture(team: "TESTTEAM01", hashes: [Data(repeating: 3, count: 20)], version: version)
         if #available(macOS 15.0, *) {
@@ -104,5 +129,17 @@ struct Driver {
             Check.that(released != nil, "owned-preparation-created")
         }
         Check.that(released == nil, "prelaunch-owner-released")
+    }
+
+    private static func runPairingChild(_ mode: String) {
+        switch mode {
+        case "success": try? FileHandle.standardOutput.write(contentsOf: Data("{\"protocolVersion\":1,\"result\":\"succeeded\"}\n".utf8))
+        case "limit": try? FileHandle.standardOutput.write(contentsOf: Data(repeating: 120, count: 4096))
+        case "overflow":
+            try? FileHandle.standardOutput.write(contentsOf: Data(repeating: 120, count: 4097))
+            Thread.sleep(forTimeInterval: 5)
+        case "hold": Thread.sleep(forTimeInterval: 5)
+        default: exit(2)
+        }
     }
 }

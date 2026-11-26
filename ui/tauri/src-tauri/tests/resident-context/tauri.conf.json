@@ -19,7 +19,8 @@
           ],
           "permissions": [
             "allow-shell-status",
-            "allow-resident-port"
+            "allow-resident-port",
+            "allow-resident-pairing"
           ]
         }
       ],

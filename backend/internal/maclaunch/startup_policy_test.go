@@ -5,16 +5,87 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
-	"golang.org/x/crypto/ssh"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
+	"golang.org/x/crypto/ssh"
 )
+
+func TestMissingStandbyPolicyRejectedBeforeProtectedRead(t *testing.T) {
+	f, _ := fixedNativeFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	policyPath := filepath.Join(t.TempDir(), "missing-policy.json")
+	if _, err := os.Stat(filepath.Dir(policyPath)); err != nil {
+		t.Fatal(err)
+	}
+	readCalls := 0
+	d := f.deps
+	d.read = func(context.Context, string) ([]byte, error) {
+		readCalls++
+		return nil, agentkeys.ErrDenied
+	}
+	got, err := loadResidentMode(ctx, policyPath, d, true)
+	if got != nil || !IsStartupPolicyRejected(err) || readCalls != 0 {
+		t.Fatalf("factory=%v err=%v policyRejected=%v protectedReads=%d", got, err, IsStartupPolicyRejected(err), readCalls)
+	}
+}
+
+func TestMissingNonStandbyPolicyKeepsReaderError(t *testing.T) {
+	f, _ := fixedNativeFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	policyPath := filepath.Join(t.TempDir(), "missing-policy.json")
+	readCalls := 0
+	d := f.deps
+	d.read = func(context.Context, string) ([]byte, error) {
+		readCalls++
+		return nil, agentkeys.ErrDenied
+	}
+	got, err := loadResidentMode(ctx, policyPath, d, false)
+	if got != nil || !errors.Is(err, ErrResident) || IsStartupPolicyRejected(err) || readCalls != 1 {
+		t.Fatalf("factory=%v err=%v policyRejected=%v protectedReads=%d", got, err, IsStartupPolicyRejected(err), readCalls)
+	}
+}
+
+func TestStandbyLstatErrorKeepsReaderError(t *testing.T) {
+	f, _ := fixedNativeFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	notDirectory := filepath.Join(t.TempDir(), "not-directory")
+	if err := os.WriteFile(notDirectory, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(notDirectory, "resident-policy.json")
+	readCalls := 0
+	d := f.deps
+	d.read = func(context.Context, string) ([]byte, error) {
+		readCalls++
+		return nil, agentkeys.ErrDenied
+	}
+	got, err := loadResidentMode(ctx, policyPath, d, true)
+	if got != nil || !errors.Is(err, ErrResident) || IsStartupPolicyRejected(err) || readCalls != 1 {
+		t.Fatalf("factory=%v err=%v policyRejected=%v protectedReads=%d", got, err, IsStartupPolicyRejected(err), readCalls)
+	}
+}
+
+func fixedStandbyFixture(t *testing.T) (*ResidentFactory, *neverRuntime) {
+	t.Helper()
+	f, rt := fixedNativeFixture(t)
+	f.path = filepath.Join(t.TempDir(), "resident-policy.json")
+	if err := os.WriteFile(f.path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return f, rt
+}
 
 func TestStandbyPolicyRejectedBeforeAnyKeyAcquisition(t *testing.T) {
 	for _, kind := range []string{"schema", "id", "command", "timeout", "extra", "same-key-path"} {
 		t.Run(kind, func(t *testing.T) {
-			f, _ := fixedNativeFixture(t)
+			f, _ := fixedStandbyFixture(t)
 			d := f.deps
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -71,7 +142,7 @@ func TestStandbyReaderAndKeyErrorsNeverMintRejection(t *testing.T) {
 	for _, phase := range []string{"read", "key"} {
 		for i, failure := range failures {
 			t.Run(fmt.Sprintf("%s-%d", phase, i), func(t *testing.T) {
-				f, _ := fixedNativeFixture(t)
+				f, _ := fixedStandbyFixture(t)
 				d := f.deps
 				if phase == "read" {
 					d.read = func(context.Context, string) ([]byte, error) { return []byte("{}"), failure }
@@ -106,7 +177,7 @@ func TestStandbyPositiveClassificationIsDirectOnly(t *testing.T) {
 func TestStandbyLoaderPanicsNeverBecomeRejection(t *testing.T) {
 	for _, phase := range []string{"read", "key"} {
 		t.Run(phase, func(t *testing.T) {
-			f, _ := fixedNativeFixture(t)
+			f, _ := fixedStandbyFixture(t)
 			d := f.deps
 			if phase == "read" {
 				d.read = func(context.Context, string) ([]byte, error) { panic("test read") }
@@ -126,7 +197,7 @@ func TestStandbyLoaderPanicsNeverBecomeRejection(t *testing.T) {
 	}
 }
 func TestStandbyPreReadAndKeyValidationAreNotPositive(t *testing.T) {
-	f, _ := fixedNativeFixture(t)
+	f, _ := fixedStandbyFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if _, err := loadResidentMode(ctx, "relative", f.deps, true); IsStartupPolicyRejected(err) {

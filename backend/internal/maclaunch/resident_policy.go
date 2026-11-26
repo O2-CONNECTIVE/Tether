@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"os"
 	"path"
 	"sync"
 	"sync/atomic"
@@ -103,6 +105,14 @@ func loadResident(ctx context.Context, policyPath string, d residentDeps) (*Resi
 func loadResidentMode(ctx context.Context, policyPath string, d residentDeps, standby bool) (*ResidentFactory, error) {
 	if !finiteResident(ctx) || d.read == nil || d.key == nil || d.runtime == nil || d.client == nil || !path.IsAbs(policyPath) || path.Clean(policyPath) != policyPath || policyPath == "/" {
 		return nil, ErrResident
+	}
+	if standby {
+		if _, e := os.Lstat(policyPath); errors.Is(e, fs.ErrNotExist) {
+			// A missing policy only rejects startup and trusts nothing, so a file
+			// created right after Lstat is harmless. An existing file is still
+			// checked by the protected reader (owner, mode, symlinks).
+			return nil, startupPolicyRejected{}
+		}
 	}
 	raw, e := d.read(ctx, policyPath)
 	if e != nil {

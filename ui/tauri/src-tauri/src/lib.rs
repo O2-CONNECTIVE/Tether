@@ -23,6 +23,7 @@ mod mac_quit_dialog;
 #[path = "../../native/resident-launch/rust/owner.rs"]
 mod native_preparation;
 
+mod resident_pairing;
 #[allow(
     dead_code,
     reason = "resident IO ownership has no trusted launch factory or production IPC binding"
@@ -164,11 +165,13 @@ fn commands_with_state<R: tauri::Runtime>(
         .manage(runtime)
         .manage(output)
         .manage(state)
+        .manage(resident_pairing::PairingManager::production())
         .invoke_handler(tauri::generate_handler![
             get_shell_status,
             get_status_presentation,
             resident_port::get_resident_status,
             resident_port::request_resident_intent,
+            resident_pairing::request_resident_pairing,
         ])
 }
 

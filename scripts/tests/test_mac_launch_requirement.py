@@ -14,15 +14,15 @@ sys.path.pop(0)
 
 class NativeLaunchRequirementReportTests(unittest.TestCase):
     def test_complete_inert_fixture_has_positive_result(self):
-        self.assertEqual(tool.validate_report('NATIVE_REQUIREMENT_FIXTURE passed=35 failed=0 launched=0\n'), 35)
+        self.assertEqual(tool.validate_report('NATIVE_REQUIREMENT_FIXTURE passed=41 failed=0 launched=0\n'), 41)
 
     def test_missing_partial_failed_or_launched_results_are_not_success(self):
         for output in ['', 'NATIVE_REQUIREMENT_UNEXECUTED unsupportedOS',
                        'NATIVE_REQUIREMENT_FIXTURE passed=0 failed=0 launched=0',
-                       'NATIVE_REQUIREMENT_FIXTURE passed=34 failed=0 launched=0',
-                       'NATIVE_REQUIREMENT_FIXTURE passed=35 failed=1 launched=0',
-                       'NATIVE_REQUIREMENT_FIXTURE passed=35 failed=0 launched=1',
-                       'NATIVE_REQUIREMENT_FIXTURE passed=35 failed=0 launched=0\nextra']:
+                       'NATIVE_REQUIREMENT_FIXTURE passed=40 failed=0 launched=0',
+                       'NATIVE_REQUIREMENT_FIXTURE passed=41 failed=1 launched=0',
+                       'NATIVE_REQUIREMENT_FIXTURE passed=41 failed=0 launched=1',
+                       'NATIVE_REQUIREMENT_FIXTURE passed=41 failed=0 launched=0\nextra']:
             with self.subTest(output=output), self.assertRaises(ValueError):
                 tool.validate_report(output)
 

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { browser, url } from './app-browser.ts';
+import { runPairingBrowserFlow } from './resident-pairing-browser-flow.ts';
 // なぜ要るか: どの起動拒否の理由でも、確認中から結果へ移ったあと待機スイッチを有効化しない。
 for (const [state, heading] of [['source-policy-rejected', '登録設定を確認してください'], ['source-host-key-unavailable', 'この Mac の鍵を読めません']]) {
   void test(`native startup refusal ${state} is visible with standby unavailable`, async () => {
@@ -236,3 +237,4 @@ void test('the same resident view resumes fresh status after hiding, while page 
     assert.equal(await page.locator('#resident-diagnostic').innerText(), 'RESIDENT_VIEW_INVALIDATED');
   } finally { await page.close(); }
 });
+void test('registration starts from the button and displays the helper result', runPairingBrowserFlow); // なぜ必要か: 実ブラウザー上の no-arg 呼び出しと結果表示を確認する。

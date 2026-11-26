@@ -384,6 +384,31 @@ private final class PreparationSlot: @unchecked Sendable {
 
 private let preparationSlot = PreparationSlot()
 
+@c @implementation public func rh_resident_host_pairing_run(
+    _ stdoutBytes: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ stdoutLength: UnsafeMutablePointer<UInt32>?, _ exitStatus: UnsafeMutablePointer<Int32>?
+) -> UInt32 {
+    guard let stdoutBytes, capacity == 4096, let stdoutLength, let exitStatus else {
+        return UInt32(RH_PAIRING_UNAVAILABLE)
+    }
+    stdoutLength.pointee = 0
+    exitStatus.pointee = 0
+    return autoreleasepool {
+        guard let preparation = try? ResidentLaunchPreparation.prepare() else { return UInt32(RH_PAIRING_UNAVAILABLE) }
+        switch preparation.launchPairingHelper() {
+        case .unavailable: return UInt32(RH_PAIRING_UNAVAILABLE)
+        case .timedOut: return UInt32(RH_PAIRING_TIMED_OUT)
+        case .outputTooLarge: return UInt32(RH_PAIRING_OUTPUT_TOO_LARGE)
+        case let .exited(status, stdout):
+            guard stdout.count <= Int(capacity) else { return UInt32(RH_PAIRING_OUTPUT_TOO_LARGE) }
+            stdout.copyBytes(to: stdoutBytes, count: stdout.count)
+            stdoutLength.pointee = UInt32(stdout.count)
+            exitStatus.pointee = status
+            return UInt32(RH_PAIRING_EXITED)
+        }
+    }
+}
+
 @c @implementation public func rh_resident_preparation_create() -> UInt64 {
     autoreleasepool { preparationSlot.create(fixtureMode: nil) }
 }

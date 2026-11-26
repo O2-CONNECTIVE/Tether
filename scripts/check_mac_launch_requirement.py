@@ -21,9 +21,9 @@ def validate_report(output):
     if len(lines) != 1:
         raise ValueError('fixture did not have one terminal result')
     match = re.fullmatch(r'NATIVE_REQUIREMENT_FIXTURE passed=(\d+) failed=(\d+) launched=(\d+)', lines[0])
-    if not match or tuple(map(int, match.groups())) != (35, 0, 0):
+    if not match or tuple(map(int, match.groups())) != (41, 0, 0):
         raise ValueError('fixture was incomplete, failed or launched a process')
-    return 35
+    return 41
 
 
 def validate_weak_link(output):
