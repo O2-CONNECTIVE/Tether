@@ -67,10 +67,8 @@ func TestGUIResumePendingReopensConsentAfterFirst202(t *testing.T) {
 	f := newGUIPairFixture(t, nil)
 	operation, fingerprint := createGUIResumableOperation(t, f, 0x41)
 	writeGUIPendingJSON(t, f, f.gateway.URL, operation.ID, fingerprint)
-	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
-	defer cancel()
 	f.depsOverride = func(d *deps) { d.confirmInterval = time.Millisecond }
-	code, stdout, stderr := f.runWithContext(t, ctx)
+	code, stdout, stderr := f.run(t)
 	if code != 0 || guiResult(t, stdout) != guiResultSucceeded || stderr != "" || f.operation != operation.ID ||
 		f.operationsCalls.Load() != 1 || f.confirmCalls.Load() != 2 || f.consentLaunches.Load() != 1 || f.nativeCalls.Load() != 0 || f.authLaunches.Load() != 0 {
 		t.Fatalf("resume code=%d result=%q stderr=%q operation=%q calls=%d/%d consent=%d native=%d auth=%d",
@@ -94,9 +92,7 @@ func TestGUIResumeBrowserFailureCleansPendingKey(t *testing.T) {
 			return errors.New("synthetic browser launch failure")
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-	code, stdout, stderr := f.runWithContext(t, ctx)
+	code, stdout, stderr := f.run(t)
 	if code != 0 || guiResult(t, stdout) != guiResultBrowserFailed || stderr != "" || opens.Load() != 1 || f.keychain.has(fingerprint) || f.operationsCalls.Load() != 1 {
 		t.Fatalf("resume code=%d result=%q stderr=%q opens=%d key=%v preflights=%d", code, guiResult(t, stdout), stderr, opens.Load(), f.keychain.has(fingerprint), f.operationsCalls.Load())
 	}
@@ -109,14 +105,16 @@ func TestGUIResumeUsesSavedOperationExpiry(t *testing.T) {
 	// Why: restarting must not extend the gateway's fixed operation lifetime by another ten minutes.
 	f := newGUIPairFixture(t, nil)
 	operation, fingerprint := createGUIResumableOperation(t, f, 0x42)
-	expiresAt := time.Now().Add(90 * time.Millisecond).UTC()
-	pendingPath := writeGUIPendingJSON(t, f, f.gateway.URL, operation.ID, fingerprint)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	var opens atomic.Int32
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(time.Minute)
+	writeGUIPendingRecord(t, f, marshalGUIPendingJSON(t, f.gateway.URL, operation.ID, fingerprint, expiresAt))
+	currentTime := now
+	var confirms, opens atomic.Int32
 	f.depsOverride = func(d *deps) {
 		d.confirmInterval = 5 * time.Millisecond
+		d.now = func() time.Time { return currentTime }
 		d.guiClient = &http.Client{Transport: guiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			confirms.Add(1)
 			return guiPairHTTPResponse(request, http.StatusAccepted, "application/json", `{"state":"consent_pending"}`), nil
 		})}
 		d.openBrowser = func(raw string) error {
@@ -124,18 +122,13 @@ func TestGUIResumeUsesSavedOperationExpiry(t *testing.T) {
 				return errors.New("unexpected consent URL")
 			}
 			opens.Add(1)
+			currentTime = expiresAt
 			return nil
 		}
 	}
-	// Replace the legacy fixture record with a bounded expiry while retaining its operation and key.
-	raw := marshalGUIPendingJSON(t, f.gateway.URL, operation.ID, fingerprint, expiresAt)
-	if err := os.WriteFile(pendingPath, raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	started := time.Now()
-	code, stdout, stderr := f.runWithContext(t, ctx)
-	if code != 0 || guiResult(t, stdout) != guiResultRejected || stderr != "" || opens.Load() != 1 || time.Since(started) >= 250*time.Millisecond || f.keychain.has(fingerprint) {
-		t.Fatalf("resume code=%d result=%q stderr=%q opens=%d elapsed=%s key=%v", code, guiResult(t, stdout), stderr, opens.Load(), time.Since(started), f.keychain.has(fingerprint))
+	code, stdout, stderr := f.run(t)
+	if code != 0 || guiResult(t, stdout) != guiResultRejected || stderr != "" || confirms.Load() != 1 || opens.Load() != 1 || f.keychain.has(fingerprint) {
+		t.Fatalf("resume code=%d result=%q stderr=%q confirms=%d opens=%d key=%v", code, guiResult(t, stdout), stderr, confirms.Load(), opens.Load(), f.keychain.has(fingerprint))
 	}
 }
 

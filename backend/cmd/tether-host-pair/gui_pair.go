@@ -521,6 +521,10 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 	if interval <= 0 {
 		interval = guiConfirmInterval
 	}
+	now := d.now
+	if now == nil {
+		now = time.Now
+	}
 	pendingSeen := false
 	for {
 		requestTimeout := pairRequestTimeout(d)
@@ -535,7 +539,7 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 		if requestErr != nil {
 			cancel()
 			if pendingSeen {
-				if waitGUIConfirmRetry(ctx, interval, deadline) {
+				if waitGUIConfirmRetry(ctx, interval, deadline, now) {
 					continue
 				}
 			}
@@ -546,7 +550,7 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 		cancel()
 		if readErr != nil {
 			if pendingSeen {
-				if waitGUIConfirmRetry(ctx, interval, deadline) {
+				if waitGUIConfirmRetry(ctx, interval, deadline, now) {
 					continue
 				}
 			}
@@ -569,7 +573,7 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 				return guiResultUnknown, empty
 			}
 			pendingSeen = true
-			if !time.Now().Before(deadline) {
+			if !now().Before(deadline) {
 				return guiResultRejected, empty
 			}
 			if reopenConsent {
@@ -578,7 +582,7 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 				}
 				reopenConsent = false
 			}
-			if !waitGUIConfirmRetry(ctx, interval, deadline) {
+			if !waitGUIConfirmRetry(ctx, interval, deadline, now) {
 				if ctx.Err() != nil {
 					return guiResultUnknown, empty
 				}
@@ -614,7 +618,7 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 			return guiResultUnknown, empty
 		case http.StatusBadGateway, http.StatusGatewayTimeout:
 			if pendingSeen {
-				if waitGUIConfirmRetry(ctx, interval, deadline) {
+				if waitGUIConfirmRetry(ctx, interval, deadline, now) {
 					continue
 				}
 			}
@@ -625,8 +629,8 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 	}
 }
 
-func waitGUIConfirmRetry(ctx context.Context, interval time.Duration, deadline time.Time) bool {
-	remaining := time.Until(deadline)
+func waitGUIConfirmRetry(ctx context.Context, interval time.Duration, deadline time.Time, now func() time.Time) bool {
+	remaining := deadline.Sub(now())
 	if remaining <= 0 {
 		return false
 	}
@@ -638,7 +642,7 @@ func waitGUIConfirmRetry(ctx context.Context, interval time.Duration, deadline t
 	defer timer.Stop()
 	select {
 	case <-timer.C:
-		return time.Now().Before(deadline)
+		return now().Before(deadline)
 	case <-ctx.Done():
 		return false
 	}

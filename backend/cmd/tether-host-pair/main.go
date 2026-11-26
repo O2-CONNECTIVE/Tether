@@ -39,6 +39,7 @@ type deps struct {
 	callbackAddress           string
 	callbackWait, pairTimeout time.Duration
 	confirmInterval           time.Duration
+	now                       func() time.Time
 }
 
 var guiGateway, guiIssuer, guiClientID string
