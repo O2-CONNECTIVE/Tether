@@ -317,7 +317,7 @@ func executeGUIResult(ctx context.Context, d deps) string {
 		return guiResultUnavailable
 	}
 	if err := d.openBrowser(operation.ConsentURL); err != nil {
-		return cleanupGUIResult(guiResultBrowserFailed, pending, pendingPath, dir, d)
+		return cleanupGUIResult(guiResultBrowserFailed, pending, pendingPath, dir, oldPolicy, d)
 	}
 	result, registration := confirmGUIPair(ctx, client, d, gateway, pending.Operation, fingerprint, signer, operation.ExpiresAt, "", false)
 	return completeGUIResult(result, registration, pending, pendingPath, dir, home, policyPath, oldPolicy, signer, d)
@@ -522,18 +522,8 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 		interval = guiConfirmInterval
 	}
 	pendingSeen := false
-	transientFailure := false
 	for {
-		if !time.Now().Before(deadline) {
-			if pendingSeen && transientFailure {
-				return guiResultUnknown, empty
-			}
-			return guiResultRejected, empty
-		}
 		requestTimeout := pairRequestTimeout(d)
-		if remaining := time.Until(deadline); remaining < requestTimeout {
-			requestTimeout = remaining
-		}
 		requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 		req, reqErr := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 		if reqErr != nil {
@@ -545,7 +535,6 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 		if requestErr != nil {
 			cancel()
 			if pendingSeen {
-				transientFailure = true
 				if waitGUIConfirmRetry(ctx, interval, deadline) {
 					continue
 				}
@@ -557,7 +546,6 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 		cancel()
 		if readErr != nil {
 			if pendingSeen {
-				transientFailure = true
 				if waitGUIConfirmRetry(ctx, interval, deadline) {
 					continue
 				}
@@ -581,7 +569,9 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 				return guiResultUnknown, empty
 			}
 			pendingSeen = true
-			transientFailure = false
+			if !time.Now().Before(deadline) {
+				return guiResultRejected, empty
+			}
 			if reopenConsent {
 				if d.openBrowser == nil || d.openBrowser(consentURL) != nil {
 					return guiResultBrowserFailed, empty
@@ -624,7 +614,6 @@ func confirmGUIPair(ctx context.Context, client *http.Client, d deps, gateway, o
 			return guiResultUnknown, empty
 		case http.StatusBadGateway, http.StatusGatewayTimeout:
 			if pendingSeen {
-				transientFailure = true
 				if waitGUIConfirmRetry(ctx, interval, deadline) {
 					continue
 				}
@@ -678,10 +667,16 @@ func completeGUIResult(result string, registration pairResult, pending guiPairPe
 	if result == guiResultUnknown || result == guiResultLocalApplyFailed {
 		return result
 	}
-	return cleanupGUIResult(result, pending, pendingPath, dir, d)
+	return cleanupGUIResult(result, pending, pendingPath, dir, oldPolicy, d)
 }
 
-func cleanupGUIResult(result string, pending guiPairPending, pendingPath, dir string, d deps) string {
+func cleanupGUIResult(result string, pending guiPairPending, pendingPath, dir string, oldPolicy []byte, d deps) string {
+	if policy, ok := readGUIPolicyIdentity(oldPolicy); ok && policy.Fingerprint == pending.HostKeyFingerprint {
+		if removeGUIWaiting(dir, pendingPath) != nil {
+			return guiResultUnavailable
+		}
+		return result
+	}
 	if d.deleteHostKey(pending.HostKeyFingerprint) != nil {
 		return guiResultUnavailable
 	}

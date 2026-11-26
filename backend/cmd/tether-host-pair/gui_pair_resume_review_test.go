@@ -139,6 +139,97 @@ func TestGUIResumeUsesSavedOperationExpiry(t *testing.T) {
 	}
 }
 
+func TestGUIResumeExpiredPendingStillConfirmsSuccessfulOperation(t *testing.T) {
+	// Why: a gateway may have committed before the response was lost, so expiry must not prevent reconciling its registered operation.
+	f := newGUIPairFixture(t, nil)
+	operation, fingerprint := createGUIResumableOperation(t, f, 0x44)
+	pendingPath := writeGUIPendingRecord(t, f, marshalGUIPendingJSON(t, f.gateway.URL, operation.ID, fingerprint, time.Now().Add(-time.Second)))
+	var confirms, opens atomic.Int32
+	successBody := guiConfirmSuccessBody(t)
+	f.depsOverride = func(d *deps) {
+		d.guiClient = &http.Client{Transport: guiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			confirms.Add(1)
+			return guiPairHTTPResponse(request, http.StatusOK, "application/json", successBody), nil
+		})}
+		d.openBrowser = func(string) error {
+			opens.Add(1)
+			return nil
+		}
+	}
+
+	code, stdout, stderr := f.run(t)
+	policyRaw, policyErr := os.ReadFile(f.policy)
+	policy, policyExists := readGUIPolicyIdentity(policyRaw)
+	if code != 0 || guiResult(t, stdout) != guiResultSucceeded || stderr != "" || confirms.Load() != 1 || opens.Load() != 0 ||
+		!policyExists || policy.Fingerprint != fingerprint || !f.keychain.has(fingerprint) {
+		t.Fatalf("resume code=%d result=%q stderr=%q confirms=%d opens=%d policy=%+v policy-exists=%v policy-error=%v key=%v",
+			code, guiResult(t, stdout), stderr, confirms.Load(), opens.Load(), policy, policyExists, policyErr, f.keychain.has(fingerprint))
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("pending record remains after successful reconciliation: %v", err)
+	}
+}
+
+func TestGUIResumeExpiredPending202RejectsWithoutOpeningBrowser(t *testing.T) {
+	// Why: after an expired operation reports consent_pending, the helper must reject without reopening consent or waiting.
+	f := newGUIPairFixture(t, nil)
+	operation, fingerprint := createGUIResumableOperation(t, f, 0x45)
+	pendingPath := writeGUIPendingRecord(t, f, marshalGUIPendingJSON(t, f.gateway.URL, operation.ID, fingerprint, time.Now().Add(-time.Second)))
+	var confirms, opens atomic.Int32
+	f.depsOverride = func(d *deps) {
+		d.guiClient = &http.Client{Transport: guiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			confirms.Add(1)
+			return guiPairHTTPResponse(request, http.StatusAccepted, "application/json", `{"state":"consent_pending"}`), nil
+		})}
+		d.openBrowser = func(string) error {
+			opens.Add(1)
+			return nil
+		}
+	}
+
+	code, stdout, stderr := f.run(t)
+	if code != 0 || guiResult(t, stdout) != guiResultRejected || stderr != "" || confirms.Load() != 1 || opens.Load() != 0 || f.keychain.has(fingerprint) {
+		t.Fatalf("resume code=%d result=%q stderr=%q confirms=%d opens=%d key=%v",
+			code, guiResult(t, stdout), stderr, confirms.Load(), opens.Load(), f.keychain.has(fingerprint))
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("pending record remains after expired consent_pending: %v", err)
+	}
+}
+
+func TestGUIResumeTerminalResultPreservesCurrentPolicyKey(t *testing.T) {
+	// Why: a terminal gateway result clears stale pending metadata but must not delete the key the current policy still uses.
+	f := newGUIPairFixture(t, nil)
+	fingerprint := seedGUIPendingKey(t, f, 0x46)
+	if err := os.MkdirAll(f.dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := json.Marshal(map[string]string{"host_key_store": "keychain", "host_key_fingerprint": fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.policy, policy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	pendingPath := writeGUIPendingJSON(t, f, f.gateway.URL, validGUIPendingOperation(), fingerprint)
+	var confirms atomic.Int32
+	f.depsOverride = func(d *deps) {
+		d.guiClient = &http.Client{Transport: guiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			confirms.Add(1)
+			return guiPairHTTPResponse(request, http.StatusNotFound, "application/json", `{"error":"operation_not_found"}`), nil
+		})}
+	}
+
+	code, stdout, stderr := f.run(t)
+	if code != 0 || guiResult(t, stdout) != guiResultRejected || stderr != "" || confirms.Load() != 1 || !f.keychain.has(fingerprint) {
+		t.Fatalf("resume code=%d result=%q stderr=%q confirms=%d key=%v",
+			code, guiResult(t, stdout), stderr, confirms.Load(), f.keychain.has(fingerprint))
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("pending record remains after terminal gateway result: %v", err)
+	}
+}
+
 func TestGUIPendingDirectorySyncFailureContinuesAfterRename(t *testing.T) {
 	// Why: once rename has committed the recoverable pending record, a directory sync warning must not stop consent.
 	f := newGUIPairFixture(t, nil)
