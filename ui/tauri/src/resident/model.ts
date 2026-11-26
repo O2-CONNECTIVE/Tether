@@ -12,7 +12,7 @@ export type Observation = { revision: number; validForMs: number; standby: 'off'
   standbyUntil: number | null; standbyEndingSoon: boolean; standbyExpired: boolean;
   previousCleanup: 'confirmed' | 'unknown';
   sleepPrevention: 'inactive' | 'active' | 'unknown' };
-export type ResidentStartup = 'checking' | 'policy-rejected';
+export type ResidentStartup = 'checking' | 'policy-rejected' | 'host-key-unavailable';
 type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner' } & (
   { observation: Observation; startup?: never } | { observation: null; startup?: ResidentStartup });
 export type ResidentInvoke = (command: 'get_resident_status' | 'request_resident_intent', args: { request: {
@@ -28,8 +28,10 @@ export function decodeStatus(value: unknown): ResidentStatus | undefined {
   if (value.source !== 'resident-owner') return;
   if (keys(value, 'protocolVersion,source,state')) {
     if (value.state === 'source-unavailable') return { source: 'resident-owner', observation: null };
-    if (value.state === 'source-startup-checking' || value.state === 'source-policy-rejected') {
-      const startup = value.state === 'source-startup-checking' ? 'checking' : 'policy-rejected';
+    if (value.state === 'source-startup-checking' || value.state === 'source-policy-rejected'
+      || value.state === 'source-host-key-unavailable') {
+      const startup = value.state === 'source-startup-checking' ? 'checking'
+        : value.state === 'source-policy-rejected' ? 'policy-rejected' : 'host-key-unavailable';
       return { source: 'resident-owner', observation: null, startup };
     }
   }

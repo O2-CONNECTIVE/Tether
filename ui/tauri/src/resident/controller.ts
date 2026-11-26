@@ -82,7 +82,8 @@ export function createResidentController({ invoke, onChange, now = () => perform
           }
           return expireStartup();
         }
-        publish(startup === 'policy-rejected' ? 'RESIDENT_ENROLLMENT_POLICY_REJECTED' : 'RESIDENT_SOURCE_UNAVAILABLE');
+        publish(startup === 'policy-rejected' ? 'RESIDENT_ENROLLMENT_POLICY_REJECTED'
+          : startup === 'host-key-unavailable' ? 'RESIDENT_HOST_KEY_UNAVAILABLE' : 'RESIDENT_SOURCE_UNAVAILABLE');
         return;
       }
       startup = null;

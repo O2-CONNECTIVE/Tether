@@ -2,7 +2,7 @@ use super::*;
 use crate::resident_port::duplex::{
     exchange::Shared,
     test_frames::{intent_request as request, status_line as status},
-    wire::Event,
+    wire::{Event, RejectionCode},
 };
 use serde_json::json;
 fn rejected(at: u64) -> Event {
@@ -74,6 +74,26 @@ fn startup_rejection_wire_rejects_extra_duplicate_wrong_types_and_codes() {
     ] {
         assert!(Event::parse(invalid.as_bytes()).is_err(), "{invalid}");
     }
+}
+
+#[test]
+fn startup_rejection_wire_recognizes_the_host_key_code() {
+    // Why: the new code must pass the same strict frame decoder as policy-rejected.
+    let frame = r#"{"protocolVersion":1,"type":"startupRejected","sourceContinuousMs":100,"code":"host-key-unavailable"}"#;
+    let event = Event::parse(frame.as_bytes()).unwrap();
+    assert!(matches!(
+        event,
+        Event::StartupRejected {
+            code: RejectionCode::HostKeyUnavailable,
+            ..
+        }
+    ));
+    let mut startup = Startup::default();
+    assert!(startup
+        .event(&Event::parse(frame.as_bytes()).unwrap(), 100)
+        .unwrap());
+    startup.eof();
+    assert!(startup.confirmed());
 }
 
 #[test]

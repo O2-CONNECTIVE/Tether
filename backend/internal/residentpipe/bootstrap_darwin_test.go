@@ -5,14 +5,18 @@ package residentpipe
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostkeychain"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostlifecycle"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/maclaunch"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
@@ -127,6 +131,148 @@ func TestBootstrapPreservesDirectPolicyRejection(t *testing.T) {
 	if owner != nil || !maclaunch.IsStartupPolicyRejected(err) {
 		t.Fatal("loader wrapped or lost pre-key policy refusal", err)
 	}
+}
+
+// なぜ要るか: Keychain鍵を読めない起動は、利用者が登録設定拒否と見分けて再登録できる独立結果にする。
+func TestRunBootstrapReportsHostKeyUnavailable(t *testing.T) {
+	path := idleProtectedPolicy(t)
+	var fingerprintBytes [32]byte
+	if _, err := rand.Read(fingerprintBytes[:]); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := "SHA256:" + base64.RawStdEncoding.EncodeToString(fingerprintBytes[:])
+	clear(fingerprintBytes[:])
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy map[string]any
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		t.Fatal(err)
+	}
+	clear(raw)
+	policy["host_key_store"] = "keychain"
+	policy["host_key_fingerprint"] = fingerprint
+	delete(policy, "host_key_path")
+	raw, err = json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	clear(raw)
+	oldUseDataProtectionKeychain := hostkeychain.UseDataProtectionKeychain
+	hostkeychain.UseDataProtectionKeychain = false
+	t.Cleanup(func() { hostkeychain.UseDataProtectionKeychain = oldUseDataProtectionKeychain })
+	loadCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	owner, loadErr := loadBootstrap(loadCtx, explicitPolicyBootstrap, path)
+	cancel()
+	if owner != nil || !errors.Is(loadErr, maclaunch.ErrResidentKeyUnavailable) {
+		t.Fatalf("fixture did not produce a Keychain key-unavailable result: owner=%v error=%v", owner, loadErr)
+	}
+
+	processErr, output := runBootstrapWithCapturedPipes(t, path)
+	if processErr != errStartupHostKeyUnavailable {
+		t.Errorf("startup result = %v, want exact host-key-unavailable sentinel", processErr)
+	}
+	if code := ExitCode(processErr); code != 3 {
+		t.Errorf("exit code = %d, want 3 (error %v)", code, processErr)
+	}
+	frame := startupRejectedEnvelope{}
+	if err := decodeSingleStartupFrame(output, &frame); err != nil {
+		t.Errorf("startup frame: %v", err)
+	} else if frame.Code != "host-key-unavailable" {
+		t.Errorf("startup frame code = %q, want host-key-unavailable", frame.Code)
+	}
+}
+
+// なぜ要るか: 新しい起動結果を足しても、既存のpolicy拒否はexit 2とpolicy-rejectedのまま保つ。
+func TestRunBootstrapKeepsPolicyRejectedResult(t *testing.T) {
+	path := idleProtectedPolicy(t)
+	if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	processErr, output := runBootstrapWithCapturedPipes(t, path)
+	if code := ExitCode(processErr); code != 2 {
+		t.Errorf("exit code = %d, want 2 (error %v)", code, processErr)
+	}
+	frame := startupRejectedEnvelope{}
+	if err := decodeSingleStartupFrame(output, &frame); err != nil {
+		t.Errorf("startup frame: %v", err)
+	} else if frame.Code != "policy-rejected" {
+		t.Errorf("startup frame code = %q, want policy-rejected", frame.Code)
+	}
+}
+
+func runBootstrapWithCapturedPipes(t *testing.T, policyPath string) (error, []byte) {
+	t.Helper()
+	inRead, inWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outRead, outWrite, err := os.Pipe()
+	if err != nil {
+		inRead.Close()
+		inWrite.Close()
+		t.Fatal(err)
+	}
+	savedIn, err := unix.Dup(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	savedOut, err := unix.Dup(1)
+	if err != nil {
+		unix.Close(savedIn)
+		t.Fatal(err)
+	}
+	var restored bool
+	restore := func() {
+		if restored {
+			return
+		}
+		restored = true
+		if err := unix.Dup2(savedIn, 0); err != nil {
+			t.Errorf("restore stdin: %v", err)
+		}
+		if err := unix.Dup2(savedOut, 1); err != nil {
+			t.Errorf("restore stdout: %v", err)
+		}
+		unix.Close(savedIn)
+		unix.Close(savedOut)
+	}
+	t.Cleanup(restore)
+	if err := unix.Dup2(int(inRead.Fd()), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Dup2(int(outWrite.Fd()), 1); err != nil {
+		t.Fatal(err)
+	}
+	inRead.Close()
+	outWrite.Close()
+	processErr := runBootstrap(context.Background(), explicitPolicyBootstrap, policyPath, jsonInput)
+	restore()
+	inWrite.Close()
+	output, err := io.ReadAll(outRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outRead.Close()
+	return processErr, output
+}
+
+func decodeSingleStartupFrame(output []byte, frame *startupRejectedEnvelope) error {
+	lines := strings.Split(string(output), "\n")
+	if len(lines) != 2 || lines[0] == "" || lines[1] != "" {
+		return fmt.Errorf("want exactly one newline-terminated frame, got %q", output)
+	}
+	if err := json.Unmarshal([]byte(lines[0]), frame); err != nil {
+		return fmt.Errorf("decode frame: %w", err)
+	}
+	if frame.ProtocolVersion != 1 || frame.Type != "startupRejected" {
+		return fmt.Errorf("unexpected startup frame: %#v", frame)
+	}
+	return nil
 }
 
 // Both adapters use the production lifetime after a real accepted protected

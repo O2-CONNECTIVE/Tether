@@ -41,8 +41,8 @@ impl NativeSession {
         }
         // Only the original, joined owner can prove a startup policy refusal.
         let joined = self.owner.poll_join();
-        if self.owner.outcome() == Some(Outcome::StartupRejected) {
-            Status::policy_rejected()
+        if let Some(status) = Self::startup_status(self.owner.outcome()) {
+            status
         } else if joined.is_none() {
             Status::startup_checking()
         } else {
@@ -51,6 +51,17 @@ impl NativeSession {
     }
     pub(crate) fn owner(&self) -> &NativeOuterOwner {
         &self.owner
+    }
+    fn startup_status(outcome: Option<Outcome>) -> Option<Status> {
+        match outcome {
+            Some(Outcome::StartupRejected) => Some(Status::policy_rejected()),
+            Some(Outcome::HostKeyUnavailable) => Some(Status::host_key_unavailable()),
+            _ => None,
+        }
+    }
+    #[cfg(resident_launch_fixture)]
+    pub(crate) fn startup_status_fixture(outcome: Outcome) -> Status {
+        Self::startup_status(Some(outcome)).expect("startup fixture outcome")
     }
     #[cfg(resident_launch_fixture)]
     pub(crate) fn fixture(

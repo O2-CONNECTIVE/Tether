@@ -135,10 +135,24 @@ fn classify(observed: Observed) -> Outcome {
         } if observed.native.terminal_confirmed() && observed.native.startup_rejected() => {
             Outcome::StartupRejected
         }
+        NativeOutcome::Active {
+            exit: ExitObservation::Exit(3),
+            io: State::ActiveIoRetired,
+            unwound: false,
+        } if observed.native.terminal_confirmed() && observed.native.host_key_unavailable() => {
+            Outcome::HostKeyUnavailable
+        }
         // Refused is ambiguous (including an already retained native record),
         // not a positively proven NotSpawned. Never promote exit status alone.
         _ => Outcome::Unknown,
     }
+}
+#[cfg(resident_launch_fixture)]
+pub(crate) fn classify_startup_fixture(native: NativeJoined) -> Outcome {
+    classify(Observed {
+        native,
+        wire: false,
+    })
 }
 fn observe_join(producer: &mut NativeIoSupervisor) -> Option<Observed> {
     producer

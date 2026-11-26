@@ -43,6 +43,7 @@ fn production_drop_guard_requires_proof_not_physical_reap_or_consumed_error() {
         known: false,
         cleanup_confirmed: false,
         startup_rejected: false,
+        host_key_unavailable: false,
         not_spawned: false,
         require_cleanup: true,
     });
@@ -82,6 +83,7 @@ fn production_drop_guard_requires_proof_not_physical_reap_or_consumed_error() {
 
 #[test]
 fn clean_startup_rejection_is_failure_but_releasable_after_exact_join() {
+    // Why: preserve the existing exit 2 + policy-rejected proof while adding a separate result.
     let script = r#"import ctypes,json,sys
 lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
 class TB(ctypes.Structure): _fields_=[('n',ctypes.c_uint32),('d',ctypes.c_uint32)]
@@ -116,6 +118,90 @@ sys.exit(2)
     assert!(!owner.can_release());
     assert!(!owner.startup_rejected());
 }
+
+fn joined_startup_fixture(
+    code: &str,
+    exit: i32,
+    age_ms: u64,
+    extra_frame: bool,
+) -> ManuallyDrop<Supervisor> {
+    let script = r#"import ctypes,json,sys
+lib=ctypes.CDLL('/usr/lib/libSystem.B.dylib')
+class TB(ctypes.Structure): _fields_=[('n',ctypes.c_uint32),('d',ctypes.c_uint32)]
+t=TB();assert lib.mach_timebase_info(ctypes.byref(t))==0
+lib.mach_continuous_time.restype=ctypes.c_uint64
+now=lib.mach_continuous_time()*t.n//t.d//1000000
+frame={'protocolVersion':1,'type':'startupRejected','sourceContinuousMs':now-int(sys.argv[3]),'code':sys.argv[1]}
+print(json.dumps(frame),flush=True)
+if sys.argv[4]=='1': print(json.dumps(frame),flush=True)
+sys.exit(int(sys.argv[2]))
+"#;
+    let mut command = std::process::Command::new("/usr/bin/python3");
+    command
+        .args([
+            "-c",
+            script,
+            code,
+            &exit.to_string(),
+            &age_ms.to_string(),
+            if extra_frame { "1" } else { "0" },
+        ])
+        .env_clear();
+    let (owner, source) = Supervisor::fixture_retained(command).unwrap();
+    let mut owner = ManuallyDrop::new(owner);
+    assert!(source
+        .unwrap()
+        .first_with_timeout(Duration::from_secs(2))
+        .is_err());
+    let start = std::time::Instant::now();
+    loop {
+        if owner.poll_join().is_some() {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10));
+        thread::sleep(Duration::from_millis(5));
+    }
+    owner
+}
+
+#[test]
+fn host_key_unavailable_requires_exit_three_and_the_exact_startup_evidence() {
+    // Why: accept only the new exit/code pair after EOF; mismatches and weakened startup evidence stay unknown.
+    let mut host = joined_startup_fixture("host-key-unavailable", 3, 0, false);
+    let is_host_key_unavailable = host.host_key_unavailable();
+    let is_policy_rejected = host.startup_rejected();
+    let releasable = host.can_release();
+    if releasable {
+        // SAFETY: the worker was joined and this is the only manual drop.
+        unsafe { ManuallyDrop::drop(&mut host) };
+    }
+    assert!(
+        is_host_key_unavailable,
+        "exit 3 + host-key-unavailable + EOF must be proven"
+    );
+    assert!(!is_policy_rejected);
+    assert!(releasable);
+}
+
+#[test]
+fn mismatched_exit_codes_extra_frames_and_expired_proofs_stay_unknown() {
+    // Why: each rejected shape guards the exact code pairing and pre-owner timing/EOF boundary.
+    for (code, exit, age_ms, extra_frame) in [
+        ("policy-rejected", 3, 0, false),
+        ("host-key-unavailable", 2, 0, false),
+        ("host-key-unavailable", 3, 0, true),
+        ("host-key-unavailable", 3, 3000, false),
+    ] {
+        let owner = joined_startup_fixture(code, exit, age_ms, extra_frame);
+        assert!(
+            !owner.host_key_unavailable(),
+            "{code} + exit {exit}, age {age_ms}, extra={extra_frame}"
+        );
+        assert!(!owner.startup_rejected());
+        assert!(!owner.can_release());
+    }
+}
+
 #[test]
 fn strict_decoder_accepts_typed_startup_rejection() {
     assert!(super::super::wire::Event::parse(br#"{"protocolVersion":1,"type":"startupRejected","sourceContinuousMs":1,"code":"policy-rejected"}"#).is_ok());

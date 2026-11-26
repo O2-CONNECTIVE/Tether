@@ -19,6 +19,8 @@ fn no_request_no_result_unknown_and_unjoined_monitor_never_allow_exit() {
         assert!(!gate.finish_requested());
     }
     assert!(safe(Some(Outcome::StartupRejected)));
+    // Why: a proven host-key failure is a terminal startup result that permits safe teardown.
+    assert!(safe(Some(Outcome::HostKeyUnavailable)));
     assert!(safe(Some(Outcome::NotSpawned)));
 }
 

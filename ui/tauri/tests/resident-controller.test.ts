@@ -42,6 +42,12 @@ void test('a joined registration policy refusal replaces startup checking withou
     assert.equal(reads, 2);
   } finally { r.controller.dispose(); }
 });
+// なぜ要るか: Keychain鍵が読めないときは診断を分け、待機要求を発行できないことを固定する。
+void test('host key unavailability reports its diagnosis and disables standby operations', async () => {
+  const calls: string[] = [], r = capture(command => (calls.push(command), Promise.resolve({ protocolVersion: 1, source: 'resident-owner', state: 'source-host-key-unavailable' })));
+  await r.controller.refresh(); const s = r.last(); await r.controller.request('on'); r.controller.dispose();
+  assert.deepEqual([s?.startup, s?.diagnostic, s?.canOn, s?.canOff, s?.canExtend, calls], ['host-key-unavailable', 'RESIDENT_HOST_KEY_UNAVAILABLE', false, false, false, ['get_resident_status']]);
+});
 void test('strict source contract rejects unknown fields, enums and inconsistent states', () => {
   assert.ok(decodeStatus(sample()));
   for (const changes of [{ extra: 'secret' }, { revision: 0 }, { validForMs: 3001 }, { validForMs: 0 }, { caller: '\n' },

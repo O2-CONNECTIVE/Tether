@@ -86,6 +86,7 @@ impl Supervisor {
                 known: false,
                 cleanup_confirmed: false,
                 startup_rejected: false,
+                host_key_unavailable: false,
                 not_spawned: false,
                 require_cleanup,
             },

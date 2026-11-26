@@ -5,8 +5,8 @@ use crate::native_preparation::{
     ExitObservation, FixedActiveFixture, NativePreparation, Preparation, State,
 };
 use crate::resident_port::duplex::owner::native::NativeOutcome;
-use crate::standby_lifecycle::{Outcome, native::NativeOuterJoined};
-use serde_json::{Value, json};
+use crate::standby_lifecycle::{native::NativeOuterJoined, Outcome};
+use serde_json::{json, Value};
 fn status(session: &NativeSession) -> Value {
     serde_json::to_value(session.status()).unwrap()
 }
@@ -102,6 +102,17 @@ fn active(mode: &str) {
         assert!(v, "session condition {}", passed + 1);
         passed += 1;
     };
+    // Why: a joined host-key outcome must reach the GUI as its distinct source state.
+    let host_key_state_matches = mode != "session-rejected"
+        || serde_json::to_value(NativeSession::startup_status_fixture(
+            Outcome::HostKeyUnavailable,
+        ))
+        .unwrap()
+            == json!({
+                "protocolVersion":1,
+                "source":"resident-owner",
+                "state":"source-host-key-unavailable"
+            });
     let terminal = matches!(
         mode,
         "session-confirmed" | "session-rejected" | "session-drop"
@@ -125,12 +136,14 @@ fn active(mode: &str) {
     };
     let session = NativeSession::fixture(fixture, mode == "session-unwind").unwrap();
     let before = status(&session);
-    check(match before["state"].as_str() {
-        Some("source-observation") => !unavailable,
-        Some("source-unavailable" | "source-startup-checking") => unavailable,
-        Some("source-policy-rejected") => mode == "session-rejected",
-        _ => false,
-    });
+    check(
+        match before["state"].as_str() {
+            Some("source-observation") => !unavailable,
+            Some("source-unavailable" | "source-startup-checking") => unavailable,
+            Some("source-policy-rejected") => mode == "session-rejected",
+            _ => false,
+        } && host_key_state_matches,
+    );
     // Attachment failure already requests Close. ExitTwo may have completed
     // before this first check; accept only its complete original join proof.
     let initially_finished = session.owner().finish_requested();
