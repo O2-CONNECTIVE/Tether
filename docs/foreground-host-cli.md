@@ -65,6 +65,7 @@ close
 
 stdoutの `status.snapshot` は `standbyUntil`・`standbyEndingSoon`・`standbyExpired` と、
 スリープ防止の状態 `sleepPrevention` を含みます（[development-resident](development-resident.md)）。
+`previousCleanup` は前回の常駐 owner の回収が確認できたかを示し、`unknown` は Mac の再起動まで残ります。アプリの再起動や今回の正常終了では解消しません。
 製品 JSON 方言の `status.snapshot` も同じ鍵を含み、どちらもGoが出した値をそのまま運びます。
 JSONL入口でCLI行を受けたり、CLI入口で任意JSONを受けたりはしません。
 `close` に別receiptはなく、元ownerの結果に従うclosed frameで報告します。

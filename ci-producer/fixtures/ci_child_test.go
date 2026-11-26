@@ -220,7 +220,7 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 	switch kind {
 	case "status":
 		var e statusEnvelope
-		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired", "sleepPrevention"}
+		keys := []string{"protocolVersion", "source", "state", "revision", "validForMs", "standby", "registration", "caller", "work", "cleanup", "canRequestOn", "canRequestOff", "transition", "standbyUntil", "standbyEndingSoon", "standbyExpired", "previousCleanup", "sleepPrevention"}
 		flags := []string{"canRequestOn", "canRequestOff", "standbyEndingSoon", "standbyExpired"}
 		if !exactKeys(root, "protocolVersion", "type", "sourceContinuousMs", "snapshot") || ciStrictFrame(raw, &e) != nil || e.ProtocolVersion != 1 || bytes.Equal(bytes.TrimSpace(root["sourceContinuousMs"]), []byte("null")) || e.SourceContinuousMS > MaxInteger || e.SourceContinuousMS < p.lastSource {
 			return ErrProtocol
@@ -237,7 +237,7 @@ func (p *ciChild) acceptFrame(raw []byte) error {
 			}
 		}
 		x := e.Snapshot
-		if !oneOf(string(x.SleepPrevention), "inactive", "active", "unknown") || (x.Cleanup == "unknown" && x.SleepPrevention != "unknown") {
+		if !oneOf(x.PreviousCleanup, "confirmed", "unknown") || !oneOf(string(x.SleepPrevention), "inactive", "active", "unknown") || (x.Cleanup == "unknown" && x.SleepPrevention != "unknown") {
 			return ErrProtocol
 		}
 		if x.ProtocolVersion != 1 || x.Source != "resident-owner" || x.State != "source-observation" || x.Revision <= p.snapshot.Revision || x.Revision > MaxInteger || x.ValidForMS != 3000 || !oneOf(x.Standby, "off", "on", "stopping", "unknown") || !oneOf(x.Registration, "disconnected", "connecting", "authenticated", "unknown") || !oneOf(x.Work, "idle", "preparing", "running", "stopping", "unknown") || !oneOf(x.Cleanup, "confirmed", "pending", "unknown") || (x.StandbyUntil != nil && (*x.StandbyUntil == 0 || *x.StandbyUntil > MaxInteger)) || (x.StandbyEndingSoon && x.StandbyUntil == nil) {

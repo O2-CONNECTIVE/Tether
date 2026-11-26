@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentmac"
@@ -27,11 +28,23 @@ func runDevelopmentInput(lifetime context.Context) error {
 		return err
 	}
 	defer pipes.close()
-	coord, owner, err := startStandby(lifetime, func(ctx context.Context) (*residentmac.Standby, error) {
+	place := developmentRecordPlace(lifetime)
+	coord, owner, record, err := startStandby(lifetime, place, func(ctx context.Context) (*residentmac.Standby, error) {
 		return residentmac.LoadDevelopmentStandby(ctx)
 	})
 	if err != nil {
 		return err
 	} // no invented startup-rejection receipt
-	return runOwnedInput(lifetime, coord, owner, pipes, foregroundInput)
+	return runOwnedInput(lifetime, coord, owner, record, pipes, foregroundInput)
+}
+
+func developmentRecordPlace(lifetime context.Context) recordPlace {
+	place := recordPlace{bootSession: currentBootSession}
+	ctx, cancel := context.WithTimeout(lifetime, LoadBudget)
+	defer cancel()
+	_, policyPath, err := residentmac.DevelopmentEnrolledLocation(ctx)
+	if err == nil && policyPath != "" {
+		place.dir = filepath.Dir(policyPath)
+	}
+	return place
 }

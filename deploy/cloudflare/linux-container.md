@@ -56,15 +56,22 @@ pairing登録簿のlock fileは登録簿と同じdirectoryに作られます。�
 
 ### 待受するroute（`cmd/rescue-gateway`の`routes`）
 
+#453の二段階pairing routeはgateway側を別PRで実装中です。以下は承認済みのroute契約で、gateway handlerの配置・実通信が完了したことを示しません。consent callbackには構成済みIdPへのgateway発HTTPS通信も必要です。
+
 | path | 認証前に到達できる処理 | 認証・認可 |
 | --- | --- | --- |
 | MCP resource（POST/DELETE） | 同時処理枠（最大32、`MaxInflightRequests`）の取得、method/Origin/query検査、header上限16KiBでの署名検証 | OAuth：Bearer JWT（401、challenge付き）。Access：assertion 1件（403）。どちらも検証済みsubjectが設定principalと一致する場合だけ（不一致は403）。session作成・command実行はその後、かつ受信者が承認したrouteがある場合だけ |
 | OAuth方式のprotected resource metadata（GET） | 公開設定値の静的JSONだけ | なし（秘密・commandなし）。Access方式は404 |
+| `POST /tether-agent/v1/pair/operations` | 4 KiB以下のJSON、pairing tokenと新公開鍵proofの検査。登録簿は変更しない | pairing verifierでissuer/subject/principalを照合。busyは409、operation上限超過は503 |
+| `GET /tether-agent/v1/pair/consent?operation=...` | pending operationの確認、32 byte cookieとIdP state/PKCE記録の作成、302を返す | 同じoperationの本人同意だけを開始。queryはoperation 1つ |
+| `GET /tether-agent/v1/pair/consent/callback` | `code`+`state` または `error`+`error_description`+`state`、cookie、IdP token交換と確認HTML | stateとcookieを照合し、IdP subjectがoperationのissuer/subjectと一致することを検証 |
+| `POST /tether-agent/v1/pair/consent` | WorkerがOriginを公開originと照合してからformを転送。cookieと一回限りのform tokenを検査。登録簿は変更しない | confirm/cancelを一度だけ記録し、revisionを照合 |
+| `POST /tether-agent/v1/pair/confirm` | 4 KiB以下のJSONと新鍵proofを検査。Bearer tokenは要求しない | consented operationだけを確定。202 pending、403 consent拒否、404期限切れ/未知、409競合、503保存失敗、500 `registration_unknown` を区別 |
 | WSS登録endpoint（GET） | precheck、未認証登録の同時枠（`MaxPending`=4、追跡上限`MaxTracked`=8）、upgrade、nonce challenge、2KiB以下の1 message読取りを登録期限10秒まで | 登録済みMac host鍵による、endpoint・nonce・dispatchへ束縛した署名proof。成功後もgatewayは登録済みsignerでagent channelを開き、host鍵をpinします |
 | WSSレスキュー受付口（`GET /tether-agent/v1/rescue`） | precheck、受付の上限（有効なコード 100 件と受付記録 1,000 件で 503、新しい受付 1 分 30 件で 429）、upgrade、nonce の交換、2KiB 以下の message の読取りを登録期限 10 秒まで | その回だけの鍵 K の proof（受付口の公開 URL・gateway の nonce・目的に束縛）。誰でも登録できる口で、守りは回数の制限と、要求の側の認証 |
 | 上記以外 | なし | 404 |
 
-Workerは `TETHER_NATIVE_RESCUE=open-native-tether-rescue` を明示した配置だけでこのpathを中継します（`TETHER_NATIVE_GATE` と固定VPC bindingも必要）。公開routeを有効にする配置では、Cloudflareのrate limiting ruleを別途作成し、対象を `/tether-agent/v1/rescue`、特性を送信元IP、期間を1分、閾値を5件に設定して、超過要求をblockします。この5件制限は[レスキューの接続の開始の「回数の制限」](../../docs/rescue-connection-start.md#回数の制限)に対応します。gatewayからは接続元IPを確かめられず、同一bridge経由の発信元を識別できないため、Worker内ではなくCloudflare edgeで適用します。gatewayの全体制限とedgeの送信元別制限は別の制御です。
+Workerは `TETHER_NATIVE_RESCUE=open-native-tether-rescue` を明示した配置だけでこのpathを中継します（`TETHER_NATIVE_GATE` と固定VPC bindingも必要）。pairingの各routeも `TETHER_NATIVE_PAIRING=open-native-tether-pairing` が必要で、WorkerはoperationsだけBearerを転送し、confirmからBearerを落とします。consent callback/POSTでは同じcookieを中継し、POSTは公開originと一致するOriginだけを許可します。公開routeを有効にする配置では、Cloudflareのrate limiting ruleを別途作成し、対象を `/tether-agent/v1/rescue`、特性を送信元IP、期間を1分、閾値を5件に設定して、超過要求をblockします。この5件制限は[レスキューの接続の開始の「回数の制限」](../../docs/rescue-connection-start.md#回数の制限)に対応します。gatewayからは接続元IPを確かめられず、同一bridge経由の発信元を識別できないため、Worker内ではなくCloudflare edgeで適用します。gatewayの全体制限とedgeの送信元別制限は別の制御です。
 
 認証なしでcommandを実行するendpointはありません。一方、以下のunauthenticatedな資源消費は**origin側でedge認可を代替しません**：
 

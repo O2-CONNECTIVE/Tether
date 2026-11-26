@@ -6,7 +6,7 @@ import { presentResident } from '../src/resident/presentation.ts';
 
 const sample = (change: Record<string, unknown> = {}) => ({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1,
   validForMs: 3000, standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false,
-  transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive', ...change });
+  transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, previousCleanup: 'confirmed', sleepPrevention: 'inactive', ...change });
 function capture(invoke: ResidentInvoke | undefined, options: { now?: () => number; timeoutMs?: number } = {}) {
   const states: ResidentState[] = [];
   const controller = createResidentController({ invoke, onChange: state => states.push(state), pollMs: 10000, ...options });

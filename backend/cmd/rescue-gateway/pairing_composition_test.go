@@ -1,3 +1,5 @@
+//go:build tether_development
+
 package main
 
 import (
@@ -16,19 +18,6 @@ import (
 )
 
 const pairEndpoint = "https://gateway.example.invalid" + agentgateway.PairPath
-
-func pairingDoc(t *testing.T) map[string]any {
-	t.Helper()
-	doc := residentDoc(t)
-	host := item(doc, "hosts", 0)
-	delete(host, "public_key")
-	host["paired"] = true
-	doc["pairing"] = map[string]any{
-		"registry_path": "/tmp/pairing-registry.json", "audience": "pair-api",
-		"client_id": "pair-client", "token_types": []any{"at+jwt"},
-	}
-	return doc
-}
 
 func pairToken(t *testing.T) string {
 	t.Helper()

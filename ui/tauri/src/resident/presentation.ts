@@ -5,6 +5,7 @@ export interface ResidentPresentation {
   detail: string;
   tone: 'neutral' | 'connected' | 'stopping' | 'unconfirmed';
   icon: 'checking' | 'neutral' | 'warning' | 'active';
+  warning?: string;
 }
 const standby: Record<Observation['standby'], string> = { off: 'OFF', on: 'ON', stopping: '停止中', unknown: '未確認' };
 const registration: Record<Observation['registration'], string> = { disconnected: '未接続', connecting: '接続を確認中', reconnecting: '再接続中',
@@ -18,7 +19,12 @@ const work: Record<Observation['work'], string> = { idle: '作業なし', prepar
 const cleanup: Record<Observation['cleanup'], string> = { confirmed: '回収確認済み', pending: '回収待ち', unknown: '要清掃' };
 // Pure display mapping. It grants nothing: missing evidence stays unconfirmed,
 // and a pending change is never shown as a settled state.
+const previousCleanupWarning = '前回の遠隔作業が終わったか確認できませんでした。Mac を再起動すると、残っていた作業は止まります。';
 export function presentResident(o: Observation | null, pending: boolean, cleanupUnknown = false, startup: ResidentStartup | null = null): ResidentPresentation {
+  const view = presentResidentState(o, pending, cleanupUnknown, startup);
+  return o?.previousCleanup === 'unknown' ? { ...view, warning: previousCleanupWarning } : view;
+}
+function presentResidentState(o: Observation | null, pending: boolean, cleanupUnknown: boolean, startup: ResidentStartup | null): ResidentPresentation {
   if (cleanupUnknown || o?.cleanup === 'unknown') return { heading: '要清掃: 常駐ホストの回収を確認できません',
     detail: '回収を確かめられないため、停止の成功を示しません。', tone: 'unconfirmed', icon: 'warning' };
   if (!o && startup === 'checking') return { heading: '常駐ホストの起動結果を確認中',

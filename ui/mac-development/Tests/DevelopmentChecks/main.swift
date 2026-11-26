@@ -8,7 +8,7 @@ func check(_ value: @autoclosure () -> Bool, _ name: String) {
 }
 func status(_ revision: Int = 1, time: Int = 1000, standby: String = "off", transition: String = "null", until: String = "null", ending: Bool = false, expired: Bool = false) -> Data {
     Data("""
-    {"protocolVersion":1,"type":"status","sourceContinuousMs":\(time),"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":\(revision),"validForMs":3000,"standby":"\(standby)","registration":"\(standby == "on" ? "authenticated" : "disconnected")","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":\(standby == "off"),"canRequestOff":\(standby == "on"),"transition":\(transition),"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired),"sleepPrevention":"inactive"}}
+    {"protocolVersion":1,"type":"status","sourceContinuousMs":\(time),"snapshot":{"protocolVersion":1,"source":"resident-owner","state":"source-observation","revision":\(revision),"validForMs":3000,"standby":"\(standby)","registration":"\(standby == "on" ? "authenticated" : "disconnected")","caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":\(standby == "off"),"canRequestOff":\(standby == "on"),"transition":\(transition),"standbyUntil":\(until),"standbyEndingSoon":\(ending),"standbyExpired":\(expired),"previousCleanup":"confirmed","sleepPrevention":"inactive"}}
     """.utf8)
 }
 func receipt(_ disposition: String, id: Int = 1, intent: String = "on") -> Data {
@@ -177,6 +177,8 @@ for bad in [
     plain.replacingOccurrences(of: "\"standbyEndingSoon\":false", with: "\"standbyEndingSoon\":null"),
     plain.replacingOccurrences(of: "\"standbyExpired\":false", with: "\"standbyExpired\":0"),
     plain.replacingOccurrences(of: ",\"sleepPrevention\":\"inactive\"", with: ""),
+    plain.replacingOccurrences(of: ",\"previousCleanup\":\"confirmed\"", with: ""),
+    plain.replacingOccurrences(of: "\"previousCleanup\":\"confirmed\"", with: "\"previousCleanup\":\"pending\""),
     plain.replacingOccurrences(of: "\"sleepPrevention\":\"inactive\"", with: "\"sleepPrevention\":true"),
     plain.replacingOccurrences(of: "\"sleepPrevention\":\"inactive\"", with: "\"sleepPrevention\":\"unrecognized\""),
     String(decoding: status(ending: true), as: UTF8.self), // ending soon needs an end time
@@ -192,6 +194,10 @@ for sleep in ["active", "unknown"] {
     feed.ingest(Data(sample.utf8), at: 1000)
     check(!feed.fault && feed.observation != nil, "sleep prevention states accepted")
 }
+// A previous run's unknown cleanup is a notice: this run stays usable.
+var previousUnknown = Feed()
+previousUnknown.ingest(Data(plain.replacingOccurrences(of: "\"previousCleanup\":\"confirmed\"", with: "\"previousCleanup\":\"unknown\"").utf8), at: 1000)
+check(!previousUnknown.fault && previousUnknown.observation != nil, "previous unknown cleanup accepted")
 
 // The record of what ran. The gateway signs only a hash, so this list is how
 // the person at the Mac sees the command text. A damaged line is shown as

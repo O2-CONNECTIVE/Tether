@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { decodeReceipt, decodeStatus } from '../src/resident/model.ts';
 const sample = (change: Record<string, unknown> = {}) => ({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1,
   validForMs: 3000, standby: 'on', registration: 'authenticated', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: false, canRequestOff: true,
-  transition: null, standbyUntil: 1_900_000_000_000, standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive', ...change });
+  transition: null, standbyUntil: 1_900_000_000_000, standbyEndingSoon: false, standbyExpired: false, previousCleanup: 'confirmed', sleepPrevention: 'inactive', ...change });
 
 // The host GUI shows "until hh:mm", warns ten minutes before it, and says when
 // standby stopped because it ran out (#451). Go owns that end; the GUI only
@@ -11,7 +11,7 @@ const sample = (change: Record<string, unknown> = {}) => ({ protocolVersion: 1, 
 void test('status carries when standby ends, as Go wrote it', () => {
   assert.deepEqual(decodeStatus(sample({ standbyEndingSoon: true })), { source: 'resident-owner', observation: { revision: 1, validForMs: 3000,
     standby: 'on', registration: 'authenticated', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: false, canRequestOff: true,
-    transition: null, standbyUntil: 1_900_000_000_000, standbyEndingSoon: true, standbyExpired: false, sleepPrevention: 'inactive' } });
+    transition: null, standbyUntil: 1_900_000_000_000, standbyEndingSoon: true, standbyExpired: false, previousCleanup: 'confirmed', sleepPrevention: 'inactive' } });
   const expired = decodeStatus(sample({ standby: 'off', canRequestOn: true, canRequestOff: false, standbyUntil: null, standbyExpired: true }));
   assert.equal(expired?.source === 'resident-owner' && expired.observation?.standbyExpired, true);
   assert.ok(decodeStatus(sample({ standbyUntil: Number.MAX_SAFE_INTEGER })));
@@ -30,16 +30,25 @@ void test('status without a valid standby end is refused', () => {
   }
 });
 
-void test('status requires and carries sleep prevention from the owner', () => {
+void test('status requires and carries previous cleanup and sleep prevention from the owner', () => {
   for (const state of ['inactive', 'active', 'unknown']) {
     const decoded = decodeStatus(sample({ sleepPrevention: state }));
     const observation = decoded?.source === 'resident-owner' && decoded.observation;
     assert.ok(observation);
     assert.equal(observation.sleepPrevention, state);
   }
+  const previous = decodeStatus(sample({ previousCleanup: 'unknown' }));
+  assert.ok(previous?.source === 'resident-owner' && previous.observation);
+  assert.equal(previous.observation.previousCleanup, 'unknown');
   const missing = sample();
   Reflect.deleteProperty(missing, 'sleepPrevention');
   assert.equal(decodeStatus(missing), undefined);
+  const missingPrevious = sample();
+  Reflect.deleteProperty(missingPrevious, 'previousCleanup');
+  assert.equal(decodeStatus(missingPrevious), undefined);
+  for (const state of [null, true, 'pending']) {
+    assert.equal(decodeStatus(sample({ previousCleanup: state })), undefined);
+  }
   for (const state of [null, true, 'unconfirmed']) {
     assert.equal(decodeStatus(sample({ sleepPrevention: state })), undefined);
   }

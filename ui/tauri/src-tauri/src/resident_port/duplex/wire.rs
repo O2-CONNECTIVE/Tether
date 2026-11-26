@@ -75,6 +75,7 @@ pub(super) struct Snapshot {
     standby_until: Option<u64>,
     standby_ending_soon: bool,
     standby_expired: bool,
+    previous_cleanup: PreviousCleanup,
     sleep_prevention: SleepPrevention,
 }
 #[derive(Deserialize)]
@@ -106,6 +107,7 @@ impl Snapshot {
             standby_ending_soon: self.standby_ending_soon,
             standby_expired: self.standby_expired,
             sleep_prevention: self.sleep_prevention,
+            previous_cleanup: self.previous_cleanup,
         };
         (self.protocol_version == 1
             && observation.valid()

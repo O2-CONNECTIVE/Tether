@@ -31,6 +31,7 @@ type Snapshot struct {
 	StandbyEndingSoon  bool        `json:"standbyEndingSoon"` // from ten minutes before standbyUntil
 	StandbyExpired     bool        `json:"standbyExpired"`    // the last cycle ended because standby ran out
 
+	PreviousCleanup string                      `json:"previousCleanup"`
 	SleepPrevention residentmac.SleepPrevention `json:"sleepPrevention"`
 }
 
@@ -54,6 +55,7 @@ type mapper struct {
 	closedOn                     uint64 // an ON closed as rejected at its cycle's end; kept, since the GUI polls only the latest status
 	poisoned                     bool
 	cleanupUnknown               bool
+	previousCleanup              string
 }
 
 func oneOf(s string, values ...string) bool {
@@ -63,6 +65,12 @@ func oneOf(s string, values ...string) bool {
 		}
 	}
 	return false
+}
+func (m *mapper) previousCleanupValue() string {
+	if m.previousCleanup == "unknown" {
+		return "unknown"
+	}
+	return "confirmed"
 }
 func validRaw(o residentmac.StandbyObservation) bool {
 	if o.Revision == 0 || o.Revision > MaxInteger || o.Owned < 0 || !oneOf(o.Standby, "off", "on", "stopping", "unknown") || !oneOf(o.Registration, "disconnected", "connecting", "reconnecting", "authenticated", "needs_action", "unknown") || !oneOf(o.Work, "idle", "preparing", "running", "stopping", "unknown") || !oneOf(o.Cleanup, "confirmed", "pending", "unknown") {
@@ -111,7 +119,7 @@ func (m *mapper) observe(o residentmac.StandbyObservation, now uint64) (statusEn
 	if o.Cleanup == "unknown" {
 		m.cleanupUnknown = true
 	}
-	s := Snapshot{ProtocolVersion: 1, Source: "resident-owner", State: "source-observation", Revision: m.revision, ValidForMS: 3000, Standby: o.Standby, Registration: o.Registration, RegistrationReason: string(o.RegistrationReason), Caller: o.Caller, Work: o.Work, Cleanup: o.Cleanup}
+	s := Snapshot{ProtocolVersion: 1, Source: "resident-owner", State: "source-observation", Revision: m.revision, ValidForMS: 3000, Standby: o.Standby, Registration: o.Registration, RegistrationReason: string(o.RegistrationReason), Caller: o.Caller, Work: o.Work, Cleanup: o.Cleanup, PreviousCleanup: m.previousCleanupValue()}
 	off := o.AdmissionSealed && o.Owned == 0 && o.Cleanup == "confirmed" && o.Work == "idle" && o.Standby == "off"
 	historicalAuth := oneOf(o.Registration, "connecting", "disconnected") && o.TransportGeneration != "" && o.Transition != nil && o.Transition.Intent == "on" && o.Transition.Outcome == "applied"
 	needsAction := o.AdmissionSealed && o.Owned == 0 && o.Cleanup == "confirmed" && o.Work == "idle" && o.Standby == "on" && o.Registration == "needs_action"

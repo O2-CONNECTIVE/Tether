@@ -1,13 +1,9 @@
+//go:build tether_development
+
 package agentgateway_test
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -93,52 +89,6 @@ func pairSetupWithRecords(t *testing.T, subject string, hosts []agentgateway.Hos
 	}
 	t.Cleanup(func() { _ = g.Close(context.Background()) })
 	return g, fixtureSigner(t, 0x31)
-}
-
-func pairTranscriptForTest(endpoint string, key []byte, hash [32]byte) []byte {
-	var out bytes.Buffer
-	for _, part := range [][]byte{[]byte("rescue-host.agentgateway.pair\x00v1\x00"), []byte(endpoint), key, hash[:]} {
-		_ = binary.Write(&out, binary.BigEndian, uint32(len(part)))
-		out.Write(part)
-	}
-	return out.Bytes()
-}
-
-func pairRequest(t *testing.T, g *agentgateway.Gateway, signer ssh.Signer, subject string) *httptest.ResponseRecorder {
-	return pairRequestWithProof(t, g, signer, signer, subject, "https://gateway.example.invalid"+agentgateway.PairPath, false)
-}
-
-func pairRequestWithProof(t *testing.T, g *agentgateway.Gateway, hostSigner, proofSigner ssh.Signer, subject, proofEndpoint string, wrongHash bool) *httptest.ResponseRecorder {
-	t.Helper()
-	req := makePairRequest(t, hostSigner, proofSigner, subject, proofEndpoint, wrongHash)
-	rr := httptest.NewRecorder()
-	g.ServePair(rr, req)
-	return rr
-}
-
-func makePairRequest(t *testing.T, hostSigner, proofSigner ssh.Signer, subject, proofEndpoint string, wrongHash bool) *http.Request {
-	t.Helper()
-	base := claims(subject)
-	base["aud"] = pairingAudience
-	bearer := sign(t, edHeader(), base, issuerKey)
-	digest := sha256.Sum256([]byte(bearer))
-	if wrongHash {
-		digest[0] ^= 1
-	}
-	transcript := pairTranscriptForTest(proofEndpoint, hostSigner.PublicKey().Marshal(), digest)
-	proof, err := proofSigner.Sign(rand.Reader, transcript)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encodedKey := ssh.MarshalAuthorizedKey(hostSigner.PublicKey())
-	body, err := json.Marshal(map[string]string{"host_public_key": string(encodedKey[:len(encodedKey)-1]), "proof": base64.RawURLEncoding.EncodeToString(ssh.Marshal(proof))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest("POST", "http://gateway.internal"+agentgateway.PairPath, bytes.NewReader(body))
-	req.Host = "internal-alias"
-	req.Header.Set("Authorization", "Bearer "+bearer)
-	return req
 }
 
 func TestServePairRejectsUnknownSubjectsA3(t *testing.T) {
@@ -357,14 +307,4 @@ func TestConcurrentPairingSameKeyHasSingleWinnerA12(t *testing.T) {
 	if counts[200] != 1 || counts[409] != 1 {
 		t.Fatalf("concurrent outcomes = %v, want one 200 and one 409", counts)
 	}
-}
-
-// pairingVerifier accepts only tokens issued for the pair route.
-func pairingVerifier(t *testing.T) *agentgateway.Verifier {
-	t.Helper()
-	v, err := agentgateway.NewVerifier(agentgateway.VerifierConfig{Issuer: testIssuer, Audience: pairingAudience, Types: []string{"at+jwt"}, JWKS: jwks(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return v
 }

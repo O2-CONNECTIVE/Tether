@@ -77,9 +77,24 @@ func loadBootstrap(ctx context.Context, kind bootstrapKind, protectedPolicy stri
 	return residentmac.LoadStandby(ctx, protectedPolicy)
 }
 
+func bootstrapRecordPlace(lifetime context.Context, kind bootstrapKind, protectedPolicy string) recordPlace {
+	place := recordPlace{bootSession: currentBootSession}
+	if kind == explicitPolicyBootstrap {
+		place.dir = filepath.Dir(protectedPolicy)
+		return place
+	}
+	ctx, cancel := context.WithTimeout(lifetime, LoadBudget)
+	defer cancel()
+	_, policyPath, err := residentmac.EnrolledLocation(ctx)
+	if err == nil && policyPath != "" {
+		place.dir = filepath.Dir(policyPath)
+	}
+	return place
+}
+
 // startStandby loads the one original owner as the first step of a new
 // coordinator. Both entry points and their tests acquire through it.
-func startStandby(lifetime context.Context, load func(context.Context) (*residentmac.Standby, error)) (*hostlifecycle.Coordinator, *residentmac.Standby, error) {
+func startStandby(lifetime context.Context, place recordPlace, load func(context.Context) (*residentmac.Standby, error)) (*hostlifecycle.Coordinator, *residentmac.Standby, *ownerRecord, error) {
 	coord := hostlifecycle.New(CloseBudget)
 	loadCtx, cancel := context.WithTimeout(lifetime, LoadBudget)
 	defer cancel()
@@ -100,9 +115,17 @@ func startStandby(lifetime context.Context, load func(context.Context) (*residen
 		if !coord.Stop().Stopped {
 			retainForever(coord) // a load that was not taken back stays owned here
 		}
-		return coord, nil, err
+		return coord, nil, nil, err
 	}
-	return coord, owner, nil
+	record, err := openOwnerRecord(place)
+	if err != nil {
+		if !coord.Stop().Stopped {
+			retainForever(coord, owner)
+		}
+		runtime.KeepAlive(owner)
+		return coord, nil, nil, err
+	}
+	return coord, owner, record, nil
 }
 
 // retainForever keeps unconfirmed cleanup in this process indefinitely: no
@@ -124,7 +147,7 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 		return e
 	}
 	defer pipes.close()
-	coord, owner, e := startStandby(lifetime, func(ctx context.Context) (*residentmac.Standby, error) {
+	coord, owner, record, e := startStandby(lifetime, bootstrapRecordPlace(lifetime, kind, protectedPolicy), func(ctx context.Context) (*residentmac.Standby, error) {
 		return loadBootstrap(ctx, kind, protectedPolicy)
 	})
 	if e != nil {
@@ -142,12 +165,12 @@ func runBootstrap(lifetime context.Context, kind bootstrapKind, protectedPolicy 
 		}
 		return e
 	}
-	return runOwnedInput(lifetime, coord, owner, pipes, dialect)
+	return runOwnedInput(lifetime, coord, owner, record, pipes, dialect)
 }
 
 // Both entry points transfer the same loaded owner here exactly once.
-func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, owner *residentmac.Standby, pipes *ownedPipes, dialect inputDialect) error {
-	var m mapper
+func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, owner *residentmac.Standby, record *ownerRecord, pipes *ownedPipes, dialect inputDialect) error {
+	m := mapper{previousCleanup: record.previousCleanupValue()}
 	e := safeServeInput(lifetime, owner, pipes, dialect, &m)
 	result := coord.Stop()
 	var closeErr error
@@ -167,13 +190,19 @@ func runOwnedInput(lifetime context.Context, coord *hostlifecycle.Coordinator, o
 			statusErr = err
 		}
 		terminalErr = statusErr
+	} else if err := record.markClean(); err != nil {
+		terminalErr = errors.Join(terminalErr, err)
 	}
 	terminalErr = errors.Join(terminalErr, writeClosed(pipes, closeErr))
+	if result.Stopped {
+		terminalErr = errors.Join(terminalErr, record.release())
+	}
 	if closeErr != nil {
-		retainForever(coord, owner) // keep the original objects reachable
+		retainForever(coord, owner, record) // keep the original objects reachable
 	}
 	runtime.KeepAlive(coord)
 	runtime.KeepAlive(owner)
+	runtime.KeepAlive(record)
 	return ownedResult(e, closeErr, terminalErr)
 }
 
