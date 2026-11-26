@@ -22,6 +22,7 @@ def build(output, team, certificate, revision):
     source.require(platform.system() == 'Darwin' and platform.machine() == 'arm64' and
                    platform.mac_ver()[0].split('.')[0].isdigit() and
                    int(platform.mac_ver()[0].split('.')[0]) >= 27, 'SIGNED_RELEASE_HOST_REQUIRED')
+    pair_config = support.host_pair.configuration_from_env(required=True)
     actual_revision, tree = source.head()
     source.require(actual_revision == revision, 'APPROVED_SOURCE_MISMATCH')
     output = Path(os.path.abspath(output))
@@ -38,8 +39,11 @@ def build(output, team, certificate, revision):
             swift, sdk, settings = support.toolchain(stage, env)
             settings['deploymentTarget'] = '27.0'
             observer = release.compile_observer(stage, env, swift, sdk)
+            host_pair, host_pair_record = support.build_host_pair(
+                stage, revision, tree, configuration=pair_config, required_config=True)
             producer, producer_record = support.build_producer(stage, revision, tree)
-            before = {'producer': release.image_record(producer, layout.ASSEMBLY_IMAGES['producer'])}
+            before = {'producer': release.image_record(producer, layout.ASSEMBLY_IMAGES['producer']),
+                      'hostPair': release.image_record(host_pair, layout.ASSEMBLY_IMAGES['hostPair'])}
             producer.chmod(0o700)
             release.sign(producer, 'producer', certificate, stage, env)
             signed_producer = release.image_record(producer, layout.ASSEMBLY_IMAGES['producer'])
@@ -47,6 +51,13 @@ def build(output, team, certificate, revision):
                 release.observe(observer, producer, 'producer', team, certificate, stage, env),
                 'producer', team, certificate)
             release.unchanged(producer, signed_producer)
+            host_pair.chmod(0o700)
+            release.sign(host_pair, 'hostPair', certificate, stage, env)
+            signed_host_pair = release.image_record(host_pair, layout.ASSEMBLY_IMAGES['hostPair'])
+            approved_host_pair = release.validate_observation(
+                release.observe(observer, host_pair, 'hostPair', team, certificate, stage, env),
+                'hostPair', team, certificate)
+            release.unchanged(host_pair, signed_host_pair)
             generated = release.provider_bytes(approved)
             provider = stage / release.PROVIDER
             provider.parent.mkdir()
@@ -54,15 +65,17 @@ def build(output, team, certificate, revision):
             generated_hash = source.digest(generated)
             built = support.compile_images(stage, env, swift, sdk, signed_release=True)
             release.unchanged(producer, signed_producer)
+            release.unchanged(host_pair, signed_host_pair)
             source.require(provider.read_bytes() == generated, 'GENERATED_IDENTITY_CHANGED')
             release.verify_inputs(stage, files, revision, tree, recipe)
             built['producer'] = producer
+            built['hostPair'] = host_pair
             app = output / APP
             minima = [27 << 16]
             for role, relative in layout.ASSEMBLY_IMAGES.items():
                 data = layout.files.read_regular(built[role], layout.LIMIT)
                 minima.append(layout.inspect(data, 'darwin-arm64', role))
-                if role != 'producer':
+                if role not in before:
                     before[role] = release.image_record(built[role], relative)
                 destination = app / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -78,15 +91,18 @@ def build(output, team, certificate, revision):
             source.require(release.image_record(app / layout.ASSEMBLY_IMAGES['native'], layout.ASSEMBLY_IMAGES['native']) ==
                            signed_native, 'SIGNED_NATIVE_CHANGED')
             release.unchanged(app / layout.ASSEMBLY_IMAGES['producer'], signed_producer)
+            release.unchanged(app / layout.ASSEMBLY_IMAGES['hostPair'], signed_host_pair)
             signatures, images = {}, {}
             for role, relative in layout.ASSEMBLY_IMAGES.items():
                 path = app if role == 'gui' else app / relative
-                bound = approved['cdhash'] if role == 'producer' else None
+                bound = approved['cdhash'] if role == 'producer' else \
+                    approved_host_pair['cdhash'] if role == 'hostPair' else None
                 signatures[role] = release.validate_observation(
                     release.observe(observer, path, role, team, certificate, stage, env, cdhash=bound),
                     role, team, certificate, bound)
                 images[role] = release.image_record(app / relative, relative)
             release.unchanged(app / layout.ASSEMBLY_IMAGES['producer'], signed_producer)
+            release.unchanged(app / layout.ASSEMBLY_IMAGES['hostPair'], signed_host_pair)
             source.require(images['native'] == signed_native, 'SIGNED_NATIVE_CHANGED')
             matched = release.inventory(app, {role: value['sha256'] for role, value in images.items()})
             source.require((app / 'Contents/Info.plist').read_bytes() == plist, 'SIGNED_PLIST_CHANGED')
@@ -95,12 +111,13 @@ def build(output, team, certificate, revision):
             evidence = output / release.PROVIDER
             evidence.parent.mkdir()
             evidence.write_bytes(generated)
-            record = {'schema': 'tether-mac-signed-candidate-build/1', 'repository': 'O2-CONNECTIVE/Tether',
+            record = {'schema': 'tether-mac-signed-candidate-build/2', 'repository': 'O2-CONNECTIVE/Tether',
                       'status': 'signed-local-candidate', 'activation': 'unverified', 'distribution': 'blocked',
                       'sourceCommit': revision, 'sourceTree': tree, 'target': 'darwin-arm64',
                       'buildUTC': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                       'app': APP, 'settings': settings, 'snapshotFiles': files, 'recipe': recipe,
-                      'producerBuild': producer_record, 'preSigningImages': before, 'images': images,
+                      'producerBuild': producer_record, 'hostPairBuild': host_pair_record,
+                      'preSigningImages': before, 'images': images,
                       'approvedProducer': approved, 'signatures': signatures, 'signedInventory': matched,
                       'generatedIdentity': {'path': release.PROVIDER, 'sha256': generated_hash,
                                             'source': 'validated-producer-signature'},
@@ -128,7 +145,8 @@ def main(argv=None):
                           'record': 'BUILD_RECORD.json', 'sourceCommit': record['sourceCommit'],
                           'distribution': 'blocked', 'blockers': list(release.BLOCKERS)}))
         return 2  # Local signature validity is not distribution/connection acceptance.
-    except (source.BuildError, layout.LayoutError, layout.files.PackageError) as error:
+    except (source.BuildError, support.host_pair.PairBuildError,
+            layout.LayoutError, layout.files.PackageError) as error:
         print(json.dumps({'status': 'refused', 'code': str(error)}))
     except (OSError, ValueError, TypeError, KeyError, UnicodeError):
         print(json.dumps({'status': 'refused', 'code': 'SIGNED_RELEASE_INPUT_INVALID'}))

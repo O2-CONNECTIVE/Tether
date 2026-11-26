@@ -38,6 +38,7 @@ class SignedReleaseTests(unittest.TestCase):
         self.patch(tool.platform, 'mac_ver', lambda: ('27.1', (), ''))
         self.patch(tool.release, 'snapshot', self.snapshot)
         self.patch(tool.support, 'toolchain', lambda *a: ('/swift', '/sdk', {}))
+        self.patch(tool.support, 'build_host_pair', self.host_pair)
         self.patch(tool.support, 'build_producer', self.producer)
         self.patch(tool.release, 'compile_observer', lambda *a: Path('/observer'))
         self.patch(tool.release, 'sign', self.sign)
@@ -46,6 +47,11 @@ class SignedReleaseTests(unittest.TestCase):
             # Model only the Darwin mode observation; Windows chmod has no POSIX bits.
             self.patch(tool.release, 'stat', SimpleNamespace(S_IMODE=lambda mode: 0o700))
         self.patch(tool.support, 'compile_images', self.compile)
+        configured = patch.dict(os.environ, {'TETHER_PAIR_GATEWAY': 'https://gateway.example',
+                             'TETHER_PAIR_ISSUER': 'https://issuer.example',
+                             'TETHER_PAIR_CLIENT_ID': 'public-client'})
+        configured.start()
+        self.addCleanup(configured.stop)
 
     def patch(self, owner, name, value):
         item = patch.object(owner, name, value)
@@ -63,6 +69,13 @@ class SignedReleaseTests(unittest.TestCase):
         path = stage / 'resident-pipe'
         path.write_bytes(executable())
         return path, {'sourceCommit': revision, 'sourceTree': tree, 'image': {'sha256': tool.source.digest(path.read_bytes())}}
+
+    def host_pair(self, stage, revision, tree, *, configuration=None, required_config=False):
+        self.events.append('build-host-pair')
+        path = stage / 'tether-host-pair'
+        path.write_bytes(executable())
+        return path, {'sourceCommit': revision, 'sourceTree': tree,
+                      'image': {'sha256': tool.source.digest(path.read_bytes())}}
 
     def sign(self, path, role, identity, stage, env):
         self.events.append('sign-' + role)
@@ -105,8 +118,9 @@ class SignedReleaseTests(unittest.TestCase):
 
     def test_producer_is_signed_and_verified_before_compilation(self):
         result = self.build()
-        self.assertEqual(self.events[:5], ['build-producer', 'sign-producer', 'observe-producer',
-                                         'compile-gui-native', 'sign-native'])
+        self.assertEqual(self.events[:8], ['build-host-pair', 'build-producer', 'sign-producer',
+                                          'observe-producer', 'sign-hostPair', 'observe-hostPair',
+                                          'compile-gui-native', 'sign-native'])
         self.assertEqual(self.events.count('sign-producer'), 1)
         self.assertLess(self.events.index('sign-native'), self.events.index('sign-gui'))
         self.assertEqual(result['activation'], 'unverified')
@@ -116,7 +130,46 @@ class SignedReleaseTests(unittest.TestCase):
         self.assertEqual(result['approvedProducer']['cdhash'], 'd' * 40)
         self.assertNotEqual(result['preSigningImages']['producer']['sha256'], result['images']['producer']['sha256'])
         self.assertEqual(result['generatedIdentity']['path'], tool.release.PROVIDER)
+        self.assertEqual(result['signatures']['hostPair']['signingIdentifier'],
+                         'com.o2connective.rescue-host.tether-host-pair')
+        self.assertIn('hostPairBuild', result)
         self.assertTrue((self.output / tool.release.PROVIDER).is_file())
+
+    def test_pair_helper_has_its_fixed_signing_identifier(self):
+        # 4c-2's launch requirement will match this exact code-signing identifier.
+        self.assertEqual(tool.release.IDENTIFIERS.get('hostPair'),
+                         'com.o2connective.rescue-host.tether-host-pair')
+
+    def test_signature_observer_accepts_the_pair_helper_path_for_its_identifier(self):
+        # The signed release invokes the observer with this role and fixed basename.
+        observer = Path(__file__).resolve().parents[2] / tool.release.OBSERVER
+        self.assertIn('"com.o2connective.rescue-host.tether-host-pair": "tether-host-pair"',
+                      observer.read_text())
+
+    def test_signed_release_refuses_missing_pair_configuration_before_signing(self):
+        # Missing and partial release settings must fail before output creation or codesign.
+        for values, code in [({'TETHER_PAIR_GATEWAY': '', 'TETHER_PAIR_ISSUER': '',
+                               'TETHER_PAIR_CLIENT_ID': ''}, 'PAIR_CONFIG_REQUIRED'),
+                             ({'TETHER_PAIR_GATEWAY': 'https://gateway.example',
+                               'TETHER_PAIR_ISSUER': '', 'TETHER_PAIR_CLIENT_ID': ''},
+                              'PAIR_CONFIG_PARTIAL')]:
+            with patch.dict(os.environ, values):
+                with self.subTest(code=code), self.assertRaisesRegex(
+                        tool.support.host_pair.PairBuildError, code):
+                    self.build()
+            self.assertEqual(self.events, [])
+            self.assertFalse(self.output.exists())
+
+    def test_pair_signature_must_use_the_pair_launch_requirement_identifier(self):
+        # Reusing resident-pipe's ID would make the later fixed launch requirement ambiguous.
+        def wrong_pair_identifier(result):
+            if result['signingIdentifier'] == tool.release.IDENTIFIERS['hostPair']:
+                result['signingIdentifier'] = tool.release.IDENTIFIERS['producer']
+        self.observe_change = wrong_pair_identifier
+        with self.assertRaisesRegex(tool.source.BuildError, 'SIGNATURE_OBSERVATION_INVALID'):
+            self.build()
+        self.assertNotIn('compile-gui-native', self.events)
+        self.assertFalse(self.output.exists())
 
     def test_wrong_observation_never_reaches_compilation(self):
         cases = [('teamIdentifier', 'OTHER12345'), ('signingIdentifier', tool.release.IDENTIFIERS['gui']),

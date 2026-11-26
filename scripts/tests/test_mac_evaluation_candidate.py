@@ -64,7 +64,8 @@ class CandidateFixture:
         return subprocess.run([sys.executable, str(ROOT / 'scripts/verify_mac_evaluation_candidate.py'),
             '--root', str(self.root), '--source', 'a' * 40,
             '--manifest-sha256', self.manifest_hash, '--gui-sha256', self.hashes['gui'],
-            '--producer-sha256', self.hashes['producer'], *extra],
+            '--producer-sha256', self.hashes['producer'],
+            '--host-pair-sha256', self.hashes['hostPair'], *extra],
             capture_output=True, text=True, timeout=15)
 
 
@@ -91,6 +92,7 @@ class CandidateTests(unittest.TestCase):
         self.assertIs(result['materialsMatched'], True)
         self.assertEqual(result['unverifiedScopes'], candidate.GAPS)
         self.assertEqual(result['platformDeclarations']['producer']['minimumMacOSDeclared'], '27.0.0')
+        self.assertEqual(result['platformDeclarations']['hostPair']['minimumMacOSDeclared'], '27.0.0')
         run = self.fixture.cli()
         self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
         self.assertEqual(run.stderr, '')
@@ -109,6 +111,9 @@ class CandidateTests(unittest.TestCase):
         self.refuse('CANDIDATE_MANIFEST_HASH_MISMATCH')
         self.fixture.save()
         self.fixture.hashes['producer'] = '0' * 64
+        self.refuse('CANDIDATE_IMAGE_MISMATCH')
+        self.fixture.hashes['producer'] = candidate.digest(image())
+        self.fixture.hashes['hostPair'] = '0' * 64
         self.refuse('CANDIDATE_IMAGE_MISMATCH')
 
     def test_no_hash_only_source_or_release_claim_is_accepted(self):
@@ -144,6 +149,7 @@ class CandidateTests(unittest.TestCase):
     def test_missing_extra_or_redirected_image_roles(self):
         original = copy.deepcopy(self.fixture.record)
         changes = [lambda r: r['images'].pop('producer'),
+                   lambda r: r['images'].pop('hostPair'),
                    lambda r: r['images'].update(extra={}),
                    lambda r: r['images']['producer'].update(path='PRIVATE'),
                    lambda r: r['images']['producer'].update(source='PRIVATE'),
@@ -193,16 +199,17 @@ class CandidateTests(unittest.TestCase):
         self.refuse('CANDIDATE_MEMBER_SET_MISMATCH')
 
     def test_macho_target_not_script_library_or_wrong_arch(self):
-        name = self.fixture.images['producer']
-        for value in (b'#!/bin/sh\n', image(0x01000007), b'!<arch>\n', b'PRIVATE'):
-            with self.subTest(value=value):
-                (self.root / name).write_bytes(value)
-                wanted = candidate.digest(value)
-                self.fixture.hashes['producer'] = wanted
-                self.fixture.record['images']['producer']['sha256'] = wanted
-                self.fixture.record['files'][name] = wanted
-                self.fixture.save()
-                self.refuse()
+        for role in ('producer', 'hostPair'):
+            name = self.fixture.images[role]
+            for value in (b'#!/bin/sh\n', image(0x01000007), b'!<arch>\n', b'PRIVATE'):
+                with self.subTest(role=role, value=value):
+                    (self.root / name).write_bytes(value)
+                    wanted = candidate.digest(value)
+                    self.fixture.hashes[role] = wanted
+                    self.fixture.record['images'][role]['sha256'] = wanted
+                    self.fixture.record['files'][name] = wanted
+                    self.fixture.save()
+                    self.refuse()
 
     def test_plist_gui_path_and_display_label_are_bound(self):
         name = self.fixture.record['appDirectory'] + '/Contents/Info.plist'

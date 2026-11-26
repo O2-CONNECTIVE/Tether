@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import PurePosixPath
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -48,8 +49,11 @@ class GuiCandidateBuildTests(unittest.TestCase):
         self.input = 'ui/tauri/source.txt'
         self.images = {role: image(role) for role in ('gui', 'native')}
         self.images['producer'] = executable()
+        self.images['hostPair'] = executable()
         self.producer_revision, self.producer_tree = self.revision, self.tree
         self.patch(tool.support.producer, 'build', self.producer_build)
+        self.patch(tool.support, 'build_host_pair', self.host_pair_build)
+        self.patch(tool.support.host_pair, 'verify_binary', lambda *a, **k: None)
         self.mutate = lambda stage: None
         self.patch(tool.source, 'ROOT', self.repo)
         self.patch(tool.source, 'head', lambda: (self.revision, self.tree))
@@ -58,7 +62,9 @@ class GuiCandidateBuildTests(unittest.TestCase):
         self.patch(tool.support, 'compile_images', self.compiler)
         self.patch(tool.platform, 'system', lambda: 'Darwin')
         self.patch(tool.platform, 'machine', lambda: 'arm64')
-        env = patch.dict(os.environ, {'RUNNER_ENVIRONMENT': 'github-hosted'})
+        env = patch.dict(os.environ, {'RUNNER_ENVIRONMENT': 'github-hosted',
+                                      'TETHER_PAIR_GATEWAY': '', 'TETHER_PAIR_ISSUER': '',
+                                      'TETHER_PAIR_CLIENT_ID': ''})
         env.start()
         self.addCleanup(env.stop)
 
@@ -105,6 +111,34 @@ class GuiCandidateBuildTests(unittest.TestCase):
                 'compiledRepositoryPackages': [producer.ROLE],
                 'recipe': {p: 'c' * 64 for p in producer.RECIPE}}
 
+    def host_pair_build(self, stage, revision, tree, *, configuration=None, required_config=False):
+        pair = tool.support.host_pair
+        path = stage / 'tether-host-pair'
+        path.write_bytes(self.images['hostPair'])
+        inventory = pair.product_files_for('darwin', True)
+        source_files = {str(PurePosixPath('backend') /
+                           package[len(pair.source.PROJECT):].lstrip('/') / name): 'c' * 64
+                        for package, names in inventory.items() for name in names}
+        empty = {'gateway': '', 'issuer': '', 'clientID': ''}
+        flags = pair.linker_flags(empty)
+        record = {'schema': 'tether-mac-host-pair-build/1', 'status': 'blocked',
+                  'activation': 'blocked', 'distribution': 'blocked',
+                  'repository': 'O2-CONNECTIVE/Tether', 'sourceCommit': revision,
+                  'sourceTree': tree, 'buildUTC': '2026-11-09T12:00:00Z',
+                  'role': pair.ROLE, 'target': 'darwin-arm64',
+                  'settings': {'GOVERSION': 'go1.27.3', 'GOOS': 'darwin',
+                               'GOARCH': 'arm64', 'CGO_ENABLED': '1'},
+                  'flags': list(pair.FLAGS), 'pairConfig': empty, 'ldflags': flags,
+                  'goBuildInfo': {'path': pair.ROLE, 'ldflags': flags},
+                  'snapshotGoFiles': source_files,
+                  'locks': {'backend/go.mod': 'c' * 64, 'backend/go.sum': 'c' * 64},
+                  'recipe': {name: 'd' * 64 for name in pair.RECIPE},
+                  'compiledRepositoryPackages': [pair.ROLE], 'modules': [],
+                  'image': pair.inspect_image(path), 'helperExecutable': True,
+                  'helperExecuted': False, 'signingPerformed': False,
+                  'blockers': list(pair.BLOCKERS)}
+        return path, record
+
     def test_other_producer_commit_or_tree_cannot_join_the_app(self):
         for field in ('producer_revision', 'producer_tree'):
             original = getattr(self, field)
@@ -136,11 +170,13 @@ class GuiCandidateBuildTests(unittest.TestCase):
         with contextlib.redirect_stdout(stream):
             self.assertEqual(tool.main(['--output', str(self.output)]), 2)
         record = json.loads((self.output / 'BUILD_RECORD.json').read_text())
-        self.assertEqual(set(record['images']), {'gui', 'native', 'producer'})
+        self.assertEqual(set(record['images']), {'gui', 'native', 'producer', 'hostPair'})
         self.assertTrue(record['producerIncluded'])
         self.assertEqual(record['images']['producer']['path'], 'Contents/Helpers/resident-pipe')
         self.assertEqual(record['producerBuild']['sourceCommit'], self.revision)
         self.assertEqual(record['producerBuild']['sourceTree'], self.tree)
+        self.assertIn('hostPairBuild', record)
+        self.assertEqual(record['images']['hostPair']['path'], 'Contents/Helpers/tether-host-pair')
 
     def test_public_cli_assembles_inert_images_and_retains_blocked_record(self):
         stream = io.StringIO()
@@ -156,6 +192,25 @@ class GuiCandidateBuildTests(unittest.TestCase):
                          {'Contents/Info.plist', *tool.layout.ASSEMBLY_IMAGES.values()})
         for role, relative in tool.layout.ASSEMBLY_IMAGES.items():
             self.assertEqual((app / relative).read_bytes(), self.images[role])
+
+    def test_partial_pair_configuration_is_reported_without_a_traceback(self):
+        # A partial endpoint set must fail at the CLI boundary before expensive GUI compilation.
+        stream = io.StringIO()
+        with patch.object(tool.support.host_pair, 'configuration_from_env',
+                          side_effect=tool.support.host_pair.PairBuildError('PAIR_CONFIG_PARTIAL')):
+            with contextlib.redirect_stdout(stream):
+                self.assertEqual(tool.main(['--output', str(self.output)]), 1)
+        self.assertEqual(json.loads(stream.getvalue())['code'], 'PAIR_CONFIG_PARTIAL')
+        self.assertFalse(self.output.exists())
+
+    def test_ci_checker_sanitizes_pair_build_errors(self):
+        # A mismatched linker record must use the checker failure boundary, not expose a traceback.
+        error = tool.support.host_pair.PairBuildError('PAIR_BUILD_INFO_MISMATCH')
+        stream = io.StringIO()
+        with patch.object(check, 'run', side_effect=error), \
+                patch.object(sys, 'stderr', stream):
+            self.assertEqual(check.main(), 1)
+        self.assertEqual(stream.getvalue(), 'MAC_GUI_CANDIDATE_BUILD_FAILED PAIR_BUILD_INFO_MISMATCH\n')
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX permission bits required')
     def test_images_are_nonexecutable_and_output_is_private(self):
@@ -254,6 +309,18 @@ class GuiCandidateBuildTests(unittest.TestCase):
             bad['producerBuild'][field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
                 check.validate(bad, self.revision, self.tree)
+
+    def test_ci_rejects_pair_ldflags_or_assembled_bytes_that_do_not_match(self):
+        # A valid producer cannot hide a pairing binary built with different client configuration.
+        record = tool.build(self.output)
+        bad = copy.deepcopy(record)
+        bad['hostPairBuild']['ldflags'] += ' altered'
+        with self.assertRaises(tool.support.host_pair.PairBuildError):
+            check.validate(bad, self.revision, self.tree)
+        bad = copy.deepcopy(record)
+        bad['images']['hostPair']['sha256'] = '0' * 64
+        with self.assertRaises(ValueError):
+            check.validate(bad, self.revision, self.tree)
         for field, value in [('path', 'Contents/Helpers/other'), ('sha256', '0' * 64), ('bytes', 1)]:
             bad = copy.deepcopy(record)
             bad['images']['producer'][field] = value
@@ -307,6 +374,7 @@ class GuiCandidateBuildTests(unittest.TestCase):
         native = Path(__file__).resolve().parents[2] / tool.support.NATIVE_ROOT / 'ResidentLaunchPreparation.swift'
         self.assertIn('Contents/Helpers/resident-pipe', native.read_text())
         self.assertEqual(tool.layout.ASSEMBLY_IMAGES['producer'], 'Contents/Helpers/resident-pipe')
+        self.assertEqual(tool.layout.ASSEMBLY_IMAGES['hostPair'], 'Contents/Helpers/tether-host-pair')
 
     def test_false_success_or_fixture_promotions_are_refused(self):
         record = tool.build(self.output)

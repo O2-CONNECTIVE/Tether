@@ -56,6 +56,7 @@ private struct Request {
         }
         let names = [
             "com.o2connective.rescue-host.resident-pipe": "resident-pipe",
+            "com.o2connective.rescue-host.tether-host-pair": "tether-host-pair",
             "com.o2connective.rescue-host.resident-preparation": "libResidentPreparation.dylib",
             "com.o2connective.rescue-host.shell": "app"
         ]

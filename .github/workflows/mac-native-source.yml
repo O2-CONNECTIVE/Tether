@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   gui-candidate:
-    name: Same-source GUI, Swift and sealed producer app assembly
+    name: Same-source GUI, Swift and Go helper app assembly
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -60,7 +60,7 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.1'
-      - name: Set up fixed Go for the same-source sealed producer
+      - name: Set up fixed Go for the same-source producer and pairing helper
         if: steps.ci-scope.outputs.selected == 'true'
         id: ci-work-5
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -80,7 +80,7 @@ jobs:
           npm ci --prefix ui/tauri --ignore-scripts --no-audit --no-fund
           cargo fetch --locked --manifest-path ui/tauri/src-tauri/Cargo.toml
           python scripts/go_ci.py prepare
-      - name: Build and verify all three app images without signing or launch
+      - name: Build and verify all four app images without signing or launch
         if: steps.ci-scope.outputs.selected == 'true'
         id: ci-work-8
         run: |

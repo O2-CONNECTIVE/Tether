@@ -34,9 +34,12 @@ def image(role, extra=(), arch=0x100000c, minimum=27 << 16, commands=None):
         commands = [struct.pack('<6I', 0x32, 24, 1, minimum, 27 << 16, 0)]
         if role == 'gui':
             commands += [dylib(0xc, NATIVE), text_command(0x8000001c, RPATH)]
-        else:
+        elif role == 'native':
             commands += [dylib(0xd, NATIVE)]
-        commands += [dylib(0xc, FRAMEWORK), dylib(0xc, SWIFT), text_command(0x8000001c, '/usr/lib/swift')]
+        if role in ('gui', 'native'):
+            commands += [dylib(0xc, FRAMEWORK), dylib(0xc, SWIFT), text_command(0x8000001c, '/usr/lib/swift')]
+        elif role == 'hostPair':
+            commands += [dylib(0xc, '/usr/lib/libSystem.B.dylib')]
     commands = list(commands) + list(extra)
     body = b''.join(commands)
     return struct.pack('<8I', 0xfeedfacf, arch, 0, 2 if role == 'gui' else 6,
@@ -234,7 +237,7 @@ class LinkLayoutTests(unittest.TestCase):
         self.assertFalse(json.loads(result.stdout)['runtimeVerified'])
 
 
-class ThreeImageAssemblyTests(unittest.TestCase):
+class FourImageAssemblyTests(unittest.TestCase):
     def setUp(self):
         sys.path.insert(0, str(ROOT / 'scripts'))
         import verify_mac_gui_link_layout as layout
@@ -244,7 +247,7 @@ class ThreeImageAssemblyTests(unittest.TestCase):
         self.app = Path(temporary.name).resolve() / 'Tether.app'
         self.hashes = {}
         for role in layout.ASSEMBLY_IMAGES:
-            self.write(role, image(role) if role != 'producer' else self.producer())
+            self.write(role, image(role) if role not in ('producer', 'hostPair') else self.producer())
         self.plist = self.app / 'Contents/Info.plist'
         self.plist.write_bytes(plistlib.dumps({'CFBundleExecutable': 'rescue-host-shell',
             'CFBundleIdentifier': 'com.o2connective.rescue-host.shell', 'CFBundlePackageType': 'APPL',
@@ -264,17 +267,38 @@ class ThreeImageAssemblyTests(unittest.TestCase):
     def verify(self):
         return self.tool.verify_assembly(self.app, 'darwin-arm64', self.hashes)
 
-    def test_all_three_fixed_images_are_required_and_stay_blocked(self):
+    def test_pair_helper_uses_the_fixed_nested_path(self):
+        # Swift's launch requirement in the next PR depends on this stable nested location.
+        self.assertEqual(self.tool.ASSEMBLY_IMAGES.get('hostPair'), 'Contents/Helpers/tether-host-pair')
+
+    def test_all_four_fixed_images_are_required_and_stay_blocked(self):
         record = self.verify()
         self.assertEqual(record['imageHashes'], self.hashes)
         self.assertEqual(record['status'], 'blocked')
         self.assertTrue(record['producerIncluded'])
+        self.assertTrue(record['hostPairIncluded'])
         self.assertTrue(record['productionGateClosed'])
         self.assertFalse(record['imageLoaded'])
         self.assertFalse(record['runtimeVerified'])
         del self.hashes['producer']
         with self.assertRaises(self.tool.LayoutError):
             self.verify()
+        self.hashes['producer'] = hashlib.sha256(self.producer()).hexdigest()
+        del self.hashes['hostPair']
+        with self.assertRaises(self.tool.LayoutError):
+            self.verify()
+
+    def test_pair_helper_must_be_present_with_no_private_loader_inputs(self):
+        # A helper with an alternate loader path could escape the fixed app layout checks.
+        self.assertEqual(self.tool.ASSEMBLY_IMAGES.get('hostPair'), 'Contents/Helpers/tether-host-pair')
+        for data in (image('hostPair', [text_command(0x8000001c, '/PRIVATE')]),
+                     image('hostPair', [text_command(0x8000001c, RPATH)]),
+                     image('hostPair', [dylib(0xc, NATIVE)]),
+                     image('hostPair', [dylib(0xc, SWIFT)]),
+                     image('hostPair', [dylib(0xc, '/PRIVATE/lib.dylib')])):
+            self.write('hostPair', data)
+            with self.subTest(data=data[:40]), self.assertRaises(self.tool.LayoutError):
+                self.verify()
 
     def test_producer_hash_role_architecture_and_private_loader_inputs_are_refused(self):
         original = self.hashes['producer']
@@ -311,6 +335,19 @@ class ThreeImageAssemblyTests(unittest.TestCase):
                 self.verify()
         self.plist.write_bytes(plistlib.dumps(plist))
         (self.app / self.tool.ASSEMBLY_IMAGES['producer']).unlink()
+        with self.assertRaises(self.tool.LayoutError):
+            self.verify()
+
+    def test_missing_or_extra_pair_files_are_refused(self):
+        # Both absence and shadow files must fail the exact nested helper inventory.
+        pair = self.app / self.tool.ASSEMBLY_IMAGES['hostPair']
+        data = pair.read_bytes()
+        pair.unlink()
+        with self.assertRaises(self.tool.LayoutError):
+            self.verify()
+        pair.write_bytes(data)
+        extra = pair.with_name('unexpected')
+        extra.write_bytes(b'extra')
         with self.assertRaises(self.tool.LayoutError):
             self.verify()
 

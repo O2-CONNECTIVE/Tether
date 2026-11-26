@@ -1,4 +1,4 @@
-"""Build and assemble a blocked GUI/native/producer app on a disposable CI Mac; never run it."""
+"""Build and assemble a blocked GUI/native/producer/pair app on a disposable CI Mac; never run it."""
 from datetime import datetime, timezone
 import json
 import os
@@ -15,6 +15,7 @@ from mac_gui_build_support import source, layout
 def build(output):
     source.require(platform.system() == 'Darwin' and platform.machine() == 'arm64' and
                    os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted', 'GUI_CI_HOST_REQUIRED')
+    pair_config = support.host_pair.configuration_from_env()
     revision, tree = source.head()
     output = Path(os.path.abspath(output))
     source.require(not output.is_relative_to(source.ROOT), 'OUTPUT_INSIDE_SOURCE')
@@ -30,6 +31,8 @@ def build(output):
             swift, sdk, settings = support.toolchain(stage, env)
             built = support.compile_images(stage, env, swift, sdk)
             built['producer'], producer_record = support.build_producer(stage, revision, tree)
+            built['hostPair'], host_pair_record = support.build_host_pair(
+                stage, revision, tree, configuration=pair_config)
             app = output / support.APP
             images = {}
             minima = []
@@ -48,17 +51,17 @@ def build(output):
             for name, expected in files.items():
                 source.require(source.digest((stage / name).read_bytes()) == expected, 'BUILD_INPUT_CHANGED')
             source.require(source.head() == (revision, tree), 'SOURCE_CHANGED')
-            record = {'schema': 'tether-mac-gui-candidate-build/2', 'repository': 'O2-CONNECTIVE/Tether',
+            record = {'schema': 'tether-mac-gui-candidate-build/3', 'repository': 'O2-CONNECTIVE/Tether',
                       'status': 'blocked', 'activation': 'blocked', 'distribution': 'blocked',
                       'sourceCommit': revision, 'sourceTree': tree, 'target': 'darwin-arm64',
                       'buildUTC': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                       'app': support.APP, 'settings': settings, 'cargoFlags': list(support.CARGO_FLAGS),
                       'rustCfg': ['resident_native_source'], 'swiftFixtureDefines': [],
                       'snapshotFiles': files, 'recipe': recipe, 'images': images,
-                      'producerBuild': producer_record,
+                      'producerBuild': producer_record, 'hostPairBuild': host_pair_record,
                       'infoPlistSha256': source.digest(plist), 'linkLayout': matched,
                       'appAssembled': True, 'imageExecuted': False, 'imageLoaded': False,
-                      'producerIncluded': True, 'signingPerformed': False,
+                      'producerIncluded': True, 'hostPairIncluded': True, 'signingPerformed': False,
                       'enrollmentAccessed': False, 'productionGateClosed': True,
                       'cryptographicAttestation': False, 'blockers': list(support.BLOCKERS)}
             (output / 'BUILD_RECORD.json').write_text(json.dumps(record, indent=2) + '\n')
@@ -85,7 +88,7 @@ def main(argv=None):
         args = parser.parse_args(argv)
         print(json.dumps(summary(build(args.output))))
         return 2
-    except (source.BuildError, layout.LayoutError) as error:
+    except (source.BuildError, support.host_pair.PairBuildError, layout.LayoutError) as error:
         print(json.dumps({'status': 'blocked', 'code': str(error)}))
     except (OSError, ValueError, KeyError, TypeError, UnicodeError, layout.files.PackageError):
         print(json.dumps({'status': 'blocked', 'code': 'GUI_BUILD_INPUT_INVALID'}))

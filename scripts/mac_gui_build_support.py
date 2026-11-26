@@ -6,6 +6,7 @@ import re
 
 import build_mac_resident_source as source
 import build_mac_sealed_producer as producer
+import build_mac_host_pair as host_pair
 import verify_mac_gui_link_layout as layout
 
 TARGET = 'aarch64-apple-darwin'
@@ -21,7 +22,8 @@ EXPORTS = {'_rh_resident_preparation_' + name for name in (
 RECIPE = ('scripts/build_mac_gui_candidate.py', 'scripts/mac_gui_build_support.py',
           'scripts/build_mac_resident_source.py', 'scripts/go_ci.py',
           'scripts/verify_mac_gui_link_layout.py', 'scripts/package_mac_agent.py',
-          'scripts/build_mac_sealed_producer.py', 'scripts/collect_go_licenses.py')
+          'scripts/build_mac_sealed_producer.py', 'scripts/build_mac_host_pair.py',
+          'scripts/collect_go_licenses.py')
 CARGO_FLAGS = ('--locked', '--offline', '--release', '--jobs', '2',
                '--target', TARGET, '--bin', 'rescue-host-shell',
                '--features', 'custom-protocol')
@@ -165,4 +167,16 @@ def build_producer(stage, revision, tree):
                    'PRODUCER_SOURCE_MISMATCH')
     path = output / 'resident-pipe'
     source.require(producer.inspect_image(path) == record['image'], 'PRODUCER_IMAGE_MISMATCH')
+    return path, record
+
+
+def build_host_pair(stage, revision, tree, *, configuration=None, required_config=False):
+    output = stage / 'gui-host-pair'
+    record = host_pair.build(output, configuration, required_config=required_config)
+    host_pair.validate_record(record, revision, tree)
+    source.require(record['sourceCommit'] == revision and record['sourceTree'] == tree and
+                   record['target'] == 'darwin-arm64' and record['role'] == host_pair.ROLE,
+                   'HOST_PAIR_SOURCE_MISMATCH')
+    path = output / 'tether-host-pair'
+    source.require(host_pair.inspect_image(path) == record['image'], 'HOST_PAIR_IMAGE_MISMATCH')
     return path, record
