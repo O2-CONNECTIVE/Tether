@@ -49,7 +49,7 @@ async function replay(mode: 'old-stale' | 'ordered-stale' | 'accepted-pending' |
   let lastId = 0, pending: number | null = null, firstOff = true, now = 0, ownerOffCalls = 0;
   let observation: Observation = { revision: 1, validForMs: 3000, standby: 'off', registration: 'disconnected',
     caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false, transition: null,
-    standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive' };
+    standbyUntil: null, standbyEndingSoon: false, standbyExpired: false, previousCleanup: 'confirmed', sleepPrevention: 'inactive' };
   const events: string[] = [], receipts: string[] = [], order: string[] = [];
   let expectReopenRead = false;
   const dataset: Record<string, string> = {};
@@ -134,7 +134,7 @@ function applied(intent: Intent, id: number, revision: number): Observation {
   return { revision, validForMs: 3000, standby: intent, registration: intent === 'on' ? 'authenticated' : 'disconnected',
     caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: intent === 'off', canRequestOff: intent === 'on',
     transition: { requestId: id, intent, outcome: 'applied' }, standbyUntil: intent === 'on' ? 1_900_000_000_000 : null,
-    standbyEndingSoon: false, standbyExpired: false, sleepPrevention: 'inactive' };
+    standbyEndingSoon: false, standbyExpired: false, previousCleanup: 'confirmed', sleepPrevention: 'inactive' };
 }
 void test('modeled pre-owner stale schedule requires same-ID rejection before its receipt', async () => {
   const old = await replay('old-stale');

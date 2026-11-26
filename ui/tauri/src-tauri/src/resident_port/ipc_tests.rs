@@ -181,6 +181,7 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
             "standbyUntil": null,
             "standbyEndingSoon": false,
             "standbyExpired": false,
+            "previousCleanup": "confirmed",
             "sleepPrevention": "inactive"
         }
     });
@@ -256,6 +257,7 @@ fn get_resident_status_after_stdout_eof_without_closed_is_expired_and_non_action
         thread::sleep(Duration::from_millis(2));
     };
     assert_eq!(before["revision"], 1);
+    assert_eq!(before["previousCleanup"], "confirmed");
     assert_eq!(before["sleepPrevention"], "inactive");
     assert!(before["validForMs"].as_u64().unwrap() > 1000);
     assert_eq!(before["canRequestOn"], true);
@@ -350,7 +352,7 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
         "revision":7,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"confirmed","canRequestOn":true,
         "canRequestOff":false,
-        "standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,"sleepPrevention":"inactive",
+        "standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,"previousCleanup":"confirmed","sleepPrevention":"inactive",
         "transition":{"requestId":7,"intent":"off","outcome":"applied"}
     });
     let final_status = json!({
@@ -358,7 +360,7 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
         "revision":8,"validForMs":3000,"standby":"off","registration":"disconnected",
         "caller":null,"work":"idle","cleanup":"unknown","canRequestOn":false,
         "canRequestOff":false,
-        "standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,"sleepPrevention":"unknown",
+        "standbyUntil":null,"standbyEndingSoon":false,"standbyExpired":false,"previousCleanup":"confirmed","sleepPrevention":"unknown",
         "transition":{"requestId":7,"intent":"off","outcome":"unknown"}
     });
     let mut command = Command::new("/usr/bin/python3");
@@ -417,6 +419,7 @@ print(json.dumps({"protocolVersion":1,"type":"closed","sourceContinuousMs":stamp
 
     let observed = status();
     assert_eq!(observed["cleanup"], "unknown");
+    assert_eq!(observed["previousCleanup"], "confirmed");
     assert_eq!(observed["sleepPrevention"], "unknown");
     assert_eq!(observed["revision"], 8);
     assert_eq!(observed["validForMs"], 0);

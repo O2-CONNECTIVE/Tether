@@ -41,7 +41,7 @@ struct Parser {
             i += 1; var result: [String:Value] = [:]
             while true {
                 let key = try string()
-                guard result[key] == nil, result.count < 18 else { throw Invalid.input } // 18: a needs_action status snapshot
+                guard result[key] == nil, result.count < 19 else { throw Invalid.input } // 19: a needs_action status snapshot
                 try take(58); result[key] = try value(depth: depth+1); whitespace()
                 guard i < bytes.count else { throw Invalid.input }
                 if bytes[i] == 125 { i += 1; return .object(result) }

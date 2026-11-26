@@ -33,7 +33,8 @@ void test('resident switch and deadline use shared IPC and wait for owner observ
         const status = { protocolVersion: 1, source: 'resident-owner', state: 'source-observation',
           revision, validForMs: 3000, standby: on ? 'on' : 'off', registration, caller: null,
           work: 'idle', cleanup: 'confirmed', canRequestOn: !on, canRequestOff: on, transition,
-          standbyUntil: on ? deadline : null, standbyEndingSoon: on && endingSoon, standbyExpired: false, sleepPrevention: 'inactive' };
+          standbyUntil: on ? deadline : null, standbyEndingSoon: on && endingSoon, standbyExpired: false,
+          previousCleanup: 'confirmed', sleepPrevention: 'inactive' };
         if (document.documentElement.dataset.holdPoll !== 'true') return Promise.resolve(status);
         document.documentElement.dataset.pollHeld = 'true';
         return new Promise(resolve => { window.addEventListener('test-release-poll', () => resolve(status), { once: true }); });
@@ -155,7 +156,7 @@ void test('cleanup unknown disables resident controls and is shown as needs clea
       : { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1, validForMs: 3000,
         standby: 'unknown', registration: 'unknown', caller: 'private-fixture-name', work: 'unknown', cleanup: 'unknown',
         canRequestOn: false, canRequestOff: false, transition: null, standbyUntil: null, standbyEndingSoon: false, standbyExpired: true,
-        sleepPrevention: 'unknown' }) } };
+        previousCleanup: 'confirmed', sleepPrevention: 'unknown' }) } };
   });
   await page.goto(url); await page.waitForSelector('#resident-panel');
   assert.equal(await page.locator('#resident-switch').isDisabled(), true);
@@ -181,7 +182,7 @@ void test('sleep prevention and the lid note use fresh owner status', async () =
       : { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision, validForMs: 3000,
         standby: 'on', registration: 'authenticated', caller: null, work: 'running', cleanup: 'confirmed',
         canRequestOn: false, canRequestOff: true, transition: null, standbyUntil: 1_900_000_000_000,
-        standbyEndingSoon: false, standbyExpired: false, sleepPrevention }) } };
+        standbyEndingSoon: false, standbyExpired: false, previousCleanup: 'confirmed', sleepPrevention }) } };
   });
   await page.goto(url);
   const sleep = page.locator('#resident-sleep-status');
@@ -212,7 +213,7 @@ void test('the same resident view resumes fresh status after hiding, while page 
         ? { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision, validForMs: 3000,
           standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed',
           canRequestOn: true, canRequestOff: false, transition: null, standbyUntil: null, standbyEndingSoon: false,
-          standbyExpired: false, sleepPrevention: 'inactive' }
+          standbyExpired: false, previousCleanup: 'confirmed', sleepPrevention: 'inactive' }
         : { protocolVersion: 1, source: 'mac-status', state: 'source-unavailable' }) } };
     });
     await page.goto(url);

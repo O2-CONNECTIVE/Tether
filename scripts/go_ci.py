@@ -231,7 +231,7 @@ def product_files_for(goos, cgo_enabled=True):
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/fileread'].update(
         {'selected_darwin.go', 'selected_observation_darwin.go'} if goos == 'darwin' else {'selected_other.go'})
     if goos == 'darwin' and cgo_enabled:
-        expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe'].update({'owned_darwin.go', 'run_darwin.go', 'foreground_darwin.go'})
+        expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/residentpipe'].update({'owned_darwin.go', 'owner_record_darwin.go', 'run_darwin.go', 'foreground_darwin.go'})
     expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent'].update(MAC_AGENT_FILES[goos])
     if goos == 'darwin':
         expected['github.com/O2-CONNECTIVE/rescue-host/backend/internal/macagent'].add('groupobserver_darwin.go' if cgo_enabled else 'groupobserver_darwin_nocgo.go')

@@ -50,6 +50,9 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
     <section className={`status${view.tone === 'neutral' ? '' : ` status--${view.tone}`}`} role="status" aria-live="polite" aria-atomic="true">
       <StatusContent view={view} icon={view.icon} headingId="resident-heading" descriptionId="resident-state" />
     </section>
+    {view.warning && <section className="status status--unconfirmed" role="alert" aria-atomic="true">
+      <div className="status__content"><p>{view.warning}</p></div>
+    </section>}
     <section className="resident-standby" aria-labelledby="resident-standby-heading">
       <div className="resident-standby__row">
         <h3 id="resident-standby-heading">待機</h3>

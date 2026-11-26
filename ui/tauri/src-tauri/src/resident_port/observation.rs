@@ -51,6 +51,12 @@ values!(SleepPrevention {
     Active,
     Unknown
 });
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum PreviousCleanup {
+    Confirmed,
+    Unknown,
+}
 values!(TransitionOutcome {
     Pending,
     Applied,
@@ -91,6 +97,7 @@ pub(crate) struct Observation {
     pub(super) standby_ending_soon: bool,
     pub(super) standby_expired: bool,
     pub(super) sleep_prevention: SleepPrevention,
+    pub(super) previous_cleanup: PreviousCleanup,
 }
 impl Observation {
     pub(super) fn unresolved(&self) -> Option<(u64, Intent)> {
