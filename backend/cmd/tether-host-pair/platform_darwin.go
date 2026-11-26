@@ -13,3 +13,9 @@ func openBrowser(url string) error {
 	defer cancel()
 	return exec.CommandContext(ctx, "/usr/bin/open", url).Run()
 }
+
+func runAppleScript(ctx context.Context, script string, args ...string) (string, error) {
+	commandArgs := append([]string{"-e", script}, args...)
+	output, err := exec.CommandContext(ctx, "/usr/bin/osascript", commandArgs...).Output()
+	return string(output), err
+}

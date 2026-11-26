@@ -19,18 +19,27 @@ import (
 
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentgateway"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/agentkeys"
+	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostkeychain"
 	"github.com/O2-CONNECTIVE/rescue-host/backend/internal/hostpairoauth"
 	"golang.org/x/crypto/ssh"
 )
 
 type deps struct {
 	client                    *http.Client
+	guiClient                 *http.Client
 	location                  func(context.Context) (home, policyPath string, err error)
 	readProtected             func(context.Context, string) ([]byte, error)
 	openBrowser               func(string) error
+	storeHostKey              func([]byte, string) error
+	loadHostKey               func(string) (ssh.Signer, error)
+	deleteHostKey             func(string) error
+	runAppleScript            func(context.Context, string, ...string) (string, error)
 	callbackAddress           string
 	callbackWait, pairTimeout time.Duration
+	confirmInterval           time.Duration
 }
+
+var guiGateway, guiIssuer, guiClientID string
 
 const (
 	diagPairRunning    = "別の pair が実行中です"
@@ -68,6 +77,9 @@ func validGatewayForm(raw string) bool {
 	return err == nil && u.Host != "" && u.Host == strings.ToLower(u.Host) && (u.Path == "" || u.Path == "/") && raw == "https://"+u.Host+u.Path
 }
 func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) int {
+	if len(args) == 0 {
+		return executeGUI(ctx, stdout, d)
+	}
 	gateway, issuer, clientID, ok := parseArgs(args)
 	if !ok {
 		fmt.Fprintln(stderr, "引数を確認してください")
@@ -219,9 +231,19 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 	fmt.Fprintln(stdout, diagPairComplete)
 	return 0
 }
-func main() {
+func productionDeps() deps {
 	client := &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	d := deps{client: client, openBrowser: openBrowser, callbackWait: 5 * time.Minute, pairTimeout: 60 * time.Second}
+	d := deps{
+		client: client, guiClient: guiHTTPClient(), readProtected: agentkeys.ReadTrustConfig,
+		openBrowser: openBrowser, storeHostKey: hostkeychain.Store, loadHostKey: hostkeychain.Load,
+		deleteHostKey: hostkeychain.Delete, runAppleScript: runAppleScript,
+		callbackWait: 5 * time.Minute, pairTimeout: 60 * time.Second,
+	}
 	configurePairing(&d)
+	return d
+}
+
+func main() {
+	d := productionDeps()
 	os.Exit(execute(context.Background(), os.Args[1:], os.Stdout, os.Stderr, d))
 }
