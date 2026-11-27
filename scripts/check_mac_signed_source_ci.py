@@ -98,6 +98,16 @@ def run():
         if refused.returncode != 2 or refused.stdout or \
                 reason != 'mac-release-signature: signature-or-identity-invalid':
             raise ValueError('untrusted compiler output was not rejected')
+        phase('pair-helper-adhoc-refusal')
+        untrusted_pair = stage / 'tether-host-pair'
+        untrusted_pair.write_bytes(untrusted.read_bytes())
+        untrusted_pair.chmod(0o700)
+        pair_request = [str(observer), '--path', str(untrusted_pair), '--team-id', 'FIXTURE123',
+                        '--identifier', release.IDENTIFIERS['hostPair'], '--certificate-sha1', 'C' * 40]
+        pair_refused = completed(pair_request, env)
+        if pair_refused.returncode != 2 or pair_refused.stdout or \
+                pair_refused.stderr.strip() != 'mac-release-signature: signature-or-identity-invalid':
+            raise ValueError('untrusted pair helper output was not rejected')
         phase('canonical-path-refusals')
         (stage / 'alias').symlink_to(stage, target_is_directory=True)
         (stage / 'nested').mkdir()
@@ -115,7 +125,7 @@ def run():
             raise ValueError('unexpected helper arguments were not rejected')
     print(json.dumps({'fixture': 'mac-signed-release-source', 'normalTypecheck': True,
                       'syntheticReleaseCompiled': True, 'providerCompileRefusals': 2,
-                      'adHocRefusals': 1, 'canonicalPathRefusals': 2, 'argumentRefusals': 1, 'signingPerformed': False,
+                      'adHocRefusals': 2, 'canonicalPathRefusals': 2, 'argumentRefusals': 1, 'signingPerformed': False,
                       'productExecuted': False, 'productLoaded': False,
                       'scope': 'compiler and unsigned refusal only; genuine Developer ID unverified'}))
 

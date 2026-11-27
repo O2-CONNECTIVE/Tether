@@ -17,7 +17,9 @@ import package_mac_agent as files
 
 IMAGES = {'gui': 'Contents/MacOS/rescue-host-shell',
           'native': 'Contents/Frameworks/libResidentPreparation.dylib'}
-ASSEMBLY_IMAGES = {**IMAGES, 'producer': 'Contents/Helpers/resident-pipe'}
+ASSEMBLY_IMAGES = {**IMAGES, 'producer': 'Contents/Helpers/resident-pipe',
+                   'hostPair': 'Contents/Helpers/tether-host-pair'}
+STANDALONE_HELPERS = {'producer', 'hostPair'}
 NATIVE = '@rpath/libResidentPreparation.dylib'
 FRAMEWORKS = '@executable_path/../Frameworks'
 SWIFT_ROOT = '/usr/lib/swift'
@@ -121,13 +123,14 @@ def inspect(data, target, role):
             'LINK_DYNAMIC_LINKER_INVALID')
     require(len(rpaths) == len(set(rpaths)) and len(dependencies) == len({v for _, v in dependencies}),
             'LINK_DUPLICATE_INVALID')
-    allowed_rpaths = set() if role == 'producer' else {SWIFT_ROOT} | ({FRAMEWORKS} if role == 'gui' else set())
+    allowed_rpaths = set() if role in STANDALONE_HELPERS else {SWIFT_ROOT} | ({FRAMEWORKS} if role == 'gui' else set())
     require(set(rpaths) <= allowed_rpaths and (role != 'gui' or FRAMEWORKS in rpaths),
             'LINK_RPATH_INVALID')
     native_links = [(code, value) for code, value in dependencies if value == NATIVE]
     require(native_links == ([(0xc, NATIVE)] if role == 'gui' else []), 'LINK_NATIVE_DEPENDENCY_INVALID')
     for _, value in dependencies:
-        require(system_library(value) or (role != 'producer' and (value == NATIVE or swift_library(value))),
+        require(system_library(value) or (role not in STANDALONE_HELPERS and
+                                          (value == NATIVE or swift_library(value))),
                 'LINK_DEPENDENCY_INVALID')
         if swift_library(value):
             require(SWIFT_ROOT in rpaths, 'LINK_SWIFT_RPATH_MISSING')
@@ -231,14 +234,14 @@ def verify(app, target, hashes):
 
 
 def verify_assembly(app, target, hashes):
-    """Three fixed product images, not an arbitrary artifact import or launch gate."""
+    """Four fixed product images, not an arbitrary artifact import or launch gate."""
     require(set(hashes) == set(ASSEMBLY_IMAGES), 'ASSEMBLY_EXPECTATION_INVALID')
     app = Path(os.path.abspath(app))
     result = verify(app, target, {role: hashes[role] for role in IMAGES})
     expected = {'Contents': {'MacOS', 'Frameworks', 'Helpers', 'Info.plist'},
                 'Contents/MacOS': {'rescue-host-shell'},
                 'Contents/Frameworks': {'libResidentPreparation.dylib'},
-                'Contents/Helpers': {'resident-pipe'}}
+                'Contents/Helpers': {'resident-pipe', 'tether-host-pair'}}
     files.directory_chain(app)
     require({p.name for p in app.iterdir()} == {'Contents'}, 'ASSEMBLY_INVENTORY_INVALID')
     for relative, names in expected.items():
@@ -260,7 +263,7 @@ def verify_assembly(app, target, hashes):
             plist.get('CFBundlePackageType') == 'APPL' and
             plist.get('LSMinimumSystemVersion') == minimum, 'ASSEMBLY_PLIST_INVALID')
     return {**result, 'check': 'mac-gui-producer-assembly', 'imageHashes': dict(hashes),
-            'minimumMacOSDeclared': minimum, 'producerIncluded': True}
+            'minimumMacOSDeclared': minimum, 'producerIncluded': True, 'hostPairIncluded': True}
 
 
 class Parser(argparse.ArgumentParser):

@@ -22,9 +22,6 @@ import (
 
 func createGUIResumableOperation(t *testing.T, f *guiPairFixture, seed byte) (guiPairOperation, string) {
 	t.Helper()
-	oldGateway, oldIssuer, oldClientID := guiGateway, guiIssuer, guiClientID
-	guiGateway, guiIssuer, guiClientID = f.gateway.URL, f.issuer.URL, "gui-public-client"
-	t.Cleanup(func() { guiGateway, guiIssuer, guiClientID = oldGateway, oldIssuer, oldClientID })
 
 	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize))
 	signer, err := ssh.NewSignerFromKey(private)
@@ -36,7 +33,7 @@ func createGUIResumableOperation(t *testing.T, f *guiPairFixture, seed byte) (gu
 		t.Fatal(err)
 	}
 	token := f.signedToken(f.gateway.URL + agentgateway.PairPath)
-	operation, preflightResult, err := createGUIPairOperation(context.Background(), f.client, deps{}, f.gateway.URL, token, signer, fingerprint)
+	operation, preflightResult, err := createGUIPairOperation(context.Background(), f.client, deps{}, f.gateway.URL, f.issuer.URL, token, signer, fingerprint)
 	if err != nil || preflightResult != "" {
 		t.Fatalf("create pending gateway operation: result=%q err=%v", preflightResult, err)
 	}

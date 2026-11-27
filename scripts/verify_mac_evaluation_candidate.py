@@ -15,10 +15,11 @@ try:
 except ModuleNotFoundError:
     import package_mac_agent as mac
 
-SCHEMA = 'tether-mac-evaluation-materials/1'
+SCHEMA = 'tether-mac-evaluation-materials/2'
 LABEL = 'カレントの検証版'
 IMAGES = {'gui': 'Contents/MacOS/rescue-host-shell',
-          'producer': 'Contents/Helpers/resident-pipe'}
+          'producer': 'Contents/Helpers/resident-pipe',
+          'hostPair': 'Contents/Helpers/tether-host-pair'}
 LOCKS = {'locks/go.mod', 'locks/go.sum', 'locks/Cargo.lock', 'locks/package-lock.json'}
 FIXED = {'LICENSE', 'RECIPIENT.txt'} | LOCKS
 GO_NOTICES = {'notices/go/' + name: digest for name, digest in mac.TEXTS.items()}
@@ -210,11 +211,13 @@ class Parser(argparse.ArgumentParser):
 def main(argv=None):
     try:
         parser = Parser(description=__doc__, allow_abbrev=False)
-        for name in ('root', 'source', 'manifest-sha256', 'gui-sha256', 'producer-sha256'):
+        for name in ('root', 'source', 'manifest-sha256', 'gui-sha256',
+                     'producer-sha256', 'host-pair-sha256'):
             parser.add_argument('--' + name, required=True)
         args = parser.parse_args(argv)
         result = verify(args.root, args.source, args.manifest_sha256,
-                        {'gui': args.gui_sha256, 'producer': args.producer_sha256})
+                        {'gui': args.gui_sha256, 'producer': args.producer_sha256,
+                         'hostPair': args.host_pair_sha256})
         code = 2  # Material consistency never returns release/launch approval.
     except (CandidateError, mac.PackageError) as error:
         result, code = {'check': 'mac-evaluation-materials', 'status': 'refused', 'code': str(error)}, 1

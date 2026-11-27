@@ -21,15 +21,22 @@ credential を使用し、製品 enrollment/credential をコピー・共有し�
 
 ```sh
 go build -tags tether_development \
-  -ldflags="-X main.guiGateway=https://gateway.example.test -X main.guiIssuer=https://issuer.example.test -X main.guiClientID=tether-dev-pair" \
   -o tether-dev-host-pair ./cmd/tether-host-pair
 ```
 
-GUI登録に使うgateway、issuer、public client IDはbuild時の `-X` 固定値です。省略または形式不正なら、引数なし起動は `unavailable` を返して何も行いません。開発タグでは認証基盤に `http://127.0.0.1:51847/callback` を正確に登録します。このportが使用中ならOAuth browserを開く前に失敗します。
+GUI登録に使うgateway、issuer、public client IDは `pair_config.json` の固定値で、`go:embed` で埋め込まれます。repository内の同ファイルは3値とも空のため、上のコマンドでそのままbuildしたhelperの引数なし起動は `unavailable` を返して何も行いません。Mac候補・署名release builderはstage内のJSONだけを設定値で置き換えてbuildします。
+
+開発でGUI登録を試すときは、buildの前に手元の `backend/cmd/tether-host-pair/pair_config.json` へ開発用の3値を書きます。この変更はcommitしません。キーの順はgateway、issuer、clientID、区切りはbuilderと同じ空白なしの1行で、末尾は改行1つです。値はbuilderと同じ許可リスト（`https` のみ、小文字host、gatewayはpathなし）に合わせてください。
+
+```json
+{"gateway":"https://gateway.example","issuer":"https://issuer.example","clientID":"public-client"}
+```
+
+開発タグでは認証基盤に `http://127.0.0.1:51847/callback` を正確に登録します。このportが使用中ならOAuth browserを開く前に失敗します。
 
 引数なしで起動すると [ホストのペア登録](host-pairing.md) の二段階GUI登録を行います。新しい鍵はKeychainへ保存し、native dialogとgatewayの確認画面を経てからKeychain形式のpolicyへ切り替えます。ペア登録後は開発用常駐を起動し直してください。既存の登録枠を置き換える場合、native dialogとbrowser画面の両方に置換対象を表示します。
 
-既存CLIを使う場合は従来どおり `--gateway`、`--issuer`、`--client-id` の3引数を渡します。このCLI経路はPEM形式の鍵とpolicyを出力します。GUI用のbuild固定値はCLIの引数値では上書きできません。
+既存CLIを使う場合は従来どおり `--gateway`、`--issuer`、`--client-id` の3引数を渡します。このCLI経路はPEM形式の鍵とpolicyを出力します。GUI用の固定JSONはCLIの引数値では上書きできません。
 
 常駐 policy は従来の `host_key_path` による PEM 参照と、
 `host_key_store: "keychain"` による Keychain 参照を相互排他で受け付けます。

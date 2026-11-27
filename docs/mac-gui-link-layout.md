@@ -32,7 +32,7 @@ python scripts/verify_mac_gui_link_layout.py \
 
 各 image は256 MiB、load command 領域は1 MiB、4096 commands、path は1024 ASCII文字までです。通常の入力では2 image のみを読み、framework directory は余分な一件を見つけた時点で拒否します。Info.plist、producer、notice や他の resource はこのCLIの対象外です。
 
-同じmoduleの内部 `verify_assembly` は[通常GUIの組立入口](mac-gui-candidate-build.md)専用で、第三の固定 `Contents/Helpers/resident-pipe` を追加照合します。producerはARM64のMach-O executableとsystem library依存だけを受け、rpath、Swift/native link、私有依存を拒否します。4 filesの全配置、symlink拒否、同じ三imageの最大minimum OSとInfo.plistを照合し、`producerIncluded=true` でもblockedを維持します。
+同じmoduleの内部 `verify_assembly` は[通常GUIの組立入口](mac-gui-candidate-build.md)専用で、`Contents/Helpers/resident-pipe` と `Contents/Helpers/tether-host-pair` の両方を追加照合します。二つのhelperはARM64 Mach-O executableとsystem library依存だけを受け、rpath、Swift/native link、私有依存を拒否します。全4 imageとInfo.plistの固定配置、symlink拒否、最大minimum OSを照合し、`producerIncluded=true` と `hostPairIncluded=true` でもblockedを維持します。
 
 正常出力は固定の未検証集合、外部期待 hash、target と最低 OS 宣言です。失敗出力は固定 code だけで、path、例外、文字列内容や原ログを出しません。file 読取り前後と framework directory の形状を確認しますが、原子的 filesystem snapshot ではありません。入力は変更・削除しません。
 
@@ -42,9 +42,9 @@ python scripts/verify_mac_gui_link_layout.py \
 
 ## 既存材料契約との関係と残件
 
-[材料照合 v1](mac-evaluation-materials.md) は GUI と producer の二 image に限定され、この Swift dylib を含む layout を受理しません。今回 v1 を黙って拡張したり、新しい full-package manifest を作ったりしていません。両検査を通せば一つの完成 package になる、とは扱わないでください。
+[材料照合 v2](mac-evaluation-materials.md) は GUI と二つのhelperを照合しますが、この Swift dylib を含むlayoutを受理しません。full appのlink layoutと評価材料は別の契約として保ち、両検査の成功だけで一つの完成packageとは扱いません。
 
-固定 source の実build入口は[GUI/Swiftの非実行app組立](mac-gui-candidate-build.md)で扱います。通常GUIの同じsessionへの入口は[閉じたstartup](mac-gui-trusted-startup.md)へ接続します。三imageの同じsource組立・対応記録はこの入口で行いますが、Mac notice閉包、正規署名identity、`ApprovedRelease.production`、enrollment、実dot、実終了回収と配布受入は未構成・未検証のままです。未設定gateは維持します。
+固定 source の実build入口は[GUI/Swiftの非実行app組立](mac-gui-candidate-build.md)で扱います。通常GUIの同じsessionへの入口は[閉じたstartup](mac-gui-trusted-startup.md)へ接続します。4 imageの同じsource組立・対応記録はこの入口で行いますが、Mac notice閉包、正規署名identity、`ApprovedRelease.production`、enrollment、実dot、実終了回収と配布受入は未構成・未検証のままです。未設定gateは維持します。
 
 ## 有限試験
 

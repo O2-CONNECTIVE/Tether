@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 
 import build_mac_sealed_producer as builder
+import build_mac_host_pair as host_pair
 import collect_go_licenses as licenses
 import package_mac_agent as mac
 from go_ci import product_files_for
@@ -118,16 +119,31 @@ def check_record(record, source, locks, image, image_sha):
     return seen
 
 
-def verify(producer_root, notices_root, module_root, source, record_sha, image_sha):
-    require(hex_value(source, 40) and hex_value(record_sha, 64) and hex_value(image_sha, 64),
+def check_host_pair_record(record, source, locks, image, image_sha):
+    try:
+        host_pair.validate_record(record, source, record.get('sourceTree'))
+    except host_pair.PairBuildError:
+        raise NoticeError('GO_NOTICE_HOST_PAIR_RECORD_INVALID') from None
+    require(same(record['locks'], {'backend/' + name: mac.sha(data) for name, data in locks.items()}),
+            'GO_NOTICE_LOCK_MISMATCH')
+    expected_image = {'path': 'tether-host-pair', 'sha256': image_sha, 'bytes': len(image),
+                      'kind': 'mach-o-executable', 'header': mac.macho(image, 'darwin-arm64')}
+    require(same(record['image'], expected_image), 'GO_NOTICE_HOST_PAIR_IMAGE_MISMATCH')
+    return {item['Path'] for item in record['modules']}
+
+
+def verify(producer_root, host_pair_root, notices_root, module_root, source,
+           record_sha, image_sha, host_pair_record_sha, host_pair_sha):
+    hashes = (record_sha, image_sha, host_pair_record_sha, host_pair_sha)
+    require(hex_value(source, 40) and all(hex_value(value, 64) for value in hashes),
             'GO_NOTICE_EXPECTATION_INVALID')
-    producer_root, notices_root, module_root = [Path(os.path.abspath(path))
-                                               for path in (producer_root, notices_root, module_root)]
-    # Only producer/notice outputs are exact trees. module_root is a source
-    # directory: read its two fixed lock files, never enumerate its other files.
+    producer_root, host_pair_root, notices_root, module_root = [Path(os.path.abspath(path))
+        for path in (producer_root, host_pair_root, notices_root, module_root)]
     producer_files = {'BUILD_RECORD.json', 'resident-pipe'}
+    host_pair_files = {'BUILD_RECORD.json', 'tether-host-pair'}
     notice_files = set(mac.TEXTS) | {'DEPENDENCIES.json'}
     exact_tree(producer_root, producer_files)
+    exact_tree(host_pair_root, host_pair_files)
     exact_tree(notices_root, notice_files)
     locks = {name: mac.read_regular(module_root / name, mac.TEXT_LIMIT) for name in ('go.mod', 'go.sum')}
     licenses.check_locks(locks)
@@ -136,23 +152,41 @@ def verify(producer_root, notices_root, module_root, source, record_sha, image_s
     image = mac.read_regular(producer_root / 'resident-pipe', mac.BINARY_LIMIT)
     require(mac.sha(image) == image_sha, 'GO_NOTICE_IMAGE_HASH_MISMATCH')
     selected = check_record(parse(raw_record), source, locks, image, image_sha)
+    producer_selected_count = len(selected)
+    raw_host_pair_record = mac.read_regular(host_pair_root / 'BUILD_RECORD.json', RECORD_LIMIT)
+    require(mac.sha(raw_host_pair_record) == host_pair_record_sha,
+            'GO_NOTICE_HOST_PAIR_BUILD_HASH_MISMATCH')
+    host_pair_image = mac.read_regular(host_pair_root / 'tether-host-pair', mac.BINARY_LIMIT)
+    require(mac.sha(host_pair_image) == host_pair_sha, 'GO_NOTICE_HOST_PAIR_IMAGE_HASH_MISMATCH')
+    pair_record = parse(raw_host_pair_record)
+    pair_selected = check_host_pair_record(pair_record, source, locks, host_pair_image, host_pair_sha)
+    host_pair_selected_count = len(pair_selected)
+    try:
+        host_pair.verify_binary(host_pair_root / 'tether-host-pair', pair_record)
+    except (host_pair.PairBuildError, builder.source.BuildError):
+        raise NoticeError('GO_NOTICE_HOST_PAIR_CONFIG_MISMATCH') from None
+    selected |= pair_selected
     inventory_bytes = mac.read_regular(notices_root / 'DEPENDENCIES.json', 64 * 1024)
     inventory = parse(inventory_bytes)
     require(same(inventory, licenses.inventory_record(source, locks)), 'GO_NOTICE_INVENTORY_MISMATCH')
     for path, expected in mac.TEXTS.items():
         require(mac.sha(mac.read_regular(notices_root / path, mac.TEXT_LIMIT)) == expected,
                 'GO_NOTICE_TEXT_HASH_MISMATCH')
-    # Shape and record rereads are not an atomic snapshot or verify-to-exec protection.
     require(mac.read_regular(producer_root / 'BUILD_RECORD.json', RECORD_LIMIT) == raw_record
+            and mac.read_regular(host_pair_root / 'BUILD_RECORD.json', RECORD_LIMIT) == raw_host_pair_record
             and mac.read_regular(notices_root / 'DEPENDENCIES.json', 64 * 1024) == inventory_bytes,
             'GO_NOTICE_RECORD_CHANGED')
     exact_tree(producer_root, producer_files)
+    exact_tree(host_pair_root, host_pair_files)
     exact_tree(notices_root, notice_files)
     return {'check': 'go-notice-closure', 'status': 'blocked', 'selectedModuleNoticesMatched': True,
             'scope': 'recorded-selected-modules-and-fixed-texts-only',
             'sourceCommitDeclared': source, 'buildRecordSha256': record_sha,
             'producerSha256': image_sha, 'inventorySha256': mac.sha(inventory_bytes),
+            'hostPairBuildRecordSha256': host_pair_record_sha, 'hostPairSha256': host_pair_sha,
             'selectedModuleCount': len(selected), 'fixedTextCount': len(mac.TEXTS),
+            'producerSelectedModuleCount': producer_selected_count,
+            'hostPairSelectedModuleCount': host_pair_selected_count,
             'fixedModulesNotSelected': sorted(set(licenses.MODULES) - selected),
             'binaryDependenciesVerified': False, 'noticeCompletenessVerified': False,
             'distributionStatus': 'blocked', 'productionGateClosed': True,
@@ -167,16 +201,19 @@ class Parser(argparse.ArgumentParser):
 def main(argv=None):
     try:
         parser = Parser(description=__doc__, allow_abbrev=False)
-        for name in ('producer-root', 'notices-root', 'module-root', 'source',
-                     'build-record-sha256', 'producer-sha256'):
+        for name in ('producer-root', 'host-pair-root', 'notices-root', 'module-root', 'source',
+                     'build-record-sha256', 'producer-sha256',
+                     'host-pair-build-record-sha256', 'host-pair-sha256'):
             parser.add_argument('--' + name, required=True)
         args = parser.parse_args(argv)
-        result = verify(args.producer_root, args.notices_root, args.module_root, args.source,
-                        args.build_record_sha256, args.producer_sha256)
+        result = verify(args.producer_root, args.host_pair_root, args.notices_root,
+                        args.module_root, args.source, args.build_record_sha256,
+                        args.producer_sha256, args.host_pair_build_record_sha256,
+                        args.host_pair_sha256)
         code = 2  # A match never grants notice, signing, activation or distribution approval.
     except NoticeError as error:
         result, code = {'check': 'go-notice-closure', 'status': 'refused', 'code': str(error)}, 1
-    except (mac.PackageError, licenses.CollectionError, CandidateError):
+    except (mac.PackageError, licenses.CollectionError, CandidateError, host_pair.PairBuildError):
         result, code = {'check': 'go-notice-closure', 'status': 'refused', 'code': 'GO_NOTICE_MATERIAL_INVALID'}, 1
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
         result, code = {'check': 'go-notice-closure', 'status': 'refused', 'code': 'GO_NOTICE_INPUT_INVALID'}, 1

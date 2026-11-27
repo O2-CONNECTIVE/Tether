@@ -430,10 +430,14 @@ func (f *guiPairFixture) run(t *testing.T) (int, string, string) {
 
 func (f *guiPairFixture) runWithContext(t *testing.T, ctx context.Context) (int, string, string) {
 	t.Helper()
-	oldGateway, oldIssuer, oldClient := guiGateway, guiIssuer, guiClientID
-	guiGateway, guiIssuer, guiClientID = f.gateway.URL, f.issuer.URL, "gui-public-client"
-	t.Cleanup(func() { guiGateway, guiIssuer, guiClientID = oldGateway, oldIssuer, oldClient })
-	d := deps{client: f.client, callbackWait: 3 * time.Second, pairTimeout: 3 * time.Second}
+	configuration, err := json.Marshal(map[string]string{
+		"gateway": f.gateway.URL, "issuer": f.issuer.URL, "clientID": "gui-public-client",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := deps{client: f.client, callbackWait: 3 * time.Second, pairTimeout: 3 * time.Second,
+		guiConfigJSON: configuration}
 	configurePairing(&d)
 	d.location = func(context.Context) (string, string, error) { return f.home, f.policy, nil }
 	d.readProtected = func(_ context.Context, path string) ([]byte, error) { return os.ReadFile(path) }
@@ -530,13 +534,43 @@ func guiOldRecord(t *testing.T, signer ssh.Signer) agentgateway.PairRecord {
 
 func TestGUIEmptyFixedValuesReturnsUnavailableWithoutWrites(t *testing.T) {
 	// Why: a build without trusted fixed endpoints must not touch Keychain, the filesystem, or network.
-	oldGateway, oldIssuer, oldClient := guiGateway, guiIssuer, guiClientID
-	guiGateway, guiIssuer, guiClientID = "", "", ""
-	t.Cleanup(func() { guiGateway, guiIssuer, guiClientID = oldGateway, oldIssuer, oldClient })
 	var stdout, stderr strings.Builder
-	code := execute(context.Background(), nil, &stdout, &stderr, deps{})
+	d := deps{guiConfigJSON: embeddedGUIPairConfig}
+	code := execute(context.Background(), nil, &stdout, &stderr, d)
 	if code != 0 || guiResult(t, stdout.String()) != "unavailable" || stderr.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestGUIInvalidOrPartialEmbeddedConfigurationReturnsUnavailable(t *testing.T) {
+	// Why: malformed, unknown, non-string, or partial embedded config must stop before host access.
+	cases := []string{
+		`{`,
+		`{"gateway":"","issuer":"","clientID":"","extra":"value"}`,
+		`{"gateway":"","issuer":"","clientID":1}`,
+		`{"gateway":"","gateway":"","issuer":"","clientID":""}`,
+		`{"gateway":"https://gateway.example","issuer":"","clientID":"client"}`,
+	}
+	for _, raw := range cases {
+		locationCalls := 0
+		d := deps{guiConfigJSON: []byte(raw), location: func(context.Context) (string, string, error) {
+			locationCalls++
+			return "/home/test", "/home/test/policy.json", nil
+		}}
+		var stdout, stderr strings.Builder
+		if code := execute(context.Background(), nil, &stdout, &stderr, d); code != 0 ||
+			guiResult(t, stdout.String()) != guiResultUnavailable || stderr.Len() != 0 || locationCalls != 0 {
+			t.Errorf("raw=%q code=%d stdout=%q stderr=%q locationCalls=%d",
+				raw, code, stdout.String(), stderr.String(), locationCalls)
+		}
+	}
+}
+
+func TestGUIPairConfigurationRejectsNullStringValue(t *testing.T) {
+	// Why: encoding/json accepts null into a string unless the token type is checked explicitly.
+	raw := []byte(`{"gateway":"","issuer":null,"clientID":""}`)
+	if _, err := parseGUIPairConfiguration(raw); err == nil {
+		t.Fatal("accepted null for a string configuration value")
 	}
 }
 
@@ -548,12 +582,15 @@ func TestGUIInvalidFixedValuesReturnUnavailableBeforeWrites(t *testing.T) {
 		{"https://gateway.example", "http://issuer.example", "client"},
 		{"https://gateway.example", "https://issuer.example", "bad\nclient"},
 	}
-	oldGateway, oldIssuer, oldClient := guiGateway, guiIssuer, guiClientID
-	defer func() { guiGateway, guiIssuer, guiClientID = oldGateway, oldIssuer, oldClient }()
 	for _, tc := range cases {
-		guiGateway, guiIssuer, guiClientID = tc.gateway, tc.issuer, tc.clientID
+		configuration, err := json.Marshal(map[string]string{
+			"gateway": tc.gateway, "issuer": tc.issuer, "clientID": tc.clientID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		var stdout, stderr strings.Builder
-		code := execute(context.Background(), nil, &stdout, &stderr, deps{})
+		code := execute(context.Background(), nil, &stdout, &stderr, deps{guiConfigJSON: configuration})
 		if code != 0 || guiResult(t, stdout.String()) != "unavailable" || stderr.Len() != 0 {
 			t.Fatalf("fixed values were not rejected before work: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 		}

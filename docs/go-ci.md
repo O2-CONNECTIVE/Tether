@@ -350,7 +350,7 @@ Linux/Windowsは非対応の拒否・root handle消費と共通permission契約�
 
 ## tether-host-pair
 
-ホストのpair helperは `cmd/tether-host-pair` の通常ビルド共通4 fileと、lock / browser / native dialog起動のOS別fileを製品fileとして照合します。linux / darwinは `platform_unix.go`、windowsは拒否stubを選びます。browser起動とAppleScript dialogはdarwinだけ利用できます。開発タグ付きの組立は [開発用常駐](development-resident.md) の検査で扱います。
+ホストのpair helperは `cmd/tether-host-pair` の通常ビルド共通4 fileと、lock / browser / native dialog起動のOS別fileを製品fileとして照合します。`pair_config.json` はこのpackageだけが使う唯一の許可済み `go:embed` 入力で、Go file inventoryの件数には含みません。linux / darwinは `platform_unix.go`、windowsは拒否stubを選びます。browser起動とAppleScript dialogはdarwinだけ利用できます。開発タグ付きの組立は [開発用常駐](development-resident.md) の検査で扱います。
 ブラウザと PKCE の共通処理は `internal/hostpairoauth` の2 fileを全 OS の製品 inventory で照合します。
 
 ## レスキューの許可の状態機械

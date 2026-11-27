@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import build_mac_sealed_producer as builder
+import build_mac_host_pair as host_pair
 import collect_go_licenses as licenses
 import package_mac_agent as mac
 from go_ci import product_files_for
@@ -32,9 +33,10 @@ class GoNoticeClosureTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
         self.producer = self.root / 'producer'
+        self.host_pair = self.root / 'host-pair'
         self.notices = self.root / 'notices'
         self.module = self.root / 'module'
-        for path in (self.producer, self.notices, self.module):
+        for path in (self.producer, self.host_pair, self.notices, self.module):
             path.mkdir()
         self.locks = {name: (ROOT / 'backend' / name).read_bytes() for name in ('go.mod', 'go.sum')}
         for name, data in self.locks.items():
@@ -67,18 +69,48 @@ class GoNoticeClosureTests(unittest.TestCase):
             'image': {'path': 'resident-pipe', 'kind': 'mach-o-executable', 'sha256': sha(self.image),
                       'bytes': len(self.image), 'header': mac.macho(self.image, 'darwin-arm64')},
         }
+        pair_config = {'gateway': '', 'issuer': '', 'clientID': ''}
+        pair_config_bytes = host_pair.pair_config_bytes(pair_config)
+        self.host_pair_image = self.image + pair_config_bytes
+        (self.host_pair / 'tether-host-pair').write_bytes(self.host_pair_image)
+        self.host_pair_record = {
+            'schema': 'tether-mac-host-pair-build/1', 'status': 'blocked',
+            'activation': 'blocked', 'distribution': 'blocked',
+            'repository': 'O2-CONNECTIVE/Tether', 'sourceCommit': SOURCE,
+            'sourceTree': 'b'*40, 'buildUTC': '2026-11-09T12:00:00Z',
+            'role': host_pair.ROLE, 'target': 'darwin-arm64',
+            'settings': {'GOVERSION': 'go1.27.3', 'GOOS': 'darwin',
+                         'GOARCH': 'arm64', 'CGO_ENABLED': '1'},
+            'flags': list(host_pair.FLAGS), 'pairConfig': pair_config,
+            'pairConfigSha256': sha(pair_config_bytes),
+            'snapshotGoFiles': files,
+            'locks': {'backend/' + name: sha(data) for name, data in self.locks.items()},
+            'recipe': {path: 'e'*64 for path in host_pair.RECIPE},
+            'compiledRepositoryPackages': [host_pair.ROLE],
+            'modules': [dict(zip(('Path', 'Version', 'Sum', 'GoModSum'), (name, *values)))
+                        for name, values in licenses.MODULES.items()],
+            'image': {'path': 'tether-host-pair', 'kind': 'mach-o-executable',
+                      'sha256': sha(self.host_pair_image), 'bytes': len(self.host_pair_image),
+                      'header': mac.macho(self.host_pair_image, 'darwin-arm64')},
+            'helperExecutable': True, 'helperExecuted': False, 'signingPerformed': False,
+            'blockers': list(host_pair.BLOCKERS)}
         self.save()
 
     def save(self):
         self.record_bytes = (json.dumps(self.record, sort_keys=True) + '\n').encode()
         (self.producer / 'BUILD_RECORD.json').write_bytes(self.record_bytes)
+        self.host_pair_record_bytes = (json.dumps(self.host_pair_record, sort_keys=True) + '\n').encode()
+        (self.host_pair / 'BUILD_RECORD.json').write_bytes(self.host_pair_record_bytes)
         (self.notices / 'DEPENDENCIES.json').write_text(json.dumps(self.inventory), encoding='utf-8')
 
     def run_cli(self, *extra):
         return subprocess.run([sys.executable, str(TOOL), '--producer-root', str(self.producer),
+            '--host-pair-root', str(self.host_pair),
             '--notices-root', str(self.notices), '--module-root', str(self.module), '--source', SOURCE,
-            '--build-record-sha256', sha(self.record_bytes), '--producer-sha256', sha(self.image), *extra],
-            capture_output=True, text=True, timeout=15, env={**os.environ, 'PATH': '', 'PYTHONOPTIMIZE': '2'})
+            '--build-record-sha256', sha(self.record_bytes), '--producer-sha256', sha(self.image),
+            '--host-pair-build-record-sha256', sha(self.host_pair_record_bytes),
+            '--host-pair-sha256', sha(self.host_pair_image), *extra], capture_output=True, text=True, timeout=15,
+            env={**os.environ, 'PYTHONOPTIMIZE': '2'})
 
     def rejected(self, code=None, *extra):
         result = self.run_cli(*extra)
@@ -98,6 +130,7 @@ class GoNoticeClosureTests(unittest.TestCase):
         value = json.loads(result.stdout)
         self.assertIs(value['selectedModuleNoticesMatched'], True)
         self.assertEqual(value['selectedModuleCount'], 3)
+        self.assertEqual(value['hostPairSelectedModuleCount'], 3)
         self.assertEqual(value['fixedModulesNotSelected'], [])
         self.assertEqual(value['distributionStatus'], 'blocked')
         self.assertIs(value['productionGateClosed'], True)
@@ -149,8 +182,9 @@ class GoNoticeClosureTests(unittest.TestCase):
         result = self.run_cli()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         value = json.loads(result.stdout)
-        self.assertEqual(value['selectedModuleCount'], 1)
-        self.assertEqual(value['fixedModulesNotSelected'], ['golang.org/x/crypto', 'golang.org/x/sys'])
+        self.assertEqual(value['producerSelectedModuleCount'], 1)
+        self.assertEqual(value['selectedModuleCount'], 3)
+        self.assertEqual(value['fixedModulesNotSelected'], [])
 
     def test_module_outside_fixed_notice_set_is_refused(self):
         self.record['modules'].append({'Path': 'PRIVATE/unknown', 'Version': 'v1.0.0',
@@ -165,8 +199,9 @@ class GoNoticeClosureTests(unittest.TestCase):
         result = self.run_cli()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         value = json.loads(result.stdout)
-        self.assertEqual(value['selectedModuleCount'], 0)
-        self.assertEqual(value['fixedModulesNotSelected'], sorted(licenses.MODULES))
+        self.assertEqual(value['producerSelectedModuleCount'], 0)
+        self.assertEqual(value['selectedModuleCount'], len(licenses.MODULES))
+        self.assertEqual(value['fixedModulesNotSelected'], [])
         self.assertIs(value['binaryDependenciesVerified'], False)
         self.assertIn('recorded-module-closure-completeness', value['unverifiedScopes'])
 
@@ -247,8 +282,28 @@ class GoNoticeClosureTests(unittest.TestCase):
     def test_record_and_image_external_hashes_are_checked(self):
         self.rejected('GO_NOTICE_BUILD_HASH_MISMATCH', '--build-record-sha256', '0'*64)
         self.rejected('GO_NOTICE_IMAGE_HASH_MISMATCH', '--producer-sha256', '0'*64)
+        self.rejected('GO_NOTICE_HOST_PAIR_BUILD_HASH_MISMATCH',
+                      '--host-pair-build-record-sha256', '0'*64)
+        self.rejected('GO_NOTICE_HOST_PAIR_IMAGE_HASH_MISMATCH', '--host-pair-sha256', '0'*64)
         (self.producer / 'resident-pipe').write_bytes(self.image + b'PRIVATE')
         self.rejected('GO_NOTICE_IMAGE_HASH_MISMATCH')
+
+    def test_pair_embedded_config_must_match_the_recorded_values(self):
+        # Why: notice closure must verify the bytes in the helper, not only its self-declared record.
+        expected = host_pair.pair_config_bytes(self.host_pair_record['pairConfig'])
+        changed = host_pair.pair_config_bytes({
+            'gateway': 'https://other.example', 'issuer': 'https://issuer.example',
+            'clientID': 'other-client',
+        })
+        self.host_pair_image = self.host_pair_image.replace(expected, changed)
+        (self.host_pair / 'tether-host-pair').write_bytes(self.host_pair_image)
+        self.host_pair_record['image'] = {
+            'path': 'tether-host-pair', 'kind': 'mach-o-executable',
+            'sha256': sha(self.host_pair_image), 'bytes': len(self.host_pair_image),
+            'header': mac.macho(self.host_pair_image, 'darwin-arm64'),
+        }
+        self.save()
+        self.rejected('GO_NOTICE_HOST_PAIR_CONFIG_MISMATCH')
 
     def test_image_record_hash_size_header_and_kind_are_checked(self):
         original = copy.deepcopy(self.record['image'])
@@ -284,13 +339,14 @@ class GoNoticeClosureTests(unittest.TestCase):
         self.rejected('GO_NOTICE_LOCK_MISMATCH')
 
     def test_extra_files_empty_directories_and_missing_records_are_refused(self):
-        for root in (self.producer, self.notices):
+        for root in (self.producer, self.host_pair, self.notices):
             for directory in (False, True):
                 path = root / 'PRIVATE-extra'
                 path.mkdir() if directory else path.write_bytes(b'PRIVATE')
                 self.rejected('GO_NOTICE_MATERIAL_INVALID')
                 path.rmdir() if directory else path.unlink()
-        for path in (self.producer / 'BUILD_RECORD.json', self.notices / 'DEPENDENCIES.json'):
+        for path in (self.producer / 'BUILD_RECORD.json', self.host_pair / 'BUILD_RECORD.json',
+                     self.notices / 'DEPENDENCIES.json'):
             original = path.read_bytes()
             path.unlink()
             self.rejected()
@@ -341,7 +397,8 @@ class GoNoticeClosureTests(unittest.TestCase):
                 self.record_bytes = original
 
     def test_invalid_expectations_arguments_and_oversize_notice_are_refused(self):
-        for flag in ('--source', '--build-record-sha256', '--producer-sha256'):
+        for flag in ('--source', '--build-record-sha256', '--producer-sha256',
+                     '--host-pair-build-record-sha256', '--host-pair-sha256'):
             self.rejected('GO_NOTICE_EXPECTATION_INVALID', flag, 'PRIVATE')
         self.rejected('GO_NOTICE_ARGUMENT_INVALID', '--config', '/PRIVATE')
         (self.notices / 'websocket-v1.8.15/LICENSE.txt').write_bytes(b'x'*(16*1024 + 1))

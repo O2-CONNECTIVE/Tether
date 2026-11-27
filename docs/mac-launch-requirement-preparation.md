@@ -24,6 +24,11 @@ Team の字形・hash のサイズ検査は、署名や publisher の証明で�
 期待値を candidate の path / PID / raw hash や任意 manifest から取得せず、未確定の値は欠けたまま拒否します。
 実 publisher の指定は実署名・実物用構成の前提であり、この合成 source / fixture を進めるためのユーザー質問は不要です。
 
+PR 4c-1 は別のGUI pairing helperを固定path `Contents/Helpers/tether-host-pair` と
+SigningIdentifier `com.o2connective.rescue-host.tether-host-pair` で同梱・署名します。
+この文書のrequirementは既存producer向けのままで、pair helperを起動するrequirementや
+Swift起動経路は後続PR 4c-2で扱います。
+
 ## macOS と保証範囲
 
 Process.launchRequirement / LaunchCodeRequirement は macOS 14.4+ です。[後続の原子的な匿名 IO](mac-atomic-preparation-pipes.md)は別に macOS 27以上を要求し、割当前に拒否します。

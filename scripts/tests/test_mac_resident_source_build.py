@@ -235,6 +235,14 @@ class ResidentSourceBuildTests(unittest.TestCase):
             with self.subTest(field=field), patch.dict(self.package, {field: ['unreviewed']}):
                 self.rejected('EXTRA_BUILD_INPUT')
 
+    def test_only_host_pair_config_json_is_allowed_as_an_embed_input(self):
+        # Why: go:embed adds one reviewed JSON input without widening the Go source inventory.
+        package = dict(self.package, ImportPath=tool.HOST_PAIR_ROLE, EmbedFiles=['pair_config.json'])
+        self.assertEqual(tool.go_files(package), {'codec.go'})
+        package['EmbedFiles'] = ['other.json']
+        with self.assertRaisesRegex(tool.BuildError, 'EXTRA_BUILD_INPUT'):
+            tool.go_files(package)
+
     def test_compiled_source_directory_cannot_escape_snapshot(self):
         self.package['Dir'] = str(self.parent)
         self.rejected('SOURCE_ROOT_INVALID')

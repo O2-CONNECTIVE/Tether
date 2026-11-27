@@ -16,6 +16,7 @@ from go_ci import json_objects, product_files_for
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = 'github.com/O2-CONNECTIVE/rescue-host/backend'
 ROLE = PROJECT + '/internal/residentpipe'
+HOST_PAIR_ROLE = PROJECT + '/cmd/tether-host-pair'
 GO_VERSION = 'go1.27.3'
 ARCHES = {'arm64': 'arm64', 'x86_64': 'amd64'}
 RECIPE = ('scripts/build_mac_resident_source.py', 'scripts/go_ci.py')
@@ -165,7 +166,11 @@ def module_metadata(module, env, paths):
 
 
 def go_files(package):
-    require(not any(package.get(key) for key in EXTRA_INPUTS), 'EXTRA_BUILD_INPUT')
+    for key in EXTRA_INPUTS:
+        if key == 'EmbedFiles' and package.get('ImportPath') == HOST_PAIR_ROLE and \
+                package.get(key) == ['pair_config.json']:
+            continue
+        require(not package.get(key), 'EXTRA_BUILD_INPUT')
     return set(package.get('GoFiles', [])) | set(package.get('CgoFiles', []))
 
 

@@ -3,6 +3,10 @@
 専用 `resident-pipe` source に対し、元 Swift `Process` と元 IO owner を
 既存 Rust supervisor から起動する内部組成です。通常 Tauri は引き続き未配線です。
 
+Issue #453 PR 4c-1 ではGUI pair helperを `Contents/Helpers/tether-host-pair` に同梱し、
+`com.o2connective.rescue-host.tether-host-pair` で署名します。この起動組成が選ぶのは引き続き
+`resident-pipe` で、pair helperのSwift起動・Tauri配線は後続PRの範囲です。
+
 ## 閉じた起動入力
 
 `ApprovedRelease.production` は nil のままです。正規 Team / Developer ID / exact release

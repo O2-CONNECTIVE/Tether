@@ -1,12 +1,12 @@
 # Mac 検証候補の材料照合
 
 [配布前チェック #24](https://github.com/O2-CONNECTIVE/Tether/issues/24) の小項目です。
-[`verify_mac_evaluation_candidate.py`](../scripts/verify_mac_evaluation_candidate.py) は、将来の Mac 評価候補 directory にある manifest、GUI と producer、lock、宣言された notice の実 bytes を読み取ります。build、ZIP 作成、起動、署名、登録、配布、upload は行いません。
+[`verify_mac_evaluation_candidate.py`](../scripts/verify_mac_evaluation_candidate.py) は、将来の Mac 評価候補 directory にある manifest、GUI と二つのhelper、lock、宣言されたnoticeの実bytesを読み取ります。build、ZIP作成、起動、署名、登録、配布、uploadは行いません。
 一致時も終了値は **2 / blocked** です。ファイルの対応を確認したことを配布許可や実接続の成功へ変えません。
 
 ## 現在地と対象
 
-既存の [`package_mac_agent.py`](../scripts/package_mac_agent.py) は `rescue-mac-agent` 単体を扱い、今回の GUI と producer を含む候補を作りません。
+既存の [`package_mac_agent.py`](../scripts/package_mac_agent.py) は `rescue-mac-agent` 単体を扱い、今回の GUI と二つのhelperを含む候補を作りません。
 [`collect_go_licenses.py`](../scripts/collect_go_licenses.py) の固定7本文を再利用しますが、それだけでは stdlib vendored、platform、実 binary の依存閉包を網羅しません。
 [`collect_tauri_licenses.py`](../scripts/collect_tauri_licenses.py) の現行 record は Windows x64 の範囲です。その成功を Mac GUI の notice 完了へ読み替えません。
 
@@ -18,6 +18,7 @@ MANIFEST.json
 <candidate>.app/Contents/Info.plist
 <candidate>.app/Contents/MacOS/rescue-host-shell
 <candidate>.app/Contents/Helpers/resident-pipe
+<candidate>.app/Contents/Helpers/tether-host-pair
 LICENSE
 RECIPIENT.txt
 locks/go.mod
@@ -32,8 +33,7 @@ notices/gui/rust/<crate と版>/<license または notice 本文>
 notices/go/stdlib-vendor/<対象>/<license または notice 本文>  # 任意の追加宣言
 ```
 
-`Contents/Helpers/resident-pipe` は native の固定 nested producer path と合わせます。通常 launch の gate は変更しません。
-GUI と producer は同じ宣言 target に対応する thin Mach-O executable と `LC_BUILD_VERSION` を要求します。
+二つのhelperは固定nested pathを使います。`resident-pipe` の通常launch gateは変更しません。GUIと二つのhelperは同じ宣言targetに対応するthin Mach-O executableと `LC_BUILD_VERSION` を要求します。
 fat binary、framework、追加 resource、installer 等はこの最初の layout の対象外で、必要なら契約と負例をレビューして拡張します。
 header の minimum OS / SDK は宣言の読み取りで、実互換性や動的 library の安全性の証拠ではありません。
 
@@ -49,7 +49,8 @@ CLI は次の形です。値は当該候補を作った工程の記録と独立�
 python scripts/verify_mac_evaluation_candidate.py \
   --root <候補directory> --source <完全40桁source-SHA> \
   --manifest-sha256 <MANIFEST.jsonのSHA-256> \
-  --gui-sha256 <GUIのSHA-256> --producer-sha256 <producerのSHA-256>
+  --gui-sha256 <GUIのSHA-256> --producer-sha256 <producerのSHA-256> \
+  --host-pair-sha256 <pair helperのSHA-256>
 ```
 
 期待 hash を manifest 自身から取り出して渡しただけでは独立した根拠になりません。
@@ -57,11 +58,11 @@ python scripts/verify_mac_evaluation_candidate.py \
 外部の期待値も含め、source SHA / UTC build 時刻 / raw file hash はこの段階では追跡用の記録です。
 正式 version numbering を作らず、表示 label とこれらの追跡識別を分けます。
 
-schema は `tether-mac-evaluation-materials/1`、repository は `O2-CONNECTIVE/Tether` です。
+schema は `tether-mac-evaluation-materials/2`、repository は `O2-CONNECTIVE/Tether` です。
 構造の完全な有限例は [`CandidateFixture`](../scripts/tests/test_mac_evaluation_candidate.py) に置きます。fixture の Mach-O と依存資料は合成であり、生成されたものを配布候補として使いません。
 
 - `sourceCommit`、`buildUTC`、`target`、`label`、`appDirectory` を固定型・形式で確認します。UTC は実在する秒精度の `YYYY-MM-DDTHH:MM:SSZ`、target は `darwin-arm64` または `darwin-amd64` に限定します。
-- `images` は `gui` と `producer` だけで、固定の相対 path と外部期待 hash を照合します。追加 role や arbitrary executable path は拒否します。
+- `images` は `gui`、`producer`、`hostPair` に固定し、固定相対pathと外部期待hashを照合します。追加roleや任意executable pathは拒否します。pair helperの設定JSONは[Go notice verifier](go-notice-closure.md)がbuild recordのSHA-256とbinary内bytesから照合します。
 - `files` は manifest 以外の全 file の相対 path と SHA-256、`notices` は同梱を宣言する本文の path 一覧です。固定材料と notice の和以外の file、欠落、重複、case alias、空 directory、symlink/reparse point、特殊 file を拒否します。
 - Go 固定7本文は collector の既知 hash と実 bytes を照合します。GUI の frontend と Rust toolchain 2本文、少なくとも1個の crate notice を要求しますが、実 crate graph との一致や内容の法的十分性は確認しません。
 - 任意追加の本文は所定の Rust crate / Go stdlib-vendor prefix、その下の少なくとも1段の対象 directory と license 等の basename に限ります。prefix 直下の本文だけで crate / 対象の宣言を代用しません。本文が非空 UTF-8 で hash に一致することと、対象の全依存を網羅することは別です。
@@ -88,6 +89,6 @@ source manifest と各 file の hash / 型検査は取得した同じ bytes に�
 python -m unittest scripts.tests.test_mac_evaluation_candidate -v
 ```
 
-後続の[通常GUI組立](mac-gui-candidate-build.md)は同じsourceのGUI・Swift・sealed producerを三imageのbuild record v2で対応づけます。この評価材料v1とは別契約です。配布候補へ進めるには、Mac対象の依存graphと必要本文、binaryの秘密・path監査、recipient説明を確定する必要があります。その後も署名 publisher、OS launch enforcement、実 enrollment、受領者環境での実行と回収、配布の許可は別の工程です。この照合器や合成 CI の成功で #24 全体を完了にしません。
+後続の[通常GUI組立](mac-gui-candidate-build.md)は同じsourceのGUI・Swift・二つのhelperを4 imageのbuild record v3で対応づけます。この評価材料v2とは別契約です。配布候補へ進めるには、Mac対象の依存graphと必要本文、binaryの秘密・path監査、recipient説明を確定する必要があります。その後も署名 publisher、OS launch enforcement、実 enrollment、受領者環境での実行と回収、配布の許可は別の工程です。この照合器や合成 CI の成功で #24 全体を完了にしません。
 
-[GUI/Swift link-layout 照合](mac-gui-link-layout.md)は後続の固定 dylib 配置を対象とする独立した読取専用検査です。本 v1 の二 image 契約は変更せず、dylibを含む三imageの配布候補を両toolや組立recordの成功だけで認定しません。
+[GUI/Swift link-layout照合](mac-gui-link-layout.md)はGUIと固定Swift dylib配置を対象とする独立した読取専用検査です。評価材料v2もSwift dylibを含むfull app契約ではなく、helperのbuild-info・notice closureと署名済みinventoryは別検査で照合します。

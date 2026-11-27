@@ -40,9 +40,8 @@ type deps struct {
 	callbackWait, pairTimeout time.Duration
 	confirmInterval           time.Duration
 	now                       func() time.Time
+	guiConfigJSON             []byte
 }
-
-var guiGateway, guiIssuer, guiClientID string
 
 const (
 	diagPairRunning    = "別の pair が実行中です"
@@ -241,6 +240,7 @@ func productionDeps() deps {
 		openBrowser: openBrowser, storeHostKey: hostkeychain.Store, loadHostKey: hostkeychain.Load,
 		deleteHostKey: hostkeychain.Delete, runAppleScript: runAppleScript,
 		callbackWait: 5 * time.Minute, pairTimeout: 60 * time.Second,
+		guiConfigJSON: embeddedGUIPairConfig,
 	}
 	configurePairing(&d)
 	return d

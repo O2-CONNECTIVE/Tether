@@ -11,6 +11,7 @@ from mac_gui_build_support import source, layout
 PROVIDER = 'generated/SignedResidentReleaseIdentity.swift'
 OBSERVER = 'scripts/mac_release_signature.swift'
 IDENTIFIERS = {'producer': 'com.o2connective.rescue-host.resident-pipe',
+               'hostPair': 'com.o2connective.rescue-host.tether-host-pair',
                'native': 'com.o2connective.rescue-host.resident-preparation',
                'gui': 'com.o2connective.rescue-host.shell'}
 RECIPE = (*support.RECIPE, 'scripts/build_mac_signed_release.py',
@@ -117,7 +118,7 @@ def inventory(app, hashes):
                 'Contents': {'MacOS', 'Frameworks', 'Helpers', 'Info.plist', '_CodeSignature'},
                 'Contents/MacOS': {'rescue-host-shell'},
                 'Contents/Frameworks': {'libResidentPreparation.dylib'},
-                'Contents/Helpers': {'resident-pipe'},
+                'Contents/Helpers': {'resident-pipe', 'tether-host-pair'},
                 'Contents/_CodeSignature': {'CodeResources'}}
     for relative, names in expected.items():
         directory = app / relative
