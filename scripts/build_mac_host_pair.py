@@ -1,6 +1,5 @@
 """Build the fixed GUI pairing helper as a recorded, nonexecuted Mac image."""
 from datetime import datetime, timezone
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -9,7 +8,6 @@ import platform
 import re
 import shutil
 import tempfile
-from urllib.parse import urlsplit
 
 import build_mac_resident_source as source
 import collect_go_licenses as licenses
@@ -39,72 +37,29 @@ def require(condition, code):
         raise PairBuildError(code)
 
 
-def ascii_visible(value):
-    return isinstance(value, str) and all(0x21 <= ord(char) <= 0x7e for char in value)
+# Narrow allowlists, deliberately a subset of what the Go helper accepts
+# (hostpairoauth.ValidClient and validGatewayForm); the shared table in
+# backend/internal/hostpairoauth/testdata/pair_config_values.json is checked on both sides.
+_LABEL = r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
+_AUTHORITY = re.compile(r'(' + _LABEL + r'(?:\.' + _LABEL + r')*)(?::([1-9][0-9]{0,4}))?')
+
+
+def _authority_ok(authority):
+    match = _AUTHORITY.fullmatch(authority)
+    return (match is not None and len(match.group(1)) <= 253 and
+            (match.group(2) is None or int(match.group(2)) <= 65535))
 
 
 def valid_gateway(value):
-    if not isinstance(value, str) or not value:
-        return False
-    try:
-        parsed = urlsplit(value)
-        host = parsed.hostname
-        port = parsed.port
-    except ValueError:
-        return False
-    if (parsed.scheme != 'https' or not parsed.netloc or parsed.username is not None or
-            parsed.password is not None or parsed.path or parsed.query or parsed.fragment or
-            '?' in value or '#' in value or value != 'https://' + parsed.netloc or
-            parsed.netloc != parsed.netloc.lower() or not host):
-        return False
-    if port is not None and not 1 <= port <= 65535:
-        return False
-    if ':' in host:
-        try:
-            return '%' not in host and ipaddress.IPv6Address(host) is not None
-        except ValueError:
-            return False
-    try:
-        ipaddress.IPv4Address(host)
-        return True
-    except ValueError:
-        labels = host[:-1].split('.') if host.endswith('.') else host.split('.')
-        return bool(labels) and all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
-                                    for label in labels)
+    return isinstance(value, str) and value.startswith('https://') and _authority_ok(value[8:])
 
 
 def valid_client(issuer, client_id):
-    if (not isinstance(issuer, str) or not issuer.startswith('https://') or
-            any(ord(char) <= 0x20 or ord(char) == 0x7f for char in issuer) or
-            re.search(r'%(?![0-9a-fA-F]{2})', issuer) or not isinstance(client_id, str)):
+    if not isinstance(issuer, str) or not issuer.startswith('https://'):
         return False
-    try:
-        parsed = urlsplit(issuer)
-        host = parsed.hostname
-    except (TypeError, ValueError):
-        return False
-    authority = parsed.netloc
-    if (parsed.scheme != 'https' or not authority or parsed.username is not None or
-            parsed.password is not None or not host or '#' in issuer or '?' in issuer):
-        return False
-    if authority.startswith('['):
-        closing = authority.find(']')
-        suffix = authority[closing + 1:] if closing >= 0 else None
-        try:
-            ipaddress.IPv6Address(host)
-        except ValueError:
-            return False
-        if suffix is None or (suffix and re.fullmatch(r':[0-9]*', suffix) is None):
-            return False
-    else:
-        if ('[' in authority or ']' in authority or authority.count(':') > 1 or
-                '%' in authority):
-            return False
-        if ':' in authority:
-            port = authority.rsplit(':', 1)[1]
-            if port and re.fullmatch('[0-9]+', port) is None:
-                return False
-    return 0 < len(client_id) <= 256 and ascii_visible(client_id)
+    authority, slash, path = issuer[8:].partition('/')
+    return (_authority_ok(authority) and re.fullmatch(r'[A-Za-z0-9._~/-]*', path) is not None and
+            isinstance(client_id, str) and re.fullmatch(r'[A-Za-z0-9._~-]{1,256}', client_id) is not None)
 
 
 def validate_configuration(value, *, required=False):

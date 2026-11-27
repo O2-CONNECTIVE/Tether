@@ -1,0 +1,84 @@
+{
+  "accepted": {
+    "gateway": [
+      "https://gateway.example",
+      "https://gw-1.example.com:8443",
+      "https://localhost",
+      "https://10.0.0.1:65535"
+    ],
+    "issuer": [
+      "https://issuer.example",
+      "https://id.example:8443/tenant-1/oauth_2.0/~x",
+      "https://issuer.example/",
+      "https://10.0.0.1"
+    ],
+    "clientID": [
+      "public-client",
+      "Client_ID.1~x",
+      "a"
+    ]
+  },
+  "rejected": {
+    "gateway": [
+      "",
+      "http://gateway.example",
+      "HTTPS://gateway.example",
+      "https://GATEWAY.example",
+      "https://gateway.example/",
+      "https://gateway.example/path",
+      "https://gateway.example?query=1",
+      "https://gateway.example#f",
+      "https://user@gateway.example",
+      "https://gateway.example:",
+      "https://gateway.example:0",
+      "https://gateway.example:65536",
+      "https://gateway.example:999999",
+      "https://gateway.example:bad",
+      "https://[::1]",
+      "https://[v1.x]",
+      "https://gateway.example.",
+      "https://gate_way.example",
+      "https://gateway.example\\x",
+      "https://gate way.example"
+    ],
+    "issuer": [
+      "",
+      "http://issuer.example",
+      "HTTPS://issuer.example",
+      "https:issuer.example",
+      "https://issuer.example?query=1",
+      "https://issuer.example#f",
+      "https://user@issuer.example",
+      "https://issuer.example:",
+      "https://issuer.example:0",
+      "https://issuer.example:65536",
+      "https://issuer.example:999999",
+      "https://issuer.example:bad",
+      "https://issuer%ZZ.example",
+      "https://issuer.example/path with space",
+      "https://[::1]",
+      "https://[v1.x]",
+      "https://iss|uer.example",
+      "https://iss{uer.example",
+      "https://iss^uer.example",
+      "https://iss`uer",
+      "https://issuer.example\\x",
+      "https://issuer.example/a\\b",
+      "https://issuer.example/a?b",
+      "https://issuer.example/a%20b",
+      "https://ISSUER.example"
+    ],
+    "clientID": [
+      "",
+      "client\n",
+      "client id",
+      "client\"x",
+      "client'x",
+      "client\\x",
+      "client/x",
+      "client:x",
+      "cliént",
+      "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ]
+  }
+}

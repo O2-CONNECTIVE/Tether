@@ -59,10 +59,33 @@ class HostPairBuildTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(tool.PairBuildError):
                 tool.validate_configuration(value, required=True)
 
-    def test_issuer_port_matches_the_helpers_numeric_port_rule(self):
-        # Go's URL parser requires numeric port syntax but does not impose Python's 65535 limit.
-        value = dict(self.config(), issuer='https://issuer.example:999999')
-        self.assertEqual(tool.validate_configuration(value, required=True), value)
+    def test_shared_value_table_is_accepted_and_rejected_as_listed(self):
+        # Why: the builder must accept only a subset of what the Go helper accepts, or a signed
+        # release would embed a helper that always reports unavailable. The accepted rows are also
+        # checked by Go (pair_config_values_test.go) against validGatewayForm and ValidClient.
+        table = json.loads((tool.source.ROOT / 'backend/internal/hostpairoauth/testdata/'
+                            'pair_config_values.json').read_text())
+        self.assertTrue(all(table['accepted'].values()))
+        self.assertTrue(all(table['rejected'].values()))
+        ok_issuer, ok_client = self.config()['issuer'], self.config()['clientID']
+        for gateway in table['accepted']['gateway']:
+            with self.subTest(gateway=gateway):
+                self.assertTrue(tool.valid_gateway(gateway))
+        for issuer in table['accepted']['issuer']:
+            with self.subTest(issuer=issuer):
+                self.assertTrue(tool.valid_client(issuer, ok_client))
+        for client_id in table['accepted']['clientID']:
+            with self.subTest(clientID=client_id):
+                self.assertTrue(tool.valid_client(ok_issuer, client_id))
+        for gateway in table['rejected']['gateway']:
+            with self.subTest(gateway=gateway):
+                self.assertFalse(tool.valid_gateway(gateway))
+        for issuer in table['rejected']['issuer']:
+            with self.subTest(issuer=issuer):
+                self.assertFalse(tool.valid_client(issuer, ok_client))
+        for client_id in table['rejected']['clientID']:
+            with self.subTest(clientID=client_id):
+                self.assertFalse(tool.valid_client(ok_issuer, client_id))
 
     def test_pair_config_json_has_fixed_keys_order_and_newline(self):
         # Why: one canonical encoding keeps the staged input, record hash, and verifier expectation identical.
@@ -79,8 +102,8 @@ class HostPairBuildTests(unittest.TestCase):
     @unittest.skipUnless(platform.system() == 'Darwin' and platform.machine() == 'arm64',
                          'The real trimmed binary regression requires macOS ARM64.')
     def test_real_trimpath_binary_embeds_and_verifies_pair_configuration(self):
-        # Why: an actual trimmed Go binary proves exact embedded bytes and quote-safe recorded values.
-        values = dict(self.config(), clientID='public"\'\\client')
+        # Why: an actual trimmed Go binary proves exact embedded bytes and recorded values.
+        values = dict(self.config(), clientID='public-client_1.~')
         config_bytes = tool.pair_config_bytes(values)
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
             root = Path(temporary)

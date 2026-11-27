@@ -10,7 +10,7 @@
 - レビュー済みclean Git HEADの完全なcommit SHA。別commit、dirty source、recipe bytesの不一致を拒否します。
 - 所有者が独立に確認した10文字の公開Team IDと、既存Developer ID Application証明書の40桁大文字SHA-1 fingerprint。fingerprintはKeychain上の署名identityを曖昧なく選ぶためで、codeの信頼性やCDHashの代用品ではありません。
 - このsource・identity・実行Macを対象にした署名操作の承認。builderの引数は承認システムではありません。秘密鍵、p12、passwordを引数やチャットへ渡しません。
-- `TETHER_PAIR_GATEWAY`、`TETHER_PAIR_ISSUER`、`TETHER_PAIR_CLIENT_ID` の有効値。gatewayは小文字hostのみの `https://` authority、issuerとclient IDは `hostpairoauth.ValidClient` と同じ条件を満たす必要があります。欠落・不正・一部だけの指定を拒否します。値はpair helperのGo linker flagsとbuild recordに記録されるため、実際の公開設定だけを渡します。
+- `TETHER_PAIR_GATEWAY`、`TETHER_PAIR_ISSUER`、`TETHER_PAIR_CLIENT_ID` の有効値。builderはpair helperが必ず受理する狭い許可リストで検査し、欠落・不正・一部だけの指定を拒否します。schemeは `https` のみ、hostは英小文字・数字・`.`・`-` のみ（IPリテラルは不可）、portは書くなら1〜65535です。gatewayはpathを持てません。issuerのpathは英数字と `-._~/` のみです。client IDは英数字と `-._~` の1〜256文字です。許可リストはhelper側の検査（`hostpairoauth.ValidClient` と `validGatewayForm`）の部分集合で、共有の値表を両方の試験が使います。値は `pair_config.json` としてstage内でhelperへ埋め込まれ、build recordに記録されるため、実際の公開設定だけを渡します。
 - この初期recipeのentitlementsは全roleで空です。JIT、disable-library-validation、get-task-allow等を追加しません。必要になれば根拠と最小集合を別レビューします。
 
 通常の署名なし候補とCI buildでは3変数を全て空にできます。一部だけの指定は失敗し、空ならpair helperは設定 unavailable の状態でbuildされます。
