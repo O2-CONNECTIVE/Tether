@@ -34,6 +34,13 @@ UI thread上で待たず、送信者切断はunknown、task失敗は固定unavai
 後続のmatching transition、freshness、cleanupとreceiptは別に扱います。
 viewer/app破棄だけを元ownerのClose/回収証明へ変えません。
 
+`request_resident_pairing`は引数なしで、別permissionの`allow-resident-pairing`を使います。
+Rustはblocking workerで固定の`Contents/Helpers/tether-host-pair`を起動し、argvなし、stdinはnull device、stderrは破棄します。
+Swiftのlaunch requirementが未対応・未設定なら起動せず`unavailable`です。stdoutは4096 bytesまで、helper全体は20分まで待ち、上限超過やtimeoutでは子を終了します。
+stdoutは単一JSON行だけを厳密に読み、version 1、既知のresult、2つのキーだけを受け付けます。異常終了・timeout・不正出力は`unavailable`です。
+WebViewへ返す値は`{"result":"<kind>"}`だけです。kindは`succeeded`、`cancelled`、`rejected`、`re_registration_required`、`blocked`、`unknown`、`local_apply_failed`、`browser_failed`、`busy`、`unavailable`です。
+同時実行は1件に制限し、重複要求はhelperを起動せず`busy`を返します。`succeeded`のときだけ現在可能な既存OFF要求を1回通し、そのreceiptを待ってから状態を読み直します。新しい鍵とpolicyは次回起動から使います。
+
 Mac のメニューバーの「待機を止める」は、既存の main WebView に値を持たない合図を届けます。
 同じコントローラーが新しい状態を取得し、画面の操作と共通の要求 ID と受付を使って OFF を送ります。
 隠れた画面は隠れたままで、受付後は同じ要求 ID の適用と回収の観測が必要です。

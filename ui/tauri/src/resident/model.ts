@@ -13,10 +13,14 @@ export type Observation = { revision: number; validForMs: number; standby: 'off'
   previousCleanup: 'confirmed' | 'unknown';
   sleepPrevention: 'inactive' | 'active' | 'unknown' };
 export type ResidentStartup = 'checking' | 'policy-rejected' | 'host-key-unavailable';
+const pairingResults = ['succeeded', 'cancelled', 'rejected', 're_registration_required', 'blocked', 'unknown',
+  'local_apply_failed', 'browser_failed', 'busy', 'unavailable'] as const;
+export type PairingResult = (typeof pairingResults)[number];
 type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner' } & (
   { observation: Observation; startup?: never } | { observation: null; startup?: ResidentStartup });
 export type ResidentInvoke = (command: 'get_resident_status' | 'request_resident_intent', args: { request: {
   protocolVersion: 1; requestId?: number; expectedRevision?: number; intent?: RequestIntent; standbyHours?: StandbyHours } }) => Promise<unknown>;
+export type PairingInvoke = () => Promise<unknown>;
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const keys = (v: Record<string, unknown>, names: string) => Object.keys(v).sort().join(',') === names.split(',').sort().join(',');
 const integer = (v: unknown, min = 0): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= min;
@@ -78,4 +82,8 @@ export function decodeReceipt(value: unknown, id: number, intent: RequestIntent)
     || value.requestId !== id || value.intent !== intent
     || !oneOf(value.disposition, ['unavailable', 'accepted', 'rejected', 'stale', 'unknown'])) return;
   return value.disposition;
+}
+export function decodePairingResponse(value: unknown): PairingResult | undefined {
+  if (!record(value) || !keys(value, 'result') || !oneOf(value.result, pairingResults)) return;
+  return value.result;
 }

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createResidentController, type ResidentState } from '../src/resident/controller.ts';
+import { createResidentController } from '../src/resident/controller.ts';
+import type { ResidentState } from '../src/resident/state.ts';
 import { decodeStatus, decodeReceipt, type ResidentInvoke } from '../src/resident/model.ts';
 const sample = (change: Record<string, unknown> = {}) => ({ protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 1,
   validForMs: 3000, standby: 'off', registration: 'disconnected', caller: null, work: 'idle', cleanup: 'confirmed', canRequestOn: true, canRequestOff: false,
@@ -169,7 +170,6 @@ void test('stale receipt identity survives fresh observation without resending a
   await r.controller.refresh(); assert.equal(calls, 1); assert.equal(r.last()?.lastRequestId, 1);
   r.controller.dispose();
 });
-
 void test('real mapper pending ON remains disabled until same request is authenticated and applied', async () => {
   let observation = sample(); const requests: unknown[] = [];
   const r = capture((command, args) => {

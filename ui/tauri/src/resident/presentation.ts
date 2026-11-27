@@ -1,4 +1,4 @@
-import type { Observation, ResidentStartup } from './model.ts';
+import type { Observation, PairingResult, ResidentStartup } from './model.ts';
 
 export interface ResidentPresentation {
   heading: string;
@@ -20,6 +20,19 @@ const cleanup: Record<Observation['cleanup'], string> = { confirmed: '回収確�
 // Pure display mapping. It grants nothing: missing evidence stays unconfirmed,
 // and a pending change is never shown as a settled state.
 const previousCleanupWarning = '前回の遠隔作業が終わったか確認できませんでした。Mac を再起動すると、残っていた作業は止まります。';
+const pairingMessages: Record<PairingResult, string> = {
+  succeeded: 'この Mac を登録しました。待機を ON にすると新しい登録で始まります',
+  cancelled: '登録を取り消しました',
+  rejected: '登録できませんでした。もう一度お試しください',
+  re_registration_required: '登録の内容が変わりました。もう一度登録してください',
+  blocked: 'この Mac の登録は今は置き換えられません',
+  unknown: '登録の結果を確かめられませんでした。もう一度「登録する」を押すと続きを確かめます',
+  local_apply_failed: '登録は済みましたが、この Mac に保存できませんでした。もう一度「登録する」を押してください',
+  browser_failed: 'ブラウザを開けませんでした',
+  busy: '別の登録が実行中です',
+  unavailable: 'この Mac では登録を始められません',
+};
+export const residentPairingMessage = (result: PairingResult) => pairingMessages[result];
 export function presentResident(o: Observation | null, pending: boolean, cleanupUnknown = false, startup: ResidentStartup | null = null): ResidentPresentation {
   const view = presentResidentState(o, pending, cleanupUnknown, startup);
   return o?.previousCleanup === 'unknown' ? { ...view, warning: previousCleanupWarning } : view;

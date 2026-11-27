@@ -1,16 +1,12 @@
-import { decodeReceipt, decodeStatus, type Intent, type Observation, type RequestIntent, type ResidentInvoke, type ResidentStartup, type StandbyHours } from './model.ts';
-export type ResidentState = { visible: boolean; observation: Observation | null; busy: boolean; pending: boolean;
-  canOn: boolean; canOff: boolean; canExtend: boolean; cleanupUnknown: boolean; diagnostic: string; startup: ResidentStartup | null;
-  lastReceipt: 'accepted' | 'rejected' | 'stale' | 'unavailable' | null; lastRequestIntent: RequestIntent | null; lastRequestId: number };
-export const initialResidentState = (): ResidentState => ({ visible: false, observation: null, busy: false, pending: false,
-  canOn: false, canOff: false, canExtend: false, cleanupUnknown: false, diagnostic: 'RESIDENT_CHECKING', startup: null,
-  lastReceipt: null, lastRequestIntent: null, lastRequestId: 0 });
-interface Options { invoke: ResidentInvoke | undefined; onChange: (state: ResidentState) => void; now?: () => number; timeoutMs?: number; pollMs?: number }
-const startupWaitMs = 3000;
-export function createResidentController({ invoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: Options) {
+import { decodePairingResponse, decodeReceipt, decodeStatus, type Intent, type Observation,
+  type RequestIntent, type ResidentStartup, type StandbyHours } from './model.ts';
+import { canRequestPairing, initialResidentState, pairingTimeoutMs, startupWaitMs, type ResidentControllerOptions } from './state.ts';
+import { callWithTimeout } from './call-with-timeout.ts';
+export { initialResidentState };
+export function createResidentController({ invoke, pairingInvoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: ResidentControllerOptions) {
   let state = initialResidentState();
   let disposed = false, sealed = false, pageVisible = true;
-  let operation: 'status' | 'menu-status' | 'intent' | null = null;
+  let operation: 'status' | 'menu-status' | 'intent' | 'pairing' | null = null, stopRequestedDuringPairing = false;
   let cleanupLatched = false;
   let startup: ResidentStartup | null = null, startupUntil: number | undefined;
   let epoch = 0, requestId = 0, revision = 0, until = 0, lastClock = 0;
@@ -28,18 +24,14 @@ export function createResidentController({ invoke, onChange, now = () => perform
       canOn: fresh && !busy && !pending && observation?.canRequestOn === true,
       canOff, canExtend: canOff && observation?.standby === 'on' && observation.standbyUntil !== null
         && !observation.standbyExpired && observation.registration !== 'needs_action',
+      canPair: canRequestPairing(fresh ? observation : null, !sealed && pageVisible ? startup : null),
+      pairingBusy: operation === 'pairing', pairingResult: state.pairingResult,
       cleanupUnknown: cleanupLatched, diagnostic, startup: !sealed && pageVisible ? startup : null,
       lastReceipt: state.lastReceipt, lastRequestIntent: state.lastRequestIntent, lastRequestId: state.lastRequestId };
     onChange(state);
   };
   const stopTimers = () => { clearTimeout(poll); clearTimeout(expiry); };
   const fail = (diagnostic: string, cleanupUnknown = false) => { sealed = true; epoch++; operation = null; stopTimers(); publish(diagnostic, cleanupUnknown); };
-  const call = async (command: Parameters<ResidentInvoke>[0], args: Parameters<ResidentInvoke>[1], budget = timeoutMs) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try { return await Promise.race([invoke?.(command, args), new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('timeout')), budget);
-    })]); } finally { clearTimeout(timer); }
-  };
   const schedule = (delay = pollMs) => { if (!disposed && !sealed && pageVisible && state.visible) poll = setTimeout(() => { void refresh(); }, delay); };
   async function refresh() {
     if (disposed || sealed || !pageVisible || operation || !invoke) return;
@@ -57,7 +49,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
     if (budget <= 0) return expireStartup();
     publish('RESIDENT_CHECKING');
     try {
-      const value = await call('get_resident_status', { request: { protocolVersion: 1 } }, budget);
+      const value = await callWithTimeout(() => invoke?.('get_resident_status', { request: { protocolVersion: 1 } }), budget);
       if (disposed || sealed || generation !== epoch) return;
       const received = clock(), decoded = decodeStatus(value);
       if (deadline !== undefined && received >= deadline) return expireStartup();
@@ -125,27 +117,38 @@ export function createResidentController({ invoke, onChange, now = () => perform
     if (!canRequest[intent] || (intent === 'extend' && standbyHours === undefined)) return;
     await submitIntent(intent, standbyHours, t, observedUntil);
   }
+  async function requestPairing() {
+    if (disposed || sealed || !pageVisible || operation || !state.canPair || !pairingInvoke) return;
+    operation = 'pairing'; until = 0; state.pairingResult = null; stopTimers(); publish('RESIDENT_PAIRING');
+    const result = (await callWithTimeout(() => pairingInvoke(), pairingTimeoutMs)
+      .then(decodePairingResponse).catch(() => undefined)) ?? 'unavailable';
+    if (disposed || sealed) return;
+    operation = null; state.pairingResult = result; publish('RESIDENT_PAIRING_RESULT');
+    const stopRequested = stopRequestedDuringPairing; stopRequestedDuringPairing = false;
+    await (result === 'succeeded' || stopRequested ? stopFromMenu() : refresh());
+  }
   async function submitIntent(intent: RequestIntent, standbyHours: StandbyHours | undefined, t: number, observedUntil: number) {
     if (requestId >= Number.MAX_SAFE_INTEGER) return fail('RESIDENT_REQUEST_EXHAUSTED');
     const id = ++requestId, generation = ++epoch;
-    if (intent !== 'extend') pending = { id, intent };
-    operation = 'intent'; clearTimeout(poll); publish(intent === 'extend' ? 'RESIDENT_EXTENDING' : 'RESIDENT_INTENT_PENDING');
+    if (intent !== 'extend') pending = { id, intent }; operation = 'intent'; clearTimeout(poll);
+    publish(intent === 'extend' ? 'RESIDENT_EXTENDING' : 'RESIDENT_INTENT_PENDING');
     try {
-      const receipt = decodeReceipt(await call('request_resident_intent', { request: { protocolVersion: 1, requestId: id,
-        expectedRevision: revision, intent, ...(standbyHours === undefined || intent === 'off' ? {} : { standbyHours }) } }), id, intent);
+      const receipt = decodeReceipt(await callWithTimeout(() => invoke?.('request_resident_intent', { request: { protocolVersion: 1, requestId: id,
+        expectedRevision: revision, intent, ...(standbyHours === undefined || intent === 'off' ? {} : { standbyHours }) } }), timeoutMs), id, intent);
       if (disposed || sealed || generation !== epoch) return;
       const received = clock();
       if (!Number.isFinite(received) || received - t >= timeoutMs || received >= observedUntil) return fail('RESIDENT_INTENT_UNCONFIRMED');
       operation = null;
       if (!receipt || receipt === 'unknown') return fail('RESIDENT_INTENT_UNCONFIRMED');
-      state.lastReceipt = receipt; state.lastRequestIntent = intent; state.lastRequestId = id;
-      if (receipt !== 'accepted') pending = undefined;
+      state.lastReceipt = receipt; state.lastRequestIntent = intent; state.lastRequestId = id; if (receipt !== 'accepted') pending = undefined;
       if (intent !== 'extend') publish(receipt === 'accepted' ? 'RESIDENT_INTENT_PENDING' : 'RESIDENT_INTENT_REJECTED');
       await refresh();
     } catch { if (!disposed && !sealed && generation === epoch) fail('RESIDENT_INTENT_UNCONFIRMED'); }
   }
   async function stopFromMenu() {
-    if (disposed || sealed || (operation && operation !== 'status') || !invoke) return;
+    if (disposed || sealed) return;
+    if (operation === 'pairing') { stopRequestedDuringPairing = true; return; }
+    if ((operation && operation !== 'status') || !invoke) return;
     const offWasPending = pending?.intent === 'off';
     // Replace an ordinary read and hold the controls through the one-shot menu read.
     until = 0; stopTimers();
@@ -169,7 +172,7 @@ export function createResidentController({ invoke, onChange, now = () => perform
     if (operation === 'status') { epoch++; operation = null; }
     publish('RESIDENT_CHECKING');
   }
-  return { refresh, request, stopFromMenu, setPageVisible, invalidate: () => fail('RESIDENT_VIEW_INVALIDATED'), dispose: () => {
+  return { refresh, request, requestPairing, stopFromMenu, setPageVisible, invalidate: () => fail('RESIDENT_VIEW_INVALIDATED'), dispose: () => {
     disposed = true; sealed = true; epoch++; stopTimers();
   } };
 }

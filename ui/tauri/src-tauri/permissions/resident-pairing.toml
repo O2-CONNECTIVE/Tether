@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-resident-pairing"
+description = "Start the fixed host registration helper and return its result kind."
+commands.allow = ["request_resident_pairing"]

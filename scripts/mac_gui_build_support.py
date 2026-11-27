@@ -18,7 +18,7 @@ SWIFT_FILES = ('ResidentLaunchPreparation.swift', 'OwnedPreparationIO.swift',
 EXPORTS = {'_rh_resident_preparation_' + name for name in (
     'create', 'startup', 'launch', 'state', 'retire', 'read', 'write', 'half_close', 'exit',
     'retire_active_io', 'abandon_active', 'request_active_close',
-    'discard_observation', 'finish_active')}
+    'discard_observation', 'finish_active')} | {'_rh_resident_host_pairing_run'}
 RECIPE = ('scripts/build_mac_gui_candidate.py', 'scripts/mac_gui_build_support.py',
           'scripts/build_mac_resident_source.py', 'scripts/go_ci.py',
           'scripts/verify_mac_gui_link_layout.py', 'scripts/package_mac_agent.py',

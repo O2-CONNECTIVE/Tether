@@ -1,6 +1,7 @@
-"""Compile native preparation and run only its inert synthetic fixture.
+"""Compile native preparation and run its constrained helper fixture.
 
-No GUI/producer launch, signing, enrollment or real identity inspection.
+The helper fixture starts fixed self-child processes, including a stdout-holding descendant.
+It never launches the GUI or producer and performs no signing, enrollment or identity inspection.
 """
 import json
 import os
@@ -21,9 +22,9 @@ def validate_report(output):
     if len(lines) != 1:
         raise ValueError('fixture did not have one terminal result')
     match = re.fullmatch(r'NATIVE_REQUIREMENT_FIXTURE passed=(\d+) failed=(\d+) launched=(\d+)', lines[0])
-    if not match or tuple(map(int, match.groups())) != (35, 0, 0):
-        raise ValueError('fixture was incomplete, failed or launched a process')
-    return 35
+    if not match or tuple(map(int, match.groups())) != (43, 0, 8):
+        raise ValueError('fixture was incomplete, failed or self-child launch count changed')
+    return 43, 8
 
 
 def validate_weak_link(output):
@@ -63,11 +64,12 @@ def run():
             validate_weak_link(command(['/usr/bin/otool', '-l', str(executable)], env))
             if target_arch == arch:
                 report = command([str(executable)], {'PATH': '/usr/bin:/bin', 'LANG': 'C'})
-                passed = validate_report(report)
+                passed, helper_launches = validate_report(report)
     print(json.dumps({'fixture': 'resident-launch-requirement', 'passed': passed,
                       'normalCompileTargets': 2, 'fixtureCompileTargets': 2,
-                      'foreignExecution': False, 'producerLaunches': 0,
-                      'scope': 'typed API and inert owner only; no launch enforcement proof'}))
+                      'foreignExecution': False, 'helperSelfChildLaunches': helper_launches,
+                      'guiLaunches': 0, 'producerLaunches': 0,
+                      'scope': 'typed API, unlaunched production owner and fixed self-child helper IO; no launch enforcement proof'}))
 
 
 if __name__ == '__main__':

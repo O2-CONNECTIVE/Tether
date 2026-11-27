@@ -2,6 +2,20 @@
 #define RESIDENT_PREPARATION_H
 #include <stdint.h>
 
+enum {
+    RH_PAIRING_UNAVAILABLE = 0,
+    RH_PAIRING_EXITED = 1,
+    RH_PAIRING_TIMED_OUT = 2,
+    RH_PAIRING_OUTPUT_TOO_LARGE = 3
+};
+
+/* Fixed signed helper, no caller-selected path/argv. Output is capped at 4096 bytes.
+ * 0: unavailable/refused, 1: child exited (inspect exit status),
+ * 2: timed out and child was killed, 3: stdout exceeded the cap and child was killed. */
+uint32_t rh_resident_host_pairing_run(uint8_t * _Nullable stdout_bytes, uint32_t capacity,
+                                      uint32_t * _Nullable stdout_length,
+                                      int32_t * _Nullable exit_status);
+
 /* Internal, unlinked native owner ABI. No caller-selected launch or exit permission. */
 enum {
     RH_PREPARATION_INVALID = 0,

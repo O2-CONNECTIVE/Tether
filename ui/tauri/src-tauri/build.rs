@@ -9,6 +9,7 @@ fn main() {
             "get_status_presentation",
             "get_resident_status",
             "request_resident_intent",
+            "request_resident_pairing",
         ]));
     // Tauri's binary-only resource does not reach library test executables.
     // See https://github.com/tauri-apps/tauri/issues/13419.

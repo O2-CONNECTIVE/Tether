@@ -127,6 +127,57 @@ func TestMissingResidentKeychainItemIsNotPolicyRejection(t *testing.T) {
 	}
 }
 
+func TestMissingStandbyPolicyIsStartupPolicyRejected(t *testing.T) {
+	// なぜ必要か: 未登録MacでもRustへ明示拒否を返し、登録導線を表示できるようにする。
+	withLoginKeychainForTest(t)
+	signer, _ := residentTestKey(t)
+	policyPath := residentKeychainPolicyFile(t, ssh.FingerprintSHA256(signer.PublicKey()))
+	if err := os.Remove(policyPath); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	factory, err := LoadStandbyResident(ctx, policyPath, noKeychainClient{}, agentgateway.ChannelBudgets())
+	if factory != nil || !IsStartupPolicyRejected(err) {
+		t.Fatalf("missing policy result: factory=%v err=%v policyRejected=%v", factory, err, IsStartupPolicyRejected(err))
+	}
+}
+
+func TestStandbyPolicySymlinkIsNotStartupPolicyRejected(t *testing.T) {
+	// なぜ必要か: missing-file判定の追加で既存のsymlink保護拒否を登録可能状態へ変えない。
+	withLoginKeychainForTest(t)
+	signer, _ := residentTestKey(t)
+	policyPath := residentKeychainPolicyFile(t, ssh.FingerprintSHA256(signer.PublicKey()))
+	if err := os.Remove(policyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(policyPath+"-missing-target", policyPath); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	factory, err := LoadStandbyResident(ctx, policyPath, noKeychainClient{}, agentgateway.ChannelBudgets())
+	if factory != nil || err == nil || IsStartupPolicyRejected(err) {
+		t.Fatalf("symlink policy result: factory=%v err=%v policyRejected=%v", factory, err, IsStartupPolicyRejected(err))
+	}
+}
+
+func TestUnprotectedStandbyPolicyIsNotStartupPolicyRejected(t *testing.T) {
+	// なぜ必要か: 既存policyの権限拒否を登録用の起動拒否へ読み替えない。
+	withLoginKeychainForTest(t)
+	signer, _ := residentTestKey(t)
+	policyPath := residentKeychainPolicyFile(t, ssh.FingerprintSHA256(signer.PublicKey()))
+	if err := os.Chmod(policyPath, 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	factory, err := LoadStandbyResident(ctx, policyPath, noKeychainClient{}, agentgateway.ChannelBudgets())
+	if factory != nil || err == nil || IsStartupPolicyRejected(err) {
+		t.Fatalf("unprotected policy result: factory=%v err=%v policyRejected=%v", factory, err, IsStartupPolicyRejected(err))
+	}
+}
+
 func runSyntheticGatewaySSHHandshake(t *testing.T, signer ssh.Signer, enrolled ssh.PublicKey) {
 	t.Helper()
 	if signer == nil {

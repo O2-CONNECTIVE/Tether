@@ -2,18 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { createResidentController, initialResidentState } from './controller.ts';
-import { standbyHoursOptions, type ResidentInvoke, type StandbyHours } from './model.ts';
-import { presentResident } from './presentation.ts';
+import { standbyHoursOptions, type PairingInvoke, type ResidentInvoke, type StandbyHours } from './model.ts';
+import { presentResident, residentPairingMessage } from './presentation.ts';
 import { StatusContent } from '../host-status/StatusContent.tsx';
 
 const sleepStatus = { active: '作動中', inactive: '作動なし', unknown: '未確認' } as const;
 
-export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }) {
+export function ResidentPanel({ invoke, pairingInvoke }: { invoke: ResidentInvoke | undefined; pairingInvoke?: PairingInvoke }) {
   const [state, setState] = useState(initialResidentState);
   const [hours, setHours] = useState<StandbyHours>(2);
   const controller = useRef<ReturnType<typeof createResidentController> | null>(null);
   useEffect(() => {
-    const instance = createResidentController({ invoke, onChange: setState });
+    const instance = createResidentController({ invoke, pairingInvoke, onChange: setState });
     controller.current = instance;
     const visibility = () => { void instance.setPageVisible(document.visibilityState === 'visible'); };
     if (document.visibilityState === 'visible') void instance.refresh();
@@ -29,7 +29,7 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
       document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('tether-resident-stop', stop);
       window.removeEventListener('pagehide', invalidate); window.removeEventListener('pageshow', restore); };
-  }, [invoke]);
+  }, [invoke, pairingInvoke]);
   if (!state.visible) return null;
   const o = state.observation;
   const view = presentResident(o, state.pending, state.cleanupUnknown, state.startup);
@@ -77,7 +77,13 @@ export function ResidentPanel({ invoke }: { invoke: ResidentInvoke | undefined }
           今から{hours}時間に{o?.standbyEndingSoon ? '延長' : '更新'}
         </Button>
       </div>}
+      {(state.canPair || state.pairingBusy) && <div className="resident-standby__row">
+        <h3>登録</h3>
+        <Button disabled={state.pairingBusy} onClick={() => { void controller.current?.requestPairing(); }}>登録する</Button>
+      </div>}
       <div className="resident-standby__notice" role="status">
+        {state.pairingBusy && <p>ブラウザで登録を確かめています</p>}
+        {state.pairingResult && <p>{residentPairingMessage(state.pairingResult)}</p>}
         {hasDeadline && o?.standbyEndingSoon && <p>待機期限まで残り10分以内です。</p>}
         {hasDeadline && extendRejected && <p>期限を更新できませんでした。表示された期限を確認してください。</p>}
       </div>

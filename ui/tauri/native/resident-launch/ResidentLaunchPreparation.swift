@@ -1,5 +1,6 @@
 import Foundation
 import LightweightCodeRequirements
+import Darwin
 
 enum PreparationFailure: Error {
     case unsupportedOS
@@ -42,6 +43,115 @@ enum ProcessCompletionObservation {
     case unavailable, pending, observed(ObservedProcessExit), unknown
 }
 enum ProducerLaunchResult { case notAttempted, active, unknown }
+enum PairingHelperRun: Equatable {
+    case unavailable, timedOut, outputTooLarge
+    case exited(status: Int32, stdout: Data)
+}
+struct PairingProcessRun: Equatable {
+    let result: PairingHelperRun
+    let launched: Int
+}
+private let pairingPostExitEOFTimeout: TimeInterval = 2
+
+private enum PairingProcessEvent: Equatable { case exited, outputTooLarge, outputFailed, timedOut }
+
+private final class PairingProcessMonitor: @unchecked Sendable {
+    private let lock = NSLock()
+    private let eventSignal = DispatchSemaphore(value: 0)
+    private var exited = false
+    private var outputTooLarge = false
+    private var outputFailed = false
+
+    func didExit() {
+        lock.lock(); exited = true; lock.unlock()
+        eventSignal.signal()
+    }
+
+    func didOverflow() {
+        lock.lock(); outputTooLarge = true; lock.unlock()
+        eventSignal.signal()
+    }
+
+    func didFailReading() {
+        lock.lock(); outputFailed = true; lock.unlock()
+        eventSignal.signal()
+    }
+
+    func wait(timeout: TimeInterval) -> PairingProcessEvent {
+        let deadline = DispatchTime.now() + timeout
+        while true {
+            lock.lock()
+            let event: PairingProcessEvent? = outputFailed ? .outputFailed
+                : outputTooLarge ? .outputTooLarge : exited ? .exited : nil
+            lock.unlock()
+            if let event { return event }
+            if eventSignal.wait(timeout: deadline) == .timedOut { return .timedOut }
+        }
+    }
+
+    func waitForExit(until deadline: DispatchTime) -> Bool {
+        while true {
+            lock.lock(); let exited = self.exited; lock.unlock()
+            if exited { return true }
+            let result = eventSignal.wait(timeout: deadline)
+            lock.lock(); let exitedAfterWait = self.exited; lock.unlock()
+            if exitedAfterWait { return true }
+            if result == .timedOut { return false }
+        }
+    }
+}
+
+private final class PairingStdoutCollector: @unchecked Sendable {
+    private let file: FileHandle
+    private let monitor: PairingProcessMonitor
+    private let lock = NSLock()
+    private let reader = DispatchGroup()
+    private var output = Data()
+
+    init(file: FileHandle, monitor: PairingProcessMonitor) {
+        self.file = file
+        self.monitor = monitor
+    }
+
+    func start() {
+        reader.enter()
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            defer { reader.leave() }
+            while true {
+                let data: Data
+                do {
+                    guard let next = try file.read(upToCount: 4097) else { break }
+                    data = next
+                } catch {
+                    monitor.didFailReading()
+                    break
+                }
+                if data.isEmpty { break }
+                lock.lock()
+                let remaining = 4096 - output.count
+                if data.count > remaining {
+                    if remaining > 0 { output.append(data.prefix(remaining)) }
+                    lock.unlock()
+                    monitor.didOverflow()
+                    break
+                }
+                output.append(data)
+                lock.unlock()
+            }
+        }
+    }
+
+    func finish(until deadline: DispatchTime) -> Data? {
+        guard reader.wait(timeout: deadline) == .success else {
+            // Closing here can invalidate a descriptor while read(2) is blocked, then it may be reused.
+            // Leave it open so the reader can exit itself when the inherited writer reaches EOF.
+            return nil
+        }
+        file.closeFile()
+        lock.lock(); defer { lock.unlock() }
+        return output
+    }
+}
 
 private enum ProcessCompletionPhase {
     case unlaunched, running, waited(ObservedProcessExit), unknown
@@ -53,6 +163,7 @@ private enum ProcessCompletionPhase {
 final class ResidentLaunchPreparation {
     private let task: Process
     private let productionRelease: Bool
+    private let trustedTeam: String?
     private let io = OwnedPreparationIO()
     private var completion: ProcessCompletionPhase = .unlaunched
     #if RESIDENT_LAUNCH_FIXTURE
@@ -98,6 +209,7 @@ final class ResidentLaunchPreparation {
         }
         task = process
         productionRelease = production
+        trustedTeam = production ? release.team : nil
         #if RESIDENT_LAUNCH_FIXTURE
         expectedStructure = try Self.structure(requirement)
         isCompletionFixture = false
@@ -126,6 +238,81 @@ final class ResidentLaunchPreparation {
         task.standardError = FileHandle.nullDevice
         do { return try startConfiguredProcess() ? .active : .unknown }
         catch { return .unknown } // No failed run can become a NotSpawned receipt.
+    }
+
+    func launchPairingHelper() -> PairingHelperRun {
+        guard productionRelease, let trustedTeam,
+              Self.supports(ProcessInfo.processInfo.operatingSystemVersion),
+              #available(macOS 14.4, *), task.launchRequirement != nil else { return .unavailable }
+        let bundle = Bundle.main
+        guard bundle.bundleIdentifier == "com.o2connective.rescue-host.shell",
+              bundle.bundleURL.isFileURL, bundle.bundleURL.pathExtension == "app",
+              let executable = bundle.executableURL,
+              executable.deletingLastPathComponent().standardizedFileURL ==
+                bundle.bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true).standardizedFileURL else {
+            return .unavailable
+        }
+        do {
+            let requirement = try Self.pairingRequirement(team: trustedTeam)
+            let process = Process()
+            process.launchRequirement = requirement
+            guard process.launchRequirement != nil else { return .unavailable }
+            process.executableURL = bundle.bundleURL.appendingPathComponent(
+                "Contents/Helpers/tether-host-pair", isDirectory: false)
+            process.arguments = []
+            process.environment = [:]
+            process.currentDirectoryURL = URL(fileURLWithPath: "/", isDirectory: true)
+            process.standardInput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            let output = Pipe()
+            process.standardOutput = output
+            return Self.runCapturedProcess(process, output: output.fileHandleForReading, timeout: 20 * 60).result
+        } catch {
+            return .unavailable
+        }
+    }
+
+    @available(macOS 14.4, *)
+    private static func pairingRequirement(team: String) throws -> LaunchCodeRequirement {
+        guard team.utf8.count == 10,
+              team.utf8.allSatisfy({ (65...90).contains($0) || (48...57).contains($0) }) else {
+            throw PreparationFailure.invalidRelease
+        }
+        return try LaunchCodeRequirement.allOf {
+            TeamIdentifier(team)
+            SigningIdentifier("com.o2connective.rescue-host.tether-host-pair")
+            ValidationCategory(.developerID)
+        }
+    }
+
+    private static func runCapturedProcess(_ process: Process, output: FileHandle,
+                                           timeout: TimeInterval) -> PairingProcessRun {
+        let monitor = PairingProcessMonitor()
+        let collector = PairingStdoutCollector(file: output, monitor: monitor)
+        process.terminationHandler = { _ in monitor.didExit() }
+        do { try process.run() } catch { return PairingProcessRun(result: .unavailable, launched: 0) }
+        collector.start()
+        let event = monitor.wait(timeout: timeout)
+        if event == .timedOut || event == .outputTooLarge || event == .outputFailed {
+            let postExitDeadline = DispatchTime.now() + pairingPostExitEOFTimeout
+            if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+            guard monitor.waitForExit(until: postExitDeadline), collector.finish(until: postExitDeadline) != nil else {
+                return PairingProcessRun(result: .unavailable, launched: 1)
+            }
+            let result: PairingHelperRun = event == .timedOut ? .timedOut
+                : event == .outputTooLarge ? .outputTooLarge : .unavailable
+            return PairingProcessRun(result: result, launched: 1)
+        }
+        guard let stdout = collector.finish(until: .now() + pairingPostExitEOFTimeout) else {
+            return PairingProcessRun(result: .unavailable, launched: 1)
+        }
+        switch monitor.wait(timeout: 0) {
+        case .outputTooLarge: return PairingProcessRun(result: .outputTooLarge, launched: 1)
+        case .outputFailed: return PairingProcessRun(result: .unavailable, launched: 1)
+        case .exited:
+            return PairingProcessRun(result: .exited(status: process.terminationStatus, stdout: stdout), launched: 1)
+        case .timedOut: return PairingProcessRun(result: .unavailable, launched: 1)
+        }
     }
 
     // Shared by production and finite untrusted self-child IO fixtures. It never
@@ -209,6 +396,7 @@ final class ResidentLaunchPreparation {
     private init(completionFixture: Void) {
         task = Process() // Separate untrusted test actor; no requirement override.
         productionRelease = false
+        trustedTeam = nil
         expectedStructure = Data()
         isCompletionFixture = true
     }
@@ -277,6 +465,27 @@ final class ResidentLaunchPreparation {
         try input.fileHandleForWriting.close()
         completionInput = nil
         return true
+    }
+    @available(macOS 14.4, *)
+    static func pairingRequirementFixture(team: String) throws -> Data {
+        try structure(pairingRequirement(team: team))
+    }
+    static func runPairingProcessFixture(_ mode: String, timeout: TimeInterval) -> PairingProcessRun {
+        let launchCount = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-pairing-launch-\(UUID().uuidString)")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        process.arguments = ["pairing-child", mode, launchCount.path]
+        process.environment = [:]
+        process.currentDirectoryURL = URL(fileURLWithPath: "/", isDirectory: true)
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let output = Pipe()
+        process.standardOutput = output
+        let run = runCapturedProcess(process, output: output.fileHandleForReading, timeout: timeout)
+        let nested = (try? String(contentsOf: launchCount, encoding: .utf8)).flatMap(Int.init) ?? 0
+        try? FileManager.default.removeItem(at: launchCount)
+        return PairingProcessRun(result: run.result, launched: run.launched + nested)
     }
     func fixtureCounts() -> (open: UInt32, closed: UInt32) { (io.open, io.closed) }
     func peer(_ action: UInt32) -> Bool { io.peer(task, action: action) }
