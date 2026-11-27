@@ -26,7 +26,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'execute' }
     $phase = 'OWNER_PROBE_DESCENDANT_RESULTS_FAILED'
     $expected = @('descendant-normal-exit:passed', 'descendant-cancel-before-resume:passed',
-        'OWNER_PROBE_DESCENDANT_CASES_PASSED_2')
+        'nested-descendant-normal-exit:passed', 'nested-descendant-cancel-before-resume:passed',
+        'OWNER_PROBE_DESCENDANT_CASES_PASSED_4')
     if ($results.Count -ne $expected.Count) { throw 'count' }
     for ($index = 0; $index -lt $expected.Count; $index++) {
         if ($results[$index] -cne $expected[$index]) { throw 'result' }
