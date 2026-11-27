@@ -2,7 +2,7 @@
 
 [[agent-gateway]] / [[agent-cli-resident]] / [[linux-container]]
 
-この文書は、gatewayで常駐ホスト鍵を登録するHTTP契約を記載します。このPRではgateway側を実装します。`tether-host-pair`、Worker、Keychain、Tauriの挙動は変更しません。実IdPと実配置を使った確認は未実施です。
+この文書は、gatewayで常駐ホスト鍵を登録するHTTP契約と、署名済みMac helperのGUI登録手順を記載します。gatewayの二段階APIを使うhelperは、引数なしで起動したときだけGUI登録に入り、gateway・issuer・client IDはbuild時の固定値を使います。3引数の既存CLI登録は従来のPEM形式を維持します。引数・環境から鍵、署名、接続先を変更する入口はありません。
 
 ## 二段階の登録
 
@@ -12,6 +12,12 @@
 4. 確定後、ホストはoperationと新しい鍵で署名したproofを `POST /tether-agent/v1/pair/confirm` に送ります。gatewayは同意、鍵、期限、元の登録簿revision、busy状態を再確認してから登録簿を保存し、鍵を反映して旧ホストの接続を切断します。
 
 operationはgatewayのメモリにだけ保存され、有効期間は10分です。同じ枠の新しい事前確認は前の未完了operationを無効にします。gateway全体で最大64件です。OAuth stateとform tokenもメモリ上に保持し、それぞれgateway全体で最大64件です。再起動後の再送は、登録簿のoperation IDとproofで完了済み登録を照合します。
+
+GUI helperは新しいEd25519鍵をKeychainへ保存してから共有OAuth（外部ブラウザ、PKCE、loopback callback）を行います。operationsの事前確認後、固定AppleScriptのネイティブ画面でアカウント、登録枠、置換対象、新しい鍵fingerprintを表示します。このMacの既存policyが事前確認の置換対象と違う場合は、現在の登録主体とホストが使えなくなることも表示します。利用者が進めた場合だけconsent URLと期限を含む保留記録を0600で保存し、gatewayの確認画面を開いてconfirmを送ります。成功時はKeychain形式のresident policyへ切り替え、旧鍵の削除を試みます。削除に失敗しても登録成功とし、保留記録が残った場合は次の起動で同じoperationの200を照合します。常駐プロセスは起動しません。
+
+保留記録はgateway、operation、ホスト鍵fingerprint、consent URL、RFC3339期限の5項目を持ちます。再開時は保存した期限を使い、confirmが最初に202を返した場合は保存したconsent URLを開き直してから待ちます。202の待機中に通信失敗または502・504が起きた場合は期限まで再試行します。期限まで202が続いた場合は `rejected`、一時失敗が続いて結果を確かめられない場合は `unknown` とし、新鍵と保留記録を維持します。gatewayの永続化が確認できない500 `registration_unknown` は同じgateway process内では500を返し続けます。gateway再起動後、登録簿にoperation IDが残っていればconfirmは200で照合できます。policyの書込みに失敗した場合も保留記録を残し、次回の200でpolicy適用を再試行します。
+
+helperのstdoutは1行の `{"protocolVersion":1,"result":"..."}` です。resultは `succeeded`、`cancelled`、`rejected`、`re_registration_required`、`blocked`、`unknown`、`local_apply_failed`、`browser_failed`、`busy`、`unavailable` のいずれかです。OAuth callbackの時間切れは `cancelled`、operationの期限までnative確認画面を閉じなかった場合は `rejected` です。GUIモードはSIGINTとSIGTERMでcontextを止め、確認前の新鍵をKeychainから削除します。終了コードはJSON出力成功時に0です。
 
 ## HTTP契約
 
@@ -63,20 +69,20 @@ Bearerなしで `{ "operation": "...", "proof": "..." }` を送ります。proof
 | 202 `consent_pending` | ブラウザでの決定待ち |
 | 200 | 登録完了。既存pairと同じ `registration_endpoint`、`host_label`、`principal_label`、`principal_public_key` を返します |
 | 403 `consent_cancelled` | 利用者が取消を選択済み |
-| 404 | 未知、期限切れ、または無効化されたoperation |
+| 404 `operation_not_found` | 未知、期限切れ、または無効化されたoperation |
 | 409 `revision_changed` | 表示後に登録枠が変わりました |
 | 409 `replace_blocked` | 確定時点で枠がbusyです。結果は終端化されます |
 | 409 `key_in_use` | 新しい鍵が別hostまたはprincipal鍵と重複します |
 | 503 `save_failed` | rename前の保存失敗。旧登録内容を保ち、同じ結果を返します |
-| 500 `registration_unknown` | rename後の親directory fsyncが失敗し、永続化を確認できません。同じoperationの再送も500です |
+| 500 `registration_unknown` | rename後の親directory fsyncが失敗し、永続化を確認できません。同じgateway process内の再送も500です。gateway再起動後、登録簿にoperation IDが残っていれば200で照合し、残っていなければ404になります |
 
-期限後・置き換え後のoperation IDに対する404は、「今は登録されていない」ことが確定した結果です。helperは通常の拒否と同じ扱いにします。
+gatewayはconfirmの未検出を `{"error":"operation_not_found"}` として返します。このコードの404、`consent_cancelled` の403、`save_failed` の503だけをhelperは終端結果として処理します。Workerのpairing gateが閉じた404やbinding未設定の503など、gatewayのエラーコードがない応答は `unknown` として新鍵と保留記録を保ちます。期限後・置き換え後のoperation IDに対するgatewayの404は、「今は登録されていない」ことが確定した結果です。
 
 同じoperationへの並行confirmや再送は、確定を最大1回にします。MCP用Bearer tokenはpairing用APIで使えません。pairing verifierはissuer/subjectでアカウントを特定し、pairing audienceのtokenをMCP入口に通しません。
 
 ### 一段階APIとの互換
 
-`POST /tether-agent/v1/pair` は `tether_development` buildでだけ有効です。開発buildでの既存挙動は維持します。製品buildではrouteを登録せず、404になります。`tether-host-pair` はこのPRで変更していないため、製品buildの二段階API呼び出し元にはなりません。
+`POST /tether-agent/v1/pair` は `tether_development` buildでだけ有効です。開発buildでの既存挙動は維持します。製品buildではrouteを登録せず、404になります。GUI helperは製品buildで二段階APIを呼び、既存3引数CLIは従来の一段階APIを使います。
 
 ## 設定
 

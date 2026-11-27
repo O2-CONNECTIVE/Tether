@@ -79,8 +79,7 @@ func install(dir, policyPath, home string, priv ed25519.PrivateKey, signer ssh.S
 	if e = renameFile(keyTemp, keyPath); e != nil {
 		return false, e
 	}
-	policy := map[string]any{"protocol": "rescue-mac-resident-policy/1", "policy_digest": agentexec.MacCurrentUserPolicyDigest(), "registration_endpoint": result.RegistrationEndpoint, "host_label": result.HostLabel, "principal_label": result.PrincipalLabel, "principal_public_key": strings.SplitN(result.PrincipalPublicKey, " ", 2)[1], "host_key_path": keyPath, "host_key_fingerprint": ssh.FingerprintSHA256(signer.PublicKey()), "work_dir": home, "home": home, "cleanup_seconds": 10, "operations": []any{map[string]any{"id": maclaunch.ResidentFixedRequestID, "command": maclaunch.ResidentFixedCommand, "timeout_ms": 15000}}}
-	raw, e := json.Marshal(policy)
+	raw, e := residentPolicyBytes(home, signer, result, keyPath, "")
 	if e != nil {
 		return false, e
 	}
@@ -109,6 +108,18 @@ func install(dir, policyPath, home string, priv ed25519.PrivateKey, signer ssh.S
 	installDone = true
 	return syncWarning, nil
 }
+
+func residentPolicyBytes(home string, signer ssh.Signer, result pairResult, keyPath, keyStore string) ([]byte, error) {
+	principalKey := strings.SplitN(result.PrincipalPublicKey, " ", 2)[1]
+	policy := map[string]any{"protocol": "rescue-mac-resident-policy/1", "policy_digest": agentexec.MacCurrentUserPolicyDigest(), "registration_endpoint": result.RegistrationEndpoint, "host_label": result.HostLabel, "principal_label": result.PrincipalLabel, "principal_public_key": principalKey, "host_key_fingerprint": ssh.FingerprintSHA256(signer.PublicKey()), "work_dir": home, "home": home, "cleanup_seconds": 10, "operations": []any{map[string]any{"id": maclaunch.ResidentFixedRequestID, "command": maclaunch.ResidentFixedCommand, "timeout_ms": 15000}}}
+	if keyStore != "" {
+		policy["host_key_store"] = keyStore
+	} else {
+		policy["host_key_path"] = keyPath
+	}
+	return json.Marshal(policy)
+}
+
 func writeTemp(dir, prefix string, b []byte) (string, error) {
 	f, e := os.CreateTemp(dir, prefix)
 	if e != nil {
