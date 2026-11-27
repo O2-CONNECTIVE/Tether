@@ -170,7 +170,6 @@ void test('stale receipt identity survives fresh observation without resending a
   await r.controller.refresh(); assert.equal(calls, 1); assert.equal(r.last()?.lastRequestId, 1);
   r.controller.dispose();
 });
-
 void test('real mapper pending ON remains disabled until same request is authenticated and applied', async () => {
   let observation = sample(); const requests: unknown[] = [];
   const r = capture((command, args) => {
