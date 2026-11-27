@@ -79,8 +79,13 @@ export function createResidentController({ invoke, pairingInvoke, onChange, now 
         return;
       }
       startup = null;
-      if (next.revision < revision || (next.revision === revision && observation
-        && JSON.stringify({ ...next, validForMs: 0 }) !== JSON.stringify({ ...observation, validForMs: 0 }))) return fail('RESIDENT_REVISION_INVALID');
+      if (next.revision < revision) return fail('RESIDENT_REVISION_INVALID');
+      if (next.revision === revision && observation) {
+        // Rust withdraws both actions on EOF without advancing its last observation's revision.
+        const expired = next.validForMs === 0 && !next.canRequestOn && !next.canRequestOff;
+        const previous = expired ? { ...observation, canRequestOn: false, canRequestOff: false } : observation;
+        if (JSON.stringify({ ...next, validForMs: 0 }) !== JSON.stringify({ ...previous, validForMs: 0 })) return fail('RESIDENT_REVISION_INVALID');
+      }
       if (next.cleanup === 'unknown') return fail('RESIDENT_CLEANUP_UNKNOWN', true);
       const observedUntil = started + next.validForMs;
       if (received >= observedUntil) return fail('RESIDENT_OBSERVATION_EXPIRED');
