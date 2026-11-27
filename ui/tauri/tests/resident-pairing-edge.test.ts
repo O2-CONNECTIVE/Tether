@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createResidentController, type ResidentState } from '../src/resident/controller.ts';
-import { pairingTimeoutMs } from '../src/resident/state.ts';
+import { createResidentController } from '../src/resident/controller.ts';
+import { pairingTimeoutMs, type ResidentState } from '../src/resident/state.ts';
 
 const startup = { protocolVersion: 1, source: 'resident-owner', state: 'source-policy-rejected' };
 const waiting = { protocolVersion: 1, source: 'resident-owner', state: 'source-observation', revision: 2,

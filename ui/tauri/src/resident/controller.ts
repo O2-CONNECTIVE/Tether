@@ -1,9 +1,8 @@
 import { decodePairingResponse, decodeReceipt, decodeStatus, type Intent, type Observation,
   type RequestIntent, type ResidentStartup, type StandbyHours } from './model.ts';
-import { canRequestPairing, initialResidentState, pairingTimeoutMs, startupWaitMs, type ResidentControllerOptions, type ResidentState } from './state.ts';
+import { canRequestPairing, initialResidentState, pairingTimeoutMs, startupWaitMs, type ResidentControllerOptions } from './state.ts';
 import { callWithTimeout } from './call-with-timeout.ts';
 export { initialResidentState };
-export type { ResidentState };
 export function createResidentController({ invoke, pairingInvoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: ResidentControllerOptions) {
   let state = initialResidentState();
   let disposed = false, sealed = false, pageVisible = true;

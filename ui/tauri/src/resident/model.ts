@@ -13,7 +13,7 @@ export type Observation = { revision: number; validForMs: number; standby: 'off'
   previousCleanup: 'confirmed' | 'unknown';
   sleepPrevention: 'inactive' | 'active' | 'unknown' };
 export type ResidentStartup = 'checking' | 'policy-rejected' | 'host-key-unavailable';
-export const pairingResults = ['succeeded', 'cancelled', 'rejected', 're_registration_required', 'blocked', 'unknown',
+const pairingResults = ['succeeded', 'cancelled', 'rejected', 're_registration_required', 'blocked', 'unknown',
   'local_apply_failed', 'browser_failed', 'busy', 'unavailable'] as const;
 export type PairingResult = (typeof pairingResults)[number];
 type ResidentStatus = { source: 'unsupported' } | { source: 'resident-owner' } & (

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createResidentController, type ResidentState } from '../src/resident/controller.ts';
+import { createResidentController } from '../src/resident/controller.ts';
+import type { ResidentState } from '../src/resident/state.ts';
 import { decodePairingResponse, type PairingResult } from '../src/resident/model.ts';
 import { residentPairingMessage } from '../src/resident/presentation.ts';
 
