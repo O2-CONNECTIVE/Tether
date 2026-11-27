@@ -29,7 +29,8 @@ compilerが無ければ固定分類で失敗し、download/installや別toolchai
 生成した固定exeを同じ実行で使い、終了後にその一時directoryを削除します。
 compile診断は公開出力へ流さず、成功分類・固定失敗分類だけを出します。
 
-新しいexeには固定2ケースがあり、既存3ケースの成功を引き継ぎません。
+exeには直接継承の固定2ケースと、後述する内側Jobの固定2ケースがあり、
+既存3ケースの成功を引き継ぎません。
 
 - **子の通常終了**: 外側ownerが専用Jobを作り、同じexeのparent modeをsuspendedで作成し、
   Jobへ割当ててからresumeします。parentは固定cmdをsuspendedで生成します。
@@ -58,3 +59,28 @@ acknowledgment・回収契約が必要です。PIDや通知・boolを渡す方�
 今回の範囲は「生存する固定parentが子の元handleを保持した実Job継承」に限定します。
 MacではC# compile、PowerShell実行、Windows API実行はいずれも未実行です。
 Windows CIでの初回評価・固定headの独立レビューは別途必要で、追跡Issue #45のchild-older根因は不明のままです（#319はMac変更のPR）。
+
+## 親が追加する内側Jobの固定実験（Windows未実行）
+
+固定した `tauri-driver` 2.1.0 crate（SHA-256:
+`2f2e29bd6900fb718dfdc06f2e7a371d6087c085daaf83709847ef3e6b0c1953`）の
+`src/main.rs:31–45` は、自分をkill-on-close Jobへ割当てた後にnative driverをspawnします。
+外側のharness Jobだけを試す既存ケースでは、この追加階層を検査できません。
+[source archive](https://static.crates.io/crates/tauri-driver/tauri-driver-2.1.0.crate) を
+`ui/tauri/native-smoke/tools.json` のhashと一致確認して読んだsource上の差分です。
+
+`descendant.test.ps1` は既存2ケースに加え、同じ固定parentが内側の専用Jobを作り、
+kill-on-closeだけを設定して自分を割当ててから固定cmdを生成する2ケースを一度ずつ実行します。
+parentとsuspended childの元handleについて、外側と内側の両Jobへの実membershipを確認します。
+一方は通常終了、もう一方はresume前取消しで、元の0/42/77の終了区別を維持します。
+内側Jobをparentのfinallyで閉じるとparent自身を強制終了するため、そのhandleはstatic参照へ
+保持してparentのprocess終了まで閉じません。外側ownerは元parent handleの終了codeと
+外側Jobの空を別に確認します。内側Jobの割当てが拒否されたら、そのcaseは失敗し、
+breakaway・既存Job解除・別権限へのfallbackはしません。
+
+合計4ケースの固定出力をPowerShellが照合し、途中失敗・追加出力・cleanup失敗は成功にしません。
+これは固定helperによるJob階層の実験です。実driverやWebViewの互換性、子の完全捕捉、
+appの役割・生成時handle transfer、driver生存中の通常closeは証明しません。
+`src/server.rs:51–68,102–105` ではappを直接生成せず、applicationを
+`ms:edgeOptions.binary`へ変換してEdgeへ転送しています。外側Jobの追加だけでは
+このapp生成元からharnessへの所有契約は得られません。#341の失敗と#45は未解消のままです。
