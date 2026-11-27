@@ -111,23 +111,45 @@ void test('cleanup uncertainty stays latched after the view is invalidated', asy
     assert.equal(state?.canOff, false);
   } finally { r.controller.dispose(); }
 });
-void test('the current EOF response stays generically unconfirmed', async () => {
+void test('same-revision EOF expires the observation without granting any action', async () => {
   let observation = sample();
   const r = capture(() => Promise.resolve(observation));
   try {
     await r.controller.refresh();
-    // Rust's status after stdout EOF without a closed frame has expired validity and no actions.
+    assert.equal(r.last()?.canOn, true);
+    // Rust withdraws validity and both actions on stdout EOF without a closed frame.
     observation = sample({ validForMs: 0, canRequestOn: false, canRequestOff: false });
     await r.controller.refresh();
     const state = r.last();
     const view = presentResident(state?.observation ?? null, state?.pending ?? false, state?.cleanupUnknown ?? false);
-    assert.equal(state?.diagnostic, 'RESIDENT_REVISION_INVALID');
+    assert.equal(state?.diagnostic, 'RESIDENT_OBSERVATION_EXPIRED');
     assert.equal(view.heading, '常駐ホストの状態を確認できません');
     assert.equal(view.tone, 'unconfirmed');
     assert.equal(state?.canOn, false);
     assert.equal(state?.canOff, false);
+    assert.equal(state?.canExtend, false);
     assert.equal(state?.pending, false);
+    observation = sample({ revision: 2 });
+    await r.controller.refresh();
+    assert.equal(r.last()?.canOn, false);
   } finally { r.controller.dispose(); }
+});
+void test('same-revision action and state changes outside exact EOF remain invalid', async () => {
+  for (const change of [
+    { canRequestOn: false },
+    { validForMs: 0, canRequestOn: false, registration: 'connecting' },
+  ]) {
+    let observation = sample();
+    const r = capture(() => Promise.resolve(observation));
+    try {
+      await r.controller.refresh();
+      observation = sample(change);
+      await r.controller.refresh();
+      assert.equal(r.last()?.diagnostic, 'RESIDENT_REVISION_INVALID');
+      assert.equal(r.last()?.canOn, false);
+      assert.equal(r.last()?.canOff, false);
+    } finally { r.controller.dispose(); }
+  }
 });
 void test('zero validity expires without changing the same revision action flags', async () => {
   let observation = sample({ canRequestOn: false });
