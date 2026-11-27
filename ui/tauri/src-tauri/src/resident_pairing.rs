@@ -21,7 +21,7 @@ pub(crate) enum PairingResult {
     Unavailable,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(
     dead_code,
     reason = "native helper output is only produced by signed-source builds"
@@ -30,6 +30,18 @@ pub(crate) enum HelperOutput {
     Exited { status: i32, stdout: Vec<u8> },
     TimedOut,
     Unavailable,
+}
+
+#[cfg(any(test, all(target_os = "macos", resident_native_source)))]
+fn native_helper_output(code: u32, length: u32, status: i32, mut stdout: Vec<u8>) -> HelperOutput {
+    match code {
+        1 if length as usize <= STDOUT_LIMIT && length as usize <= stdout.len() => {
+            stdout.truncate(length as usize);
+            HelperOutput::Exited { status, stdout }
+        }
+        2 => HelperOutput::TimedOut,
+        _ => HelperOutput::Unavailable,
+    }
 }
 
 pub(crate) trait HelperRunner: Send + Sync {
@@ -48,7 +60,8 @@ pub(crate) fn decode_helper_output(output: HelperOutput) -> PairingResult {
         return PairingResult::Unavailable;
     };
     if stdout.len() > STDOUT_LIMIT
-        || !stdout.ends_with(b"\n")
+        || stdout.first() != Some(&b'{')
+        || !stdout.ends_with(b"}\n")
         || stdout[..stdout.len().saturating_sub(1)].contains(&b'\n')
         || stdout[..stdout.len().saturating_sub(1)].contains(&b'\r')
     {
@@ -155,14 +168,7 @@ impl HelperRunner for NativeHelperRunner {
         let code = unsafe {
             rh_resident_host_pairing_run(stdout.as_mut_ptr(), 4096, &mut length, &mut status)
         };
-        match code {
-            1 if length <= 4096 => {
-                stdout.truncate(length as usize);
-                HelperOutput::Exited { status, stdout }
-            }
-            2 => HelperOutput::TimedOut,
-            _ => HelperOutput::Unavailable,
-        }
+        native_helper_output(code, length, status, stdout)
     }
 }
 

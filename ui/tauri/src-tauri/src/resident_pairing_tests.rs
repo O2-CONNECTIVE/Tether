@@ -50,6 +50,46 @@ fn accepts_only_one_complete_v1_result_line() {
 }
 
 #[test]
+fn rejects_whitespace_outside_the_json_object() {
+    // Why: serde_json skips outer whitespace, but helper stdout requires exact object bytes and one LF.
+    for stdout in [
+        " {\"protocolVersion\":1,\"result\":\"succeeded\"}\n",
+        "\t{\"protocolVersion\":1,\"result\":\"succeeded\"}\n",
+        "{\"protocolVersion\":1,\"result\":\"succeeded\"} \n",
+        "{\"protocolVersion\":1,\"result\":\"succeeded\"}\n\n",
+        "{\"protocolVersion\":1,\"result\":\"succeeded\"}",
+    ] {
+        assert_eq!(
+            decode_helper_output(exited(stdout)),
+            PairingResult::Unavailable,
+            "{stdout:?}"
+        );
+    }
+}
+
+#[test]
+fn native_helper_output_maps_codes_and_rejects_an_oversized_length() {
+    // Why: FFI status codes and lengths must be translated safely without invoking native code in Rust tests.
+    assert_eq!(
+        native_helper_output(1, 3, 7, b"abcx".to_vec()),
+        HelperOutput::Exited {
+            status: 7,
+            stdout: b"abc".to_vec()
+        }
+    );
+    assert_eq!(
+        native_helper_output(2, 0, 0, Vec::new()),
+        HelperOutput::TimedOut
+    );
+    for (code, length) in [(0, 0), (3, 0), (1, 4097)] {
+        assert_eq!(
+            native_helper_output(code, length, 0, vec![0; 4096]),
+            HelperOutput::Unavailable
+        );
+    }
+}
+
+#[test]
 fn nonzero_exit_timeout_and_oversize_are_unavailable() {
     // Why: a valid-looking line cannot override process failure, timeout, or the 4 KiB cap.
     let valid = b"{\"protocolVersion\":1,\"result\":\"succeeded\"}\n".to_vec();
@@ -91,6 +131,42 @@ fn pairing_success_returns_the_helper_result_without_submitting_resident_intents
     let result = manager.run();
     assert_eq!(result, PairingResult::Succeeded);
     assert_eq!(runner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn async_request_releases_its_permit_after_the_blocking_worker_completes() {
+    // Why: the production async path must move its permit into spawn_blocking and return it afterward.
+    let runner = Arc::new(FakeRunner::new(exited(
+        "{\"protocolVersion\":1,\"result\":\"succeeded\"}\n",
+    )));
+    let manager = PairingManager::new(runner.clone());
+    for _ in 0..2 {
+        let response = tauri::async_runtime::block_on(manager.request());
+        assert_eq!(response.result, PairingResult::Succeeded);
+    }
+    assert_eq!(runner.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+struct PanicOnceRunner(AtomicUsize);
+impl HelperRunner for PanicOnceRunner {
+    fn run(&self) -> HelperOutput {
+        if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            panic!("fixture panic");
+        }
+        exited("{\"protocolVersion\":1,\"result\":\"succeeded\"}\n")
+    }
+}
+
+#[test]
+fn async_request_releases_its_permit_when_the_runner_panics() {
+    // Why: unwinding in spawn_blocking must not leave later registration requests permanently busy.
+    let runner = Arc::new(PanicOnceRunner(AtomicUsize::new(0)));
+    let manager = PairingManager::new(runner.clone());
+    let first = tauri::async_runtime::block_on(manager.request());
+    assert_eq!(first.result, PairingResult::Unavailable);
+    let second = tauri::async_runtime::block_on(manager.request());
+    assert_eq!(second.result, PairingResult::Succeeded);
+    assert_eq!(runner.0.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 #[test]

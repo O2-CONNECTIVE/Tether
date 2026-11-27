@@ -22,7 +22,7 @@ export async function runPairingBrowserFlow() {
     await page.getByText('ブラウザで登録を確かめています').waitFor();
     assert.equal(await button.isDisabled(), true);
     await page.evaluate(() => window.dispatchEvent(new Event('test-pairing-finish')));
-    await page.getByText('この Mac を登録しました。待機は OFF です').waitFor();
+    await page.getByText('この Mac を登録しました。待機を ON にすると新しい登録で始まります').waitFor();
     assert.equal(await page.locator('html').getAttribute('data-pairing-args'), '0');
   } finally { await page.close(); }
 }

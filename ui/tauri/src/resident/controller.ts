@@ -7,7 +7,7 @@ export type { ResidentState };
 export function createResidentController({ invoke, pairingInvoke, onChange, now = () => performance.now(), timeoutMs = 2000, pollMs = 500 }: ResidentControllerOptions) {
   let state = initialResidentState();
   let disposed = false, sealed = false, pageVisible = true;
-  let operation: 'status' | 'menu-status' | 'intent' | 'pairing' | null = null;
+  let operation: 'status' | 'menu-status' | 'intent' | 'pairing' | null = null, stopRequestedDuringPairing = false;
   let cleanupLatched = false;
   let startup: ResidentStartup | null = null, startupUntil: number | undefined;
   let epoch = 0, requestId = 0, revision = 0, until = 0, lastClock = 0;
@@ -120,15 +120,13 @@ export function createResidentController({ invoke, pairingInvoke, onChange, now 
   }
   async function requestPairing() {
     if (disposed || sealed || !pageVisible || operation || !state.canPair || !pairingInvoke) return;
-    operation = 'pairing'; until = 0; stopTimers(); publish('RESIDENT_PAIRING');
-    try {
-      const result = decodePairingResponse(await callWithTimeout(() => pairingInvoke(), pairingTimeoutMs)) ?? 'unavailable';
-      if (disposed || sealed) return;
-      operation = null; state.pairingResult = result; publish('RESIDENT_PAIRING_RESULT');
-      await (result === 'succeeded' ? stopFromMenu() : refresh());
-    } catch {
-      if (!disposed && !sealed) { operation = null; state.pairingResult = 'unavailable'; publish('RESIDENT_PAIRING_RESULT'); await refresh(); }
-    }
+    operation = 'pairing'; until = 0; state.pairingResult = null; stopTimers(); publish('RESIDENT_PAIRING');
+    const result = (await callWithTimeout(() => pairingInvoke(), pairingTimeoutMs)
+      .then(decodePairingResponse).catch(() => undefined)) ?? 'unavailable';
+    if (disposed || sealed) return;
+    operation = null; state.pairingResult = result; publish('RESIDENT_PAIRING_RESULT');
+    const stopRequested = stopRequestedDuringPairing; stopRequestedDuringPairing = false;
+    await (result === 'succeeded' || stopRequested ? stopFromMenu() : refresh());
   }
   async function submitIntent(intent: RequestIntent, standbyHours: StandbyHours | undefined, t: number, observedUntil: number) {
     if (requestId >= Number.MAX_SAFE_INTEGER) return fail('RESIDENT_REQUEST_EXHAUSTED');
@@ -149,7 +147,9 @@ export function createResidentController({ invoke, pairingInvoke, onChange, now 
     } catch { if (!disposed && !sealed && generation === epoch) fail('RESIDENT_INTENT_UNCONFIRMED'); }
   }
   async function stopFromMenu() {
-    if (disposed || sealed || (operation && operation !== 'status') || !invoke) return;
+    if (disposed || sealed) return;
+    if (operation === 'pairing') { stopRequestedDuringPairing = true; return; }
+    if ((operation && operation !== 'status') || !invoke) return;
     const offWasPending = pending?.intent === 'off';
     // Replace an ordinary read and hold the controls through the one-shot menu read.
     until = 0; stopTimers();

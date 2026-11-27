@@ -47,6 +47,11 @@ enum PairingHelperRun: Equatable {
     case unavailable, timedOut, outputTooLarge
     case exited(status: Int32, stdout: Data)
 }
+struct PairingProcessRun: Equatable {
+    let result: PairingHelperRun
+    let launched: Int
+}
+private let pairingPostExitEOFTimeout: TimeInterval = 2
 
 private enum PairingProcessEvent: Equatable { case exited, outputTooLarge, outputFailed, timedOut }
 
@@ -81,6 +86,17 @@ private final class PairingProcessMonitor: @unchecked Sendable {
             lock.unlock()
             if let event { return event }
             if eventSignal.wait(timeout: deadline) == .timedOut { return .timedOut }
+        }
+    }
+
+    func waitForExit(until deadline: DispatchTime) -> Bool {
+        while true {
+            lock.lock(); let exited = self.exited; lock.unlock()
+            if exited { return true }
+            let result = eventSignal.wait(timeout: deadline)
+            lock.lock(); let exitedAfterWait = self.exited; lock.unlock()
+            if exitedAfterWait { return true }
+            if result == .timedOut { return false }
         }
     }
 }
@@ -125,8 +141,13 @@ private final class PairingStdoutCollector: @unchecked Sendable {
         }
     }
 
-    func finish() -> Data {
-        reader.wait()
+    func finish(until deadline: DispatchTime) -> Data? {
+        guard reader.wait(timeout: deadline) == .success else {
+            // Closing here can invalidate a descriptor while read(2) is blocked, then it may be reused.
+            // Leave it open so the reader can exit itself when the inherited writer reaches EOF.
+            return nil
+        }
+        file.closeFile()
         lock.lock(); defer { lock.unlock() }
         return output
     }
@@ -245,7 +266,7 @@ final class ResidentLaunchPreparation {
             process.standardError = FileHandle.nullDevice
             let output = Pipe()
             process.standardOutput = output
-            return Self.runCapturedProcess(process, output: output.fileHandleForReading, timeout: 20 * 60)
+            return Self.runCapturedProcess(process, output: output.fileHandleForReading, timeout: 20 * 60).result
         } catch {
             return .unavailable
         }
@@ -265,25 +286,32 @@ final class ResidentLaunchPreparation {
     }
 
     private static func runCapturedProcess(_ process: Process, output: FileHandle,
-                                           timeout: TimeInterval) -> PairingHelperRun {
+                                           timeout: TimeInterval) -> PairingProcessRun {
         let monitor = PairingProcessMonitor()
         let collector = PairingStdoutCollector(file: output, monitor: monitor)
         process.terminationHandler = { _ in monitor.didExit() }
-        do { try process.run() } catch { return .unavailable }
+        do { try process.run() } catch { return PairingProcessRun(result: .unavailable, launched: 0) }
         collector.start()
         let event = monitor.wait(timeout: timeout)
         if event == .timedOut || event == .outputTooLarge || event == .outputFailed {
+            let postExitDeadline = DispatchTime.now() + pairingPostExitEOFTimeout
             if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
-            process.waitUntilExit()
-            _ = collector.finish()
-            return event == .timedOut ? .timedOut : event == .outputTooLarge ? .outputTooLarge : .unavailable
+            guard monitor.waitForExit(until: postExitDeadline), collector.finish(until: postExitDeadline) != nil else {
+                return PairingProcessRun(result: .unavailable, launched: 1)
+            }
+            let result: PairingHelperRun = event == .timedOut ? .timedOut
+                : event == .outputTooLarge ? .outputTooLarge : .unavailable
+            return PairingProcessRun(result: result, launched: 1)
         }
-        let stdout = collector.finish()
+        guard let stdout = collector.finish(until: .now() + pairingPostExitEOFTimeout) else {
+            return PairingProcessRun(result: .unavailable, launched: 1)
+        }
         switch monitor.wait(timeout: 0) {
-        case .outputTooLarge: return .outputTooLarge
-        case .outputFailed: return .unavailable
-        case .exited: return .exited(status: process.terminationStatus, stdout: stdout)
-        case .timedOut: return .unavailable
+        case .outputTooLarge: return PairingProcessRun(result: .outputTooLarge, launched: 1)
+        case .outputFailed: return PairingProcessRun(result: .unavailable, launched: 1)
+        case .exited:
+            return PairingProcessRun(result: .exited(status: process.terminationStatus, stdout: stdout), launched: 1)
+        case .timedOut: return PairingProcessRun(result: .unavailable, launched: 1)
         }
     }
 
@@ -442,17 +470,22 @@ final class ResidentLaunchPreparation {
     static func pairingRequirementFixture(team: String) throws -> Data {
         try structure(pairingRequirement(team: team))
     }
-    static func runPairingProcessFixture(_ mode: String, timeout: TimeInterval) -> PairingHelperRun {
+    static func runPairingProcessFixture(_ mode: String, timeout: TimeInterval) -> PairingProcessRun {
+        let launchCount = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-pairing-launch-\(UUID().uuidString)")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-        process.arguments = ["pairing-child", mode]
+        process.arguments = ["pairing-child", mode, launchCount.path]
         process.environment = [:]
         process.currentDirectoryURL = URL(fileURLWithPath: "/", isDirectory: true)
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         let output = Pipe()
         process.standardOutput = output
-        return runCapturedProcess(process, output: output.fileHandleForReading, timeout: timeout)
+        let run = runCapturedProcess(process, output: output.fileHandleForReading, timeout: timeout)
+        let nested = (try? String(contentsOf: launchCount, encoding: .utf8)).flatMap(Int.init) ?? 0
+        try? FileManager.default.removeItem(at: launchCount)
+        return PairingProcessRun(result: run.result, launched: run.launched + nested)
     }
     func fixtureCounts() -> (open: UInt32, closed: UInt32) { (io.open, io.closed) }
     func peer(_ action: UInt32) -> Bool { io.peer(task, action: action) }
